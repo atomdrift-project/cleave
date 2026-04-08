@@ -1873,9 +1873,15 @@ mod tests {
 
     #[test]
     fn test_for_none_unsets_file_types() {
-        let mut defaults = super::super::models::TraitDefaults::default();
-        defaults.platforms = Some(vec!["linux".to_string(), "macos".to_string(), "windows".to_string()]);
-        defaults.r#for = Some(vec!["python".to_string()]);
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(vec![
+                "linux".to_string(),
+                "macos".to_string(),
+                "windows".to_string(),
+            ]),
+            r#for: Some(vec!["python".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        };
         let raw = make_raw_trait("test-trait", Some(vec!["none".to_string()]));
         let mut warnings = Vec::new();
         let result = super::apply_trait_defaults(
@@ -1887,7 +1893,9 @@ mod tests {
         );
         // "none" unsets file_types via apply_vec_default, falling back to All
         assert!(
-            result.r#for.contains(&crate::composite_rules::FileType::All),
+            result
+                .r#for
+                .contains(&crate::composite_rules::FileType::All),
             "for: [none] should unset to All, got: {:?}",
             result.r#for
         );

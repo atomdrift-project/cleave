@@ -102,7 +102,13 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
                     max
                 ));
             } else {
-                eprintln!("  ✅ {}: score {} (expected {}-{})", path.display(), score, min, max);
+                eprintln!(
+                    "  ✅ {}: score {} (expected {}-{})",
+                    path.display(),
+                    score,
+                    min,
+                    max
+                );
             }
         }
         Err(e) => {

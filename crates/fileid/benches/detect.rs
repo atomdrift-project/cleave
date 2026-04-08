@@ -1,13 +1,20 @@
 //! Benchmarks for fileid detection.
 //!
 //! Run with: cargo bench -p fileid
+#![allow(missing_docs)]
 
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use std::path::Path;
 
 fn load(name: &str) -> Vec<u8> {
     let path = format!("{}/testdata/{name}", env!("CARGO_MANIFEST_DIR"));
-    std::fs::read(&path).unwrap_or_else(|e| panic!("failed to read {path}: {e}"))
+    match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            eprintln!("failed to read {path}: {e}");
+            std::process::abort();
+        }
+    }
 }
 
 fn bench_magic_bytes(c: &mut Criterion) {
@@ -76,7 +83,12 @@ fn bench_heuristic(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("heuristic");
     g.bench_function("shell_53b", |b| {
-        b.iter(|| fileid::detect(black_box(Path::new("bash_profile")), black_box(&bash_profile)))
+        b.iter(|| {
+            fileid::detect(
+                black_box(Path::new("bash_profile")),
+                black_box(&bash_profile),
+            )
+        })
     });
     g.bench_function("js_182b", |b| {
         b.iter(|| fileid::detect(black_box(Path::new("bundle")), black_box(&js)))

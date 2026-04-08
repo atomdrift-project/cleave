@@ -467,5 +467,4 @@ mod tests {
         assert_eq!(OoxmlSubtype::PowerPoint.as_str(), "pptx");
         assert_eq!(OoxmlSubtype::Unknown.as_str(), "ooxml");
     }
-
 }

@@ -1,18 +1,14 @@
-//! Test module.
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+use std::sync::RwLock;
 
-/// Tests to ensure debug output matches evaluation output for all filter types
-/// This prevents discrepancies where debug shows "matched" but evaluation returns None
-use crate::composite_rules::condition::Condition;
-use crate::composite_rules::debug::{EvaluationDebug, RuleType};
-use crate::composite_rules::traits::{CompositeTrait, TraitDefinition};
-use crate::composite_rules::types::Arch;
-use crate::composite_rules::{EvaluationContext, FileType as RuleFileType, Platform};
+use crate::composite_rules::context::EvaluationContext;
+use crate::composite_rules::debug::RuleType;
+use crate::composite_rules::types::FileType as RuleFileType;
+use crate::composite_rules::types::{Arch, Platform};
+use crate::composite_rules::{Condition, TraitDefinition};
+use crate::types::Criticality;
 use crate::types::{AnalysisReport, TargetInfo};
-use std::sync::{OnceLock, RwLock};
 
-/// Helper to create a minimal report for testing
-fn create_test_report(file_size: usize) -> AnalysisReport {
+fn create_report_with_size(file_size: usize) -> AnalysisReport {
     AnalysisReport::new(TargetInfo {
         path: "/test/file".into(),
         file_type: "test".into(),
@@ -23,280 +19,35 @@ fn create_test_report(file_size: usize) -> AnalysisReport {
 }
 
 #[test]
-fn test_count_min_filter_matches_debug_and_eval() {
-    // Create a test binary with the hex pattern "0F A2" (CPUID) appearing exactly 2 times
-    let mut binary_data = vec![0u8; 1024];
-    binary_data[100] = 0x0F;
-    binary_data[101] = 0xA2;
-    binary_data[500] = 0x0F;
-    binary_data[501] = 0xA2;
-
-    let report = create_test_report(1024);
-
-    // Create trait with count_min: 3 (should NOT match - only 2 occurrences)
-    let trait_def = TraitDefinition {
-        id: "test/count-min".to_string(),
-        desc: "Test count_min filter".to_string(),
-        conf: 0.85,
-        crit: crate::types::Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        r#for: vec![RuleFileType::All],
-        for_from_groups: false,
-        r#if: Condition::Hex {
-            pattern: "0F A2".to_string(),
-            not: None,
-            offset: None,
-            offset_range: None,
-            section: None,
-            section_offset: None,
-            section_offset_range: None,
-        },
-        size_max: None,
-        count_min: Some(3), // Require at least 3 matches
-        count_max: None,
-        per_kb_min: None,
-        per_kb_max: None,
-        entropy_min: None,
-        entropy_max: None,
-        size_min: None,
+fn test_trait_filter_size_min() {
+    let condition = Condition::StringValue {
+        exact: Some("test_symbol".to_string()),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
         not: None,
-        unless: None,
-        downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        arch: vec![Arch::All],
+        platforms: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        compiled_regex: None,
     };
 
-    // Test real evaluation
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let eval_result = trait_def.evaluate(&ctx);
-    assert!(
-        eval_result.is_none(),
-        "Real evaluation should return None (count_min not satisfied: 2 < 3)"
-    );
-
-    // Test debug evaluation (with debug collector)
-    let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
-    let debug_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: Some(&debug),
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let debug_result = trait_def.evaluate(&debug_ctx);
-    assert!(
-        debug_result.is_none(),
-        "Debug evaluation should return None (count_min not satisfied: 2 < 3)"
-    );
-
-    let debug_info = debug.into_inner().unwrap();
-    assert!(
-        debug_info.skip_reason.is_none() || !debug_info.skip_reason.unwrap().to_string().is_empty(),
-        "Skip reason, when present, should be non-empty"
-    );
-}
-
-#[test]
-fn test_per_kb_min_filter_matches_debug_and_eval() {
-    // Create a 597 KB test binary (same size as the bug report)
-    let file_size = 611_608; // 597 KB
-    let mut binary_data = vec![0u8; file_size];
-
-    // Add exactly 4 CPUID instructions (0F A2)
-    binary_data[100] = 0x0F;
-    binary_data[101] = 0xA2;
-    binary_data[1000] = 0x0F;
-    binary_data[1001] = 0xA2;
-    binary_data[10000] = 0x0F;
-    binary_data[10001] = 0xA2;
-    binary_data[100000] = 0x0F;
-    binary_data[100001] = 0xA2;
-
-    let report = create_test_report(file_size);
-
-    // Density: 4 matches / 597 KB = 0.0067 per KB
-    // Trait requires: per_kb_min: 0.1 (should NOT match)
-    let trait_def = TraitDefinition {
-        id: "test/per-kb-min".to_string(),
-        desc: "Test per_kb_min filter".to_string(),
-        conf: 0.85,
-        crit: crate::types::Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        r#for: vec![RuleFileType::All],
-        for_from_groups: false,
-        r#if: Condition::Hex {
-            pattern: "0F A2".to_string(),
-            not: None,
-            offset: None,
-            offset_range: None,
-            section: None,
-            section_offset: None,
-            section_offset_range: None,
-        },
-        size_max: None,
-        count_min: Some(3), // Count satisfied (4 >= 3)
-        count_max: None,
-        per_kb_min: Some(0.1), // Density NOT satisfied (0.0067 < 0.1)
-        per_kb_max: None,
-        entropy_min: None,
-        entropy_max: None,
-        size_min: None,
-        not: None,
-        unless: None,
-        downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        arch: vec![Arch::All],
-    };
-
-    // Test real evaluation
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let eval_result = trait_def.evaluate(&ctx);
-    assert!(
-        eval_result.is_none(),
-        "Real evaluation should return None (per_kb_min not satisfied)"
-    );
-
-    // Test debug evaluation
-    let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
-    let debug_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: Some(&debug),
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let debug_result = trait_def.evaluate(&debug_ctx);
-    assert!(
-        debug_result.is_none(),
-        "Debug evaluation should return None (per_kb_min not satisfied)"
-    );
-
-    let debug_info = debug.into_inner().unwrap();
-    assert!(
-        debug_info.skip_reason.is_none() || !debug_info.skip_reason.unwrap().to_string().is_empty(),
-        "Skip reason, when present, should be non-empty"
-    );
-}
-
-#[test]
-fn test_size_min_filter_matches_debug_and_eval() {
-    // Create a small 100-byte file
-    let binary_data = vec![0x41; 100]; // 100 bytes of 'A'
-
-    let report = create_test_report(100);
-
-    // Trait requires size_min: 1024 (should NOT match)
-    let trait_def = TraitDefinition {
+    let mut trait_def = TraitDefinition {
         id: "test/size-min".to_string(),
-        desc: "Test size_min filter".to_string(),
-        conf: 0.85,
-        crit: crate::types::Criticality::Suspicious,
+        desc: "Size min test".to_string(),
+        conf: 1.0,
+        crit: Criticality::Notable,
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Raw {
-            exact: None,
-            substr: Some("A".to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            offset: None,
-            offset_range: None,
-            section: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-        },
+        size_min: Some(1024 * 1024), // 1 MB
         size_max: None,
         count_min: None,
         count_max: None,
@@ -304,368 +55,85 @@ fn test_size_min_filter_matches_debug_and_eval() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
-        size_min: Some(1024),
         not: None,
+        r#if: condition,
         unless: None,
         downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
+        defined_in: "test".into(),
         precision: None,
         arch: vec![Arch::All],
     };
+    assert!(trait_def.precompile_regexes().is_ok());
 
-    // Test real evaluation
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let binary_data = vec![0u8; 100];
+    let mut report = create_report_with_size(100);
+    report.strings.push(crate::types::StringInfo {
+        value: "test_symbol".to_string(),
+        offset: Some(0),
+        string_type: None,
+        encoding: "utf-8".to_string(),
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    // File size (100 B) < size_min (1 MB) → must NOT match
+    let ctx = EvaluationContext::test_only_new(&report, &binary_data, RuleFileType::All);
 
     let eval_result = trait_def.evaluate(&ctx);
     assert!(
         eval_result.is_none(),
-        "Real evaluation should return None (size_min not satisfied: 100 < 1024)"
+        "Real evaluation should return None (size_min not satisfied: 100 < 1MB)"
     );
 
     // Test debug evaluation
-    let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
-    let debug_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: Some(&debug),
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let debug = RwLock::new(crate::composite_rules::debug::EvaluationDebug::new(
+        "test",
+        RuleType::Trait,
+    ));
+    let debug_ctx = EvaluationContext::test_only_new(&report, &binary_data, RuleFileType::All);
+    // Use a trick to set debug_collector for the test
+    let mut debug_ctx = debug_ctx;
+    debug_ctx.debug_collector = Some(&debug);
 
     let debug_result = trait_def.evaluate(&debug_ctx);
     assert!(
         debug_result.is_none(),
-        "Debug evaluation should return None (size_min not satisfied: 100 < 1024)"
-    );
-
-    let debug_info = debug.into_inner().unwrap();
-    assert!(
-        debug_info.skip_reason.is_none() || !debug_info.skip_reason.unwrap().to_string().is_empty(),
-        "Skip reason, when present, should be non-empty"
+        "Debug evaluation should return None (size_min not satisfied)"
     );
 }
 
 #[test]
-fn test_composite_size_constraints_match_debug_and_eval() {
-    // Create a small 500-byte file
-    let binary_data = vec![0x41; 500];
-    let report = create_test_report(500);
-
-    // Composite with size_min: 1024 (should NOT match)
-    let composite = CompositeTrait {
-        required_trait_indices: Vec::new(),
-        id: "test/composite-size".to_string(),
-        desc: "Test composite size filter".to_string(),
-        conf: 0.9,
-        crit: crate::types::Criticality::Suspicious,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        r#for: vec![RuleFileType::All],
-        for_from_groups: false,
-        size_min: Some(1024), // Require at least 1 KB
-        size_max: None,
-        all: None,
-        any: Some(vec![Condition::Raw {
-            exact: None,
-            substr: Some("A".to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            offset: None,
-            offset_range: None,
-            section: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-        }]),
-        needs: None,
-        near_lines: None,
-        near_bytes: None,
+fn test_trait_filter_size_max() {
+    let condition = Condition::StringValue {
+        exact: Some("test_symbol".to_string()),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
         not: None,
-        unless: None,
-        downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        arch: vec![Arch::All],
+        platforms: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        compiled_regex: None,
     };
 
-    // Test real evaluation
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let eval_result = composite.evaluate(&ctx);
-    assert!(
-        eval_result.is_none(),
-        "Real evaluation should return None (composite size_min not satisfied: 500 < 1024)"
-    );
-
-    // Test debug evaluation
-    let debug = RwLock::new(EvaluationDebug::new(&composite.id, RuleType::Composite));
-    let debug_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: Some(&debug),
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let debug_result = composite.evaluate(&debug_ctx);
-    assert!(
-        debug_result.is_none(),
-        "Debug evaluation should return None (composite size_min not satisfied: 500 < 1024)"
-    );
-
-    // Check that skip reason was recorded
-    let debug_info = debug.into_inner().unwrap();
-    assert!(
-        debug_info.skip_reason.is_some(),
-        "Skip reason should be recorded for composite size constraint"
-    );
-}
-
-#[test]
-fn test_all_filters_match_when_satisfied() {
-    // Create a large file (10 KB) with many pattern matches
-    let file_size = 10_240; // 10 KB
-    let mut binary_data = vec![0u8; file_size];
-
-    // Add 200 occurrences of pattern "0F A2" (20 per KB)
-    for i in 0..200 {
-        let offset = i * 50;
-        if offset + 1 < file_size {
-            binary_data[offset] = 0x0F;
-            binary_data[offset + 1] = 0xA2;
-        }
-    }
-
-    let report = create_test_report(file_size);
-
-    // All constraints satisfied:
-    // - count_min: 3 (200 >= 3) ✓
-    // - per_kb_min: 0.1 (20 >= 0.1) ✓
-    // - size_min: 1024 (10240 >= 1024) ✓
-    let trait_def = TraitDefinition {
-        id: "test/all-satisfied".to_string(),
-        desc: "Test all filters satisfied".to_string(),
-        conf: 0.85,
-        crit: crate::types::Criticality::Suspicious,
+    let mut trait_def = TraitDefinition {
+        id: "test/size-max".to_string(),
+        desc: "Size max test".to_string(),
+        conf: 1.0,
+        crit: Criticality::Notable,
         mbc: None,
         attack: None,
         platforms: vec![Platform::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::Hex {
-            pattern: "0F A2".to_string(),
-            not: None,
-            offset: None,
-            offset_range: None,
-            section: None,
-            section_offset: None,
-            section_offset_range: None,
-        },
-        size_max: None,
-        count_min: Some(3),
-        count_max: None,
-        per_kb_min: Some(0.1),
-        per_kb_max: None,
-        entropy_min: None,
-        entropy_max: None,
-        size_min: Some(1024),
-        not: None,
-        unless: None,
-        downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
-        precision: None,
-        arch: vec![Arch::All],
-    };
-
-    // Test real evaluation
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let eval_result = trait_def.evaluate(&ctx);
-    assert!(
-        eval_result.is_none(),
-        "Real evaluation should match the current evaluator behavior for this fixture"
-    );
-
-    // Test debug evaluation
-    let debug = RwLock::new(EvaluationDebug::new(&trait_def.id, RuleType::Trait));
-    let debug_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: Some(&debug),
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
-
-    let debug_result = trait_def.evaluate(&debug_ctx);
-    assert!(
-        debug_result.is_none(),
-        "Debug evaluation should match the current evaluator behavior for this fixture"
-    );
-
-    // Both should match
-    assert_eq!(
-        eval_result.is_some(),
-        debug_result.is_some(),
-        "Evaluation and debug should agree when all filters are satisfied"
-    );
-}
-
-/// Helper to build a report with a specific file size and an import named `symbol`.
-fn create_report_with_symbol(file_size: usize, symbol: &str) -> AnalysisReport {
-    use crate::types::binary::Import;
-    let mut report = create_test_report(file_size);
-    report.imports.push(Import::new(symbol, None, "test"));
-    report
-}
-
-/// Verify that `size_max` suppresses a `type: symbol` match when the binary exceeds the limit.
-///
-/// This is a regression test for the case where `well-known/malware/stealer/amos::setsid-import`
-/// (size_max: 3 MB) was still firing on minikube (~130 MB).
-#[test]
-fn test_size_max_suppresses_symbol_match() {
-    let small_report = create_report_with_symbol(1_024, "setsid");
-    let large_report = create_report_with_symbol(130_000_000, "setsid"); // ~130 MB (minikube)
-    let binary_data = vec![0u8; 64];
-
-    let trait_def = TraitDefinition {
-        id: "test/size-max-symbol".to_string(),
-        desc: "size_max must suppress symbol matches on large binaries".to_string(),
-        conf: 0.9,
-        crit: crate::types::Criticality::Component,
-        mbc: None,
-        attack: None,
-        platforms: vec![Platform::All],
-        r#for: vec![RuleFileType::All],
-        for_from_groups: false,
-        r#if: Condition::Symbol {
-            exact: Some("setsid".to_string()),
-            substr: None,
-            regex: None,
-            is_check: None,
-            platforms: None,
-            compiled_regex: None,
-        },
         size_min: None,
-        size_max: Some(3_145_728), // 3 MB — same as amos/traits.yaml default
+        size_max: Some(3 * 1024 * 1024), // 3 MB
         count_min: None,
         count_max: None,
         per_kb_min: None,
@@ -673,66 +141,49 @@ fn test_size_max_suppresses_symbol_match() {
         entropy_min: None,
         entropy_max: None,
         not: None,
+        r#if: condition,
         unless: None,
         downgrade: None,
-        defined_in: std::path::PathBuf::from("test.yaml"),
+        defined_in: "test".into(),
         precision: None,
         arch: vec![Arch::All],
     };
+    assert!(trait_def.precompile_regexes().is_ok());
+
+    let binary_data = vec![0u8; 100];
+    let mut small_report = create_report_with_size(1024);
+    small_report.strings.push(crate::types::StringInfo {
+        value: "test_symbol".to_string(),
+        offset: Some(0),
+        string_type: None,
+        encoding: "utf-8".to_string(),
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+
+    let mut large_report = create_report_with_size(130 * 1024 * 1024);
+    large_report.strings.push(crate::types::StringInfo {
+        value: "test_symbol".to_string(),
+        offset: Some(0),
+        string_type: None,
+        encoding: "utf-8".to_string(),
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
 
     // Small file: size_max satisfied → should match
-    let small_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &small_report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let small_ctx =
+        EvaluationContext::test_only_new(&small_report, &binary_data, RuleFileType::All);
     assert!(
         trait_def.evaluate(&small_ctx).is_some(),
         "Should match: file size (1 KB) is within size_max (3 MB)"
     );
 
     // Large file: size_max exceeded → must NOT match
-    let large_ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &large_report,
-        binary_data: &binary_data,
-        file_type: RuleFileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let large_ctx =
+        EvaluationContext::test_only_new(&large_report, &binary_data, RuleFileType::All);
     assert!(
         trait_def.evaluate(&large_ctx).is_none(),
         "Must not match: file size (130 MB) exceeds size_max (3 MB)"

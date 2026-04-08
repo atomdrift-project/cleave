@@ -87,7 +87,7 @@ pub fn run(
     min_size: Option<u64>,
     max_size: Option<u64>,
     _disabled: &cli::DisabledComponents,
-    platforms: Vec<composite_rules::Platform>,
+    platforms: &[composite_rules::Platform],
     min_hostile_precision: f32,
     min_suspicious_precision: f32,
 ) -> Result<String> {
@@ -149,7 +149,7 @@ pub fn run(
     // Load capability mapper with full validation (test-match is a developer command)
     // Allow skipping for faster tests with CLEAVE_SKIP_TRAITS
     let capability_mapper = build_test_capability_mapper(
-        platforms.clone(),
+        platforms.to_owned(),
         min_hostile_precision,
         min_suspicious_precision,
     );
@@ -172,7 +172,7 @@ pub fn run(
         &capability_mapper,
         report,
         eval_data,
-        platforms.clone(),
+        platforms.to_owned(),
         None, // test-match evaluates conditions directly, not via full rule path
     );
     let context_info = debugger.context_info();
@@ -763,7 +763,7 @@ pub fn run(
                 report,
                 binary_data,
                 internal_file_type,
-                &platforms,
+                platforms,
                 None,
                 None,
             );
@@ -923,7 +923,7 @@ pub fn run(
                 report,
                 binary_data,
                 composite_rules::FileType::All,
-                &platforms,
+                platforms,
                 None,
                 None,
             );
@@ -1353,7 +1353,7 @@ pub fn run(
                 report,
                 binary_data,
                 composite_rules::FileType::All, // FileType doesn't matter for metrics
-                &platforms,
+                platforms,
                 None, // No additional findings
                 None, // No cached AST
             );

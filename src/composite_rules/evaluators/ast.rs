@@ -145,7 +145,10 @@ pub(crate) fn eval_ast<'a>(
                         }
                         MatchMode::Substr => {
                             if case_insensitive {
-                                node_ev.value.to_lowercase().contains(&pattern.to_lowercase())
+                                node_ev
+                                    .value
+                                    .to_lowercase()
+                                    .contains(&pattern.to_lowercase())
                             } else {
                                 node_ev.value.contains(pattern)
                             }

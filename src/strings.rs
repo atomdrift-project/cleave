@@ -237,7 +237,6 @@ impl StringExtractor {
         // decoded content and incorrectly try to re-classify it.
         info
     }
-
 }
 
 impl Default for StringExtractor {

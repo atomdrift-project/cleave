@@ -28,8 +28,10 @@ pub(crate) fn inspect_zip_metadata(
     let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP archive")?;
 
     let mut entries = Vec::with_capacity(archive.len());
-    let mut metrics = ArchiveMetrics::default();
-    metrics.has_comment = !archive.comment().is_empty();
+    let mut metrics = ArchiveMetrics {
+        has_comment: !archive.comment().is_empty(),
+        ..ArchiveMetrics::default()
+    };
 
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;

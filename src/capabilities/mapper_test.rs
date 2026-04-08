@@ -384,7 +384,9 @@ traits:
     // Also verify via full evaluation on an ELF report
     let mut report = create_test_report();
     report.target.file_type = "elf".to_string();
-    report.imports.push(crate::types::Import::new("textdomain", None, "test"));
+    report
+        .imports
+        .push(crate::types::Import::new("textdomain", None, "test"));
 
     let findings = mapper.evaluate_traits(&report, b"");
     assert!(

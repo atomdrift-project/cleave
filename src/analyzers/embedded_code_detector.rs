@@ -227,9 +227,8 @@ fn is_source_map_string_set(strings: &[StringInfo]) -> bool {
 
 fn is_inline_source_map_offset(parent_path: &str, offset: u64) -> bool {
     let host_path = parent_path.split("##").next().unwrap_or(parent_path);
-    let data = match fs::read(host_path) {
-        Ok(data) => data,
-        Err(_) => return false,
+    let Ok(data) = fs::read(host_path) else {
+        return false;
     };
 
     let offset = offset as usize;
@@ -444,15 +443,14 @@ fn has_command_before(bytes: &[u8], marker_idx: usize) -> bool {
 
     let start = prefix[..end]
         .iter()
-        .rposition(|b| b.is_ascii_whitespace())
+        .rposition(u8::is_ascii_whitespace)
         .map_or(0, |pos| pos + 1);
     if start >= end {
         return false;
     }
 
-    let token = match std::str::from_utf8(&prefix[start..end]) {
-        Ok(token) => token,
-        Err(_) => return false,
+    let Ok(token) = std::str::from_utf8(&prefix[start..end]) else {
+        return false;
     };
 
     is_shell_command_token(token)

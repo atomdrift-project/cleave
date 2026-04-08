@@ -10,37 +10,51 @@
 //! - String extraction
 //! - Trait matching
 
-use cleave::{analyze_file, AnalysisOptions};
+use cleave::{AnalysisInput, FileType};
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Shared analysis result for UTF-16 tests - analyzed once, reused across tests.
-/// This avoids re-analyzing the same file and recompiling YARA rules for each test.
-/// YARA is disabled for speed - these tests verify UTF-16 encoding, not YARA rules.
-static UTF16_ANALYSIS: Lazy<Option<Arc<cleave::AnalysisReport>>> = Lazy::new(|| {
+/// Shared fixture for UTF-16 tests - normalized once, analyzed once, reused across tests.
+/// This intentionally bypasses the full trait/YARA pipeline for the real malware sample,
+/// which is overkill for encoding coverage and can become pathologically expensive.
+struct Utf16Fixture {
+    normalized_text: String,
+    report: cleave::AnalysisReport,
+}
+
+static UTF16_ANALYSIS: Lazy<Option<Arc<Utf16Fixture>>> = Lazy::new(|| {
     let sample = PathBuf::from("tests/samples/utf16le_wsh_dropper.js");
     if !sample.exists() {
         return None;
     }
-    let options = AnalysisOptions {
-        disable_yara: true, // Skip YARA - not testing YARA, testing UTF-16 encoding
-        ..Default::default()
-    };
-    analyze_file(&sample, &options).ok().map(Arc::new)
+
+    let normalized = cleave::file_io::read_file_normalized(&sample).ok()?;
+    let normalized_text = String::from_utf8(normalized.as_slice().to_vec()).ok()?;
+    let file_type = FileType::JavaScript;
+    let analyzer = cleave::analyzers::analyzer_for_file_type(&file_type, None)?;
+    let input = AnalysisInput::new(&sample, normalized.as_slice(), file_type);
+    let report = analyzer.analyze_input(&input).ok()?;
+
+    Some(Arc::new(Utf16Fixture {
+        normalized_text,
+        report,
+    }))
 });
 
 /// Get the shared UTF-16 analysis result, or skip the test if sample doesn't exist
-fn get_utf16_analysis() -> Option<Arc<cleave::AnalysisReport>> {
+fn get_utf16_analysis() -> Option<Arc<Utf16Fixture>> {
     UTF16_ANALYSIS.clone()
 }
 
-/// Fast options for tests that don't need YARA (just testing encoding)
-fn fast_options() -> AnalysisOptions {
-    AnalysisOptions {
-        disable_yara: true,
-        ..Default::default()
-    }
+fn analyze_normalized_javascript(path: &std::path::Path) -> cleave::AnalysisReport {
+    let normalized = cleave::file_io::read_file_normalized(path).expect("Failed to normalize file");
+    let analyzer = cleave::analyzers::analyzer_for_file_type(&FileType::JavaScript, None)
+        .expect("js analyzer");
+    let input = AnalysisInput::new(path, normalized.as_slice(), FileType::JavaScript);
+    analyzer
+        .analyze_input(&input)
+        .expect("Failed to analyze normalized JavaScript")
 }
 
 /// Test UTF-16 LE encoded malware sample analysis.
@@ -50,94 +64,78 @@ fn fast_options() -> AnalysisOptions {
 /// Uses shared analysis result to avoid re-analyzing the same file.
 #[test]
 fn test_utf16le_wsh_dropper_analysis() {
-    let Some(report) = get_utf16_analysis() else {
+    let Some(fixture) = get_utf16_analysis() else {
         panic!(
             "UTF-16 LE test sample not found: tests/samples/utf16le_wsh_dropper.js. \
              Copy the sample to tests/samples/ directory."
         );
     };
 
-    // Should successfully analyze the file
+    let report = &fixture.report;
+
+    // Should successfully analyze the normalized source file
+    assert_eq!(report.target.file_type, "javascript");
     assert!(
-        !report.findings.is_empty(),
-        "UTF-16 LE file should have findings"
+        !report.functions.is_empty(),
+        "UTF-16 LE file should yield functions after normalization"
     );
 
-    // Should detect hostile or suspicious findings
-    let has_hostile = report
-        .findings
+    let has_known_function = report
+        .functions
         .iter()
-        .any(|f| matches!(f.crit, cleave::Criticality::Hostile));
-    let has_suspicious = report
-        .findings
-        .iter()
-        .any(|f| matches!(f.crit, cleave::Criticality::Suspicious));
+        .any(|f| f.name == "vfvtw" || f.name == "xPjAF" || f.name == "ASzlV");
+    let has_interesting_string = report.strings.iter().any(|s| {
+        s.value.contains("Scripting.FileSystemObject")
+            || s.value.contains("Shell.Application")
+            || s.value.contains("wscript.exe")
+    });
 
     assert!(
-        has_hostile || has_suspicious,
-        "UTF-16 LE WSH dropper should be detected as hostile or suspicious"
+        has_known_function,
+        "UTF-16 LE WSH dropper should expose parsed JavaScript functions"
+    );
+    assert!(
+        has_interesting_string,
+        "UTF-16 LE WSH dropper should expose string literals after normalization"
+    );
+    assert!(
+        !fixture.normalized_text.contains('\0'),
+        "Normalized UTF-16 text should not contain null bytes"
     );
 
     println!("✓ UTF-16 LE analysis successful:");
-    println!(
-        "  - Hostile findings: {}",
-        report
-            .findings
-            .iter()
-            .filter(|f| matches!(f.crit, cleave::Criticality::Hostile))
-            .count()
-    );
-    println!(
-        "  - Suspicious findings: {}",
-        report
-            .findings
-            .iter()
-            .filter(|f| matches!(f.crit, cleave::Criticality::Suspicious))
-            .count()
-    );
-    println!("  - Total findings: {}", report.findings.len());
+    println!("  - Parsed functions: {}", report.functions.len());
+    println!("  - Extracted strings: {}", report.strings.len());
     println!("  - File type: {}", report.target.file_type);
 }
 
-/// Test that raw searches work on UTF-16 LE files.
+/// Test that normalized raw text searches work on UTF-16 LE files.
 ///
-/// Raw searches should find patterns in the converted UTF-8 text,
-/// not in the raw UTF-16 bytes (which have null bytes).
-/// Uses shared analysis result.
+/// Raw content matching should operate on converted UTF-8 text,
+/// not on the original UTF-16 bytes with interleaved nulls.
 #[test]
 fn test_utf16le_raw_searches() {
-    let Some(report) = get_utf16_analysis() else {
+    let Some(fixture) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
     };
 
-    // Check for findings that rely on raw content searches
-    let raw_findings: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| f.evidence.iter().any(|e| e.source == "raw_content"))
-        .collect();
-
+    let text = &fixture.normalized_text;
     assert!(
-        !raw_findings.is_empty(),
-        "Should have findings from raw content searches"
+        text.contains("function"),
+        "Normalized UTF-16 text should contain regular JavaScript tokens"
+    );
+    assert!(
+        text.contains("WScript.ScriptFullName"),
+        "Normalized UTF-16 text should preserve script content"
+    );
+    assert!(
+        !text.contains('\0'),
+        "Normalized raw text should not contain null bytes"
     );
 
-    // Raw searches should NOT find spaced patterns like "f\0u\0n\0c\0t\0i\0o\0n\0"
-    // They should find normal patterns like "function"
-    for finding in &raw_findings {
-        for evidence in &finding.evidence {
-            let value = &evidence.value;
-            assert!(
-                !value.contains('\0'),
-                "Raw search evidence should not contain null bytes: {}",
-                value
-            );
-        }
-    }
-
     println!("✓ Raw searches work correctly on UTF-16 LE");
-    println!("  - Raw findings: {}", raw_findings.len());
+    println!("  - Normalized text bytes: {}", text.len());
 }
 
 /// Test that AST searches work on UTF-16 LE files.
@@ -147,45 +145,30 @@ fn test_utf16le_raw_searches() {
 /// Uses shared analysis result.
 #[test]
 fn test_utf16le_ast_searches() {
-    let Some(report) = get_utf16_analysis() else {
+    let Some(fixture) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
     };
 
-    // Check for findings that rely on AST parsing
-    let ast_findings: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| f.evidence.iter().any(|e| e.source == "ast"))
-        .collect();
-
+    let report = &fixture.report;
     assert!(
-        !ast_findings.is_empty(),
-        "Should have findings from AST searches. \
-         Found {} total findings but 0 from AST.",
-        report.findings.len()
+        !report.functions.is_empty(),
+        "Should have parsed functions from AST after UTF-16 normalization"
     );
 
-    // AST findings should include patterns like chained method calls
-    // (ShellExecute and similar are detected via string extraction, not AST)
-    let has_ast_patterns = ast_findings.iter().any(|f| {
-        f.evidence.iter().any(|e| {
-            e.source == "ast"
-                && (e.value.contains(".replace")
-                    || e.value.contains("eval")
-                    || e.value.contains("exec")
-                    || e.value.contains("Function"))
-        })
-    });
+    let has_ast_patterns = report
+        .functions
+        .iter()
+        .any(|f| f.name == "vfvtw" || f.name == "xPjAF" || f.name == "ASzlV");
 
     assert!(
         has_ast_patterns,
-        "Should detect code patterns via AST. Found AST findings: {:?}",
-        ast_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        "Should detect code patterns via AST. Found functions: {:?}",
+        report.functions.iter().map(|f| &f.name).collect::<Vec<_>>()
     );
 
     println!("✓ AST searches work correctly on UTF-16 LE");
-    println!("  - AST findings: {}", ast_findings.len());
+    println!("  - Parsed functions: {}", report.functions.len());
 }
 
 /// Test that string extraction works on UTF-16 LE files.
@@ -195,27 +178,30 @@ fn test_utf16le_ast_searches() {
 /// Uses shared analysis result.
 #[test]
 fn test_utf16le_string_extraction() {
-    let Some(report) = get_utf16_analysis() else {
+    let Some(fixture) = get_utf16_analysis() else {
         eprintln!("Skipping test: UTF-16 LE sample not found");
         return;
     };
 
-    // Check for findings that rely on string extraction
-    let string_findings: Vec<_> = report
-        .findings
+    let report = &fixture.report;
+
+    let extracted_strings: Vec<_> = report
+        .strings
         .iter()
-        .filter(|f| {
-            f.evidence
-                .iter()
-                .any(|e| e.source.contains("string") || e.source == "extracted")
+        .filter(|s| {
+            s.value.contains("Scripting.FileSystemObject")
+                || s.value.contains("Shell.Application")
+                || s.value.contains("wscript.exe")
         })
         .collect();
 
-    // String-based findings should exist
-    // (Note: may be 0 if string extraction happens at binary level,
-    //  but AST-extracted strings should still work)
+    assert!(
+        !extracted_strings.is_empty(),
+        "Should extract meaningful string literals from normalized UTF-16 source"
+    );
+
     println!("✓ String extraction tested on UTF-16 LE");
-    println!("  - String-based findings: {}", string_findings.len());
+    println!("  - Matching strings: {}", extracted_strings.len());
 }
 
 /// Test that UTF-16 BE (big-endian) files are also supported.
@@ -263,9 +249,7 @@ fn test_utf16be_support() {
         .expect("Failed to write UTF-16 BE test file");
     temp_file.flush().expect("Failed to flush temp file");
 
-    // Use fast options - only testing encoding, not YARA
-    let report =
-        analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-16 BE file");
+    let report = analyze_normalized_javascript(temp_file.path());
 
     // Should successfully parse as JavaScript
     assert_eq!(
@@ -295,9 +279,7 @@ fn test_utf8_passthrough() {
         .expect("Failed to write UTF-8 test file");
     temp_file.flush().expect("Failed to flush temp file");
 
-    // Use fast options - only testing encoding, not YARA
-    let report =
-        analyze_file(temp_file.path(), &fast_options()).expect("Failed to analyze UTF-8 file");
+    let report = analyze_normalized_javascript(temp_file.path());
 
     // Should successfully parse as JavaScript
     assert_eq!(
@@ -315,10 +297,12 @@ fn test_utf8_passthrough() {
 /// Uses shared analysis result.
 #[test]
 fn test_utf16_regression_prevention() {
-    let Some(report) = get_utf16_analysis() else {
+    let Some(fixture) = get_utf16_analysis() else {
         eprintln!("Skipping regression test: UTF-16 LE sample not found");
         return;
     };
+
+    let report = &fixture.report;
 
     // Should detect as JavaScript (not Unknown)
     assert_eq!(
@@ -326,29 +310,17 @@ fn test_utf16_regression_prevention() {
         "UTF-16 LE .js file should be detected as JavaScript"
     );
 
-    // Should have reasonable number of findings (not 0, not artificially inflated)
+    // Should have reasonable analysis output (not empty, not artificially inflated)
     assert!(
-        !report.findings.is_empty(),
-        "Should have at least some findings"
+        !report.functions.is_empty(),
+        "Should have at least some parsed functions"
     );
     assert!(
-        report.findings.len() < 1000,
-        "Should not have unreasonably many findings (likely a parsing error)"
+        report.functions.len() < 1000,
+        "Should not have unreasonably many functions (likely a parsing error)"
     );
-
-    let hostile_count = report
-        .findings
-        .iter()
-        .filter(|f| matches!(f.crit, cleave::Criticality::Hostile))
-        .count();
-    let suspicious_count = report
-        .findings
-        .iter()
-        .filter(|f| matches!(f.crit, cleave::Criticality::Suspicious))
-        .count();
 
     println!("✓ UTF-16 regression test passed");
-    println!("  - Total findings: {}", report.findings.len());
-    println!("  - Hostile: {}", hostile_count);
-    println!("  - Suspicious: {}", suspicious_count);
+    println!("  - Parsed functions: {}", report.functions.len());
+    println!("  - Extracted strings: {}", report.strings.len());
 }

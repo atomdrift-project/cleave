@@ -4,7 +4,9 @@
 //! including empty mappers for testing, mappers with custom precision thresholds, and
 //! the main production constructor.
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{
+    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
+};
 use crate::composite_rules::Platform;
 use anyhow::Context;
 use std::collections::HashMap;

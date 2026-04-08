@@ -98,8 +98,8 @@ impl super::CapabilityMapper {
         let file_type = self.detect_file_type(&report.target.file_type);
 
         // Build section map ONCE for location-constrained matching.
-        // Skip parsing for non-binary files to save ~100ms per file.
-        let section_map = if file_type.is_binary() {
+        // Skip parsing for files that don't have sections (saves ~100ms per file).
+        let section_map = if file_type.has_sections() {
             SectionMap::from_binary(binary_data)
         } else {
             SectionMap::empty(binary_data.len() as u64)
@@ -111,9 +111,11 @@ impl super::CapabilityMapper {
         let raw_regex_matches_ref = raw_regex_matches.as_ref();
 
         // Use trait index to only evaluate applicable traits
-        let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
-
-
+        let applicable_indices: Vec<usize> = self
+            .trait_index
+            .get_applicable(&file_type)
+            .into_indices_static()
+            .collect();
 
         // Idea 9: Batch AST node collection
         let mut ast_kind_cache = None;
@@ -124,7 +126,9 @@ impl super::CapabilityMapper {
                     let trait_def = &self.trait_definitions[idx];
                     if let Condition::Ast { kind, node, .. } = &trait_def.r#if {
                         if let Some(k) = kind {
-                            for nt in crate::composite_rules::ast_kinds::map_kind_to_node_types(k, file_type) {
+                            for nt in crate::composite_rules::ast_kinds::map_kind_to_node_types(
+                                k, file_type,
+                            ) {
                                 required_node_types.insert(nt);
                             }
                         } else if let Some(n) = node {
@@ -136,37 +140,49 @@ impl super::CapabilityMapper {
                 if !required_node_types.is_empty() {
                     let mut cache = FxHashMap::default();
                     let mut cursor = tree.walk();
-                    crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
-                        let kind = node.kind();
-                        if required_node_types.contains(kind) {
-                            if let Ok(text) = node.utf8_text(source.as_bytes()) {
-                                cache.entry(kind.to_string()).or_insert_with(Vec::new).push(Evidence {
-                                    method: "ast".to_string(),
-                                    source: "tree-sitter".to_string(),
-                                    value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
-                                    location: Some(format!(
-                                        "{}:{}",
-                                        node.start_position().row + 1,
-                                        node.start_position().column + 1
-                                    )),
-                                    offsets: vec![node.start_byte() as u64],
-                                    ..Default::default()
-                                });
+                    crate::analyzers::ast_walker::walk_tree_with_stats(
+                        &mut cursor,
+                        None,
+                        |node, _| {
+                            let kind = node.kind();
+                            if required_node_types.contains(kind) {
+                                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                                    cache
+                                        .entry(kind.to_string())
+                                        .or_insert_with(Vec::new)
+                                        .push(Evidence {
+                                        method: "ast".to_string(),
+                                        source: "tree-sitter".to_string(),
+                                        value:
+                                            crate::composite_rules::evaluators::truncate_evidence(
+                                                text, 100,
+                                            ),
+                                        location: Some(format!(
+                                            "{}:{}",
+                                            node.start_position().row + 1,
+                                            node.start_position().column + 1
+                                        )),
+                                        offsets: vec![node.start_byte() as u64],
+                                        ..Default::default()
+                                    });
+                                }
                             }
-                        }
-                        true
-                    });
+                            true
+                        },
+                    );
                     ast_kind_cache = Some(cache);
                 }
             }
         }
-
         // Build all_strings ONCE — combines report strings, imports, and exports
         let t_strings = std::time::Instant::now();
 
         // Only build and match strings if there is something to match against
         let (string_matched_traits, cached_evidence, regex_candidates) =
-            if !report.strings.is_empty() || !report.imports.is_empty() || !report.exports.is_empty() {
+            if !report.strings.is_empty()
+                || !report.imports.is_empty()
+                || !report.exports.is_empty()
+            {
                 let all_strings = super::build_all_strings(report);
 
                 // Run string matching ONCE
@@ -180,7 +196,11 @@ impl super::CapabilityMapper {
                 let candidates = self.string_match_index.find_regex_candidates(&all_strings);
                 (traits, evidence, candidates)
             } else {
-                (FxHashSet::default(), FxHashMap::default(), FxHashSet::default())
+                (
+                    FxHashSet::default(),
+                    FxHashMap::default(),
+                    FxHashSet::default(),
+                )
             };
 
         // Run symbol matching ONCE

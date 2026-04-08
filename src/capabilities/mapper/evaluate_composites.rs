@@ -6,8 +6,8 @@
 //! - Fixed-point iteration for cascading dependencies
 //! - Downgrade re-evaluation with complete finding context
 
-use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::capabilities::indexes::TraitBitSet;
+use crate::composite_rules::{Arch, EvaluationContext, FileType as RuleFileType, SectionMap};
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashMap;
 use std::collections::HashMap;

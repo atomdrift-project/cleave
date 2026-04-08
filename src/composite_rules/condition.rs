@@ -4,6 +4,15 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
+fn compile_regex_logged(
+    _kind: &str,
+    _source_pattern: &str,
+    compile_pattern: &str,
+    _case_insensitive: bool,
+) -> std::result::Result<regex::Regex, regex::Error> {
+    regex::Regex::new(compile_pattern)
+}
+
 /// Custom serde for offset ranges that accepts/produces ergonomic formats:
 /// - `[start, end]` - closed range from start to end
 /// - `[start,]` or `[start, null]` or `[start, ~]` - from start to end of file (open-ended end)
@@ -2374,9 +2383,16 @@ impl Condition {
                 ..
             } => {
                 // Compile symbol regex if present
-                *compiled_regex = Some(regex::Regex::new(regex_pattern).map_err(|e| {
-                    anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
-                })?);
+                *compiled_regex = Some(
+                    compile_regex_logged("symbol.regex", regex_pattern, regex_pattern, false)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile symbol regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?,
+                );
             }
             Condition::StringValue {
                 regex,
@@ -2389,7 +2405,14 @@ impl Condition {
                 if let Some(word_pattern) = word {
                     let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
                     *compiled_regex = Some(if *case_insensitive {
-                        regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged(
+                            "string_value.word",
+                            word_pattern,
+                            &compile_pattern,
+                            true,
+                        )
+                        .map_err(|e| {
                             anyhow::anyhow!(
                                 "Failed to compile case-insensitive word pattern '{}': {}",
                                 word_pattern,
@@ -2397,7 +2420,13 @@ impl Condition {
                             )
                         })?
                     } else {
-                        regex::Regex::new(&regex_pattern).map_err(|e| {
+                        compile_regex_logged(
+                            "string_value.word",
+                            word_pattern,
+                            &regex_pattern,
+                            false,
+                        )
+                        .map_err(|e| {
                             anyhow::anyhow!(
                                 "Failed to compile word pattern '{}': {}",
                                 word_pattern,
@@ -2407,7 +2436,14 @@ impl Condition {
                     });
                 } else if let Some(regex_pattern) = regex {
                     *compiled_regex = Some(if *case_insensitive {
-                        regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged(
+                            "string_value.regex",
+                            regex_pattern,
+                            &compile_pattern,
+                            true,
+                        )
+                        .map_err(|e| {
                             anyhow::anyhow!(
                                 "Failed to compile case-insensitive string regex '{}': {}",
                                 regex_pattern,
@@ -2415,7 +2451,13 @@ impl Condition {
                             )
                         })?
                     } else {
-                        regex::Regex::new(regex_pattern).map_err(|e| {
+                        compile_regex_logged(
+                            "string_value.regex",
+                            regex_pattern,
+                            regex_pattern,
+                            false,
+                        )
+                        .map_err(|e| {
                             anyhow::anyhow!(
                                 "Failed to compile string regex '{}': {}",
                                 regex_pattern,
@@ -2436,39 +2478,45 @@ impl Condition {
                 if let Some(word_pattern) = word {
                     let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
                     *compiled_regex = Some(if *case_insensitive {
-                        regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
-                            anyhow::anyhow!(
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged("raw.word", word_pattern, &compile_pattern, true)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
                                 "Failed to compile case-insensitive content word pattern '{}': {}",
                                 word_pattern,
                                 e
                             )
-                        })?
+                            })?
                     } else {
-                        regex::Regex::new(&regex_pattern).map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile content word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                        })?
+                        compile_regex_logged("raw.word", word_pattern, &regex_pattern, false)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile content word pattern '{}': {}",
+                                    word_pattern,
+                                    e
+                                )
+                            })?
                     });
                 } else if let Some(regex_pattern) = regex {
                     *compiled_regex = Some(if *case_insensitive {
-                        regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive content regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged("raw.regex", regex_pattern, &compile_pattern, true)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile case-insensitive content regex '{}': {}",
+                                    regex_pattern,
+                                    e
+                                )
+                            })?
                     } else {
-                        regex::Regex::new(regex_pattern).map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile content regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
+                        compile_regex_logged("raw.regex", regex_pattern, regex_pattern, false)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile content regex '{}': {}",
+                                    regex_pattern,
+                                    e
+                                )
+                            })?
                     });
                 }
             }
@@ -2480,17 +2528,21 @@ impl Condition {
             } => {
                 // Compile regex pattern for kv searches
                 *compiled_regex = Some(if *case_insensitive {
-                    regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile case-insensitive kv regex '{}': {}",
-                            regex_pattern,
-                            e
-                        )
-                    })?
+                    let compile_pattern = format!("(?i){}", regex_pattern);
+                    compile_regex_logged("kv.regex", regex_pattern, &compile_pattern, true)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile case-insensitive kv regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
                 } else {
-                    regex::Regex::new(regex_pattern).map_err(|e| {
-                        anyhow::anyhow!("Failed to compile kv regex '{}': {}", regex_pattern, e)
-                    })?
+                    compile_regex_logged("kv.regex", regex_pattern, regex_pattern, false).map_err(
+                        |e| {
+                            anyhow::anyhow!("Failed to compile kv regex '{}': {}", regex_pattern, e)
+                        },
+                    )?
                 });
             }
             Condition::StringValueCount {
@@ -2499,13 +2551,21 @@ impl Condition {
                 ..
             } => {
                 // Compile string_count regex if present
-                *compiled_regex = Some(regex::Regex::new(regex_pattern).map_err(|e| {
-                    anyhow::anyhow!(
-                        "Failed to compile string_count regex '{}': {}",
+                *compiled_regex = Some(
+                    compile_regex_logged(
+                        "string_value_count.regex",
                         regex_pattern,
-                        e
+                        regex_pattern,
+                        false,
                     )
-                })?);
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile string_count regex '{}': {}",
+                            regex_pattern,
+                            e
+                        )
+                    })?,
+                );
             }
             Condition::Basename {
                 regex: Some(regex_pattern),
@@ -2515,21 +2575,24 @@ impl Condition {
             } => {
                 // Compile basename regex if present
                 *compiled_regex = Some(if *case_insensitive {
-                    regex::Regex::new(&format!("(?i){}", regex_pattern)).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile case-insensitive basename regex '{}': {}",
-                            regex_pattern,
-                            e
-                        )
-                    })?
+                    let compile_pattern = format!("(?i){}", regex_pattern);
+                    compile_regex_logged("basename.regex", regex_pattern, &compile_pattern, true)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile case-insensitive basename regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
                 } else {
-                    regex::Regex::new(regex_pattern).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile basename regex '{}': {}",
-                            regex_pattern,
-                            e
-                        )
-                    })?
+                    compile_regex_logged("basename.regex", regex_pattern, regex_pattern, false)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile basename regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
                 });
             }
             _ => {}

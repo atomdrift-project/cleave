@@ -201,13 +201,13 @@ fn test_embedded_pe_in_nsis_overlay_is_not_suspicious() {
 
     let output = run_analyze_json(&path);
     let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let findings = report["files"][0]["findings"]
+    let findings = report["fs"][0]["ts"]
         .as_array()
         .expect("top-level findings should be an array");
 
     let embedded_pe_findings: Vec<_> = findings
         .iter()
-        .filter(|finding| finding["id"] == "binary/embedded/pe")
+        .filter(|finding| finding["i"] == "binary/embedded/pe")
         .collect();
     assert!(
         !embedded_pe_findings.is_empty(),
@@ -216,8 +216,8 @@ fn test_embedded_pe_in_nsis_overlay_is_not_suspicious() {
     assert!(
         embedded_pe_findings
             .iter()
-            .all(|finding| finding["crit"] == "notable"),
-        "expected NSIS overlay embedded PE findings to be downgraded to notable.\nstdout:\n{}",
+            .all(|finding| finding["l"] == 3),
+        "expected NSIS overlay embedded PE findings to be downgraded to notable (level 3).\nstdout:\n{}",
         String::from_utf8_lossy(&output.stdout)
     );
 }

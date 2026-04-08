@@ -22,7 +22,9 @@
 //! - **helpers**: Utility functions (file type detection, validation helpers)
 //! - **builder**: Constructor methods (empty, new, with_platforms)
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{
+    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
+};
 use crate::capabilities::models::TraitInfo;
 use crate::composite_rules::{CompositeTrait, Platform, TraitDefinition};
 use std::collections::HashMap;

@@ -43,21 +43,18 @@ pub(crate) fn detect_from_path(path: &Path) -> Option<FileType> {
 
 /// Returns true if the path matched via filename (not extension).
 pub(crate) fn is_filename_match(path: &Path) -> bool {
-    detect_from_filename(path).is_some()
-        || {
-            let s = path.to_string_lossy();
-            (s.contains(".github/workflows/") || s.contains(".github\\workflows\\"))
-                && (ends_with_ci(s.as_bytes(), b".yml")
-                    || ends_with_ci(s.as_bytes(), b".yaml"))
-        }
+    detect_from_filename(path).is_some() || {
+        let s = path.to_string_lossy();
+        (s.contains(".github/workflows/") || s.contains(".github\\workflows\\"))
+            && (ends_with_ci(s.as_bytes(), b".yml") || ends_with_ci(s.as_bytes(), b".yaml"))
+    }
 }
 
 /// Returns true if the path has a data/config extension that should not be
 /// sent through content heuristics.
 pub(crate) fn is_data_format(path: &Path) -> bool {
-    let ext = match path.extension().and_then(|e| e.to_str()) {
-        Some(e) => e,
-        None => return false,
+    let Some(ext) = path.extension().and_then(|e| e.to_str()) else {
+        return false;
     };
 
     // Use a small stack buffer to lowercase without allocation
@@ -68,7 +65,9 @@ pub(crate) fn is_data_format(path: &Path) -> bool {
     buf[..ext.len()].copy_from_slice(ext.as_bytes());
     buf[..ext.len()].make_ascii_lowercase();
     // Input was valid UTF-8; ASCII lowering preserves that invariant.
-    let ext_lower = std::str::from_utf8(&buf[..ext.len()]).expect("ASCII lowercase preserves UTF-8");
+    let Ok(ext_lower) = std::str::from_utf8(&buf[..ext.len()]) else {
+        return false;
+    };
 
     matches!(
         ext_lower,
@@ -147,7 +146,9 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
     buf[..ext.len()].copy_from_slice(ext.as_bytes());
     buf[..ext.len()].make_ascii_lowercase();
     // Input was valid UTF-8; ASCII lowering preserves that invariant.
-    let ext_lower = std::str::from_utf8(&buf[..ext.len()]).expect("ASCII lowercase preserves UTF-8");
+    let Ok(ext_lower) = std::str::from_utf8(&buf[..ext.len()]) else {
+        return None;
+    };
 
     match ext_lower {
         "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => Some(FileType::Shell),
@@ -165,8 +166,8 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "ps1" | "psm1" | "psd1" => Some(FileType::PowerShell),
         "bat" | "cmd" => Some(FileType::Batch),
         "vbs" | "vbe" | "wsf" | "wsc" => Some(FileType::Vbs),
-        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" | "asm"
-        | "s" | "nasm" => Some(FileType::C),
+        "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "hxx" | "hh" | "pas" | "dpr" | "asm" | "s"
+        | "nasm" => Some(FileType::C),
         "lua" => Some(FileType::Lua),
         "cs" => Some(FileType::CSharp),
         "swift" => Some(FileType::Swift),
@@ -179,8 +180,9 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "plist" | "resx" => Some(FileType::Plist),
         "rtf" => Some(FileType::Rtf),
         "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => Some(FileType::OleDoc),
-        "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
-        | "xltm" => Some(FileType::Ooxml),
+        "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx" | "xltm" => {
+            Some(FileType::Ooxml)
+        }
         "lnk" => Some(FileType::Lnk),
         "pdf" => Some(FileType::Pdf),
         "jpg" | "jpeg" => Some(FileType::Jpeg),
@@ -193,8 +195,6 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         }
         "html" | "htm" => Some(FileType::Html),
         "md" | "markdown" => Some(FileType::Markdown),
-        // Erlang — known but unsupported, return None to avoid heuristic misclassification
-        "erl" | "hrl" => None,
         _ => None,
     }
 }
@@ -258,10 +258,7 @@ mod tests {
 
     #[test]
     fn jar_extension() {
-        assert_eq!(
-            detect_from_path(Path::new("lib.jar")),
-            Some(FileType::Jar)
-        );
+        assert_eq!(detect_from_path(Path::new("lib.jar")), Some(FileType::Jar));
     }
 
     #[test]

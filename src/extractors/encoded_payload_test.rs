@@ -19,6 +19,13 @@ fn extract_encoded_payloads_from_content(content: &[u8]) -> Vec<super::Extracted
 }
 
 #[cfg(test)]
+fn encode_utf16le_with_bom(text: &str) -> Vec<u8> {
+    let mut bytes = vec![0xFF, 0xFE];
+    bytes.extend(text.encode_utf16().flat_map(u16::to_le_bytes));
+    bytes
+}
+
+#[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
@@ -136,10 +143,7 @@ exec(base64.b64decode(bytes('aW1wb3J0IGJhc2U2NDtleGVjKGJhc2U2NC5iNjRkZWNvZGUoYnl
 
         let payload = &payloads[0];
         assert_eq!(payload.encoding_chain, vec!["base64"], "Should be base64");
-        assert!(
-            !payload.data.is_empty(),
-            "Payload data should not be empty"
-        );
+        assert!(!payload.data.is_empty(), "Payload data should not be empty");
 
         // Cleanup
         // let _ = std::fs::remove_file(&payload.temp_path);
@@ -157,8 +161,24 @@ payload2 = base64.b64decode('aW1wb3J0IHN5czsgc3lzLmV4aXQoMCk7IHByaW50KCdmaW5pc2h
 
         let payloads = extract_encoded_payloads_from_content(content.as_bytes());
         assert_eq!(payloads.len(), 2, "Should extract 2 payloads");
+    }
 
+    #[test]
+    fn test_utf16le_source_text_is_not_treated_as_payload() {
+        let source = r#"
+function launchPayload() {
+    var shell = new ActiveXObject("WScript.Shell");
+    shell.Run("calc.exe");
+}
+"#;
 
+        let payloads =
+            extract_encoded_payloads_from_content(&super::encode_utf16le_with_bom(source));
+
+        assert!(
+            payloads.is_empty(),
+            "UTF-16 source normalization should not produce recursive payloads"
+        );
     }
 
     #[test]
@@ -225,8 +245,6 @@ exec(data)
 
         assert_eq!(payloads.len(), 1, "Should extract large payload");
         assert!(elapsed.as_millis() < 3000, "Should complete in <3 seconds");
-
-
     }
 
     #[test]
@@ -286,8 +304,6 @@ exec(data)
             decoded_str.contains("_0x"),
             "Should contain obfuscated vars"
         );
-
-
     }
 
     #[test]
@@ -306,8 +322,6 @@ exec(data)
         if !payloads.is_empty() {
             assert!(payloads[0].encoding_chain.contains(&"url".to_string()));
         }
-
-
     }
 
     #[test]
@@ -334,8 +348,6 @@ exec(data)
                 "Should have some encoding in chain"
             );
         }
-
-
     }
 
     #[test]
@@ -359,8 +371,6 @@ hex = '{}'
 
         // Should find both payloads
         assert!(payloads.len() >= 1, "Should find at least one payload");
-
-
     }
 
     #[test]
@@ -383,8 +393,6 @@ hex = '{}'
             let decoded_str = String::from_utf8_lossy(&decoded);
             assert!(decoded_str.contains("/bin/bash"));
         }
-
-
     }
 
     #[test]
@@ -411,8 +419,6 @@ long = '{}'
             payloads.iter().all(|p| p.data.len() >= 24),
             "All payloads should be >= 24 bytes after decoding"
         );
-
-
     }
 
     #[test]
@@ -450,8 +456,6 @@ if __name__ == '__main__':
         let decoded_str = String::from_utf8_lossy(&decoded);
         assert!(decoded_str.contains("curl"));
         assert!(decoded_str.contains("evil.com"));
-
-
     }
 
     #[test]
@@ -475,8 +479,6 @@ if __name__ == '__main__':
         let decoded = payloads[0].data.clone();
         let decoded_str = String::from_utf8_lossy(&decoded);
         assert!(decoded_str.contains("import os"));
-
-
     }
 
     #[test]
@@ -502,8 +504,6 @@ if __name__ == '__main__':
             "Should find both base64 payloads, found {}",
             payloads.len()
         );
-
-
     }
 
     #[test]

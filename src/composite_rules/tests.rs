@@ -9,7 +9,6 @@ use crate::composite_rules::traits::DowngradeConditions;
 use crate::types::{
     AnalysisReport, Criticality, Finding, FindingKind, Import, StringInfo, TargetInfo,
 };
-use std::sync::OnceLock;
 
 fn create_test_context() -> (AnalysisReport, Vec<u8>) {
     let target = TargetInfo {
@@ -52,29 +51,7 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
 #[test]
 fn test_symbol_condition() {
     let (report, data) = create_test_context();
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -121,29 +98,7 @@ fn test_symbol_condition() {
 #[test]
 fn test_all() {
     let (report, data) = create_test_context();
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -204,29 +159,7 @@ fn test_all() {
 #[test]
 fn test_count() {
     let (report, data) = create_test_context();
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -286,29 +219,7 @@ fn test_count() {
 #[test]
 fn test_string_exact_condition() {
     let (report, data) = create_test_context();
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -359,29 +270,7 @@ fn test_string_exact_condition() {
 #[test]
 fn test_any() {
     let (report, data) = create_test_context();
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -459,29 +348,7 @@ fn test_not_directive_shorthand() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let trait_def = TraitDefinition {
         id: "test/domains".to_string(),
@@ -557,29 +424,7 @@ fn test_not_directive_exact() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let trait_def = TraitDefinition {
         id: "test/domains".to_string(),
@@ -661,29 +506,7 @@ fn test_not_directive_regex() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let trait_def = TraitDefinition {
         id: "test/ips".to_string(),
@@ -761,29 +584,8 @@ fn test_unless_directive_skips_trait() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/network".to_string(),
@@ -830,29 +632,7 @@ fn test_unless_directive_skips_trait() {
 fn test_unless_directive_allows_trait() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let trait_def = TraitDefinition {
         id: "test/network".to_string(),
@@ -914,29 +694,8 @@ fn test_downgrade_to_notable() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/curl-pipe".to_string(),
@@ -1013,29 +772,8 @@ fn test_downgrade_one_level() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/network".to_string(),
@@ -1090,29 +828,7 @@ fn test_downgrade_one_level() {
 fn test_downgrade_no_match_keeps_original() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let trait_def = TraitDefinition {
         id: "test/network".to_string(),
@@ -1182,29 +898,8 @@ fn test_downgrade_from_hostile() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/network".to_string(),
@@ -1294,29 +989,8 @@ fn test_all_three_directives_combined() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/domains".to_string(),
@@ -1404,29 +1078,7 @@ fn test_string_exact_match_requires_full_equality() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // exact: "hello" should match only "hello", not "hello world"
     let trait_def = TraitDefinition {
@@ -1503,29 +1155,7 @@ fn test_string_substr_matches_substrings() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // substr: "hello" should match both "hello" and "hello world"
     let trait_def = TraitDefinition {
@@ -1593,29 +1223,7 @@ fn test_symbol_exact_vs_substr() {
         source: "test".to_string(),
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // exact: "read" should match only "read", not "readlink"
     let trait_exact = TraitDefinition {
@@ -1713,29 +1321,7 @@ fn test_string_case_insensitive_exact() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Case-insensitive exact match
     let trait_def = TraitDefinition {
@@ -1807,29 +1393,7 @@ fn test_string_word_boundary_match() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // word: "cat" should match "the cat sat" but not "category"
     let trait_def = TraitDefinition {
@@ -1914,29 +1478,7 @@ fn test_string_regex_match() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // regex for IP addresses
     let trait_def = TraitDefinition {
@@ -1994,29 +1536,14 @@ fn test_content_exact_vs_substr() {
     let (mut report, _) = create_test_context();
     report.strings.clear(); // Clear existing strings so we fall through to content check
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Shell,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Shell,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     // exact: should match only if entire content equals the pattern (won't match)
     let location = super::evaluators::ContentLocationParams::default();
@@ -2074,29 +1601,14 @@ fn create_test_context_with_path(path: &str) -> (AnalysisReport, Vec<u8>) {
 fn test_basename_exact_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/__init__.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     // exact: "__init__.py" should match
     let result = super::evaluators::eval_basename(
@@ -2116,29 +1628,14 @@ fn test_basename_exact_match() {
 fn test_basename_exact_no_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/main.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     // exact: "__init__.py" should not match "main.py"
     let result = super::evaluators::eval_basename(
@@ -2157,29 +1654,14 @@ fn test_basename_exact_no_match() {
 fn test_basename_substr_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/setup_tools.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     // substr: "setup" should match "setup_tools.py"
     let result = super::evaluators::eval_basename(
@@ -2198,29 +1680,14 @@ fn test_basename_substr_match() {
 fn test_basename_regex_match() {
     let (report, data) = create_test_context_with_path("/home/user/project/test_utils.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     // regex: "^test_" should match files starting with "test_"
     let result = super::evaluators::eval_basename(
@@ -2239,29 +1706,7 @@ fn test_basename_regex_match() {
 fn test_basename_case_insensitive() {
     let (report, data) = create_test_context_with_path("/home/user/project/README.md");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::All, &[Platform::All], None, None);
 
     // exact: "readme.md" should match "README.md" with case_insensitive
     let result = super::evaluators::eval_basename(
@@ -2280,29 +1725,14 @@ fn test_basename_case_insensitive() {
 fn test_basename_in_trait_definition() {
     let (report, data) = create_test_context_with_path("/home/user/project/__init__.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     let trait_def = TraitDefinition {
         id: "test/init-file".to_string(),
@@ -2348,29 +1778,14 @@ fn test_basename_in_trait_definition() {
 fn test_basename_in_composite_rule() {
     let (report, data) = create_test_context_with_path("/home/user/project/setup.py");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Python,
+        &[Platform::All],
+        None,
+        None,
+    );
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -2432,29 +1847,8 @@ fn test_composite_unless_skips_rule() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     // Composite rule with unless condition
     let rule = CompositeTrait {
@@ -2504,29 +1898,7 @@ fn test_composite_unless_skips_rule() {
 fn test_composite_unless_allows_rule() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None, // No findings that would match unless
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -2576,29 +1948,7 @@ fn test_composite_unless_with_basename() {
     // Test the libX11.so case that was the original bug report
     let (report, data) = create_test_context_with_path("/usr/lib/libX11.so.6");
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -2664,29 +2014,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         fragments: None,
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -2763,29 +2091,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
 fn test_needs_with_any_only_respects_threshold() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Rule with needs: 3, but only 2 conditions can match (socket, connect)
     let rule = CompositeTrait {
@@ -2859,29 +2165,7 @@ fn test_needs_with_any_only_respects_threshold() {
 fn test_needs_with_any_only_matches_when_threshold_met() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Rule with needs: 2, and 2 conditions can match (socket, connect)
     let rule = CompositeTrait {
@@ -2944,34 +2228,122 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
 }
 
 #[test]
+fn test_required_trait_prefilter_for_any_needs_is_not_overconstrained() {
+    let mut rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "test/prefilter-any-needs".to_string(),
+        desc: "Prefilter should not require every any item".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![FileType::All],
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![
+            Condition::Trait {
+                id: "test::a".to_string(),
+            },
+            Condition::Trait {
+                id: "test::b".to_string(),
+            },
+            Condition::Trait {
+                id: "test::c".to_string(),
+            },
+            Condition::Trait {
+                id: "test::d".to_string(),
+            },
+        ]),
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(3),
+        near_lines: None,
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let trait_id_map = std::collections::HashMap::from([
+        ("test::a".to_string(), 0usize),
+        ("test::b".to_string(), 1usize),
+        ("test::c".to_string(), 2usize),
+        ("test::d".to_string(), 3usize),
+    ]);
+
+    rule.populate_required_traits(&trait_id_map);
+
+    assert!(
+        rule.required_trait_indices.is_empty(),
+        "any+needs prefilter should not require all optional refs"
+    );
+}
+
+#[test]
+fn test_required_trait_prefilter_keeps_all_and_fully_required_any_refs() {
+    let mut rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "test/prefilter-all-and-any".to_string(),
+        desc: "Prefilter should keep mandatory refs".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![FileType::All],
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: Some(vec![
+            Condition::Trait {
+                id: "test::a".to_string(),
+            },
+            Condition::Trait {
+                id: "test::b".to_string(),
+            },
+        ]),
+        any: Some(vec![
+            Condition::Trait {
+                id: "test::c".to_string(),
+            },
+            Condition::Trait {
+                id: "test::d".to_string(),
+            },
+        ]),
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: None,
+        near_bytes: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    let trait_id_map = std::collections::HashMap::from([
+        ("test::a".to_string(), 0usize),
+        ("test::b".to_string(), 1usize),
+        ("test::c".to_string(), 2usize),
+        ("test::d".to_string(), 3usize),
+    ]);
+
+    rule.populate_required_traits(&trait_id_map);
+
+    assert_eq!(rule.required_trait_indices, vec![0, 1, 2, 3]);
+}
+
+#[test]
 fn test_needs_with_all_and_any_respects_threshold() {
     // This is the bug that was fixed: when both all and any are present,
     // the needs constraint on any was being ignored
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Rule with:
     // - all: socket (matches)
@@ -3070,29 +2442,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         source: "test".to_string(),
     });
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Rule with:
     // - all: socket (matches)
@@ -3178,29 +2528,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
 fn test_needs_with_all_and_any_all_fails() {
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     // Rule where all fails but any would pass
     let rule = CompositeTrait {
@@ -3266,29 +2594,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
     // When needs is NOT specified, any should require just 1 match (default behavior)
     let (report, data) = create_test_context();
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -3454,29 +2760,8 @@ fn proximity_ctx<'a>(
     data: &'a [u8],
     findings: &'a [Finding],
 ) -> EvaluationContext<'a> {
-    EvaluationContext {
-        ast_kind_cache: None,
-        report,
-        binary_data: data,
-        file_type: FileType::Python,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    }
+    EvaluationContext::test_only_new(report, data, FileType::Python)
+        .with_additional_findings(findings)
 }
 
 fn empty_report() -> AnalysisReport {
@@ -4175,29 +3460,8 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/combined-downgrade".to_string(),
@@ -4289,29 +3553,8 @@ fn test_downgrade_combined_all_and_none_pass() {
     // No findings that would match the none: condition
     let findings = vec![];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/combined-downgrade-pass".to_string(),
@@ -4404,29 +3647,8 @@ fn test_downgrade_needs_threshold_not_met() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/needs-threshold".to_string(),
@@ -4526,29 +3748,8 @@ fn test_downgrade_needs_threshold_met() {
         },
     ];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let trait_def = TraitDefinition {
         id: "test/needs-threshold-met".to_string(),
@@ -4657,29 +3858,8 @@ fn test_composite_downgrade_all_match() {
         },
     ];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -4757,29 +3937,8 @@ fn test_composite_downgrade_none_blocks() {
         source_file: None,
     }];
 
-    let ctx = EvaluationContext {
-        ast_kind_cache: None,
-        report: &report,
-        binary_data: &data,
-        file_type: FileType::Elf,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: Some(&findings),
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    };
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
 
     let rule = CompositeTrait {
         required_trait_indices: Vec::new(),

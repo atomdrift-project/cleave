@@ -3,7 +3,9 @@
 //! This module handles loading capability definitions from a single YAML file,
 //! which is primarily used in tests and for simple configurations.
 
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{
+    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
+};
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{

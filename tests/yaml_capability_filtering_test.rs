@@ -7,7 +7,57 @@ use tempfile::TempDir;
 
 /// Helper to get the first file from v2 JSON output
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
+    if let Some(file) = json.get("fs").and_then(|f| f.get(0)) {
+        return Some(file);
+    }
     json.get("files").and_then(|f| f.get(0))
+}
+
+fn get_file_type(file: &serde_json::Value) -> &str {
+    file.get("file_type")
+        .or_else(|| file.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+fn get_traits(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    file.get("traits")
+        .or_else(|| file.get("ts"))
+        .and_then(|v| v.as_array())
+}
+
+fn trait_id(trait_value: &serde_json::Value) -> Option<&str> {
+    trait_value
+        .get("id")
+        .or_else(|| trait_value.get("i"))
+        .and_then(|v| v.as_str())
+}
+
+fn trait_desc(trait_value: &serde_json::Value) -> Option<&str> {
+    trait_value
+        .get("description")
+        .or_else(|| trait_value.get("d"))
+        .and_then(|v| v.as_str())
+}
+
+fn trait_conf(trait_value: &serde_json::Value) -> Option<f64> {
+    if let Some(v) = trait_value
+        .get("confidence")
+        .or_else(|| trait_value.get("c"))
+        .and_then(Value::as_f64)
+    {
+        return Some(v);
+    }
+
+    // Compact v4 omits the confidence field when it is the default 0.5.
+    trait_value.get("i").map(|_| 0.5)
+}
+
+fn is_capability(trait_value: &serde_json::Value) -> bool {
+    trait_value
+        .get("capability")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
 }
 
 /// Test that platform-specific YAML traits are filtered correctly
@@ -35,29 +85,24 @@ fn test_windows_keylog_capability_filtered_for_elf() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect as ELF
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("elf"),
             "Expected ELF file type, got: {}",
             file_type
         );
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             // Get traits that are capabilities (capability: true)
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
 
             // Windows-specific traits should NOT appear in ELF analysis
             let windows_caps: Vec<_> = capabilities
                 .iter()
                 .filter(|cap| {
-                    cap.get("id")
-                        .and_then(|id| id.as_str())
+                    trait_id(cap)
                         .map(|id| id.contains("windows") || id.contains("keylog"))
                         .unwrap_or(false)
                 })
@@ -65,7 +110,7 @@ fn test_windows_keylog_capability_filtered_for_elf() {
 
             // Windows keylogging traits should be filtered out for ELF files
             for cap in windows_caps {
-                let cap_id = cap.get("id").and_then(|id| id.as_str()).unwrap_or("");
+                let cap_id = trait_id(cap).unwrap_or("");
                 eprintln!(
                     "Note: Windows cap '{}' appeared in ELF file - checking if expected",
                     cap_id
@@ -97,20 +142,16 @@ fn test_universal_capabilities_match_all_files() {
         // Verify basic structure exists (v2 format: files array)
         let file = get_first_file(&json).expect("Should have at least one file");
         assert!(
-            file.get("file_type").is_some(),
+            !get_file_type(file).is_empty(),
             "Should have file_type field"
         );
 
         // Traits field may be missing if empty (skip_serializing_if)
         // Capabilities are traits with capability: true
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
             eprintln!("Found {} capabilities for shell script", capabilities.len());
         } else {
@@ -144,20 +185,16 @@ fn test_python_capabilities_for_python_files() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect as Python
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("python"),
             "Expected Python file type, got: {}",
             file_type
         );
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
             eprintln!("Found {} traits for Python file", capabilities.len());
 
@@ -165,8 +202,7 @@ fn test_python_capabilities_for_python_files() {
             let net_caps: Vec<_> = capabilities
                 .iter()
                 .filter(|cap| {
-                    cap.get("id")
-                        .and_then(|id| id.as_str())
+                    trait_id(cap)
                         .map(|id| {
                             id.contains("net") || id.contains("socket") || id.contains("http")
                         })
@@ -177,7 +213,7 @@ fn test_python_capabilities_for_python_files() {
             if !net_caps.is_empty() {
                 eprintln!("Found network traits:");
                 for cap in &net_caps {
-                    if let Some(id) = cap.get("id").and_then(|i| i.as_str()) {
+                    if let Some(id) = trait_id(cap) {
                         eprintln!("  - {}", id);
                     }
                 }
@@ -211,7 +247,7 @@ fn test_javascript_capabilities_for_js_files() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect as JavaScript
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("javascript"),
             "Expected JavaScript file type, got: {}",
@@ -220,19 +256,15 @@ fn test_javascript_capabilities_for_js_files() {
 
         // Verify basic structure exists
         assert!(
-            file.get("file_type").is_some(),
+            !get_file_type(file).is_empty(),
             "Should have file_type field"
         );
 
         // Traits field may be missing if empty
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
             eprintln!(
                 "Found {} capabilities for JavaScript file",
@@ -274,20 +306,16 @@ fn test_shell_capabilities_for_shell_scripts() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect as Shell
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("shell"),
             "Expected Shell file type, got: {}",
             file_type
         );
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
             eprintln!("Found {} traits for shell script", capabilities.len());
 
@@ -295,8 +323,7 @@ fn test_shell_capabilities_for_shell_scripts() {
             let http_caps: Vec<_> = capabilities
                 .iter()
                 .filter(|cap| {
-                    cap.get("id")
-                        .and_then(|id| id.as_str())
+                    trait_id(cap)
                         .map(|id| id.contains("http") || id.contains("net"))
                         .unwrap_or(false)
                 })
@@ -305,7 +332,7 @@ fn test_shell_capabilities_for_shell_scripts() {
             if !http_caps.is_empty() {
                 eprintln!("Found HTTP traits:");
                 for cap in &http_caps {
-                    if let Some(id) = cap.get("id").and_then(|i| i.as_str()) {
+                    if let Some(id) = trait_id(cap) {
                         eprintln!("  - {}", id);
                     }
                 }
@@ -349,20 +376,16 @@ fn test_rules_without_filetype_are_universal() {
             let file_entry = get_first_file(&json).expect("Should have at least one file");
             // Verify basic structure exists
             assert!(
-                file_entry.get("file_type").is_some(),
+                !get_file_type(file_entry).is_empty(),
                 "File {:?} should have file_type field",
                 file.file_name()
             );
 
             // Traits field may be missing if empty
-            if let Some(traits) = file_entry.get("traits").and_then(|v| v.as_array()) {
+            if let Some(traits) = get_traits(file_entry) {
                 let capabilities: Vec<_> = traits
                     .iter()
-                    .filter(|t| {
-                        t.get("capability")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                    })
+                    .filter(|t| is_capability(t))
                     .collect();
                 eprintln!(
                     "File {:?} has {} capabilities",
@@ -408,17 +431,13 @@ fn test_composite_trait_file_type_filtering() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Check traits
-        if let Some(traits) = file.get("traits").and_then(|v| v.as_array()) {
+        if let Some(traits) = get_traits(file) {
             eprintln!("Found {} traits detected", traits.len());
 
             // Check that Python file gets appropriate capabilities
             let capabilities: Vec<_> = traits
                 .iter()
-                .filter(|t| {
-                    t.get("capability")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
+                .filter(|t| is_capability(t))
                 .collect();
             eprintln!(
                 "Found {} traits for Python file with suspicious patterns",
@@ -427,13 +446,13 @@ fn test_composite_trait_file_type_filtering() {
 
             // Verify capabilities have proper structure
             for cap in &capabilities {
-                assert!(cap.get("id").is_some(), "Capability should have id");
+                assert!(trait_id(cap).is_some(), "Capability should have id");
                 assert!(
-                    cap.get("description").is_some(),
+                    trait_desc(cap).is_some(),
                     "Capability should have description"
                 );
                 assert!(
-                    cap.get("confidence").is_some(),
+                    trait_conf(cap).is_some(),
                     "Capability should have confidence"
                 );
             }
@@ -464,12 +483,13 @@ fn test_platform_and_filetype_constraints_together() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         assert!(
-            file.get("file_type").is_some(),
+            !get_file_type(file).is_empty(),
             "Should have file_type field"
         );
 
         // File type should be Shell
-        if let Some(file_type) = file.get("file_type").and_then(|ft| ft.as_str()) {
+        let file_type = get_file_type(file);
+        if !file_type.is_empty() {
             assert!(
                 file_type.to_lowercase().contains("shell")
                     || file_type.to_lowercase().contains("script"),

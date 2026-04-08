@@ -6,9 +6,8 @@
 use super::*;
 use crate::composite_rules::condition::NotException;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
-use crate::composite_rules::types::{Arch, FileType, Platform};
+use crate::composite_rules::types::{FileType, Platform};
 use crate::types::{AnalysisReport, Export, Function, Import, StringInfo, StringType, TargetInfo};
-use std::sync::OnceLock;
 
 fn eval_symbol<'a>(
     exact: Option<&String>,
@@ -101,29 +100,7 @@ fn create_test_report() -> AnalysisReport {
 }
 
 fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> EvaluationContext<'a> {
-    EvaluationContext {
-        ast_kind_cache: None,
-        report,
-        binary_data: data,
-        file_type: FileType::All,
-        platforms: &[Platform::Linux],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    }
+    EvaluationContext::test_only_new(report, data, FileType::All)
 }
 
 // =============================================================================
@@ -301,7 +278,8 @@ fn test_eval_symbol_platform_filtering() {
         source: "libc".to_string(),
     });
     let data = vec![];
-    let ctx = create_test_context(&report, &data);
+    let mut ctx = create_test_context(&report, &data);
+    ctx.platforms = &[Platform::Linux];
 
     // Should not match - wrong platform
     let result = eval_symbol(

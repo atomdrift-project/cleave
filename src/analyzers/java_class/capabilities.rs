@@ -77,7 +77,7 @@ impl super::JavaClassAnalyzer {
                         && class_ref
                             .as_bytes()
                             .get(pattern.len())
-                            .map_or(true, |&b| b == b'/'))
+                            .is_none_or(|&b| b == b'/'))
                 {
                     if !report.findings.iter().any(|c| c.id == *cap_id) {
                         report.findings.push(Finding {

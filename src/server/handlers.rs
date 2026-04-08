@@ -365,7 +365,10 @@ async fn analyze_inner(
             orphan_state
                 .recycled_orphans
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!(request_id, "Detached orphan finally completed and was joined");
+            tracing::info!(
+                request_id,
+                "Detached orphan finally completed and was joined"
+            );
         });
     }
     let elapsed_ms = request_start.elapsed().as_millis();
@@ -721,7 +724,10 @@ async fn analyze_path_inner(
             orphan_state
                 .recycled_orphans
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!(request_id, "Detached orphan finally completed and was joined");
+            tracing::info!(
+                request_id,
+                "Detached orphan finally completed and was joined"
+            );
         });
     }
 

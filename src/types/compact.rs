@@ -63,7 +63,10 @@ pub struct CompactFile {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ts: Vec<CompactTrait>,
     /// Strings as tuples: [offset, value] or [offset, encoding, value]
-    #[serde(skip_serializing_if = "Vec::is_empty", serialize_with = "serialize_string_tuples")]
+    #[serde(
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "serialize_string_tuples"
+    )]
     pub ss: Vec<CompactString>,
     /// Import symbol names
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -167,8 +170,10 @@ fn round_json_floats(value: serde_json::Value) -> serde_json::Value {
             }
         }
         serde_json::Value::Object(map) => {
-            let rounded: serde_json::Map<String, serde_json::Value> =
-                map.into_iter().map(|(k, v)| (k, round_json_floats(v))).collect();
+            let rounded: serde_json::Map<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| (k, round_json_floats(v)))
+                .collect();
             serde_json::Value::Object(rounded)
         }
         serde_json::Value::Array(arr) => {
@@ -282,7 +287,11 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
     // Compute formula if not already present
     let formula = file.formula.clone().or_else(|| {
         let f = crate::malecule_bridge::formula_from_findings(&file.findings);
-        if f.is_empty() { None } else { Some(f) }
+        if f.is_empty() {
+            None
+        } else {
+            Some(f)
+        }
     });
 
     CompactFile {

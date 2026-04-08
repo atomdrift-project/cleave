@@ -5,11 +5,10 @@
 
 use super::*;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::composite_rules::types::{Arch, FileType, Platform};
+use crate::composite_rules::types::{FileType, Platform};
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Finding, FindingKind, StructuralFeature, TargetInfo,
 };
-use std::sync::OnceLock;
 
 fn eval_basename<'a>(
     exact: Option<&String>,
@@ -38,29 +37,11 @@ fn create_test_context<'a>(
     data: &'a [u8],
     additional_findings: Option<&'a [Finding]>,
 ) -> EvaluationContext<'a> {
-    EvaluationContext {
-        ast_kind_cache: None,
-        report,
-        binary_data: data,
-        file_type: FileType::All,
-        platforms: &[Platform::Linux],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
+    let mut ctx = EvaluationContext::test_only_new(report, data, FileType::All);
+    if let Some(findings) = additional_findings {
+        ctx = ctx.with_additional_findings(findings);
     }
+    ctx
 }
 
 fn create_test_finding(id: &str) -> Finding {

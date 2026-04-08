@@ -160,16 +160,13 @@ const PATTERNS: &[(&[u8], Lang, u8)] = &[
 ];
 
 struct AcScanner {
-    ac: aho_corasick::AhoCorasick,
+    ac: Option<aho_corasick::AhoCorasick>,
     entries: Vec<PatternEntry>,
 }
 
 fn build_scanner() -> AcScanner {
     let patterns: Vec<&[u8]> = PATTERNS.iter().map(|(p, _, _)| *p).collect();
-    // All patterns are static byte literals — build cannot fail.
-    let ac = aho_corasick::AhoCorasick::builder()
-        .build(&patterns)
-        .expect("static patterns are always valid");
+    let ac = aho_corasick::AhoCorasick::builder().build(&patterns).ok();
     let entries: Vec<PatternEntry> = PATTERNS
         .iter()
         .map(|(_, lang, weight)| PatternEntry {
@@ -197,10 +194,12 @@ fn scan_scores(data: &[u8]) -> [u16; LANG_COUNT] {
     let s = scanner();
     let mut scores = [0u16; LANG_COUNT];
 
-    for mat in s.ac.find_overlapping_iter(data) {
-        let entry = &s.entries[mat.pattern().as_usize()];
-        let idx = entry.lang.idx();
-        scores[idx] = scores[idx].saturating_add(entry.weight as u16);
+    if let Some(ac) = &s.ac {
+        for mat in ac.find_overlapping_iter(data) {
+            let entry = &s.entries[mat.pattern().as_usize()];
+            let idx = entry.lang.idx();
+            scores[idx] = scores[idx].saturating_add(entry.weight as u16);
+        }
     }
 
     scores
@@ -262,7 +261,7 @@ pub(crate) fn detect_from_content(data: &[u8]) -> Option<FileType> {
 
 /// Check if content looks like HTML (has actual markup tags).
 pub(crate) fn looks_like_html(data: &[u8]) -> bool {
-    static HTML_AC: OnceLock<aho_corasick::AhoCorasick> = OnceLock::new();
+    static HTML_AC: OnceLock<Option<aho_corasick::AhoCorasick>> = OnceLock::new();
     let ac = HTML_AC.get_or_init(|| {
         aho_corasick::AhoCorasick::builder()
             .ascii_case_insensitive(true)
@@ -277,11 +276,11 @@ pub(crate) fn looks_like_html(data: &[u8]) -> bool {
                 "<p>",
                 "<meta",
             ])
-            .expect("static patterns are always valid")
+            .ok()
     });
 
     let head = &data[..data.len().min(4096)];
-    ac.is_match(head)
+    ac.as_ref().is_some_and(|ac| ac.is_match(head))
 }
 
 #[cfg(test)]

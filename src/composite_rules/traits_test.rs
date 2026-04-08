@@ -17,7 +17,6 @@ use super::traits::*;
 use super::types::{Arch, FileType, Platform};
 use crate::types::{AnalysisReport, Criticality, Import, TargetInfo};
 use std::path::PathBuf;
-use std::sync::OnceLock;
 
 /// Helper: Create minimal trait definition
 fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
@@ -63,29 +62,9 @@ fn create_report_with_size(size_bytes: u64) -> AnalysisReport {
 
 /// Helper: Create test context
 fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> EvaluationContext<'static> {
-    EvaluationContext {
-        ast_kind_cache: None,
-        report: Box::leak(Box::new(report)),
-        binary_data: Box::leak(binary_data.into_boxed_slice()),
-        file_type: FileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    }
+    let leaked_report = Box::leak(Box::new(report));
+    let leaked_data = Box::leak(binary_data.into_boxed_slice());
+    EvaluationContext::test_only_new(leaked_report, leaked_data, FileType::All)
 }
 
 // ==================== Size constraint tests ====================
@@ -685,7 +664,7 @@ fn test_arch_filter_match() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.arch = vec![Arch::Arm];
+    ctx.arch = vec![Arch::Arm].into();
 
     let result = trait_def.evaluate(&ctx);
     assert!(result.is_some(), "Should match when arch intersects");
@@ -713,7 +692,7 @@ fn test_arch_filter_no_match() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.arch = vec![Arch::Arm];
+    ctx.arch = vec![Arch::Arm].into();
 
     let result = trait_def.evaluate(&ctx);
     assert!(
@@ -745,7 +724,7 @@ fn test_arch_all_matches_any_file_arch() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.arch = vec![Arch::Aarch64];
+    ctx.arch = vec![Arch::Aarch64].into();
 
     let result = trait_def.evaluate(&ctx);
     assert!(
@@ -776,7 +755,7 @@ fn test_arch_file_all_matches_any_trait_arch() {
     });
 
     let ctx = create_test_context(report, vec![]);
-    assert_eq!(ctx.arch, vec![Arch::All]);
+    assert_eq!(ctx.arch, vec![Arch::All].into());
 
     let result = trait_def.evaluate(&ctx);
     assert!(
@@ -792,7 +771,7 @@ fn test_arch_no_default_to_runtime_arch() {
     let ctx = create_test_context(report, vec![]);
     assert_eq!(
         ctx.arch,
-        vec![Arch::All],
+        vec![Arch::All].into(),
         "Default arch must be All when report has no architectures"
     );
 }
@@ -846,7 +825,7 @@ fn test_arch_multi_arch_file() {
     });
 
     let mut ctx = create_test_context(report, vec![]);
-    ctx.arch = vec![Arch::X86_64, Arch::Aarch64];
+    ctx.arch = vec![Arch::X86_64, Arch::Aarch64].into();
 
     let result = trait_def.evaluate(&ctx);
     assert!(
@@ -860,10 +839,7 @@ fn test_arch_clamp_range_fat_binary() {
     let report = create_report_with_size(200000);
     let binary_data = vec![0u8; 200000];
     let mut ctx = create_test_context(report, binary_data);
-    ctx.arch_ranges = Some(&[
-        (Arch::X86_64, 0..100000),
-        (Arch::Aarch64, 100000..200000),
-    ]);
+    ctx.arch_ranges = Some(&[(Arch::X86_64, 0..100000), (Arch::Aarch64, 100000..200000)]);
 
     // Trait targeting x86-64 should clamp to first slice
     let clamp = ctx.arch_clamp_range(&[Arch::X86_64]);

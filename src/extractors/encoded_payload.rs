@@ -25,8 +25,6 @@ const DECODED_METHODS: &[stng::StringMethod] = &[
     stng::StringMethod::Base32Decode,
     stng::StringMethod::Base85Decode,
     stng::StringMethod::XorDecode,
-    stng::StringMethod::Utf16LeDecode,
-    stng::StringMethod::Utf16BeDecode,
 ];
 
 /// Map stng StringMethod to encoding name for meta tags and encoding chains

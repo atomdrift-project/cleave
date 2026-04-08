@@ -245,9 +245,8 @@ pub fn detect(path: &Path, data: &[u8]) -> Option<Detection> {
         let ext_ft = ext::detect_from_path(path);
         let ext_match = match ext_ft {
             Some(e) if e != file_type => ExtensionMatch::Different(e),
-            Some(_) => ExtensionMatch::Consistent,
             None if path.extension().is_some() => ExtensionMatch::Unknown,
-            None => ExtensionMatch::Consistent,
+            Some(_) | None => ExtensionMatch::Consistent,
         };
         return Some(Detection {
             file_type,
@@ -320,14 +319,15 @@ pub fn detect_path(path: &Path) -> Option<Detection> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
     // Helper: assert detection result
     fn assert_detect(path: &str, data: &[u8], expected: FileType) {
-        let det = detect(Path::new(path), data)
-            .unwrap_or_else(|| panic!("expected {expected:?} for {path}, got None"));
+        let Some(det) = detect(Path::new(path), data) else {
+            panic!("expected {expected:?} for {path}, got None");
+        };
         assert_eq!(det.file_type, expected, "wrong type for {path}");
     }
 
@@ -339,15 +339,31 @@ mod tests {
 
     #[test]
     fn macho_magic() {
-        assert_detect("binary", &[0xFE, 0xED, 0xFA, 0xCE, 0, 0, 0, 0], FileType::MachO);
-        assert_detect("binary", &[0xCF, 0xFA, 0xED, 0xFE, 0, 0, 0, 0], FileType::MachO);
+        assert_detect(
+            "binary",
+            &[0xFE, 0xED, 0xFA, 0xCE, 0, 0, 0, 0],
+            FileType::MachO,
+        );
+        assert_detect(
+            "binary",
+            &[0xCF, 0xFA, 0xED, 0xFE, 0, 0, 0, 0],
+            FileType::MachO,
+        );
         // Fat binary (nfat_arch=2, not Java class range)
-        assert_detect("binary", &[0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 2], FileType::MachO);
+        assert_detect(
+            "binary",
+            &[0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 2],
+            FileType::MachO,
+        );
     }
 
     #[test]
     fn elf_magic() {
-        assert_detect("a.out", b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00", FileType::Elf);
+        assert_detect(
+            "a.out",
+            b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            FileType::Elf,
+        );
     }
 
     #[test]
@@ -375,7 +391,11 @@ mod tests {
 
     #[test]
     fn java_class_magic() {
-        assert_detect("Main.class", &[0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 52], FileType::JavaClass);
+        assert_detect(
+            "Main.class",
+            &[0xCA, 0xFE, 0xBA, 0xBE, 0, 0, 0, 52],
+            FileType::JavaClass,
+        );
     }
 
     #[test]
@@ -407,12 +427,20 @@ mod tests {
 
     #[test]
     fn python_by_shebang() {
-        assert_detect("mystery", b"#!/usr/bin/env python3\nimport sys\n", FileType::Python);
+        assert_detect(
+            "mystery",
+            b"#!/usr/bin/env python3\nimport sys\n",
+            FileType::Python,
+        );
     }
 
     #[test]
     fn python_bytecode_magic() {
-        assert_detect("mod.pyc", &[0x42, 0x0D, 0x0D, 0x0A, 0, 0, 0, 0], FileType::PythonBytecode);
+        assert_detect(
+            "mod.pyc",
+            &[0x42, 0x0D, 0x0D, 0x0A, 0, 0, 0, 0],
+            FileType::PythonBytecode,
+        );
     }
 
     #[test]
@@ -432,7 +460,11 @@ mod tests {
 
     #[test]
     fn javascript_by_shebang() {
-        assert_detect("tool", b"#!/usr/bin/env node\nconsole.log('hi');\n", FileType::JavaScript);
+        assert_detect(
+            "tool",
+            b"#!/usr/bin/env node\nconsole.log('hi');\n",
+            FileType::JavaScript,
+        );
     }
 
     #[test]
@@ -454,7 +486,11 @@ mod tests {
     fn shell_by_shebang() {
         assert_detect("mystery", b"#!/bin/bash\necho hello\n", FileType::Shell);
         assert_detect("mystery", b"#!/bin/sh\necho hello\n", FileType::Shell);
-        assert_detect("mystery", b"#!/usr/bin/env zsh\necho hello\n", FileType::Shell);
+        assert_detect(
+            "mystery",
+            b"#!/usr/bin/env zsh\necho hello\n",
+            FileType::Shell,
+        );
     }
 
     #[test]
@@ -549,7 +585,11 @@ mod tests {
 
     #[test]
     fn php_by_shebang() {
-        assert_detect("tool", b"#!/usr/bin/env php\n<?php echo 1;\n", FileType::Php);
+        assert_detect(
+            "tool",
+            b"#!/usr/bin/env php\n<?php echo 1;\n",
+            FileType::Php,
+        );
     }
 
     // ── Perl ─────────────────────────────────────────────────────────
@@ -702,7 +742,11 @@ mod tests {
 
     #[test]
     fn zstd_archive() {
-        assert_detect("data.zst", &[0x28, 0xB5, 0x2F, 0xFD, 0, 0], FileType::Archive);
+        assert_detect(
+            "data.zst",
+            &[0x28, 0xB5, 0x2F, 0xFD, 0, 0],
+            FileType::Archive,
+        );
     }
 
     #[test]
@@ -786,7 +830,11 @@ mod tests {
 
     #[test]
     fn plist_xml() {
-        assert_detect("Info.plist", b"<?xml version=\"1.0\"?>\n<!DOCTYPE plist>", FileType::Plist);
+        assert_detect(
+            "Info.plist",
+            b"<?xml version=\"1.0\"?>\n<!DOCTYPE plist>",
+            FileType::Plist,
+        );
     }
 
     #[test]
@@ -798,7 +846,11 @@ mod tests {
 
     #[test]
     fn jpeg_magic() {
-        assert_detect("photo.jpg", &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10], FileType::Jpeg);
+        assert_detect(
+            "photo.jpg",
+            &[0xFF, 0xD8, 0xFF, 0xE0, 0, 0x10],
+            FileType::Jpeg,
+        );
     }
 
     #[test]
@@ -809,7 +861,11 @@ mod tests {
 
     #[test]
     fn png_magic() {
-        assert_detect("image.png", b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR", FileType::Png);
+        assert_detect(
+            "image.png",
+            b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR",
+            FileType::Png,
+        );
     }
 
     #[test]
@@ -847,7 +903,11 @@ mod tests {
 
     #[test]
     fn html_with_content() {
-        assert_detect("page.html", b"<!DOCTYPE html><html><body>hi</body></html>", FileType::Html);
+        assert_detect(
+            "page.html",
+            b"<!DOCTYPE html><html><body>hi</body></html>",
+            FileType::Html,
+        );
     }
 
     #[test]

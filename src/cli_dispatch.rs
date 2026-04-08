@@ -382,7 +382,7 @@ fn run_test_match_command(
         req.min_size,
         req.max_size,
         ctx.disabled,
-        ctx.platforms.to_vec(),
+        ctx.platforms,
         cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
     )

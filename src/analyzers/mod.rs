@@ -332,7 +332,6 @@ pub trait Analyzer {
     fn can_analyze(&self, file_path: &Path) -> bool;
 }
 
-
 /// Detect file type from path/extension only (no file access needed).
 #[must_use]
 #[inline]
@@ -373,9 +372,9 @@ pub fn check_extension_content_mismatch(
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = det.extension_type().map_or_else(
         || {
-            file_path
-                .extension()
-                .map_or("unknown".to_string(), |e| format!("{} file", e.to_string_lossy()))
+            file_path.extension().map_or("unknown".to_string(), |e| {
+                format!("{} file", e.to_string_lossy())
+            })
         },
         |ft| format!("{ft:?}"),
     );
@@ -686,7 +685,6 @@ impl From<fileid::FileType> for FileType {
     }
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -694,25 +692,55 @@ mod tests {
 
     #[test]
     fn bridge_path_detection() {
-        assert_eq!(detect_file_type_from_path(Path::new("script.py")), FileType::Python);
-        assert_eq!(detect_file_type_from_path(Path::new("app.js")), FileType::JavaScript);
-        assert_eq!(detect_file_type_from_path(Path::new("Component.jsx")), FileType::JavaScript);
-        assert_eq!(detect_file_type_from_path(Path::new("data.xyz")), FileType::Unknown);
-        assert_eq!(detect_file_type_from_path(Path::new("page.html")), FileType::Html);
-        assert_eq!(detect_file_type_from_path(Path::new("README.md")), FileType::Markdown);
-        assert_eq!(detect_file_type_from_path(Path::new("notes.txt")), FileType::Unknown);
+        assert_eq!(
+            detect_file_type_from_path(Path::new("script.py")),
+            FileType::Python
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("app.js")),
+            FileType::JavaScript
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("Component.jsx")),
+            FileType::JavaScript
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("data.xyz")),
+            FileType::Unknown
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("page.html")),
+            FileType::Html
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("README.md")),
+            FileType::Markdown
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("notes.txt")),
+            FileType::Unknown
+        );
     }
 
     #[test]
     fn bridge_magic_detection() {
         let elf = b"\x7fELF\x02\x01\x01\x00";
-        assert_eq!(detect_file_type_from_data(Path::new("bin"), elf), FileType::Elf);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("bin"), elf),
+            FileType::Elf
+        );
 
         let pe = [b'M', b'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
-        assert_eq!(detect_file_type_from_data(Path::new("a.exe"), &pe), FileType::Pe);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("a.exe"), &pe),
+            FileType::Pe
+        );
 
         let pyc = [0x55, 0x0d, 0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00];
-        assert_eq!(detect_file_type_from_data(Path::new("c/s.dat"), &pyc), FileType::PythonBytecode);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("c/s.dat"), &pyc),
+            FileType::PythonBytecode
+        );
     }
 
     #[test]
@@ -725,36 +753,57 @@ mod tests {
 
     #[test]
     fn bridge_extension_fallback() {
-        assert_eq!(detect_file_type_from_data(Path::new("app.js"), b"x = 1\n"), FileType::JavaScript);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("app.js"), b"x = 1\n"),
+            FileType::JavaScript
+        );
     }
 
     #[test]
     fn bridge_unknown() {
-        assert_eq!(detect_file_type_from_data(Path::new("d.bin"), &[0, 0, 0, 0]), FileType::Unknown);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("d.bin"), &[0, 0, 0, 0]),
+            FileType::Unknown
+        );
     }
 
     #[test]
     fn bridge_html_requires_content() {
-        assert_eq!(detect_file_type_from_data(Path::new("p.html"), b"<html><body>hi</body></html>"), FileType::Html);
-        assert_eq!(detect_file_type_from_data(Path::new("p.html"), b"just text"), FileType::Unknown);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("p.html"), b"<html><body>hi</body></html>"),
+            FileType::Html
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new("p.html"), b"just text"),
+            FileType::Unknown
+        );
     }
 
     #[test]
     fn bridge_yaml_skip() {
-        assert_eq!(detect_file_type_from_data(Path::new("c.yaml"), b"name: test\n"), FileType::Unknown);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("c.yaml"), b"name: test\n"),
+            FileType::Unknown
+        );
     }
 
     #[test]
     fn bridge_ooxml() {
         let mut data = b"PK\x03\x04".to_vec();
         data.resize(12, 0);
-        assert_eq!(detect_file_type_from_data(Path::new("s.pptx"), &data), FileType::Ooxml);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("s.pptx"), &data),
+            FileType::Ooxml
+        );
     }
 
     #[test]
     fn bridge_heuristic_python() {
         let data = b"import os\nimport sys\ndef main():\n    print(\x27hello\x27)\n";
-        assert_eq!(detect_file_type_from_data(Path::new("script"), data), FileType::Python);
+        assert_eq!(
+            detect_file_type_from_data(Path::new("script"), data),
+            FileType::Python
+        );
     }
 
     #[test]
@@ -775,6 +824,9 @@ mod tests {
     #[test]
     fn bridge_from_roundtrip() {
         assert_eq!(FileType::from(fileid::FileType::MachO), FileType::MachO);
-        assert_eq!(FileType::from(fileid::FileType::Markdown), FileType::Markdown);
+        assert_eq!(
+            FileType::from(fileid::FileType::Markdown),
+            FileType::Markdown
+        );
     }
 }

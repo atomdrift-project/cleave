@@ -10,6 +10,7 @@
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::{Arch, Condition, EvaluationContext, SectionMap};
 use crate::types::{AnalysisReport, Evidence, Finding, FindingKind};
+use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 use std::path::Path;
@@ -45,11 +46,20 @@ impl super::CapabilityMapper {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
 
-        // Build section map for location-constrained matching
-        let section_map = SectionMap::from_binary(binary_data);
+        // Build section map for location-constrained matching.
+        // Skip parsing for files that don't have sections (saves ~100ms per file).
+        let section_map = if file_type.has_sections() {
+            SectionMap::from_binary(binary_data)
+        } else {
+            SectionMap::empty(binary_data.len() as u64)
+        };
 
         // Use trait index to only evaluate applicable traits
-        let applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
+        let applicable_indices: Vec<usize> = self
+            .trait_index
+            .get_applicable(&file_type)
+            .into_indices_static()
+            .collect();
 
         // Idea 9: Batch AST node collection
         let mut ast_kind_cache = None;
@@ -72,26 +82,36 @@ impl super::CapabilityMapper {
                 if !required_node_types.is_empty() {
                     let mut cache = FxHashMap::default();
                     let mut cursor = tree.walk();
-                    crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
-                        let kind = node.kind();
-                        if required_node_types.contains(kind) {
-                            if let Ok(text) = node.utf8_text(source.as_bytes()) {
-                                cache.entry(kind.to_string()).or_insert_with(Vec::new).push(Evidence {
-                                    method: "ast".to_string(),
-                                    source: "tree-sitter".to_string(),
-                                    value: crate::composite_rules::evaluators::truncate_evidence(text, 100),
-                                    location: Some(format!(
-                                        "{}:{}",
-                                        node.start_position().row + 1,
-                                        node.start_position().column + 1
-                                    )),
-                                    offsets: vec![node.start_byte() as u64],
-                                    ..Default::default()
-                                });
+                    crate::analyzers::ast_walker::walk_tree_with_stats(
+                        &mut cursor,
+                        None,
+                        |node, _| {
+                            let kind = node.kind();
+                            if required_node_types.contains(kind) {
+                                if let Ok(text) = node.utf8_text(source.as_bytes()) {
+                                    cache
+                                        .entry(kind.to_string())
+                                        .or_insert_with(Vec::new)
+                                        .push(Evidence {
+                                        method: "ast".to_string(),
+                                        source: "tree-sitter".to_string(),
+                                        value:
+                                            crate::composite_rules::evaluators::truncate_evidence(
+                                                text, 100,
+                                            ),
+                                        location: Some(format!(
+                                            "{}:{}",
+                                            node.start_position().row + 1,
+                                            node.start_position().column + 1
+                                        )),
+                                        offsets: vec![node.start_byte() as u64],
+                                        ..Default::default()
+                                    });
+                                }
                             }
-                        }
-                        true
-                    });
+                            true
+                        },
+                    );
                     ast_kind_cache = Some(cache);
                 }
             }
@@ -120,7 +140,9 @@ impl super::CapabilityMapper {
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
 
         // Pre-filter using batched regex matching for Content conditions
-        let raw_regex_matches = self.raw_content_regex_index.find_matches(binary_data, &file_type);
+        let raw_regex_matches = self
+            .raw_content_regex_index
+            .find_matches(binary_data, &file_type);
 
         let cache = TraitEvalCache {
             raw_regex_matches: Some(&raw_regex_matches),
@@ -145,7 +167,9 @@ impl super::CapabilityMapper {
 
         // Pass 2: Evaluate dependent traits (iteratively until fixed point)
         let mut report_with_findings = report.clone();
-        report_with_findings.findings.extend(findings.iter().cloned());
+        report_with_findings
+            .findings
+            .extend(findings.iter().cloned());
 
         const MAX_ITERATIONS: usize = 10;
         for _ in 0..MAX_ITERATIONS {
@@ -164,7 +188,11 @@ impl super::CapabilityMapper {
 
             let mut new_added = false;
             for f in dep_findings {
-                if !report_with_findings.findings.iter().any(|existing| existing.id == f.id) {
+                if !report_with_findings
+                    .findings
+                    .iter()
+                    .any(|existing| existing.id == f.id)
+                {
                     report_with_findings.findings.push(f.clone());
                     findings.push(f);
                     new_added = true;
@@ -215,7 +243,13 @@ impl super::CapabilityMapper {
         } else {
             FxHashSet::default()
         };
-        let section_map = SectionMap::from_binary(binary_data);
+        // Build section map
+        // Skip parsing for files that don't have sections (saves ~100ms per file).
+        let section_map = if file_type.has_sections() {
+            SectionMap::from_binary(binary_data)
+        } else {
+            SectionMap::empty(binary_data.len() as u64)
+        };
 
         // Build all_strings
         let all_strings = super::build_all_strings(report);
@@ -279,7 +313,8 @@ impl super::CapabilityMapper {
             None,
             cached_ast,
         )
-        .with_section_map(&cache.section_map)
+        .with_section_map(cache.section_map)
+        .with_cached_evidence(Some(cache.cached_evidence))
         .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
         .with_slow_rule_ms(self.slow_rule_ms);
 
@@ -296,11 +331,11 @@ impl super::CapabilityMapper {
 
         // Use trait index to only evaluate applicable traits
         // This dramatically reduces work for specific file types
-        let mut applicable_indices: Vec<usize> = self.trait_index.get_applicable(&file_type).collect();
-
-
-
-
+        let mut applicable_indices: Vec<usize> = self
+            .trait_index
+            .get_applicable(&file_type)
+            .into_indices_static()
+            .collect();
 
         let is_tiny_dos_com_candidate = file_type == crate::composite_rules::FileType::Unknown
             && binary_data.len() <= 4096
@@ -348,140 +383,151 @@ impl super::CapabilityMapper {
             return vec![];
         }
 
-        let all_findings: Vec<Finding> = filtered_indices
-            .iter()
-            .filter_map(|&idx| {
-                let trait_def = &self.trait_definitions[idx];
-                // For dependent traits, skip string-based optimizations since
-                // we're matching on trait: conditions, not strings
-                if !dependent_only {
-                    // Check if this is an exact string trait with cached evidence
-                    let is_simple_exact_string = trait_def.downgrade.is_none()
-                        && matches!(
-                            &trait_def.r#if,
-                            Condition::StringValue { exact: Some(_), .. }
-                        )
-                        && trait_def.count_min.unwrap_or(1) == 1
-                        && trait_def.count_max.is_none()
-                        && trait_def.per_kb_min.is_none()
-                        && trait_def.per_kb_max.is_none();
+        let eval_trait = |&idx: &usize| {
+            let trait_def = &self.trait_definitions[idx];
+            // For dependent traits, skip string-based optimizations since
+            // we're matching on trait: conditions, not strings
+            if !dependent_only {
+                // Check if this is an exact string trait with cached evidence
+                let is_simple_exact_string = trait_def.downgrade.is_none()
+                    && matches!(
+                        &trait_def.r#if,
+                        Condition::StringValue { exact: Some(_), .. }
+                    )
+                    && trait_def.count_min.unwrap_or(1) == 1
+                    && trait_def.count_max.is_none()
+                    && trait_def.per_kb_min.is_none()
+                    && trait_def.per_kb_max.is_none();
 
-                    if is_simple_exact_string {
-                        if let Some(evidence) = cache.cached_evidence.get(&idx) {
-                            if !evidence.is_empty() {
-                                return Some(Finding {
-                                    id: trait_def.id.clone(),
-                                    desc: trait_def.desc.clone(),
-                                    conf: trait_def.conf,
-                                    crit: trait_def.crit,
-                                    mbc: trait_def.mbc.clone(),
-                                    attack: trait_def.attack.clone(),
-                                    evidence: evidence.clone(),
-                                    match_count: 0,
-                                    kind: FindingKind::Capability,
-                                    trait_refs: vec![],
-                                    source_file: get_relative_source_file(&trait_def.defined_in),
-                                });
-                            }
+                if is_simple_exact_string {
+                    if let Some(evidence) = cache.cached_evidence.get(&idx) {
+                        if !evidence.is_empty() {
+                            return Some(Finding {
+                                id: trait_def.id.clone(),
+                                desc: trait_def.desc.clone(),
+                                conf: trait_def.conf,
+                                crit: trait_def.crit,
+                                mbc: trait_def.mbc.clone(),
+                                attack: trait_def.attack.clone(),
+                                evidence: evidence.clone(),
+                                match_count: 0,
+                                kind: FindingKind::Capability,
+                                trait_refs: vec![],
+                                source_file: get_relative_source_file(&trait_def.defined_in),
+                            });
                         }
-                        return None;
                     }
-
-                    // Fast path for simple substr patterns
-                    let is_simple_substr_string = trait_def.downgrade.is_none()
-                        && matches!(
-                            &trait_def.r#if,
-                            Condition::StringValue {
-                                substr: Some(_),
-                                section: None,
-                                offset: None,
-                                offset_range: None,
-                                section_offset: None,
-                                section_offset_range: None,
-                                ..
-                            }
-                        )
-                        && trait_def.count_min.unwrap_or(1) == 1
-                        && trait_def.count_max.is_none()
-                        && trait_def.per_kb_min.is_none()
-                        && trait_def.per_kb_max.is_none();
-
-                    if is_simple_substr_string {
-                        if let Some(evidence) = cache.cached_evidence.get(&idx) {
-                            if !evidence.is_empty() {
-                                return Some(Finding {
-                                    id: trait_def.id.clone(),
-                                    desc: trait_def.desc.clone(),
-                                    conf: trait_def.conf,
-                                    crit: trait_def.crit,
-                                    mbc: trait_def.mbc.clone(),
-                                    attack: trait_def.attack.clone(),
-                                    evidence: evidence.clone(),
-                                    match_count: 0,
-                                    kind: FindingKind::Capability,
-                                    trait_refs: vec![],
-                                    source_file: get_relative_source_file(&trait_def.defined_in),
-                                });
-                            }
-                        }
-                        return None;
-                    }
-
-                    // Skip indexed exact traits that weren't matched
-                    if self.string_match_index.is_exact_trait(idx)
-                        && !cache.string_matched_traits.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    // Skip indexed substr traits that weren't matched
-                    if self.string_match_index.is_substr_trait(idx)
-                        && !cache.string_matched_traits.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    // Skip indexed symbol traits that weren't matched
-                    if self.symbol_match_index.is_symbol_trait(idx)
-                        && !cache.symbol_matched_traits.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    // Skip indexed symbol traits that weren't matched
-                    if self.symbol_match_index.is_symbol_trait(idx)
-                        && !cache.symbol_matched_traits.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    if self.string_match_index.is_regex_trait(idx)
-                        && !cache.regex_candidates.contains(&idx)
-                    {
-                        return None;
-                    }
-
-                    let has_content_regex = matches!(
-                        trait_def.r#if,
-                        Condition::Raw { regex: Some(_), .. }
-                            | Condition::Raw { word: Some(_), .. }
-                    );
-                    if has_content_regex
-                        && raw_regex_prefilter_enabled
-                        && self.raw_content_regex_index.is_indexed_trait(idx)
-                        && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
-                    {
-                        return None;
-                    }
-                }
-
-                if !trait_def.r#if.can_match_file_type(&file_type) {
                     return None;
                 }
 
-                trait_def.evaluate(&ctx)
-            })
-            .collect();
+                // Fast path for simple substr patterns
+                let is_simple_substr_string = trait_def.downgrade.is_none()
+                    && matches!(
+                        &trait_def.r#if,
+                        Condition::StringValue {
+                            substr: Some(_),
+                            section: None,
+                            offset: None,
+                            offset_range: None,
+                            section_offset: None,
+                            section_offset_range: None,
+                            ..
+                        }
+                    )
+                    && trait_def.count_min.unwrap_or(1) == 1
+                    && trait_def.count_max.is_none()
+                    && trait_def.per_kb_min.is_none()
+                    && trait_def.per_kb_max.is_none();
+
+                if is_simple_substr_string {
+                    if let Some(evidence) = cache.cached_evidence.get(&idx) {
+                        if !evidence.is_empty() {
+                            return Some(Finding {
+                                id: trait_def.id.clone(),
+                                desc: trait_def.desc.clone(),
+                                conf: trait_def.conf,
+                                crit: trait_def.crit,
+                                mbc: trait_def.mbc.clone(),
+                                attack: trait_def.attack.clone(),
+                                evidence: evidence.clone(),
+                                match_count: 0,
+                                kind: FindingKind::Capability,
+                                trait_refs: vec![],
+                                source_file: get_relative_source_file(&trait_def.defined_in),
+                            });
+                        }
+                    }
+                    return None;
+                }
+
+                // Skip indexed exact traits that weren't matched
+                if self.string_match_index.is_exact_trait(idx)
+                    && !cache.string_matched_traits.contains(&idx)
+                {
+                    return None;
+                }
+
+                // Skip indexed substr traits that weren't matched
+                if self.string_match_index.is_substr_trait(idx)
+                    && !cache.string_matched_traits.contains(&idx)
+                {
+                    return None;
+                }
+
+                // Skip indexed symbol traits that weren't matched
+                if self.symbol_match_index.is_symbol_trait(idx)
+                    && !cache.symbol_matched_traits.contains(&idx)
+                {
+                    return None;
+                }
+
+                // Skip indexed symbol traits that weren't matched
+                if self.symbol_match_index.is_symbol_trait(idx)
+                    && !cache.symbol_matched_traits.contains(&idx)
+                {
+                    return None;
+                }
+
+                if self.string_match_index.is_regex_trait(idx)
+                    && !cache.regex_candidates.contains(&idx)
+                {
+                    return None;
+                }
+
+                let has_content_regex = matches!(
+                    trait_def.r#if,
+                    Condition::Raw { regex: Some(_), .. } | Condition::Raw { word: Some(_), .. }
+                );
+                if has_content_regex
+                    && raw_regex_prefilter_enabled
+                    && self.raw_content_regex_index.is_indexed_trait(idx)
+                    && cache.raw_regex_matches.is_some_and(|s| !s.contains(&idx))
+                {
+                    return None;
+                }
+            }
+
+            if !trait_def.r#if.can_match_file_type(&file_type) {
+                return None;
+            }
+
+            let mut trait_ctx = ctx.clone().with_trait_idx(idx);
+            if trait_def.count_min.is_some()
+                || trait_def.count_max.is_some()
+                || trait_def.per_kb_min.is_some()
+                || trait_def.per_kb_max.is_some()
+            {
+                trait_ctx.cached_evidence = None;
+            }
+
+            trait_def.evaluate(&trait_ctx)
+        };
+
+        let all_findings: Vec<Finding> = if std::env::var_os("CLEAVE_SERIAL_TRAITS").is_some() {
+            filtered_indices.iter().filter_map(eval_trait).collect()
+        } else {
+            filtered_indices.par_iter().filter_map(eval_trait).collect()
+        };
 
         // Deduplicate findings
         let mut seen = std::collections::HashSet::new();

@@ -556,8 +556,7 @@ fn test_system_binary_false_positive_sanity() {
     assert!(output.status.success(), "cleave exited with failure");
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let report: serde_json::Value =
-        serde_json::from_str(&stdout).expect("invalid JSON output");
+    let report: serde_json::Value = serde_json::from_str(&stdout).expect("invalid JSON output");
 
     let file_entry = &report["fs"][0];
     assert!(

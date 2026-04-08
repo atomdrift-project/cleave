@@ -44,9 +44,9 @@ pub(crate) fn clear_condition_stats() {
 /// When exceeded, evaluation is interrupted and a timeout finding is emitted.
 const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
 
-/// Debug log threshold for rule evaluation (1 second).
-/// Rules exceeding this emit a debug-level log (visible via --verbose / RUST_LOG=debug).
-const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_secs(1);
+/// Debug log threshold for rule evaluation (500ms).
+/// Rules exceeding this emit an info-level log.
+const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(500);
 
 /// Macro to time condition evaluation
 macro_rules! timed_eval {
@@ -757,22 +757,6 @@ impl TraitDefinition {
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};
 
-        // SAFETY: We need to set the current trait for warning context.
-        // The context is otherwise immutable, but we've added a helper for this.
-        // Since we're in a parallel iterator, we must be careful.
-        // However, EvaluationContext is cloned or created per-thread/per-item in most callers.
-        // Actually, in the parallel iterator in evaluate_traits_with_ast, `ctx` is shared by reference.
-        // This is a problem for parallel evaluation if we use a &mut.
-        // But the current_trait is only used for transient warnings during this call.
-
-        // Let's check how ctx is passed to evaluate.
-        // It's `&ctx`. If multiple threads call .evaluate(&ctx), we can't have &mut ctx.
-
-        // If I want to support this in parallel, I might need to pass the ID into eval_raw/eval_hex directly
-        // OR make current_trait an Atomic or similar, but it's a &str.
-
-        // Actually, the easiest is to just pass the trait ID into the evaluators.
-
         // Check platform match
         let platform_match = self.platforms.contains(&Platform::All)
             || ctx.platforms.contains(&Platform::All)
@@ -794,7 +778,7 @@ impl TraitDefinition {
         if !arch_match {
             ctx.record_skip(SkipReason::ArchMismatch {
                 rule: self.arch.clone(),
-                context: ctx.arch.clone(),
+                context: ctx.arch.to_vec(),
             });
             return None;
         }
@@ -968,9 +952,9 @@ impl TraitDefinition {
             return Some(timeout_warning);
         }
 
-        // Debug log: rules taking >1s (visible via --verbose / RUST_LOG=debug)
+        // Info log: rules taking >500ms
         if duration > RULE_EVAL_DEBUG_DURATION {
-            tracing::debug!("slow rule: {} took {}ms", self.id, duration.as_millis(),);
+            tracing::info!("slow rule: {} took {}ms", self.id, duration.as_millis(),);
         }
 
         // Warn log: rules exceeding the user-configurable slow_rule_ms threshold
@@ -1581,9 +1565,15 @@ pub(crate) struct CompositeTrait {
 }
 
 impl CompositeTrait {
-    /// Extract all trait IDs this composite rule directly depends on
-    pub(crate) fn get_dependent_trait_ids(&self) -> Vec<String> {
+    /// Collect the subset of dependent trait IDs that are individually mandatory.
+    ///
+    /// These IDs are used only for fast prefiltering before full composite evaluation,
+    /// so they must be a sound lower bound:
+    /// - every `all:` trait reference is mandatory
+    /// - `any:` references are only mandatory when the rule requires all of them
+    fn get_required_trait_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
+
         if let Some(ref conds) = self.all {
             for cond in conds {
                 if let Condition::Trait { ref id } = cond {
@@ -1591,19 +1581,31 @@ impl CompositeTrait {
                 }
             }
         }
+
         if let Some(ref conds) = self.any {
-            for cond in conds {
-                if let Condition::Trait { ref id } = cond {
-                    ids.push(id.clone());
+            let required_from_any = self.needs.unwrap_or(1);
+            if required_from_any >= conds.len() {
+                for cond in conds {
+                    if let Condition::Trait { ref id } = cond {
+                        ids.push(id.clone());
+                    }
                 }
             }
         }
+
         ids
     }
 
-    /// Populate required_trait_indices using a map of trait ID -> index
-    pub(crate) fn populate_required_traits(&mut self, trait_id_map: &std::collections::HashMap<String, usize>) {
-        let dependent_ids = self.get_dependent_trait_ids();
+    /// Populate required_trait_indices using a map of trait ID -> index.
+    ///
+    /// This is a pruning hint for composite evaluation, not a full encoding of the
+    /// rule. It must never require more matched traits than the composite actually
+    /// needs to run, or valid `any:` + `needs:` rules get skipped before evaluation.
+    pub(crate) fn populate_required_traits(
+        &mut self,
+        trait_id_map: &std::collections::HashMap<String, usize>,
+    ) {
+        let dependent_ids = self.get_required_trait_ids();
         self.required_trait_indices = dependent_ids
             .into_iter()
             .filter_map(|id| trait_id_map.get(&id).copied())
@@ -1723,7 +1725,7 @@ impl CompositeTrait {
         if !arch_match {
             ctx.record_skip(SkipReason::ArchMismatch {
                 rule: self.arch.clone(),
-                context: ctx.arch.clone(),
+                context: ctx.arch.to_vec(),
             });
             return None;
         }

@@ -215,11 +215,7 @@ impl FileAnalysis {
             // Group by top 3 directory components
             // e.g., "objectives/well-known/malware/trickbot" -> "objectives/well-known/malware"
             let base = finding.id.split("::").next().unwrap_or(&finding.id);
-            let group_id = base
-                .split('/')
-                .take(3)
-                .collect::<Vec<_>>()
-                .join("/");
+            let group_id = base.split('/').take(3).collect::<Vec<_>>().join("/");
 
             let entry = scores_by_group.entry(group_id).or_insert(0.0);
             if score > *entry {
@@ -288,7 +284,6 @@ pub struct FindingCounts {
 fn is_zero(n: &u32) -> bool {
     *n == 0
 }
-
 
 fn is_zero_u64(n: &u64) -> bool {
     *n == 0

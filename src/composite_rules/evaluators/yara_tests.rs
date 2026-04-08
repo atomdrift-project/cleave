@@ -13,35 +13,15 @@
 use super::yara::*;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::evaluators::ContentLocationParams;
-use crate::composite_rules::types::{Arch, FileType, Platform};
+use crate::composite_rules::types::FileType;
 use crate::types::{AnalysisReport, TargetInfo};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 /// Helper: Create minimal evaluation context
 fn create_test_context(report: AnalysisReport, binary_data: Vec<u8>) -> EvaluationContext<'static> {
-    EvaluationContext {
-        ast_kind_cache: None,
-        report: Box::leak(Box::new(report)),
-        binary_data: Box::leak(binary_data.into_boxed_slice()),
-        file_type: FileType::All,
-        platforms: &[Platform::All],
-        arch: vec![Arch::All],
-        arch_ranges: None,
-        additional_findings: None,
-        cached_ast: None,
-        finding_id_index: None,
-        debug_collector: None,
-        section_map: None,
-        inline_yara_results: None,
-        cached_kv_format: OnceLock::new(),
-        cached_kv_parsed: OnceLock::new(),
-        current_trait: None,
-        current_source: None,
-        string_exact_index: OnceLock::new(),
-        string_exact_index_ci: OnceLock::new(),
-        deadline: None,
-        slow_rule_ms: 4000,
-    }
+    let leaked_report = Box::leak(Box::new(report));
+    let leaked_data = Box::leak(binary_data.into_boxed_slice());
+    EvaluationContext::test_only_new(leaked_report, leaked_data, FileType::All)
 }
 
 /// Helper: Create test report

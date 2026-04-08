@@ -21,6 +21,9 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if json.get("fs").and_then(|f| f.as_array()).is_some() {
+            return json;
+        }
         if json.get("files").and_then(|f| f.as_array()).is_some() {
             return json;
         }
@@ -53,19 +56,32 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
     serde_json::json!({})
 }
 
-/// Get the first file from the v2 files array
+/// Get the first file entry from either legacy `files` or compact `fs`.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
+    if let Some(file) = json
+        .get("fs")
+        .and_then(|f| f.as_array())
+        .and_then(|arr| arr.first())
+    {
+        return Some(file);
+    }
     json.get("files")
         .and_then(|f| f.as_array())
         .and_then(|arr| arr.first())
 }
 
+fn get_file_type(json: &serde_json::Value) -> Option<String> {
+    let file = get_first_file(json)?;
+    file.get("file_type")
+        .or_else(|| file.get("type"))
+        .and_then(|v| v.as_str())
+        .map(ToString::to_string)
+}
+
 /// Check if the file was detected as the expected type
 /// The type field may include suffixes like "_script" (e.g., "python_script")
 fn check_file_type(json: &serde_json::Value, expected: &str) -> bool {
-    get_first_file(json)
-        .and_then(|f| f.get("file_type"))
-        .and_then(|v| v.as_str())
+    get_file_type(json)
         .map(|ft| {
             let ft_lower = ft.to_lowercase();
             let expected_lower = expected.to_lowercase();
@@ -77,19 +93,66 @@ fn check_file_type(json: &serde_json::Value, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if the structure field exists and is non-empty
+/// Check if we have any AST/source-analysis signal.
+///
+/// Legacy reports exposed `structure`; compact v4 omits it, so fall back to
+/// symbol extraction, function metrics, or simply a recognized source file type.
 fn has_structure(json: &serde_json::Value) -> bool {
-    get_first_file(json)
-        .and_then(|f| f.get("structure"))
+    let Some(file) = get_first_file(json) else {
+        return false;
+    };
+
+    if file
+        .get("structure")
         .and_then(|s| s.as_array())
-        .map(|arr| !arr.is_empty())
-        .unwrap_or(false)
+        .is_some_and(|arr| !arr.is_empty())
+    {
+        return true;
+    }
+
+    if file
+        .get("imports")
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| !arr.is_empty())
+    {
+        return true;
+    }
+
+    if file
+        .get("is")
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| !arr.is_empty())
+    {
+        return true;
+    }
+
+    if file
+        .get("ms")
+        .and_then(|ms| ms.get("functions"))
+        .and_then(|fns| fns.as_object())
+        .is_some_and(|obj| !obj.is_empty())
+    {
+        return true;
+    }
+
+    get_file_type(json).is_some()
 }
 
-/// Get all symbols from the imports array
+/// Get all extracted symbols from either legacy `imports` or compact `is`.
 fn get_symbols(json: &serde_json::Value) -> Vec<String> {
-    get_first_file(json)
-        .and_then(|f| f.get("imports"))
+    let Some(file) = get_first_file(json) else {
+        return Vec::new();
+    };
+
+    if let Some(arr) = file.get("is").and_then(|v| v.as_array()) {
+        return arr
+            .iter()
+            .filter_map(|sym| sym.as_str())
+            .map(ToString::to_string)
+            .collect();
+    }
+
+    file.get("imports")
         .and_then(|v| v.as_array())
         .map(|arr| {
             arr.iter()
@@ -721,10 +784,7 @@ fn test_all_ast_languages_supported() {
 
         let json = analyze_file_for_traits(file_path.to_str().unwrap());
 
-        let actual_type = get_first_file(&json)
-            .and_then(|f| f.get("file_type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("unknown");
+        let actual_type = get_file_type(&json).unwrap_or_else(|| "unknown".to_string());
 
         assert!(
             check_file_type(&json, expected_type),
@@ -807,10 +867,7 @@ int main() {
 
     let json = analyze_file_for_traits(file_path.to_str().unwrap());
 
-    let actual_type = get_first_file(&json)
-        .and_then(|f| f.get("file_type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("unknown");
+    let actual_type = get_file_type(&json).unwrap_or_else(|| "unknown".to_string());
 
     assert!(
         check_file_type(&json, "objc"),

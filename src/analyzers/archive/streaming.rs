@@ -1912,12 +1912,10 @@ pub(crate) struct ArchiveSummary {
     pub hostile_reasons: Vec<HostileArchiveReason>,
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_skip_rpm_header() {

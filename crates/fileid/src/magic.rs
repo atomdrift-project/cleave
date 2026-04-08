@@ -9,16 +9,12 @@ use crate::{DetectionSource, FileType};
 
 /// LNK shell link CLSID header (20 bytes).
 const LNK_MAGIC: &[u8] = &[
-    0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x46,
+    0x4C, 0x00, 0x00, 0x00, 0x01, 0x14, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC0, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x46,
 ];
 
-
 /// Detect file type from content. Returns the type and how it was detected.
-pub(crate) fn detect_from_content(
-    path: &Path,
-    data: &[u8],
-) -> Option<(FileType, DetectionSource)> {
+pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType, DetectionSource)> {
     if data.len() < 2 {
         return None;
     }
@@ -53,11 +49,7 @@ pub(crate) fn detect_from_content(
         }
         0xCA => {
             // Java class or Mach-O fat: CAFEBABE
-            if data.len() >= 8
-                && data[1] == 0xFE
-                && data[2] == 0xBA
-                && data[3] == 0xBE
-            {
+            if data.len() >= 8 && data[1] == 0xFE && data[2] == 0xBA && data[3] == 0xBE {
                 let major = u16::from_be_bytes([data[6], data[7]]);
                 if (45..=70).contains(&major) {
                     Some((FileType::JavaClass, DetectionSource::Magic))
@@ -82,11 +74,7 @@ pub(crate) fn detect_from_content(
         }
         0xCE => {
             // Mach-O 32-bit swapped: CEFAEDFE
-            if data.len() >= 4
-                && data[1] == 0xFA
-                && data[2] == 0xED
-                && data[3] == 0xFE
-            {
+            if data.len() >= 4 && data[1] == 0xFA && data[2] == 0xED && data[3] == 0xFE {
                 Some((FileType::MachO, DetectionSource::Magic))
             } else {
                 None
@@ -94,11 +82,7 @@ pub(crate) fn detect_from_content(
         }
         0xCF => {
             // Mach-O 64-bit swapped: CFFAEDFE
-            if data.len() >= 4
-                && data[1] == 0xFA
-                && data[2] == 0xED
-                && data[3] == 0xFE
-            {
+            if data.len() >= 4 && data[1] == 0xFA && data[2] == 0xED && data[3] == 0xFE {
                 Some((FileType::MachO, DetectionSource::Magic))
             } else {
                 None
@@ -106,11 +90,7 @@ pub(crate) fn detect_from_content(
         }
         0xBE => {
             // Mach-O fat swapped: BEBAFECA
-            if data.len() >= 4
-                && data[1] == 0xBA
-                && data[2] == 0xFE
-                && data[3] == 0xCA
-            {
+            if data.len() >= 4 && data[1] == 0xBA && data[2] == 0xFE && data[3] == 0xCA {
                 Some((FileType::MachO, DetectionSource::Magic))
             } else {
                 None
@@ -195,7 +175,7 @@ pub(crate) fn detect_from_content(
                 let ext = path
                     .extension()
                     .and_then(|e| e.to_str())
-                    .map(|e| e.to_ascii_lowercase());
+                    .map(str::to_ascii_lowercase);
                 if matches!(
                     ext.as_deref(),
                     Some("pkl" | "pickle" | "joblib" | "pt" | "pth")
@@ -328,8 +308,7 @@ fn classify_pk(path: &Path, data: &[u8]) -> (FileType, DetectionSource) {
 
     if matches!(
         ext,
-        "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx"
-            | "xltm"
+        "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx" | "xltm"
     ) {
         return (FileType::Ooxml, DetectionSource::Magic);
     }
@@ -356,11 +335,10 @@ fn lowercase_ext(path: &Path) -> Option<String> {
     buf[..ext.len()].copy_from_slice(ext.as_bytes());
     buf[..ext.len()].make_ascii_lowercase();
     // Input was valid UTF-8 ASCII, lowering preserves that.
-    Some(
-        std::str::from_utf8(&buf[..ext.len()])
-            .expect("ASCII lowercase preserves UTF-8")
-            .to_string(),
-    )
+    let Ok(ext) = std::str::from_utf8(&buf[..ext.len()]) else {
+        return None;
+    };
+    Some(ext.to_string())
 }
 
 /// Detect XML Plist markers in the first 256 bytes.
@@ -390,7 +368,10 @@ fn detect_shebang(data: &[u8]) -> Option<(FileType, DetectionSource)> {
     let interp = if line.starts_with(b"/usr/bin/env ") || line.starts_with(b"/usr/bin/env\t") {
         // Skip "/usr/bin/env " and any extra whitespace
         let rest = &line[13..];
-        let start = rest.iter().position(|&b| b != b' ' && b != b'\t').unwrap_or(0);
+        let start = rest
+            .iter()
+            .position(|&b| b != b' ' && b != b'\t')
+            .unwrap_or(0);
         &rest[start..]
     } else {
         // Find last '/' and take everything after it
@@ -411,7 +392,9 @@ fn detect_shebang(data: &[u8]) -> Option<(FileType, DetectionSource)> {
             Some((FileType::Shell, DetectionSource::Shebang))
         }
         b"python" | b"python2" | b"python3" => Some((FileType::Python, DetectionSource::Shebang)),
-        b"node" | b"nodejs" | b"deno" | b"bun" => Some((FileType::JavaScript, DetectionSource::Shebang)),
+        b"node" | b"nodejs" | b"deno" | b"bun" => {
+            Some((FileType::JavaScript, DetectionSource::Shebang))
+        }
         b"ruby" => Some((FileType::Ruby, DetectionSource::Shebang)),
         b"perl" | b"perl5" => Some((FileType::Perl, DetectionSource::Shebang)),
         b"php" | b"php8" | b"php7" => Some((FileType::Php, DetectionSource::Shebang)),
@@ -439,9 +422,7 @@ fn detect_tampered_pe(data: &[u8]) -> Option<FileType> {
                     pe_data[0x3E],
                     pe_data[0x3F],
                 ]) as usize;
-                if e_lfanew + 4 <= pe_data.len()
-                    && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0"
-                {
+                if e_lfanew + 4 <= pe_data.len() && pe_data[e_lfanew..e_lfanew + 4] == *b"PE\0\0" {
                     return Some(FileType::Pe);
                 }
             }

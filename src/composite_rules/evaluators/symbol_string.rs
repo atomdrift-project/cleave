@@ -69,6 +69,25 @@ pub(crate) fn eval_symbol<'a>(
     let mut evidence = Vec::new();
     let mut match_count: usize = 0;
 
+    // FAST PATH 0: Use pre-computed evidence from indexed matching if available.
+    // Safe when no exclusion filters or is: validators are present.
+    if not.is_none() && is_check.is_none() {
+        if let Some(trait_idx) = ctx.current_trait_idx {
+            if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
+                if !cached.is_empty() {
+                    return ConditionResult {
+                        matched: true,
+                        evidence: cached.clone(),
+                        match_count: cached.len(),
+                        warnings: Vec::new(),
+                        precision: 2.0, // Symbols are high-precision by default
+                        matched_trait_ids: Vec::new(),
+                    };
+                }
+            }
+        }
+    }
+
     // Normalize exact/substr patterns the same way symbols are normalized at load time,
     // so rule authors can write `exact: "__libc_start_main"` and it matches.
     let norm_exact = exact.map(|s| normalize_symbol(s));
@@ -241,62 +260,56 @@ pub(crate) fn eval_string<'a, 'b>(
     let mut evidence = Vec::new();
 
     // Resolve effective range from location constraints
-    let effective_range: Option<(u64, u64)> = if params.section.is_some()
+    let has_location_constraint = params.section.is_some()
         || params.offset.is_some()
         || params.offset_range.is_some()
         || params.section_offset.is_some()
         || params.section_offset_range.is_some()
-    {
-        // Use SectionMap to resolve the range if available
-        if let Some(ref section_map) = ctx.section_map {
-            section_map.resolve_range(
-                params.section.map(std::string::String::as_str),
-                params.offset,
-                params.offset_range,
-                params.section_offset,
-                params.section_offset_range,
-            )
-        } else {
-            // No SectionMap available - use absolute offset constraints only
-            match (params.offset, params.offset_range) {
-                (Some(off), None) => {
-                    // Single offset - resolve to single byte range
-                    let file_size = ctx.binary_data.len() as i64;
-                    let resolved = if off < 0 {
-                        (file_size + off).max(0) as u64
-                    } else {
-                        off as u64
-                    };
-                    Some((resolved, resolved + 1))
-                }
-                (None, Some((start, end_opt))) => {
-                    let file_size = ctx.binary_data.len() as i64;
-                    let resolved_start = if start < 0 {
-                        (file_size + start).max(0) as u64
-                    } else {
-                        start as u64
-                    };
-                    let resolved_end = match end_opt {
-                        Some(end) if end < 0 => (file_size + end).max(0) as u64,
-                        Some(end) => end as u64,
-                        None => file_size as u64,
-                    };
-                    Some((resolved_start, resolved_end))
-                }
-                _ => None, // Section constraints without SectionMap - no filtering
-            }
-        }
+        || params.arch_clamp.is_some();
+    let effective_range: Option<(u64, u64)> = if has_location_constraint {
+        let location = ContentLocationParams {
+            section: params.section.cloned(),
+            offset: params.offset,
+            offset_range: params.offset_range,
+            section_offset: params.section_offset,
+            section_offset_range: params.section_offset_range,
+            arch_clamp: params.arch_clamp,
+        };
+        let (start, end) = resolve_effective_range(&location, ctx);
+        Some((start as u64, end as u64))
     } else {
-        None // No location constraints
+        None
     };
 
     // Use pre-compiled regex from trait definition (compiled at startup)
     let compiled_regex = params.compiled_regex;
 
-    // FAST PATH: Use indexed lookup for exact matches (O(1) instead of O(n))
+    // FAST PATH 0: Use pre-computed evidence from indexed matching if available.
+    // This is only safe when there are no location constraints (offset, section)
+    // because the indexer does not currently handle those.
+    if !has_location_constraint && trait_not.is_none() && params.is_check.is_none() {
+        if let Some(trait_idx) = ctx.current_trait_idx {
+            if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
+                if !cached.is_empty() {
+                    return ConditionResult {
+                        matched: true,
+                        evidence: cached.clone(),
+                        match_count: cached.len(), // Approximation, but correct for most traits
+                        warnings: Vec::new(),
+                        precision: if params.case_insensitive { 1.0 } else { 2.0 },
+                        matched_trait_ids: Vec::new(),
+                    };
+                }
+            }
+        }
+    }
+
+    // FAST PATH 1: Use indexed lookup for exact matches (O(1) instead of O(n))
     if let Some(exact_str) = params.exact {
         if effective_range.is_none() {
             // No offset constraints - can use the index directly
+            let mut evidence = Vec::new();
+
             if params.case_insensitive {
                 if let Some(match_list) = ctx
                     .get_string_exact_index_ci()
@@ -316,17 +329,18 @@ pub(crate) fn eval_string<'a, 'b>(
                         let excluded_by_is = !validate_match(original_value, params.is_check);
 
                         if !excluded_by_not && !excluded_by_is {
-                            let method = if source == "string_extractor" {
+                            let method = if *source == "string_extractor" {
                                 "string"
                             } else if ctx.report.imports.iter().any(|i| i.source == *source) {
                                 "import_symbol"
                             } else {
                                 "export_symbol"
                             };
+
                             evidence.push(Evidence {
                                 method: method.to_string(),
-                                source: source.clone(),
-                                value: original_value.clone(),
+                                source: source.to_string(),
+                                value: original_value.to_string(),
                                 location: offset.map(|o| format!("{:#x}", o)),
                                 ..Default::default()
                             });
@@ -335,18 +349,19 @@ pub(crate) fn eval_string<'a, 'b>(
                 }
             } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
                 for (i, (source, offset)) in match_list.iter().enumerate() {
+                    let original_value = exact_str;
                     if i >= MAX_EVIDENCE_PER_TRAIT {
                         break;
                     }
 
                     // Apply not: exclusion filter
                     let excluded_by_not = trait_not
-                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
+                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(original_value)))
                         .unwrap_or(false);
-                    let excluded_by_is = !validate_match(exact_str, params.is_check);
+                    let excluded_by_is = !validate_match(original_value, params.is_check);
 
                     if !excluded_by_not && !excluded_by_is {
-                        let method = if source == "string_extractor" {
+                        let method = if *source == "string_extractor" {
                             "string"
                         } else if ctx.report.imports.iter().any(|i| i.source == *source) {
                             "import_symbol"
@@ -355,8 +370,8 @@ pub(crate) fn eval_string<'a, 'b>(
                         };
                         evidence.push(Evidence {
                             method: method.to_string(),
-                            source: source.clone(),
-                            value: exact_str.clone(),
+                            source: source.to_string(),
+                            value: original_value.to_string(),
                             location: offset.map(|o| format!("{:#x}", o)),
                             ..Default::default()
                         });
@@ -421,9 +436,15 @@ pub(crate) fn eval_string<'a, 'b>(
                 match_value = exact_str.clone();
             }
         } else if let Some(contains_str) = params.substr {
-            matched = if let Some(ref pattern_lower) = substr_lower {
-                // Use pre-computed lowercase pattern (avoids allocation per iteration)
-                value.to_lowercase().contains(pattern_lower.as_str())
+            matched = if params.case_insensitive {
+                if let Some(ref pattern_lower) = substr_lower {
+                    // Note: This still allocates via to_lowercase().
+                    // Most CI substr matches should have been caught by FAST PATH 0.
+                    value.to_lowercase().contains(pattern_lower.as_str())
+                } else {
+                    // Fallback for unexpected state
+                    value.to_lowercase().contains(&contains_str.to_lowercase())
+                }
             } else {
                 value.contains(contains_str)
             };

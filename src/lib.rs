@@ -35,6 +35,7 @@ mod shared_resources;
 pub mod strings;
 pub mod test_rules;
 #[cfg(test)]
+/// Test module for rule filters.
 pub mod test_rules_filters_test;
 pub mod traits_repo;
 mod upx;
@@ -157,10 +158,10 @@ fn should_skip_unknown_xor_payload_for_source(
         && !looks_like_textual_payload_preview(&payload.preview)
 }
 
-fn smallest_section_for_offset<'a>(
+fn smallest_section_for_offset(
     offset: usize,
-    sections: &'a [types::Section],
-) -> Option<&'a types::Section> {
+    sections: &[types::Section],
+) -> Option<&types::Section> {
     sections
         .iter()
         .filter(|section| {
@@ -861,7 +862,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
-    // Skip extraction for archive files themselves as they are expected to contain 
+    // Skip extraction for archive files themselves as they are expected to contain
     // binary noise and their contents will be analyzed separately.
     let (stng_strings, stage_stng_ms) = if matches!(file_type, FileType::Archive | FileType::Jar) {
         (Vec::new(), 0)

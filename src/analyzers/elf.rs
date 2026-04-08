@@ -341,11 +341,8 @@ impl ElfAnalyzer {
                         // that goblin rejects even though the executable is otherwise
                         // legitimate and dynamically linked. Keep the structural anomaly
                         // visible, but below suspicious for these known-benign contexts.
-                        crit = if malformed_sections {
-                            Criticality::Notable
-                        } else {
-                            Criticality::Notable
-                        };
+                        let _ = malformed_sections;
+                        crit = Criticality::Notable;
                     }
                 }
                 report.findings.push(Finding {

@@ -3015,8 +3015,7 @@ mod constraint_tests {
     fn test_none_only_with_proximity_is_flagged() {
         let rules = vec![CompositeTrait {
             required_trait_indices: Vec::new(),
-            id:
- "test/none-prox".to_string(),
+            id: "test/none-prox".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3049,8 +3048,7 @@ mod constraint_tests {
     fn test_none_with_all_and_proximity_is_ok() {
         let rules = vec![CompositeTrait {
             required_trait_indices: Vec::new(),
-            id:
- "test/none-plus-all".to_string(),
+            id: "test/none-plus-all".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3086,8 +3084,7 @@ mod constraint_tests {
         // all: [] + none: [something] should still be flagged — empty all vacuously matches
         let rules = vec![CompositeTrait {
             required_trait_indices: Vec::new(),
-            id:
- "test/empty-all-none".to_string(),
+            id: "test/empty-all-none".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3121,8 +3118,7 @@ mod constraint_tests {
     fn test_needs_zero_is_flagged() {
         let rules = vec![CompositeTrait {
             required_trait_indices: Vec::new(),
-            id:
- "test/needs-zero".to_string(),
+            id: "test/needs-zero".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,
@@ -3155,8 +3151,7 @@ mod constraint_tests {
     fn test_needs_one_is_not_flagged_by_needs_zero() {
         let rules = vec![CompositeTrait {
             required_trait_indices: Vec::new(),
-            id:
- "test/needs-one".to_string(),
+            id: "test/needs-one".to_string(),
             desc: "test".to_string(),
             conf: 1.0,
             crit: Criticality::Baseline,

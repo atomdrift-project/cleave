@@ -343,9 +343,9 @@ impl FileType {
         )
     }
 
-    /// Returns true if this is a binary format (ELF, Mach-O, PE, or compiled bytecode)
+    /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
     #[must_use]
-    pub(crate) fn is_binary(&self) -> bool {
+    pub(crate) fn has_sections(&self) -> bool {
         matches!(
             self,
             FileType::Elf
@@ -354,8 +354,6 @@ impl FileType {
                 | FileType::Dylib
                 | FileType::So
                 | FileType::Dll
-                | FileType::Class
-                | FileType::Pyc
         )
     }
 

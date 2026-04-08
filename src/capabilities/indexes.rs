@@ -5,6 +5,7 @@
 //! - `StringMatchIndex`: Batched string matching using Aho-Corasick automaton
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
+use crate::composite_rules::evaluators::truncate_evidence;
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
 use crate::types::binary::normalize_symbol;
 use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
@@ -12,6 +13,7 @@ use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
 use regex::bytes::{RegexSet, RegexSetBuilder};
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::sync::{Arc, RwLock};
 
 const ARCHIVE_FAMILY_TYPES: [RuleFileType; 14] = [
     RuleFileType::Archive,
@@ -55,70 +57,83 @@ fn binary_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
 }
 
 /// Index of trait indices by file type for fast lookup.
-/// Maps FileType -> Vec of indices into trait_definitions.
+/// Maps FileType -> Bitset of indices into trait_definitions.
 #[derive(Clone, Default, Debug)]
 pub(crate) struct TraitIndex {
-    /// Traits that apply to each specific file type
-    by_file_type: FxHashMap<RuleFileType, Vec<usize>>,
+    /// Traits that apply to each specific file type (raw, not including universal/families)
+    by_file_type: FxHashMap<RuleFileType, TraitBitSet>,
     /// Traits that apply to all file types (Platform::All)
-    universal: Vec<usize>,
+    universal: TraitBitSet,
+    /// Lazy-initialized combined bitsets (universal + specific + families)
+    combined_cache: Arc<RwLock<FxHashMap<RuleFileType, TraitBitSet>>>,
 }
 
 impl TraitIndex {
     pub(crate) fn new() -> Self {
         Self {
             by_file_type: FxHashMap::default(),
-            universal: Vec::new(),
+            universal: TraitBitSet::default(),
+            combined_cache: Arc::new(RwLock::new(FxHashMap::default())),
         }
     }
 
     /// Build index from trait definitions
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
-        let mut index = Self::new();
+        let mut by_type: FxHashMap<RuleFileType, TraitBitSet> = FxHashMap::default();
+        let num_traits = traits.len();
+        let mut universal = TraitBitSet::with_capacity(num_traits);
 
         for (i, trait_def) in traits.iter().enumerate() {
             let has_all = trait_def.r#for.contains(&RuleFileType::All);
 
             if has_all {
-                // Trait applies to all file types
-                index.universal.push(i);
+                universal.insert(i);
             } else {
-                // Trait applies to specific file types
                 for ft in &trait_def.r#for {
-                    index.by_file_type.entry(*ft).or_default().push(i);
+                    by_type
+                        .entry(*ft)
+                        .or_insert_with(|| TraitBitSet::with_capacity(num_traits))
+                        .insert(i);
                 }
             }
         }
 
-        index
+        Self {
+            by_file_type: by_type,
+            universal,
+            combined_cache: Arc::new(RwLock::new(FxHashMap::default())),
+        }
     }
 
     /// Get trait indices applicable to a given file type
-    pub(crate) fn get_applicable(
-        &self,
-        file_type: &RuleFileType,
-    ) -> impl Iterator<Item = usize> + '_ {
-        // Universal traits + specific file type traits
-        let specific = self
-            .by_file_type
-            .get(file_type)
-            .map(std::vec::Vec::as_slice)
-            .unwrap_or(&[]);
+    pub(crate) fn get_applicable(&self, file_type: &RuleFileType) -> TraitBitSet {
+        // 1. Check cache first (fast path)
+        if let Ok(cache) = self.combined_cache.read() {
+            if let Some(bitset) = cache.get(file_type) {
+                return bitset.clone();
+            }
+        }
 
-        self.universal
+        // 2. Compute and cache (slow path)
+        let mut combined = self.universal.clone();
+        if let Some(specific) = self.by_file_type.get(file_type) {
+            combined.union(specific);
+        }
+
+        for family_type in binary_family_types(file_type)
             .iter()
-            .copied()
-            .chain(specific.iter().copied())
-            .chain(
-                binary_family_types(file_type)
-                    .iter()
-                    .flat_map(|ft| self.by_file_type.get(ft).into_iter().flatten().copied()),
-            )
-            .chain(
-                archive_family_types(file_type)
-                    .iter()
-                    .flat_map(|ft| self.by_file_type.get(ft).into_iter().flatten().copied()),
-            )
+            .chain(archive_family_types(file_type).iter())
+        {
+            if let Some(family_traits) = self.by_file_type.get(family_type) {
+                combined.union(family_traits);
+            }
+        }
+
+        if let Ok(mut cache) = self.combined_cache.write() {
+            cache.insert(*file_type, combined.clone());
+        }
+
+        combined
     }
 }
 
@@ -132,7 +147,7 @@ pub(crate) struct TraitBitSet {
 impl TraitBitSet {
     /// Create a new bitset with enough capacity for the given number of traits
     pub(crate) fn with_capacity(num_traits: usize) -> Self {
-        let num_u64s = (num_traits + 63) / 64;
+        let num_u64s = num_traits.div_ceil(64);
         Self {
             bits: vec![0; num_u64s],
         }
@@ -144,6 +159,17 @@ impl TraitBitSet {
         let bit_idx = trait_idx % 64;
         if u64_idx < self.bits.len() {
             self.bits[u64_idx] |= 1 << bit_idx;
+        }
+    }
+
+    /// Union another bitset into this one.
+    pub(crate) fn union(&mut self, other: &Self) {
+        for (i, &other_bits) in other.bits.iter().enumerate() {
+            if i < self.bits.len() {
+                self.bits[i] |= other_bits;
+            } else {
+                self.bits.push(other_bits);
+            }
         }
     }
 
@@ -167,6 +193,68 @@ impl TraitBitSet {
             }
         }
         true
+    }
+
+    /// Returns an iterator over all set bit indices in this bitset (static version).
+    #[allow(dead_code)]
+    pub(crate) fn to_indices_static(&self) -> impl Iterator<Item = usize> + '_ {
+        let mut next_u_idx = 0;
+        let mut current_u_idx = 0;
+        let mut current_val = 0u64;
+        let bits = &self.bits;
+
+        std::iter::from_fn(move || loop {
+            if current_val != 0 {
+                let bit_idx = current_val.trailing_zeros() as usize;
+                current_val &= !(1 << bit_idx);
+                return Some(current_u_idx * 64 + bit_idx);
+            }
+            if next_u_idx >= bits.len() {
+                return None;
+            }
+            current_u_idx = next_u_idx;
+            current_val = bits[current_u_idx];
+            next_u_idx += 1;
+        })
+    }
+
+    /// Returns an iterator over all set bit indices in this bitset (owned version).
+    pub(crate) fn into_indices_static(self) -> impl Iterator<Item = usize> {
+        let mut next_u_idx = 0;
+        let mut current_u_idx = 0;
+        let mut current_val = 0u64;
+        let bitset = self;
+
+        std::iter::from_fn(move || loop {
+            if current_val != 0 {
+                let bit_idx = current_val.trailing_zeros() as usize;
+                current_val &= !(1 << bit_idx);
+                return Some(current_u_idx * 64 + bit_idx);
+            }
+            if next_u_idx >= bitset.bits.len() {
+                return None;
+            }
+            current_u_idx = next_u_idx;
+            current_val = bitset.bits[current_u_idx];
+            next_u_idx += 1;
+        })
+    }
+
+    /// Returns an iterator over all set bit indices in this bitset.
+    #[allow(dead_code)]
+    pub(crate) fn to_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.bits.iter().enumerate().flat_map(|(u_idx, &val)| {
+            let mut current_val = val;
+            std::iter::from_fn(move || {
+                if current_val == 0 {
+                    None
+                } else {
+                    let bit_idx = current_val.trailing_zeros() as usize;
+                    current_val &= !(1 << bit_idx);
+                    Some(u_idx * 64 + bit_idx)
+                }
+            })
+        })
     }
 }
 
@@ -562,7 +650,7 @@ impl StringMatchIndex {
                             entry.push(Evidence {
                                 method: "string".to_string(),
                                 source: "string_extractor".to_string(),
-                                value: string_info.value.clone(),
+                                value: truncate_evidence(&string_info.value, 120),
                                 location: string_info.offset.map(|o| format!("{:#x}", o)),
                                 ..Default::default()
                             });
@@ -689,7 +777,7 @@ impl StringMatchIndex {
                                     entry.push(Evidence {
                                         method: "string".to_string(),
                                         source: "string_extractor".to_string(),
-                                        value: string_info.value.clone(),
+                                        value: truncate_evidence(&string_info.value, 120),
                                         location: string_info.offset.map(|o| format!("{:#x}", o)),
                                         ..Default::default()
                                     });
@@ -910,7 +998,7 @@ struct FileTypeRegexSet {
     /// Original pattern strings for debugging/profiling
     patterns: Vec<String>,
     /// Individual compiled regexes for patterns WITH extractable literals
-    individual_regexes: Vec<Option<regex::bytes::Regex>>,
+    individual_regexes: Vec<Option<Arc<regex::bytes::Regex>>>,
     /// Smaller RegexSet for ONLY patterns without extractable literals
     no_literal_regex_set: Option<RegexSet>,
     /// Maps no_literal_regex_set index -> original pattern index
@@ -1004,8 +1092,7 @@ impl FileTypeRegexSet {
                 let start = mat.start();
                 let end = mat.end();
                 let before_ok = start == 0
-                    || !content[start - 1].is_ascii_alphanumeric()
-                        && content[start - 1] != b'_';
+                    || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
                 let after_ok = end == content_len
                     || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
                 if before_ok && after_ok {
@@ -1024,8 +1111,7 @@ impl FileTypeRegexSet {
                 let start = mat.start();
                 let end = mat.end();
                 let before_ok = start == 0
-                    || !content[start - 1].is_ascii_alphanumeric()
-                        && content[start - 1] != b'_';
+                    || !content[start - 1].is_ascii_alphanumeric() && content[start - 1] != b'_';
                 let after_ok = end == content_len
                     || !content[end].is_ascii_alphanumeric() && content[end] != b'_';
                 if before_ok && after_ok {
@@ -1052,7 +1138,7 @@ impl FileTypeRegexSet {
                 if trait_indices.iter().all(|t| matched_traits.contains(t)) {
                     continue;
                 }
-                if let Some(Some(ref regex)) = self.individual_regexes.get(pattern_idx) {
+                if let Some(Some(regex)) = self.individual_regexes.get(pattern_idx) {
                     if regex.is_match(content) {
                         for &t in trait_indices {
                             matched_traits.insert(t);
@@ -1152,6 +1238,27 @@ impl RawContentRegexIndex {
             }
         }
 
+        let mut unique_patterns = FxHashSet::default();
+        for (pattern, _) in &universal_patterns {
+            unique_patterns.insert(pattern.clone());
+        }
+        for bucket_patterns in by_file_type_patterns.values() {
+            for (pattern, _) in bucket_patterns {
+                unique_patterns.insert(pattern.clone());
+            }
+        }
+        let unique_patterns: Vec<String> = unique_patterns.into_iter().collect();
+        let shared_individual_regexes: FxHashMap<String, Arc<regex::bytes::Regex>> =
+            unique_patterns
+                .into_par_iter()
+                .filter_map(|pattern| {
+                    regex::bytes::Regex::new(&pattern)
+                        .ok()
+                        .map(Arc::new)
+                        .map(|compiled| (pattern, compiled))
+                })
+                .collect();
+
         // Build regex sets for each file type in parallel, collecting errors
         // Collect all file types that need building
         let all_file_types: FxHashSet<RuleFileType> = by_file_type_patterns
@@ -1169,7 +1276,17 @@ impl RawContentRegexIndex {
             .collect();
         let results: Vec<_> = ft_data
             .into_par_iter()
-            .map(|(ft, patterns, words)| (ft, Self::build_regex_set(&patterns, &words, traits)))
+            .map(|(ft, patterns, words)| {
+                (
+                    ft,
+                    Self::build_regex_set(
+                        &patterns,
+                        &words,
+                        traits,
+                        Some(&shared_individual_regexes),
+                    ),
+                )
+            })
             .collect();
 
         let mut by_file_type = FxHashMap::default();
@@ -1185,7 +1302,12 @@ impl RawContentRegexIndex {
 
         // Build universal patterns (can run in parallel with file-type-specific building
         // but kept separate for clarity)
-        let universal = match Self::build_regex_set(&universal_patterns, &universal_words, traits) {
+        let universal = match Self::build_regex_set(
+            &universal_patterns,
+            &universal_words,
+            traits,
+            Some(&shared_individual_regexes),
+        ) {
             Ok(set) => set,
             Err(mut e) => {
                 errors.append(&mut e);
@@ -1255,6 +1377,7 @@ impl RawContentRegexIndex {
         patterns: &[(String, usize)],
         words: &[WordPattern],
         traits: &[TraitDefinition],
+        shared_individual_regexes: Option<&FxHashMap<String, Arc<regex::bytes::Regex>>>,
     ) -> Result<Option<FileTypeRegexSet>, Vec<String>> {
         if patterns.is_empty() && words.is_empty() {
             return Ok(None);
@@ -1339,10 +1462,18 @@ impl RawContentRegexIndex {
         };
 
         // Pre-compile individual regexes for patterns WITH literals (used after Aho-Corasick match)
-        let individual_regexes: Vec<Option<regex::bytes::Regex>> = pattern_strs
-            .par_iter()
-            .map(|p| regex::bytes::Regex::new(p).ok())
-            .collect();
+        let individual_regexes: Vec<Option<Arc<regex::bytes::Regex>>> =
+            if let Some(shared_individual_regexes) = shared_individual_regexes {
+                pattern_strs
+                    .iter()
+                    .map(|pattern| shared_individual_regexes.get(pattern).cloned())
+                    .collect()
+            } else {
+                pattern_strs
+                    .par_iter()
+                    .map(|p| regex::bytes::Regex::new(p).ok().map(Arc::new))
+                    .collect()
+            };
 
         // Build smaller RegexSet for ONLY patterns without extractable literals
         let no_literal_patterns: Vec<&str> = patterns_without_literals
@@ -1428,28 +1559,26 @@ impl RawContentRegexIndex {
         }
 
         // Validate patterns — any that failed individual compilation are errors
-        {
-            let mut errors = Vec::new();
-            for (i, compiled) in individual_regexes.iter().enumerate() {
-                if compiled.is_none() {
-                    // Try again to get the error message
-                    if let Err(re_err) = regex::bytes::Regex::new(&pattern_strs[i]) {
-                        for trait_idx in &pattern_to_traits[i] {
-                            let trait_def = &traits[*trait_idx];
-                            errors.push(format!(
-                                "trait '{}' in \"{}\": invalid regex pattern: '{}' ({})",
-                                trait_def.id,
-                                trait_def.defined_in.display(),
-                                pattern_strs[i],
-                                re_err
-                            ));
-                        }
+        let mut errors = Vec::new();
+        for (i, compiled) in individual_regexes.iter().enumerate() {
+            if compiled.is_none() {
+                // Try again to get the error message
+                if let Err(re_err) = regex::bytes::Regex::new(&pattern_strs[i]) {
+                    for trait_idx in &pattern_to_traits[i] {
+                        let trait_def = &traits[*trait_idx];
+                        errors.push(format!(
+                            "trait '{}' in \"{}\": invalid regex pattern: '{}' ({})",
+                            trait_def.id,
+                            trait_def.defined_in.display(),
+                            pattern_strs[i],
+                            re_err
+                        ));
                     }
                 }
             }
-            if !errors.is_empty() {
-                return Err(errors);
-            }
+        }
+        if !errors.is_empty() {
+            return Err(errors);
         }
 
         Ok(Some(FileTypeRegexSet {
@@ -1531,15 +1660,40 @@ mod tests {
     #[test]
     fn test_trait_index_new() {
         let index = TraitIndex::new();
-        assert!(index.universal.is_empty());
+        assert!(index.universal.bits.is_empty());
         assert!(index.by_file_type.is_empty());
     }
 
     #[test]
     fn test_trait_index_get_applicable_empty() {
         let index = TraitIndex::new();
-        let applicable: Vec<usize> = index.get_applicable(&RuleFileType::All).collect();
+        let applicable: Vec<usize> = index
+            .get_applicable(&RuleFileType::All)
+            .into_indices_static()
+            .collect();
         assert!(applicable.is_empty());
+    }
+
+    #[test]
+    fn test_trait_bitset_into_indices_static_advances_words() {
+        let mut bitset = TraitBitSet::with_capacity(130);
+        bitset.insert(1);
+        bitset.insert(65);
+        bitset.insert(129);
+
+        let indices: Vec<usize> = bitset.into_indices_static().collect();
+        assert_eq!(indices, vec![1, 65, 129]);
+    }
+
+    #[test]
+    fn test_trait_bitset_to_indices_static_advances_words() {
+        let mut bitset = TraitBitSet::with_capacity(130);
+        bitset.insert(0);
+        bitset.insert(64);
+        bitset.insert(127);
+
+        let indices: Vec<usize> = bitset.to_indices_static().collect();
+        assert_eq!(indices, vec![0, 64, 127]);
     }
 
     // ==================== StringMatchIndex Tests ====================
@@ -1805,6 +1959,63 @@ mod tests {
         let matches = index.find_matches(content, &RuleFileType::All);
         // Direct binary matching handles invalid UTF-8 naturally
         assert!(!matches.is_empty());
+    }
+
+    #[test]
+    fn test_raw_content_regex_index_shares_compiled_regexes_across_buckets() {
+        let make_raw_regex_trait = |id: &str, file_type: RuleFileType| TraitDefinition {
+            id: id.to_string(),
+            desc: id.to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![file_type],
+            for_from_groups: false,
+            r#if: Condition::Raw {
+                exact: None,
+                substr: None,
+                regex: Some("test".to_string()),
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                compiled_regex: None,
+            },
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            size_min: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::from("test.yaml"),
+            precision: None,
+        };
+
+        let index = RawContentRegexIndex::build(&[
+            make_raw_regex_trait("js", RuleFileType::JavaScript),
+            make_raw_regex_trait("py", RuleFileType::Python),
+        ])
+        .unwrap();
+
+        let js_set = index.by_file_type.get(&RuleFileType::JavaScript).unwrap();
+        let py_set = index.by_file_type.get(&RuleFileType::Python).unwrap();
+        let js_regex = js_set.individual_regexes[0].as_ref().unwrap();
+        let py_regex = py_set.individual_regexes[0].as_ref().unwrap();
+
+        assert!(Arc::ptr_eq(js_regex, py_regex));
     }
 
     // ==================== Overlapping Substr Match Tests ====================

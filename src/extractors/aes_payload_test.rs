@@ -333,7 +333,6 @@ function activate(context) {{
 
         let payloads = extract_aes_payloads(content.as_bytes());
         assert_eq!(payloads.len(), 1, "Should extract from webpack bundle");
-
     }
 
     #[test]
@@ -417,7 +416,6 @@ eval(b);
             "Should complete in <2 seconds, took {:?}",
             elapsed
         );
-
     }
 
     #[test]

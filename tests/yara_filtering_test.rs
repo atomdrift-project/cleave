@@ -1,12 +1,74 @@
 //! Integration test module.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper to get the first file from v2 JSON output
+/// Helper to get the first file from legacy `files` or compact `fs`.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
+    if let Some(file) = json.get("fs").and_then(|f| f.get(0)) {
+        return Some(file);
+    }
     json.get("files").and_then(|f| f.get(0))
+}
+
+fn get_files(json: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    json.get("fs")
+        .or_else(|| json.get("files"))
+        .and_then(|v| v.as_array())
+}
+
+fn get_file_type(file: &serde_json::Value) -> &str {
+    file.get("file_type")
+        .or_else(|| file.get("type"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+}
+
+fn get_matches(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    file.get("yara_matches")
+        .or_else(|| file.get("ts"))
+        .and_then(|v| v.as_array())
+}
+
+fn match_rule(yara_match: &serde_json::Value) -> Option<&str> {
+    yara_match
+        .get("rule")
+        .or_else(|| yara_match.get("i"))
+        .and_then(|v| v.as_str())
+}
+
+fn match_severity(yara_match: &serde_json::Value) -> Option<&str> {
+    if let Some(severity) = yara_match.get("severity").and_then(|v| v.as_str()) {
+        return Some(severity);
+    }
+
+    // Compact v4 encodes criticality numerically: 0=filtered, 1+=non-filtered.
+    if let Some(level) = yara_match.get("l").and_then(Value::as_u64) {
+        return Some(if level == 0 { "filtered" } else { "matched" });
+    }
+
+    None
+}
+
+fn match_description(yara_match: &serde_json::Value) -> Option<&str> {
+    yara_match
+        .get("description")
+        .or_else(|| yara_match.get("d"))
+        .and_then(|v| v.as_str())
+}
+
+fn match_namespace(yara_match: &serde_json::Value) -> Option<String> {
+    if let Some(ns) = yara_match.get("namespace").and_then(|v| v.as_str()) {
+        return Some(ns.to_string());
+    }
+
+    match_rule(yara_match).map(|rule| {
+        rule.split_once("::")
+            .map(|(prefix, _)| prefix.to_string())
+            .unwrap_or_else(|| rule.to_string())
+    })
 }
 
 /// Test that shell-specific YARA rules match shell scripts
@@ -30,20 +92,19 @@ fn test_shell_script_matches_shell_rules() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect shell file type
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("shell"),
             "Expected shell file type, got: {}",
             file_type
         );
 
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Look for shell-specific rules - should NOT be filtered
             let shell_rules: Vec<_> = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("rule")
-                        .and_then(|r| r.as_str())
+                    match_rule(m)
                         .map(|r| r.contains("shell") || r.contains("base64"))
                         .unwrap_or(false)
                 })
@@ -51,13 +112,13 @@ fn test_shell_script_matches_shell_rules() {
 
             if !shell_rules.is_empty() {
                 for rule in &shell_rules {
-                    let severity = rule.get("severity").and_then(|s| s.as_str()).unwrap_or("");
+                    let severity = match_severity(rule).unwrap_or("");
                     // Shell-specific rules should NOT be filtered for shell scripts
                     assert_ne!(
                         severity,
                         "filtered",
                         "Shell rule {:?} should not be filtered for shell script",
-                        rule.get("rule")
+                        match_rule(rule)
                     );
                 }
             }
@@ -86,20 +147,19 @@ fn test_python_rules_filtered_for_shell_scripts() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect shell file type
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("shell"),
             "Expected shell file type, got: {}",
             file_type
         );
 
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Look for any matches with severity "filtered"
             let filtered_rules: Vec<_> = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("severity")
-                        .and_then(|s| s.as_str())
+                    match_severity(m)
                         .map(|s| s == "filtered")
                         .unwrap_or(false)
                 })
@@ -107,7 +167,7 @@ fn test_python_rules_filtered_for_shell_scripts() {
 
             // If we have filtered rules, verify they're for wrong file types
             for rule in &filtered_rules {
-                let rule_name = rule.get("rule").and_then(|r| r.as_str()).unwrap_or("");
+                let rule_name = match_rule(rule).unwrap_or("");
                 eprintln!("Filtered rule for shell script: {}", rule_name);
                 // The rule should be filtered - this is expected behavior
             }
@@ -140,20 +200,19 @@ fn test_python_file_matches_python_rules() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect Python file type
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("python"),
             "Expected Python file type, got: {}",
             file_type
         );
 
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Look for Python-specific rules
             let python_rules: Vec<_> = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("rule")
-                        .and_then(|r| r.as_str())
+                    match_rule(m)
                         .map(|r| r.contains("marshal") || r.contains("python"))
                         .unwrap_or(false)
                 })
@@ -161,13 +220,13 @@ fn test_python_file_matches_python_rules() {
 
             if !python_rules.is_empty() {
                 for rule in &python_rules {
-                    let severity = rule.get("severity").and_then(|s| s.as_str()).unwrap_or("");
+                    let severity = match_severity(rule).unwrap_or("");
                     // Python-specific rules should NOT be filtered for Python files
                     assert_ne!(
                         severity,
                         "filtered",
                         "Python rule {:?} should not be filtered for Python file",
-                        rule.get("rule")
+                        match_rule(rule)
                     );
                 }
             }
@@ -199,17 +258,11 @@ fn test_generic_rules_never_filtered() {
     // Parse JSON to check YARA matches (v2 format: files[0])
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Generic rules (no filetype) should never be filtered
             for yara_match in yara_matches {
-                let rule = yara_match
-                    .get("rule")
-                    .and_then(|r| r.as_str())
-                    .unwrap_or("");
-                let severity = yara_match
-                    .get("severity")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                let rule = match_rule(yara_match).unwrap_or("");
+                let severity = match_severity(yara_match).unwrap_or("");
 
                 // If a rule matches generic network patterns, it shouldn't be filtered
                 if rule.contains("http") || rule.contains("curl") || rule.contains("wget") {
@@ -245,20 +298,19 @@ fn test_javascript_file_filters_non_js_rules() {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
         // Should detect JavaScript file type
-        let file_type = file.get("file_type").and_then(|v| v.as_str()).unwrap_or("");
+        let file_type = get_file_type(file);
         assert!(
             file_type.to_lowercase().contains("javascript"),
             "Expected JavaScript file type, got: {}",
             file_type
         );
 
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Count filtered vs unfiltered
             let filtered_count = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("severity")
-                        .and_then(|s| s.as_str())
+                    match_severity(m)
                         .map(|s| s == "filtered")
                         .unwrap_or(false)
                 })
@@ -267,8 +319,7 @@ fn test_javascript_file_filters_non_js_rules() {
             let unfiltered_count = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("severity")
-                        .and_then(|s| s.as_str())
+                    match_severity(m)
                         .map(|s| s != "filtered")
                         .unwrap_or(false)
                 })
@@ -312,20 +363,13 @@ fn test_scan_multi_filetype_directory() {
     // Should succeed and return JSON array
     assert!(output.status.success());
 
-    // Parse as JSON array of reports (v2 format)
-    if let Ok(reports) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        if let Some(reports_array) = reports.as_array() {
-            assert_eq!(reports_array.len(), 3, "Should have 3 analysis reports");
-
-            // Each report should have files and metadata fields (v2 format)
-            for report in reports_array {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if let Some(files) = get_files(&json) {
+            assert_eq!(files.len(), 3, "Should have 3 analyzed files");
+            for file in files {
                 assert!(
-                    report.get("files").is_some(),
-                    "Each report should have files field"
-                );
-                assert!(
-                    report.get("metadata").is_some(),
-                    "Each report should have metadata field"
+                    !get_file_type(file).is_empty(),
+                    "Each analyzed file should have a file type"
                 );
             }
         }
@@ -352,26 +396,20 @@ fn test_filtered_criticality_level() {
     // Parse JSON (v2 format: files[0])
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Look for filtered matches
             for yara_match in yara_matches {
-                let severity = yara_match
-                    .get("severity")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("");
+                let severity = match_severity(yara_match).unwrap_or("");
 
                 // If severity is "filtered", verify it's properly documented
                 if severity == "filtered" {
-                    let rule = yara_match
-                        .get("rule")
-                        .and_then(|r| r.as_str())
-                        .unwrap_or("");
+                    let rule = match_rule(yara_match).unwrap_or("");
                     eprintln!("Found filtered match: {}", rule);
 
                     // Filtered matches should still have all required fields
-                    assert!(yara_match.get("rule").is_some());
-                    assert!(yara_match.get("description").is_some());
-                    assert!(yara_match.get("namespace").is_some());
+                    assert!(match_rule(yara_match).is_some());
+                    assert!(match_description(yara_match).is_some());
+                    assert!(match_namespace(yara_match).is_some());
                 }
             }
         }
@@ -406,14 +444,13 @@ fn test_filtered_matches_preserved() {
     // Parse JSON (v2 format: files[0])
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
         let file = get_first_file(&json).expect("Should have at least one file");
-        if let Some(yara_matches) = file.get("yara_matches").and_then(|v| v.as_array()) {
+        if let Some(yara_matches) = get_matches(file) {
             // Should have both filtered and unfiltered matches preserved
             let total_matches = yara_matches.len();
             let filtered_matches = yara_matches
                 .iter()
                 .filter(|m| {
-                    m.get("severity")
-                        .and_then(|s| s.as_str())
+                    match_severity(m)
                         .map(|s| s == "filtered")
                         .unwrap_or(false)
                 })
@@ -430,15 +467,15 @@ fn test_filtered_matches_preserved() {
             // Verify filtered matches have all required fields
             for yara_match in yara_matches {
                 assert!(
-                    yara_match.get("rule").is_some(),
+                    match_rule(yara_match).is_some(),
                     "Match should have rule field"
                 );
                 assert!(
-                    yara_match.get("severity").is_some(),
+                    match_severity(yara_match).is_some(),
                     "Match should have severity field"
                 );
                 assert!(
-                    yara_match.get("description").is_some(),
+                    match_description(yara_match).is_some(),
                     "Match should have description field"
                 );
             }

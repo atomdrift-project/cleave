@@ -266,13 +266,11 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
 }
 
 fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
-    let file = match File::open(file_path) {
-        Ok(file) => file,
-        Err(_) => return false,
+    let Ok(file) = File::open(file_path) else {
+        return false;
     };
-    let mut archive = match ZipArchive::new(file) {
-        Ok(archive) => archive,
-        Err(_) => return false,
+    let Ok(mut archive) = ZipArchive::new(file) else {
+        return false;
     };
 
     let mut total_entries = 0usize;
@@ -282,9 +280,8 @@ fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
     let mut max_size = 0u64;
 
     for i in 0..archive.len() {
-        let entry = match archive.by_index(i) {
-            Ok(entry) => entry,
-            Err(_) => return false,
+        let Ok(entry) = archive.by_index(i) else {
+            return false;
         };
 
         total_entries += 1;
@@ -2256,9 +2253,10 @@ composite_rules:
 
         // Should have detected path traversal as a hostile finding
         assert!(
-            report.findings.iter().any(|f| f
-                .id
-                .contains("path-traversal")),
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("path-traversal")),
             "should detect path traversal, findings: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );

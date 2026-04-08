@@ -326,7 +326,7 @@ pub(crate) fn resolve_effective_range<'a>(
         && location.section_offset_range.is_none()
     {
         (0, file_size)
-    } else if let Some(ref section_map) = ctx.section_map {
+    } else if let Some(section_map) = ctx.section_map {
         if let Some((start, end)) = section_map.resolve_range(
             location.section.as_deref(),
             location.offset,
@@ -335,9 +335,19 @@ pub(crate) fn resolve_effective_range<'a>(
             location.section_offset_range,
         ) {
             (start as usize, end as usize)
+        } else if location.section.is_some()
+            || location.section_offset.is_some()
+            || location.section_offset_range.is_some()
+        {
+            resolve_report_section_constraints(location, &ctx.report.sections)
         } else {
             resolve_offset_constraints(location, file_size)
         }
+    } else if location.section.is_some()
+        || location.section_offset.is_some()
+        || location.section_offset_range.is_some()
+    {
+        resolve_report_section_constraints(location, &ctx.report.sections)
     } else {
         resolve_offset_constraints(location, file_size)
     };
@@ -350,11 +360,66 @@ pub(crate) fn resolve_effective_range<'a>(
     }
 }
 
+fn resolve_report_section_constraints(
+    location: &ContentLocationParams,
+    sections: &[crate::types::Section],
+) -> (usize, usize) {
+    let Some(section_name) = location.section.as_deref() else {
+        return (0, 0);
+    };
+
+    let Some(section) = sections.iter().find(|section| {
+        crate::composite_rules::section_map::SectionMap::section_matches(
+            section.name.as_str(),
+            section_name,
+        )
+    }) else {
+        return (0, 0);
+    };
+
+    let Some(base_start) = section.offset.or(section.address).map(|v| v as usize) else {
+        return (0, 0);
+    };
+    let base_end = base_start.saturating_add(section.size as usize);
+
+    if let Some(sec_off) = location.section_offset {
+        let start = resolve_relative_offset(sec_off, base_start, base_end, false);
+        return start
+            .map(|start| (start, start.saturating_add(1)))
+            .unwrap_or((0, 0));
+    }
+
+    if let Some((rel_start, rel_end)) = location.section_offset_range {
+        let Some(start) = resolve_relative_offset(rel_start, base_start, base_end, false) else {
+            return (0, 0);
+        };
+        let end = match rel_end {
+            Some(rel_end) => {
+                let Some(end) = resolve_relative_offset(rel_end, base_start, base_end, true) else {
+                    return (0, 0);
+                };
+                end
+            }
+            None => base_end,
+        };
+        return if start < end { (start, end) } else { (0, 0) };
+    }
+
+    (base_start, base_end)
+}
+
 /// Resolve absolute offset constraints without SectionMap.
 fn resolve_offset_constraints(
     location: &ContentLocationParams,
     file_size: usize,
 ) -> (usize, usize) {
+    if location.section.is_some()
+        || location.section_offset.is_some()
+        || location.section_offset_range.is_some()
+    {
+        return (0, 0);
+    }
+
     match (location.offset, &location.offset_range) {
         (Some(off), None) => {
             let resolved = if off < 0 {
@@ -362,7 +427,7 @@ fn resolve_offset_constraints(
             } else {
                 off as usize
             };
-            (resolved, file_size)
+            (resolved, (resolved + 1).min(file_size))
         }
         (None, Some((start, end_opt))) => {
             let file_size_i64 = file_size as i64;
@@ -379,6 +444,28 @@ fn resolve_offset_constraints(
             (resolved_start, resolved_end)
         }
         _ => (0, file_size),
+    }
+}
+
+fn resolve_relative_offset(
+    offset: i64,
+    base_start: usize,
+    base_end: usize,
+    allow_end: bool,
+) -> Option<usize> {
+    let base_size = base_end.saturating_sub(base_start);
+    let abs_rel_offset = if offset >= 0 {
+        offset as usize
+    } else {
+        base_size.checked_sub(offset.unsigned_abs() as usize)?
+    };
+
+    if allow_end {
+        (abs_rel_offset <= base_size).then_some(base_start + abs_rel_offset)
+    } else if abs_rel_offset < base_size {
+        Some(base_start + abs_rel_offset)
+    } else {
+        None
     }
 }
 

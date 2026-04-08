@@ -772,10 +772,9 @@ fn format_evidence_value(value: &Value) -> String {
 mod tests {
     use super::*;
     use crate::composite_rules::context::EvaluationContext;
-    use crate::composite_rules::types::{Arch, FileType, Platform};
+    use crate::composite_rules::types::FileType;
     use crate::types::{AnalysisReport, TargetInfo};
     use serde_json::json;
-    use std::sync::OnceLock;
 
     /// Helper to create evaluation context for testing
     fn create_test_ctx<'a>(
@@ -791,29 +790,7 @@ mod tests {
             architectures: None,
         })));
 
-        EvaluationContext {
-            ast_kind_cache: None,
-            report,
-            binary_data,
-            file_type: FileType::All,
-            platforms: &[Platform::All],
-            arch: vec![Arch::All],
-            arch_ranges: None,
-            additional_findings: None,
-            cached_ast: None,
-            finding_id_index: None,
-            debug_collector: None,
-            section_map: None,
-            inline_yara_results: None,
-            cached_kv_format: OnceLock::new(),
-            cached_kv_parsed: OnceLock::new(),
-            current_trait: None,
-            current_source: None,
-            string_exact_index: OnceLock::new(),
-            string_exact_index_ci: OnceLock::new(),
-            deadline: None,
-            slow_rule_ms: 4000,
-        }
+        EvaluationContext::test_only_new(report, binary_data, FileType::All)
     }
 
     /// Test wrapper for evaluate_kv that creates context automatically

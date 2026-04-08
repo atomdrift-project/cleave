@@ -253,99 +253,103 @@ impl ArchiveAnalyzer {
             }
 
             match self.analyze_extracted_file(entry.path()) {
-            Err(e) => {
-                debug!("Failed to analyze archive member {}: {}", entry_path, e);
-            }
-            Ok(file_report) => {
-                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
+                Err(e) => {
+                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                }
+                Ok(file_report) => {
+                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    trace!(
+                        "Analyzed archive member {}: {} findings",
+                        entry_path,
+                        file_report.findings.len()
+                    );
 
-                let (
-                    Ok(mut caps),
-                    Ok(mut traits),
-                    Ok(mut all_traits),
-                    Ok(mut all_yara),
-                    Ok(mut all_strings),
-                    Ok(mut all_archive_entries),
-                    Ok(mut all_files),
-                ) = (
-                    total_capabilities.lock(),
-                    total_traits.lock(),
-                    collected_traits.lock(),
-                    collected_yara.lock(),
-                    collected_strings.lock(),
-                    collected_archive_entries.lock(),
-                    collected_files.lock(),
-                )
-                else {
-                    return; // Skip this file if any lock is poisoned
-                };
+                    let (
+                        Ok(mut caps),
+                        Ok(mut traits),
+                        Ok(mut all_traits),
+                        Ok(mut all_yara),
+                        Ok(mut all_strings),
+                        Ok(mut all_archive_entries),
+                        Ok(mut all_files),
+                    ) = (
+                        total_capabilities.lock(),
+                        total_traits.lock(),
+                        collected_traits.lock(),
+                        collected_yara.lock(),
+                        collected_strings.lock(),
+                        collected_archive_entries.lock(),
+                        collected_files.lock(),
+                    )
+                    else {
+                        return; // Skip this file if any lock is poisoned
+                    };
 
-                // Aggregate findings
-                for f in &file_report.findings {
-                    traits.insert(f.id.clone());
-                    caps.insert(f.id.clone());
-                    if !all_traits.iter().any(|existing| existing.id == f.id) {
-                        let mut new_finding = f.clone();
-                        for evidence in &mut new_finding.evidence {
-                            // Prefix location with archive path
-                            // - If no location: set to archive path
-                            // - If location starts with "archive:": already from nested, leave it
-                            // - Otherwise: prefix with archive path (e.g., "line:3" -> "archive:file.sh:line:3")
-                            match &evidence.location {
-                                None => {
-                                    evidence.location = Some(archive_location.clone());
+                    // Aggregate findings
+                    for f in &file_report.findings {
+                        traits.insert(f.id.clone());
+                        caps.insert(f.id.clone());
+                        if !all_traits.iter().any(|existing| existing.id == f.id) {
+                            let mut new_finding = f.clone();
+                            for evidence in &mut new_finding.evidence {
+                                // Prefix location with archive path
+                                // - If no location: set to archive path
+                                // - If location starts with "archive:": already from nested, leave it
+                                // - Otherwise: prefix with archive path (e.g., "line:3" -> "archive:file.sh:line:3")
+                                match &evidence.location {
+                                    None => {
+                                        evidence.location = Some(archive_location.clone());
+                                    }
+                                    Some(loc) if !loc.starts_with("archive:") => {
+                                        evidence.location =
+                                            Some(format!("{}:{}", archive_location, loc));
+                                    }
+                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
-                                Some(loc) if !loc.starts_with("archive:") => {
-                                    evidence.location =
-                                        Some(format!("{}:{}", archive_location, loc));
-                                }
-                                _ => {} // Already has archive: prefix from nested analysis
                             }
+                            all_traits.push(new_finding);
                         }
-                        all_traits.push(new_finding);
+                    }
+
+                    // Aggregate YARA matches
+                    for yara_match in &file_report.yara_matches {
+                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                            all_yara.push(yara_match.clone());
+                        }
+                    }
+
+                    // Aggregate interesting strings
+                    for string in &file_report.strings {
+                        if matches!(
+                            string.string_type,
+                            Some(StringType::Url | StringType::IP | StringType::Base64)
+                        ) {
+                            all_strings.push(string.clone());
+                        }
+                    }
+
+                    // Convert to FileAnalysis, consuming the report to avoid cloning
+                    let (mut file_entry, nested_files, archive_contents) =
+                        file_report.into_file_analysis(0);
+                    file_entry.path = entry_path.clone();
+                    file_entry.depth = 1; // Direct child of archive
+                    file_entry.compute_summary();
+                    all_files.push(file_entry);
+
+                    // Merge archive_contents from nested archives
+                    for nested_entry in archive_contents {
+                        all_archive_entries.push(nested_entry);
+                    }
+
+                    // Handle nested archives - add their files with updated paths
+                    for mut nested_file in nested_files {
+                        if !nested_file.path.contains("!!") {
+                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                        }
+                        nested_file.depth += 1;
+                        all_files.push(nested_file);
                     }
                 }
-
-                // Aggregate YARA matches
-                for yara_match in &file_report.yara_matches {
-                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                        all_yara.push(yara_match.clone());
-                    }
-                }
-
-                // Aggregate interesting strings
-                for string in &file_report.strings {
-                    if matches!(
-                        string.string_type,
-                        Some(StringType::Url | StringType::IP | StringType::Base64)
-                    ) {
-                        all_strings.push(string.clone());
-                    }
-                }
-
-                // Convert to FileAnalysis, consuming the report to avoid cloning
-                let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0);
-                file_entry.path = entry_path.clone();
-                file_entry.depth = 1; // Direct child of archive
-                file_entry.compute_summary();
-                all_files.push(file_entry);
-
-                // Merge archive_contents from nested archives
-                for nested_entry in archive_contents {
-                    all_archive_entries.push(nested_entry);
-                }
-
-                // Handle nested archives - add their files with updated paths
-                for mut nested_file in nested_files {
-                    if !nested_file.path.contains("!!") {
-                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                    }
-                    nested_file.depth += 1;
-                    all_files.push(nested_file);
-                }
-            }
             }
         });
 
@@ -406,106 +410,110 @@ impl ArchiveAnalyzer {
 
             // Run file-type-specific analysis
             match self.analyze_extracted_file(entry.path()) {
-            Err(e) => {
-                debug!("Failed to analyze archive member {}: {}", entry_path, e);
-            }
-            Ok(file_report) => {
-                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
+                Err(e) => {
+                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                }
+                Ok(file_report) => {
+                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    trace!(
+                        "Analyzed archive member {}: {} findings",
+                        entry_path,
+                        file_report.findings.len()
+                    );
 
-                let (
-                    Ok(mut caps),
-                    Ok(mut traits),
-                    Ok(mut all_traits),
-                    Ok(mut all_yara),
-                    Ok(mut all_strings),
-                    Ok(mut all_archive_entries),
-                    Ok(mut all_files),
-                ) = (
-                    total_capabilities.lock(),
-                    total_traits.lock(),
-                    collected_traits.lock(),
-                    collected_yara.lock(),
-                    collected_strings.lock(),
-                    collected_archive_entries.lock(),
-                    collected_files.lock(),
-                )
-                else {
-                    return; // Skip this file if any lock is poisoned
-                };
+                    let (
+                        Ok(mut caps),
+                        Ok(mut traits),
+                        Ok(mut all_traits),
+                        Ok(mut all_yara),
+                        Ok(mut all_strings),
+                        Ok(mut all_archive_entries),
+                        Ok(mut all_files),
+                    ) = (
+                        total_capabilities.lock(),
+                        total_traits.lock(),
+                        collected_traits.lock(),
+                        collected_yara.lock(),
+                        collected_strings.lock(),
+                        collected_archive_entries.lock(),
+                        collected_files.lock(),
+                    )
+                    else {
+                        return; // Skip this file if any lock is poisoned
+                    };
 
-                // Aggregate findings
-                for f in &file_report.findings {
-                    traits.insert(f.id.clone());
-                    caps.insert(f.id.clone());
-                    if !all_traits.iter().any(|existing| existing.id == f.id) {
-                        // LIMIT: Cap at 10,000 findings per archive analysis phase
-                        if all_traits.len() < 10_000 {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
+                    // Aggregate findings
+                    for f in &file_report.findings {
+                        traits.insert(f.id.clone());
+                        caps.insert(f.id.clone());
+                        if !all_traits.iter().any(|existing| existing.id == f.id) {
+                            // LIMIT: Cap at 10,000 findings per archive analysis phase
+                            if all_traits.len() < 10_000 {
+                                let mut new_finding = f.clone();
+                                for evidence in &mut new_finding.evidence {
+                                    // Prefix location with archive path
+                                    match &evidence.location {
+                                        None => {
+                                            evidence.location = Some(archive_location.clone());
+                                        }
+                                        Some(loc) if !loc.starts_with("archive:") => {
+                                            evidence.location =
+                                                Some(format!("{}:{}", archive_location, loc));
+                                        }
+                                        _ => {} // Already has archive: prefix from nested analysis
                                     }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
                                 }
+                                all_traits.push(new_finding);
                             }
-                            all_traits.push(new_finding);
                         }
                     }
-                }
 
-                // Aggregate YARA matches
-                for yara_match in &file_report.yara_matches {
-                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                        // LIMIT: Cap YARA matches at 1,000
-                        if all_yara.len() < 1_000 {
-                            all_yara.push(yara_match.clone());
+                    // Aggregate YARA matches
+                    for yara_match in &file_report.yara_matches {
+                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                            // LIMIT: Cap YARA matches at 1,000
+                            if all_yara.len() < 1_000 {
+                                all_yara.push(yara_match.clone());
+                            }
                         }
                     }
-                }
 
-                // Aggregate interesting strings
-                for string in &file_report.strings {
-                    if matches!(
-                        string.string_type,
-                        Some(StringType::Url | StringType::IP | StringType::Base64)
-                    ) {
-                        // LIMIT: Cap aggregated strings at 10,000
-                        if all_strings.len() < 10_000 {
-                            all_strings.push(string.clone());
+                    // Aggregate interesting strings
+                    for string in &file_report.strings {
+                        if matches!(
+                            string.string_type,
+                            Some(StringType::Url | StringType::IP | StringType::Base64)
+                        ) {
+                            // LIMIT: Cap aggregated strings at 10,000
+                            if all_strings.len() < 10_000 {
+                                all_strings.push(string.clone());
+                            }
                         }
                     }
-                }
 
-                // Convert to FileAnalysis, consuming the report to avoid cloning
-                let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0);
-                file_entry.path = entry_path.clone();
-                file_entry.depth = 1;
-                file_entry.compute_summary();
+                    // Convert to FileAnalysis, consuming the report to avoid cloning
+                    let (mut file_entry, nested_files, archive_contents) =
+                        file_report.into_file_analysis(0);
+                    file_entry.path = entry_path.clone();
+                    file_entry.depth = 1;
+                    file_entry.compute_summary();
 
-                all_files.push(file_entry);
+                    all_files.push(file_entry);
 
-                // Merge archive_contents from nested archives
-                for nested_entry in archive_contents {
-                    all_archive_entries.push(nested_entry);
-                }
-
-                // Handle nested archives
-                for mut nested_file in nested_files {
-                    if !nested_file.path.contains("!!") {
-                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                    // Merge archive_contents from nested archives
+                    for nested_entry in archive_contents {
+                        all_archive_entries.push(nested_entry);
                     }
-                    nested_file.depth += 1;
-                    all_files.push(nested_file);
+
+                    // Handle nested archives
+                    for mut nested_file in nested_files {
+                        if !nested_file.path.contains("!!") {
+                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                        }
+                        nested_file.depth += 1;
+                        all_files.push(nested_file);
+                    }
                 }
-            }
             }
         });
 
@@ -703,135 +711,143 @@ impl ArchiveAnalyzer {
             }
 
             match self.analyze_extracted_file(entry.path()) {
-            Err(e) => {
-                debug!("Failed to analyze archive member {}: {}", entry_path, e);
-            }
-            Ok(file_report) => {
-                files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                trace!("Analyzed archive member {}: {} findings", entry_path, file_report.findings.len());
-
-                let Ok(mut caps) = total_capabilities.lock() else {
-                    return;
-                };
-                let Ok(mut traits) = total_traits.lock() else {
-                    return;
-                };
-                let Ok(mut all_traits) = collected_traits.lock() else {
-                    return;
-                };
-                let Ok(mut all_yara) = collected_yara.lock() else {
-                    return;
-                };
-                let Ok(mut all_strings) = collected_strings.lock() else {
-                    return;
-                };
-                let Ok(mut all_archive_entries) = collected_archive_entries.lock() else {
-                    return;
-                };
-                let Ok(mut all_files) = collected_files.lock() else {
-                    return;
-                };
-
-                // Convert to FileAnalysis, consuming the report to avoid cloning
-                let (mut file_entry, nested_files, archive_contents) =
-                    file_report.into_file_analysis(0);
-                file_entry.path = entry_path.clone();
-                file_entry.depth = 1; // Direct child of archive
-                file_entry.compute_summary();
-
-                // Extract file to disk if configured (mirrors streaming.rs behavior)
-                if let Some(ref config) = self.sample_extraction {
-                    if let Ok(file_data) = std::fs::read(entry.path()) {
-                        let extract_relative_path = match &self.archive_path_prefix {
-                            Some(prefix) => {
-                                format!("{}/{}", prefix.replace('!', "/"), relative_path)
-                            }
-                            None => relative_path.to_string(),
-                        };
-                        if let Some(extracted_path) =
-                            config.extract(&file_entry.sha256, &extract_relative_path, &file_data)
-                        {
-                            file_entry.extracted_path = Some(extracted_path.display().to_string());
-                        }
-                    }
+                Err(e) => {
+                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
+                Ok(file_report) => {
+                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    trace!(
+                        "Analyzed archive member {}: {} findings",
+                        entry_path,
+                        file_report.findings.len()
+                    );
 
-                // Aggregate findings from the converted FileAnalysis
-                for f in &file_entry.findings {
-                    traits.insert(f.id.clone());
-                    caps.insert(f.id.clone());
-                    if !all_traits.iter().any(|existing| existing.id == f.id) {
-                        // LIMIT: Cap findings at 10,000
-                        if all_traits.len() < 10_000 {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
-                                    }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
+                    let Ok(mut caps) = total_capabilities.lock() else {
+                        return;
+                    };
+                    let Ok(mut traits) = total_traits.lock() else {
+                        return;
+                    };
+                    let Ok(mut all_traits) = collected_traits.lock() else {
+                        return;
+                    };
+                    let Ok(mut all_yara) = collected_yara.lock() else {
+                        return;
+                    };
+                    let Ok(mut all_strings) = collected_strings.lock() else {
+                        return;
+                    };
+                    let Ok(mut all_archive_entries) = collected_archive_entries.lock() else {
+                        return;
+                    };
+                    let Ok(mut all_files) = collected_files.lock() else {
+                        return;
+                    };
+
+                    // Convert to FileAnalysis, consuming the report to avoid cloning
+                    let (mut file_entry, nested_files, archive_contents) =
+                        file_report.into_file_analysis(0);
+                    file_entry.path = entry_path.clone();
+                    file_entry.depth = 1; // Direct child of archive
+                    file_entry.compute_summary();
+
+                    // Extract file to disk if configured (mirrors streaming.rs behavior)
+                    if let Some(ref config) = self.sample_extraction {
+                        if let Ok(file_data) = std::fs::read(entry.path()) {
+                            let extract_relative_path = match &self.archive_path_prefix {
+                                Some(prefix) => {
+                                    format!("{}/{}", prefix.replace('!', "/"), relative_path)
                                 }
+                                None => relative_path.to_string(),
+                            };
+                            if let Some(extracted_path) = config.extract(
+                                &file_entry.sha256,
+                                &extract_relative_path,
+                                &file_data,
+                            ) {
+                                file_entry.extracted_path =
+                                    Some(extracted_path.display().to_string());
                             }
-                            all_traits.push(new_finding);
                         }
                     }
-                }
 
-                // Aggregate YARA matches
-                for yara_match in &file_entry.yara_matches {
-                    if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                        // LIMIT: Cap YARA matches at 1,000
-                        if all_yara.len() < 1_000 {
-                            all_yara.push(yara_match.clone());
+                    // Aggregate findings from the converted FileAnalysis
+                    for f in &file_entry.findings {
+                        traits.insert(f.id.clone());
+                        caps.insert(f.id.clone());
+                        if !all_traits.iter().any(|existing| existing.id == f.id) {
+                            // LIMIT: Cap findings at 10,000
+                            if all_traits.len() < 10_000 {
+                                let mut new_finding = f.clone();
+                                for evidence in &mut new_finding.evidence {
+                                    // Prefix location with archive path
+                                    match &evidence.location {
+                                        None => {
+                                            evidence.location = Some(archive_location.clone());
+                                        }
+                                        Some(loc) if !loc.starts_with("archive:") => {
+                                            evidence.location =
+                                                Some(format!("{}:{}", archive_location, loc));
+                                        }
+                                        _ => {} // Already has archive: prefix from nested analysis
+                                    }
+                                }
+                                all_traits.push(new_finding);
+                            }
                         }
                     }
-                }
 
-                // Aggregate interesting strings
-                for string in &file_entry.strings {
-                    if matches!(
-                        string.string_type,
-                        Some(StringType::Url | StringType::IP | StringType::Base64)
-                    ) {
-                        // LIMIT: Cap aggregated strings at 10,000
-                        if all_strings.len() < 10_000 {
-                            all_strings.push(string.clone());
+                    // Aggregate YARA matches
+                    for yara_match in &file_entry.yara_matches {
+                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
+                            // LIMIT: Cap YARA matches at 1,000
+                            if all_yara.len() < 1_000 {
+                                all_yara.push(yara_match.clone());
+                            }
                         }
                     }
-                }
 
-                all_files.push(file_entry.clone());
-
-                // Merge archive_contents from nested archives
-                for nested_entry in archive_contents {
-                    all_archive_entries.push(nested_entry);
-                }
-
-                // Handle nested archives - add their files with updated paths
-                for mut nested_file in nested_files {
-                    // Update path to include our archive prefix
-                    if !nested_file.path.contains("!!") {
-                        nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                    // Aggregate interesting strings
+                    for string in &file_entry.strings {
+                        if matches!(
+                            string.string_type,
+                            Some(StringType::Url | StringType::IP | StringType::Base64)
+                        ) {
+                            // LIMIT: Cap aggregated strings at 10,000
+                            if all_strings.len() < 10_000 {
+                                all_strings.push(string.clone());
+                            }
+                        }
                     }
-                    nested_file.depth += 1; // Increment depth for nesting
-                    all_files.push(nested_file);
+
+                    all_files.push(file_entry.clone());
+
+                    // Merge archive_contents from nested archives
+                    for nested_entry in archive_contents {
+                        all_archive_entries.push(nested_entry);
+                    }
+
+                    // Handle nested archives - add their files with updated paths
+                    for mut nested_file in nested_files {
+                        // Update path to include our archive prefix
+                        if !nested_file.path.contains("!!") {
+                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
+                        }
+                        nested_file.depth += 1; // Increment depth for nesting
+                        all_files.push(nested_file);
+                    }
                 }
-            }
             }
         });
 
         // Sort files by highest severity first, then truncate to limit
         {
-            let mut all_files = collected_files.lock().map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?;
+            let mut all_files = collected_files
+                .lock()
+                .map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?;
             all_files.sort_by(|a, b| {
-                let max_crit = |f: &FileAnalysis| {
-                    f.findings.iter().map(|f| f.crit).max().unwrap_or_default()
-                };
+                let max_crit =
+                    |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
                 max_crit(b).cmp(&max_crit(a))
             });
             all_files.truncate(100_000);

@@ -876,7 +876,6 @@ impl UnifiedSourceAnalyzer {
 
             report.metrics = Some(metrics);
         }
-
         // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
         // Guard against recursion: when this analyzer was created for inner analysis
         // (e.g. decoding a -EncodedCommand payload), skip to avoid infinite loops.

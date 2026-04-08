@@ -5,7 +5,9 @@
 //! This is the primary loading method used in production.
 
 use crate::capabilities::error_formatting::enhance_yaml_error;
-use crate::capabilities::indexes::{RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex};
+use crate::capabilities::indexes::{
+    RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
+};
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
@@ -180,25 +182,40 @@ impl super::CapabilityMapper {
                                     );
 
                                     // Rebuild indexes from cached trait definitions (in parallel)
-                                    let (((trait_index, string_match_index), symbol_match_index), raw_regex_result) =
-                                        rayon::join(
-                                            || {
-                                                rayon::join(
-                                                    || {
-                                                        rayon::join(
-                                                            || TraitIndex::build(&cache_data.trait_definitions),
-                                                            || StringMatchIndex::build(&cache_data.trait_definitions),
-                                                        )
-                                                    },
-                                                    || SymbolMatchIndex::build(&cache_data.trait_definitions),
-                                                )
-                                            },
-                                            || {
-                                                RawContentRegexIndex::build(
-                                                    &cache_data.trait_definitions,
-                                                )
-                                            },
-                                        );
+                                    let (
+                                        ((trait_index, string_match_index), symbol_match_index),
+                                        raw_regex_result,
+                                    ) = rayon::join(
+                                        || {
+                                            rayon::join(
+                                                || {
+                                                    rayon::join(
+                                                        || {
+                                                            TraitIndex::build(
+                                                                &cache_data.trait_definitions,
+                                                            )
+                                                        },
+                                                        || {
+                                                            StringMatchIndex::build(
+                                                                &cache_data.trait_definitions,
+                                                            )
+                                                        },
+                                                    )
+                                                },
+                                                || {
+                                                    SymbolMatchIndex::build(
+                                                        &cache_data.trait_definitions,
+                                                    )
+                                                },
+                                            )
+                                        },
+                                        || {
+                                            RawContentRegexIndex::build(
+                                                &cache_data.trait_definitions,
+                                            )
+                                            .map_err(|errors| anyhow::anyhow!(errors.join("\n")))
+                                        },
+                                    );
                                     let t2 = std::time::Instant::now();
                                     tracing::trace!(
                                         "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
@@ -206,10 +223,7 @@ impl super::CapabilityMapper {
                                         string_match_index.total_patterns,
                                         raw_regex_result.as_ref().map(|i| i.total_patterns).unwrap_or(0),
                                     );
-                                    let raw_content_regex_index =
-                                        raw_regex_result.map_err(|errs| {
-                                            anyhow::anyhow!("Regex errors: {:?}", errs)
-                                        })?;
+                                    let raw_content_regex_index = raw_regex_result?;
 
                                     // Ensure rule stats are up-to-date for banner display
                                     let _ = crate::cache::save_rule_stats(
@@ -218,8 +232,12 @@ impl super::CapabilityMapper {
                                     );
 
                                     // Populate trait_id_map from cached data
-                                    let mut trait_id_map = std::collections::HashMap::with_capacity(cache_data.trait_definitions.len());
-                                    for (idx, trait_def) in cache_data.trait_definitions.iter().enumerate() {
+                                    let mut trait_id_map = std::collections::HashMap::with_capacity(
+                                        cache_data.trait_definitions.len(),
+                                    );
+                                    for (idx, trait_def) in
+                                        cache_data.trait_definitions.iter().enumerate()
+                                    {
                                         trait_id_map.insert(trait_def.id.clone(), idx);
                                     }
 
@@ -687,49 +705,51 @@ impl super::CapabilityMapper {
                 // Only add to the fast symbol_map when the trait applies to all file types —
                 // traits with restrictive `for:` constraints must go through the full
                 // evaluation pipeline which respects file type filtering.
-                let is_universal = trait_def.r#for.contains(&crate::composite_rules::FileType::All)
+                let is_universal = trait_def
+                    .r#for
+                    .contains(&crate::composite_rules::FileType::All)
                     || trait_def.r#for.is_empty();
                 if is_universal {
-                if let Condition::Symbol {
-                    exact,
-                    substr: _,
-                    regex,
-                    platforms: _,
-                    compiled_regex: _,
-                    ..
-                } = &trait_def.r#if
-                {
-                    // If exact is specified, add it directly
-                    if let Some(exact_val) = exact {
-                        symbol_map
-                            .entry(exact_val.clone())
-                            .or_insert_with(|| TraitInfo {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                            });
-                    }
+                    if let Condition::Symbol {
+                        exact,
+                        substr: _,
+                        regex,
+                        platforms: _,
+                        compiled_regex: _,
+                        ..
+                    } = &trait_def.r#if
+                    {
+                        // If exact is specified, add it directly
+                        if let Some(exact_val) = exact {
+                            symbol_map
+                                .entry(exact_val.clone())
+                                .or_insert_with(|| TraitInfo {
+                                    id: trait_def.id.clone(),
+                                    desc: trait_def.desc.clone(),
+                                    conf: trait_def.conf,
+                                    crit: trait_def.crit,
+                                    mbc: trait_def.mbc.clone(),
+                                    attack: trait_def.attack.clone(),
+                                });
+                        }
 
-                    // For each regex pattern (may contain "|" for alternatives)
-                    if let Some(regex_val) = regex {
-                        for symbol_pattern in regex_val.split('|') {
-                            let symbol: String = symbol_pattern.trim().to_string();
+                        // For each regex pattern (may contain "|" for alternatives)
+                        if let Some(regex_val) = regex {
+                            for symbol_pattern in regex_val.split('|') {
+                                let symbol: String = symbol_pattern.trim().to_string();
 
-                            // Only add if not already present (first match wins)
-                            symbol_map.entry(symbol).or_insert_with(|| TraitInfo {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                            });
+                                // Only add if not already present (first match wins)
+                                symbol_map.entry(symbol).or_insert_with(|| TraitInfo {
+                                    id: trait_def.id.clone(),
+                                    desc: trait_def.desc.clone(),
+                                    conf: trait_def.conf,
+                                    crit: trait_def.crit,
+                                    mbc: trait_def.mbc.clone(),
+                                    attack: trait_def.attack.clone(),
+                                });
+                            }
                         }
                     }
-                }
                 } // is_universal
 
                 // Pre-compile regexes for this trait
@@ -3080,14 +3100,12 @@ impl super::CapabilityMapper {
                         || SymbolMatchIndex::build(&trait_definitions),
                     )
                 },
-                || RawContentRegexIndex::build(&trait_definitions),
+                || {
+                    RawContentRegexIndex::build(&trait_definitions)
+                        .map_err(|errors| anyhow::anyhow!(errors.join("\n")))
+                },
             );
-        let raw_content_regex_index = match raw_regex_result {
-            Ok(index) => index,
-            Err(errors) => {
-                return Err(anyhow::anyhow!(errors.join("\n")));
-            }
-        };
+        let raw_content_regex_index = raw_regex_result?;
         tracing::trace!("Indexes built successfully");
 
         // Parse errors are fatal - print all and exit if any exist

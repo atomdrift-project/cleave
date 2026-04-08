@@ -73,7 +73,7 @@ pub(crate) fn scan_for_embedded_binaries(data: &[u8]) -> Vec<EmbeddedBinary> {
 #[must_use]
 pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding {
     let type_upper = binary.kind.as_str().to_uppercase();
-    let is_kernel_module_elf = matches!(
+    let _is_kernel_module_elf = matches!(
         binary.kind,
         EmbeddedKind::Elf32Le
             | EmbeddedKind::Elf32Be
@@ -88,11 +88,7 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
             type_upper, binary.offset, binary.estimated_size,
         ),
         conf: 0.9,
-        crit: if is_kernel_module_elf {
-            Criticality::Notable
-        } else {
-            Criticality::Notable
-        },
+        crit: Criticality::Notable,
         mbc: None,
         attack: Some("T1027.009".to_string()), // Embedded Payloads
         evidence: vec![Evidence {

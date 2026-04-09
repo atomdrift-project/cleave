@@ -64,6 +64,166 @@ struct MapperCacheData {
     composite_rules: Vec<CompositeTrait>,
 }
 
+#[derive(Debug, Clone)]
+struct FileStemReferenceHint {
+    filename_stem: String,
+    directory_ref: String,
+    available_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+struct BrokenTraitReference {
+    rule_id: String,
+    ref_id: String,
+    source_file: String,
+    line_hint: Option<usize>,
+    suggestion: Option<String>,
+}
+
+fn trait_local_id(id: &str) -> &str {
+    if let Some((_, local_id)) = id.rsplit_once("::") {
+        local_id
+    } else {
+        id.rsplit('/').next().unwrap_or(id)
+    }
+}
+
+fn normalize_ref_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn format_reference_choices(ids: &[String]) -> String {
+    const MAX_CHOICES: usize = 4;
+    let mut rendered: Vec<String> = ids
+        .iter()
+        .take(MAX_CHOICES)
+        .map(|id| format!("'{id}'"))
+        .collect();
+    if ids.len() > MAX_CHOICES {
+        rendered.push(format!("... and {} more", ids.len() - MAX_CHOICES));
+    }
+    rendered.join(", ")
+}
+
+fn build_file_stem_reference_hints(
+    dir_path: &Path,
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+) -> FxHashMap<String, FileStemReferenceHint> {
+    let mut hints = FxHashMap::default();
+
+    let mut register = |id: &str, defined_in: &Path| {
+        let Ok(relative_path) = defined_in.strip_prefix(dir_path) else {
+            return;
+        };
+        let file_stem_path = relative_path.with_extension("");
+        let file_stem_ref = normalize_ref_path(&file_stem_path);
+        if file_stem_ref.is_empty() {
+            return;
+        }
+
+        let filename_stem = file_stem_path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_string();
+        let directory_ref = relative_path
+            .parent()
+            .map(normalize_ref_path)
+            .unwrap_or_default();
+
+        let entry = hints
+            .entry(file_stem_ref)
+            .or_insert_with(|| FileStemReferenceHint {
+                filename_stem,
+                directory_ref,
+                available_ids: Vec::new(),
+            });
+        if !entry.available_ids.iter().any(|existing| existing == id) {
+            entry.available_ids.push(id.to_string());
+        }
+    };
+
+    for trait_def in trait_definitions {
+        register(&trait_def.id, &trait_def.defined_in);
+    }
+    for rule in composite_rules {
+        register(&rule.id, &rule.defined_in);
+    }
+
+    for hint in hints.values_mut() {
+        hint.available_ids.sort();
+    }
+
+    hints
+}
+
+fn build_filename_reference_suggestion(
+    ref_id: &str,
+    file_stem_hints: &FxHashMap<String, FileStemReferenceHint>,
+) -> Option<String> {
+    let (path_part, local_id) = if let Some((path_part, local_id)) = ref_id.split_once("::") {
+        (path_part.trim_end_matches('/'), Some(local_id))
+    } else {
+        (ref_id.trim_end_matches('/'), None)
+    };
+
+    let hint = file_stem_hints.get(path_part)?;
+
+    match local_id {
+        Some(local_id) => {
+            if let Some(suggested) = hint
+                .available_ids
+                .iter()
+                .find(|candidate| trait_local_id(candidate) == local_id)
+            {
+                Some(format!(
+                    "Hint: '{ref_id}' includes YAML filename '{}'. Filenames are never part of trait IDs. Use '{suggested}' instead.",
+                    hint.filename_stem
+                ))
+            } else if !hint.available_ids.is_empty() {
+                Some(format!(
+                    "Hint: '{ref_id}' includes YAML filename '{}'. Filenames are never part of trait IDs. Drop the filename segment and use one of: {}.",
+                    hint.filename_stem,
+                    format_reference_choices(&hint.available_ids)
+                ))
+            } else {
+                None
+            }
+        }
+        None => {
+            if hint.available_ids.is_empty() {
+                return None;
+            }
+
+            let specific_rule_hint = if hint.available_ids.len() == 1 {
+                format!(
+                    "Use {} for the specific rule.",
+                    format_reference_choices(&hint.available_ids)
+                )
+            } else {
+                format!(
+                    "Use one of {} for specific rules.",
+                    format_reference_choices(&hint.available_ids)
+                )
+            };
+
+            if hint.directory_ref.is_empty() {
+                Some(format!(
+                    "Hint: '{ref_id}' points to YAML file '{}.yaml', not a trait ID. Filenames are never part of trait IDs. {specific_rule_hint}",
+                    hint.filename_stem
+                ))
+            } else {
+                Some(format!(
+                    "Hint: '{ref_id}' points to YAML file '{}.yaml', not a trait directory. Filenames are never part of trait IDs. {specific_rule_hint} If you intended a directory reference, use '{}'.",
+                    hint.filename_stem,
+                    hint.directory_ref
+                ))
+            }
+        }
+    }
+}
+
 impl super::CapabilityMapper {
     /// Load capability mappings from directory of YAML files (recursively)
     #[allow(dead_code)] // Used in tests
@@ -1411,6 +1571,8 @@ impl super::CapabilityMapper {
         for rule in &composite_rules {
             valid_trait_ids.insert(rule.id.clone());
         }
+        let file_stem_hints =
+            build_file_stem_reference_hints(dir_path, &trait_definitions, &composite_rules);
 
         // Debug: Print sample of valid trait IDs
         if std::env::var("CLEAVE_DEBUG").is_ok() {
@@ -2786,7 +2948,16 @@ impl super::CapabilityMapper {
                             .get(&rule_id)
                             .map(std::string::String::as_str)
                             .unwrap_or("unknown");
-                        broken_refs.push((rule_id.clone(), ref_id, source_file.to_string()));
+                        let line_hint = find_line_number(source_file, &ref_id);
+                        let suggestion =
+                            build_filename_reference_suggestion(&ref_id, &file_stem_hints);
+                        broken_refs.push(BrokenTraitReference {
+                            rule_id: rule_id.clone(),
+                            ref_id,
+                            source_file: source_file.to_string(),
+                            line_hint,
+                            suggestion,
+                        });
                     }
                 }
             }
@@ -2797,18 +2968,20 @@ impl super::CapabilityMapper {
                     broken_refs.len()
                 );
                 eprintln!("   Composite rules reference trait IDs that don't exist:\n");
-                for (rule_id, ref_id, source_file) in &broken_refs {
-                    let line_hint = find_line_number(source_file, ref_id);
-                    if let Some(line) = line_hint {
+                for broken_ref in &broken_refs {
+                    if let Some(line) = broken_ref.line_hint {
                         eprintln!(
                             "   {}:{}: Rule '{}' references non-existent trait: '{}'",
-                            source_file, line, rule_id, ref_id
+                            broken_ref.source_file, line, broken_ref.rule_id, broken_ref.ref_id
                         );
                     } else {
                         eprintln!(
                             "   {}: Rule '{}' references non-existent trait: '{}'",
-                            source_file, rule_id, ref_id
+                            broken_ref.source_file, broken_ref.rule_id, broken_ref.ref_id
                         );
+                    }
+                    if let Some(suggestion) = &broken_ref.suggestion {
+                        eprintln!("      {}", suggestion);
                     }
                 }
                 eprintln!();
@@ -2816,6 +2989,21 @@ impl super::CapabilityMapper {
                     "{} broken trait references in composite rules",
                     broken_refs.len()
                 ));
+                for broken_ref in &broken_refs {
+                    let location = if let Some(line) = broken_ref.line_hint {
+                        format!("{}:{}", broken_ref.source_file, line)
+                    } else {
+                        broken_ref.source_file.clone()
+                    };
+                    let mut detail = format!(
+                        "{location}: Rule '{}' references non-existent trait '{}'",
+                        broken_ref.rule_id, broken_ref.ref_id
+                    );
+                    if let Some(suggestion) = &broken_ref.suggestion {
+                        detail.push_str(&format!(" — {suggestion}"));
+                    }
+                    warnings.push(detail);
+                }
                 has_fatal_errors = true;
             }
 

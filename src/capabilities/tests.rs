@@ -3640,6 +3640,135 @@ traits:
 }
 
 #[test]
+fn test_broken_trait_reference_with_filename_gets_specific_fix() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let traits_dir = temp_dir
+        .path()
+        .join("objectives/persistence/system/service/systemd");
+    fs::create_dir_all(&traits_dir).unwrap();
+
+    let trait_content = r#"
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [linux, unix]
+  for: [systemd-service]
+
+traits:
+  - id: exec-start
+    desc: ExecStart directive
+    if:
+      type: text
+      word: "ExecStart"
+
+  - id: restart-always
+    desc: Restart always
+    if:
+      type: text
+      word: "Restart=always"
+
+composite_rules:
+  - id: bad-ref-with-filename
+    desc: Broken reference includes filename
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/persistence/system/service/systemd/linux::exec-start
+      - id: objectives/persistence/system/service/systemd::restart-always
+"#;
+    fs::write(traits_dir.join("linux.yaml"), trait_content).unwrap();
+
+    let result = CapabilityMapper::from_directory(temp_dir.path());
+
+    match result {
+        Ok(_) => panic!("Expected broken trait reference error, but mapper loaded successfully"),
+        Err(err) => {
+            let err_msg = format!("{:#}", err);
+            assert!(
+                err_msg.contains("includes YAML filename 'linux'"),
+                "Expected filename-specific hint, got: {}",
+                err_msg
+            );
+            assert!(
+                err_msg.contains("objectives/persistence/system/service/systemd::exec-start"),
+                "Expected exact fixed reference suggestion, got: {}",
+                err_msg
+            );
+        }
+    }
+}
+
+#[test]
+fn test_broken_trait_reference_to_filename_without_local_id_gets_directory_hint() {
+    use std::fs;
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let traits_dir = temp_dir
+        .path()
+        .join("objectives/persistence/system/service/systemd");
+    fs::create_dir_all(&traits_dir).unwrap();
+
+    let trait_content = r#"
+defaults:
+  crit: notable
+  conf: 0.8
+  platforms: [linux, unix]
+  for: [systemd-service]
+
+traits:
+  - id: exec-start
+    desc: ExecStart directive
+    if:
+      type: text
+      word: "ExecStart"
+
+  - id: restart-always
+    desc: Restart always
+    if:
+      type: text
+      word: "Restart=always"
+
+composite_rules:
+  - id: bad-file-reference
+    desc: Broken reference points at filename
+    crit: suspicious
+    conf: 0.9
+    all:
+      - id: objectives/persistence/system/service/systemd/linux
+      - id: objectives/persistence/system/service/systemd::restart-always
+"#;
+    fs::write(traits_dir.join("linux.yaml"), trait_content).unwrap();
+
+    let result = CapabilityMapper::from_directory(temp_dir.path());
+
+    match result {
+        Ok(_) => panic!("Expected broken filename reference error, but mapper loaded successfully"),
+        Err(err) => {
+            let err_msg = format!("{:#}", err);
+            assert!(
+                err_msg.contains("points to YAML file 'linux.yaml', not a trait directory"),
+                "Expected directory-specific filename hint, got: {}",
+                err_msg
+            );
+            assert!(
+                err_msg.contains("objectives/persistence/system/service/systemd::exec-start"),
+                "Expected specific trait suggestion, got: {}",
+                err_msg
+            );
+            assert!(
+                err_msg.contains("use 'objectives/persistence/system/service/systemd'"),
+                "Expected directory reference suggestion, got: {}",
+                err_msg
+            );
+        }
+    }
+}
+
+#[test]
 fn test_atomic_precision_calibration_spread() {
     let raw_trait = TraitDefinition {
         id: "test/raw-loose".to_string(),

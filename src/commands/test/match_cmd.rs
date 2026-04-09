@@ -210,6 +210,7 @@ pub fn run(
         FileType::PackageJson => composite_rules::FileType::PackageJson,
         FileType::ChromeManifest => composite_rules::FileType::ChromeManifest,
         FileType::VsixManifest => composite_rules::FileType::VsixManifest,
+        FileType::SystemdService => composite_rules::FileType::SystemdService,
         FileType::Plist => composite_rules::FileType::Plist,
         FileType::PkgInfo => composite_rules::FileType::PkgInfo,
         _ => composite_rules::FileType::All,
@@ -1049,6 +1050,7 @@ pub fn run(
                 FileType::Shell => composite_rules::FileType::Shell,
                 FileType::PowerShell => composite_rules::FileType::PowerShell,
                 FileType::Php => composite_rules::FileType::Php,
+                FileType::SystemdService => composite_rules::FileType::SystemdService,
                 _ => composite_rules::FileType::All,
             };
             let eval_ctx = composite_rules::EvaluationContext::new(

@@ -106,6 +106,8 @@ pub enum FileType {
     ComposerJson,
     /// GitHub Actions workflow YAML
     GithubActions,
+    /// systemd service unit file (.service, .service.d/*.conf)
+    SystemdService,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
     /// Archive file (zip, tar, gz, etc.)
@@ -700,6 +702,23 @@ mod tests {
     #[test]
     fn github_actions_composite() {
         assert_detect("action.yml", b"name: My Action\n", FileType::GithubActions);
+    }
+
+    #[test]
+    fn systemd_service() {
+        assert_detect(
+            "evil.service",
+            b"[Unit]\nDescription=Evil\n[Service]\nExecStart=/bin/true\n",
+            FileType::SystemdService,
+        );
+    }
+
+    #[test]
+    fn systemd_service_drop_in() {
+        assert_ext(
+            "/etc/systemd/system/ssh.service.d/override.conf",
+            FileType::SystemdService,
+        );
     }
 
     #[test]

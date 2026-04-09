@@ -847,7 +847,9 @@ fn detect_base64_binary(
     if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
         return None;
     }
-    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2") && decoded.len() < MIN_BASE64_COMPRESSED_SIZE {
+    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2")
+        && decoded.len() < MIN_BASE64_COMPRESSED_SIZE
+    {
         return None;
     }
     let offset = string_info.offset.unwrap_or(0);

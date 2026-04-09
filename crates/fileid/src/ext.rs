@@ -20,6 +20,13 @@ pub(crate) fn detect_from_path(path: &Path) -> Option<FileType> {
         }
     }
 
+    // systemd service drop-ins: *.service.d/*.conf
+    if (path_str.contains(".service.d/") || path_str.contains(".service.d\\"))
+        && ends_with_ci(path_str.as_bytes(), b".conf")
+    {
+        return Some(FileType::SystemdService);
+    }
+
     // Archive multi-part extensions (check before single extension)
     let p = path_str.as_bytes();
     if ends_with_ci(p, b".tar.gz")
@@ -90,6 +97,7 @@ pub(crate) fn is_data_format(path: &Path) -> bool {
             | "log"
             | "svg"
             | "xml"
+            | "service"
             | "erl"
             | "hrl"
             | "elv"
@@ -177,6 +185,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "zig" => Some(FileType::Zig),
         "ex" | "exs" => Some(FileType::Elixir),
         "scpt" | "applescript" => Some(FileType::AppleScript),
+        "service" => Some(FileType::SystemdService),
         "plist" | "resx" => Some(FileType::Plist),
         "rtf" => Some(FileType::Rtf),
         "doc" | "msi" | "msp" | "msg" | "dot" | "ppt" | "xls" | "xlt" => {
@@ -251,6 +260,22 @@ mod tests {
     }
 
     #[test]
+    fn systemd_service_extension() {
+        assert_eq!(
+            detect_from_path(Path::new("persistence.service")),
+            Some(FileType::SystemdService)
+        );
+    }
+
+    #[test]
+    fn systemd_service_drop_in() {
+        assert_eq!(
+            detect_from_path(Path::new("/etc/systemd/system/ssh.service.d/override.conf")),
+            Some(FileType::SystemdService)
+        );
+    }
+
+    #[test]
     fn tar_gz() {
         assert_eq!(
             detect_from_path(Path::new("data.tar.gz")),
@@ -272,6 +297,7 @@ mod tests {
     fn data_formats_blocked() {
         assert!(is_data_format(Path::new("config.yaml")));
         assert!(is_data_format(Path::new("data.json")));
+        assert!(is_data_format(Path::new("evil.service")));
         assert!(is_data_format(Path::new("notes.txt")));
         assert!(!is_data_format(Path::new("script.py")));
         assert!(!is_data_format(Path::new("binary")));

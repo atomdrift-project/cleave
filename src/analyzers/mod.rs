@@ -167,12 +167,14 @@ pub fn analyzer_for_file_type(
         )),
 
         // Text-based formats without tree-sitter - use generic analyzer
-        FileType::PkgInfo | FileType::Plist | FileType::Html | FileType::Markdown => {
-            Some(Box::new(
-                generic::GenericAnalyzer::new(file_type.clone())
-                    .with_capability_mapper(mapper_or_empty),
-            ))
-        }
+        FileType::PkgInfo
+        | FileType::Plist
+        | FileType::SystemdService
+        | FileType::Html
+        | FileType::Markdown => Some(Box::new(
+            generic::GenericAnalyzer::new(file_type.clone())
+                .with_capability_mapper(mapper_or_empty),
+        )),
 
         // Archive needs special handling (depth limits, nested analysis)
         FileType::Archive => None,
@@ -265,12 +267,14 @@ pub(crate) fn analyzer_for_file_type_arc(
         )),
 
         // Text-based formats without tree-sitter - use generic analyzer
-        FileType::PkgInfo | FileType::Plist | FileType::Html | FileType::Markdown => {
-            Some(Box::new(
-                generic::GenericAnalyzer::new(file_type.clone())
-                    .with_capability_mapper_arc(mapper_or_empty),
-            ))
-        }
+        FileType::PkgInfo
+        | FileType::Plist
+        | FileType::SystemdService
+        | FileType::Html
+        | FileType::Markdown => Some(Box::new(
+            generic::GenericAnalyzer::new(file_type.clone())
+                .with_capability_mapper_arc(mapper_or_empty),
+        )),
 
         // Archive needs special handling (depth limits, nested analysis)
         FileType::Archive => None,
@@ -467,6 +471,8 @@ pub enum FileType {
     ComposerJson,
     /// GitHub Actions workflow YAML
     GithubActions,
+    /// systemd service unit file (.service, .service.d/*.conf)
+    SystemdService,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
     /// Archive file (zip, tar, gz, etc.)
@@ -542,6 +548,7 @@ impl FileType {
             | FileType::PyProjectToml
             | FileType::ComposerJson
             | FileType::GithubActions
+            | FileType::SystemdService
             | FileType::AppleScript
             | FileType::Plist
             | FileType::Rtf
@@ -623,6 +630,7 @@ impl FileType {
             FileType::PyProjectToml => vec!["toml", "pyproject.toml", "python"],
             FileType::ComposerJson => vec!["json", "composer.json", "php"],
             FileType::GithubActions => vec!["yaml", "yml", "github-actions"],
+            FileType::SystemdService => vec!["service", "systemd", "unit"],
             FileType::Archive => vec!["zip", "tar", "gz"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
@@ -679,6 +687,7 @@ impl From<fileid::FileType> for FileType {
             fileid::FileType::PyProjectToml => Self::PyProjectToml,
             fileid::FileType::ComposerJson => Self::ComposerJson,
             fileid::FileType::GithubActions => Self::GithubActions,
+            fileid::FileType::SystemdService => Self::SystemdService,
             fileid::FileType::PkgInfo => Self::PkgInfo,
             fileid::FileType::Archive => Self::Archive,
             fileid::FileType::AppleScript => Self::AppleScript,
@@ -724,6 +733,10 @@ mod tests {
         assert_eq!(
             detect_file_type_from_path(Path::new("page.html")),
             FileType::Html
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("evil.service")),
+            FileType::SystemdService
         );
         assert_eq!(
             detect_file_type_from_path(Path::new("README.md")),

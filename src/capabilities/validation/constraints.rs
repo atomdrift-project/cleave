@@ -1012,6 +1012,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::CargoToml,
         FileType::PyProjectToml,
         FileType::GithubActions,
+        FileType::SystemdService,
         FileType::ComposerJson,
         FileType::PkgInfo,
         FileType::Plist,

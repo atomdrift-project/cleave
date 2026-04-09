@@ -611,6 +611,8 @@ pub enum DetectFileType {
     Go,
     /// Shell script
     Shell,
+    /// systemd service unit file
+    SystemdService,
     /// Raw/binary content
     Raw,
 }

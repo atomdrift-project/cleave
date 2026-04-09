@@ -389,6 +389,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::CargoToml,
                     RuleFileType::PyProjectToml,
                     RuleFileType::GithubActions,
+                    RuleFileType::SystemdService,
                     RuleFileType::ComposerJson,
                     RuleFileType::PkgInfo,
                     RuleFileType::Plist,
@@ -466,6 +467,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "chrome-manifest" | "manifest.json" => vec![RuleFileType::ChromeManifest],
                 "vsixmanifest" | "vsix-manifest" => vec![RuleFileType::VsixManifest],
                 "github-actions" => vec![RuleFileType::GithubActions],
+                "systemd-service" | "systemd_service" | "systemd" | "service" | ".service" => {
+                    vec![RuleFileType::SystemdService]
+                }
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
                 "png" => vec![RuleFileType::Png],

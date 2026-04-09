@@ -255,6 +255,8 @@ pub(crate) enum FileType {
     PyProjectToml,
     /// GitHub Actions workflow YAML
     GithubActions,
+    /// systemd service unit file (.service, .service.d/*.conf)
+    SystemdService,
     /// PHP composer.json manifest
     ComposerJson,
     /// Python package metadata (PKG-INFO, METADATA)
@@ -386,6 +388,7 @@ impl FileType {
                     | FileType::CargoToml
                     | FileType::PyProjectToml
                     | FileType::GithubActions
+                    | FileType::SystemdService
                     | FileType::ComposerJson
                     | FileType::PkgInfo
                     | FileType::Plist
@@ -454,6 +457,7 @@ impl FileType {
             FileType::CargoToml,
             FileType::PyProjectToml,
             FileType::GithubActions,
+            FileType::SystemdService,
             FileType::ComposerJson,
             FileType::PkgInfo,
             FileType::Plist,
@@ -534,6 +538,9 @@ impl FileType {
             "cargo-toml" | "cargotoml" | "cargo.toml" => FileType::CargoToml,
             "pyproject-toml" | "pyprojecttoml" | "pyproject.toml" => FileType::PyProjectToml,
             "github-actions" | "githubactions" => FileType::GithubActions,
+            "systemd-service" | "systemd_service" | "systemd" | "service" | ".service" => {
+                FileType::SystemdService
+            }
             "composer-json" | "composerjson" | "composer.json" => FileType::ComposerJson,
             "jpeg" | "jpg" => FileType::Jpeg,
             "png" => FileType::Png,
@@ -646,6 +653,12 @@ mod tests {
     }
 
     #[test]
+    fn test_is_source_code_false_for_systemd_service() {
+        assert!(!FileType::SystemdService.is_source_code());
+        assert!(FileType::SystemdService.uses_raw_text_search());
+    }
+
+    #[test]
     fn test_is_source_code_false_for_jpeg() {
         assert!(!FileType::Jpeg.is_source_code());
     }
@@ -677,6 +690,12 @@ mod tests {
     }
 
     #[test]
+    fn test_all_concrete_variants_includes_systemd_service() {
+        let variants = FileType::all_concrete_variants();
+        assert!(variants.contains(&FileType::SystemdService));
+    }
+
+    #[test]
     fn test_all_concrete_variants_includes_jpeg() {
         let variants = FileType::all_concrete_variants();
         assert!(variants.contains(&FileType::Jpeg));
@@ -705,6 +724,16 @@ mod tests {
         let file_types = default_file_types();
         assert_eq!(file_types.len(), 1);
         assert_eq!(file_types[0], FileType::All);
+    }
+
+    #[test]
+    fn test_from_str_systemd_service_aliases() {
+        assert_eq!(
+            FileType::from_str("systemd-service"),
+            FileType::SystemdService
+        );
+        assert_eq!(FileType::from_str("systemd"), FileType::SystemdService);
+        assert_eq!(FileType::from_str("service"), FileType::SystemdService);
     }
 
     // ==================== Platform Equality Tests ====================

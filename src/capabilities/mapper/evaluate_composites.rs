@@ -164,18 +164,21 @@ impl super::CapabilityMapper {
         // Add finding for excessive line length (anti-analysis technique)
         // Only check text-based files — binary formats naturally lack newlines
         const MAX_LINE_LENGTH: usize = 1_000_000;
-        let is_binary_format = matches!(
-            file_type,
-            RuleFileType::Elf
-                | RuleFileType::Macho
-                | RuleFileType::Pe
-                | RuleFileType::Dll
-                | RuleFileType::So
-                | RuleFileType::Dylib
-                | RuleFileType::Jpeg
-                | RuleFileType::Png
-                | RuleFileType::Pdf
-        );
+        let target_path = report.target.path.to_ascii_lowercase();
+        let is_installer_oledoc = target_path.ends_with(".msi") || target_path.ends_with(".msp");
+        let is_binary_format = is_installer_oledoc
+            || matches!(
+                file_type,
+                RuleFileType::Elf
+                    | RuleFileType::Macho
+                    | RuleFileType::Pe
+                    | RuleFileType::Dll
+                    | RuleFileType::So
+                    | RuleFileType::Dylib
+                    | RuleFileType::Jpeg
+                    | RuleFileType::Png
+                    | RuleFileType::Pdf
+            );
         let binary_like_text_blob = report
             .metrics
             .as_ref()

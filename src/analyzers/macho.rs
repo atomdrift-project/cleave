@@ -700,7 +700,13 @@ impl MachOAnalyzer {
                 id: ent_trait_id,
                 desc,
                 conf: 1.0,
-                crit: determine_entitlement_criticality(entitlement_key, &codesig.signature_type),
+                crit: determine_entitlement_criticality(
+                    entitlement_key,
+                    &codesig.signature_type,
+                    codesig.entitlements.contains_key(
+                        "com.apple.security.cs.disable-library-validation",
+                    ),
+                ),
                 mbc: None,
                 attack: None,
                 evidence: vec![Evidence {
@@ -929,6 +935,7 @@ fn entitlement_category(key: &str) -> &'static str {
 fn determine_entitlement_criticality(
     entitlement_key: &str,
     signature_type: &macho_codesign::SignatureType,
+    has_disable_library_validation: bool,
 ) -> Criticality {
     // Platform (Apple-signed) binaries: all entitlements are notable
     if matches!(signature_type, macho_codesign::SignatureType::Platform) {
@@ -941,9 +948,17 @@ fn determine_entitlement_criticality(
     // - allow-unsigned-executable-memory: bypasses code signing enforcement
     // - disable-executable-page-protection: weakens memory protections
     if entitlement_key.contains("debugger")
-        || entitlement_key.contains("allow-unsigned-executable-memory")
         || entitlement_key.contains("disable-executable-page-protection")
     {
+        return Criticality::Suspicious;
+    }
+
+    if entitlement_key.contains("allow-unsigned-executable-memory") {
+        if matches!(signature_type, macho_codesign::SignatureType::DeveloperID)
+            && has_disable_library_validation
+        {
+            return Criticality::Notable;
+        }
         return Criticality::Suspicious;
     }
 
@@ -1496,7 +1511,11 @@ mod tests {
             "com.apple.security.cs.disable-library-validation",
         ] {
             assert_eq!(
-                determine_entitlement_criticality(key, &macho_codesign::SignatureType::Platform),
+                determine_entitlement_criticality(
+                    key,
+                    &macho_codesign::SignatureType::Platform,
+                    false,
+                ),
                 Criticality::Notable,
                 "platform binary entitlement {key} should be notable"
             );
@@ -1511,7 +1530,11 @@ mod tests {
             "com.apple.security.cs.allow-unsigned-executable-memory",
         ] {
             assert_eq!(
-                determine_entitlement_criticality(key, &macho_codesign::SignatureType::DeveloperID),
+                determine_entitlement_criticality(
+                    key,
+                    &macho_codesign::SignatureType::DeveloperID,
+                    false,
+                ),
                 Criticality::Suspicious,
                 "non-Apple entitlement {key} should be suspicious"
             );
@@ -1521,6 +1544,7 @@ mod tests {
             determine_entitlement_criticality(
                 "com.apple.security.cs.allow-jit",
                 &macho_codesign::SignatureType::DeveloperID,
+                false,
             ),
             Criticality::Notable,
         );
@@ -1533,6 +1557,7 @@ mod tests {
             determine_entitlement_criticality(
                 "com.apple.security.cs.disable-library-validation",
                 &macho_codesign::SignatureType::DeveloperID,
+                false,
             ),
             Criticality::Notable,
         );
@@ -1542,10 +1567,26 @@ mod tests {
     fn test_determine_entitlement_criticality_privacy_notable() {
         for key in ["personal-information.location", "device.bluetooth"] {
             assert_eq!(
-                determine_entitlement_criticality(key, &macho_codesign::SignatureType::Adhoc),
+                determine_entitlement_criticality(
+                    key,
+                    &macho_codesign::SignatureType::Adhoc,
+                    false,
+                ),
                 Criticality::Notable,
             );
         }
+    }
+
+    #[test]
+    fn test_determine_entitlement_criticality_allow_unsigned_exec_memory_common_helper() {
+        assert_eq!(
+            determine_entitlement_criticality(
+                "com.apple.security.cs.allow-unsigned-executable-memory",
+                &macho_codesign::SignatureType::DeveloperID,
+                true,
+            ),
+            Criticality::Notable,
+        );
     }
 
     #[test]

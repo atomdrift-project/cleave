@@ -179,7 +179,9 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "scpt" | "applescript" => Some(FileType::AppleScript),
         "plist" | "resx" => Some(FileType::Plist),
         "rtf" => Some(FileType::Rtf),
-        "doc" | "xls" | "ppt" | "msg" | "dot" | "xlt" => Some(FileType::OleDoc),
+        "doc" | "msi" | "msp" | "msg" | "dot" | "ppt" | "xls" | "xlt" => {
+            Some(FileType::OleDoc)
+        }
         "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx" | "xltm" => {
             Some(FileType::Ooxml)
         }

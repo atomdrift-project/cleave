@@ -960,6 +960,7 @@ impl PackageJsonAnalyzer {
 
             // Check for known malicious package patterns
             if self.is_suspicious_package_name(name)
+                && !self.is_same_name_github_fork(name, version)
                 && !(is_official_react_native && name.starts_with("@react-native/"))
             {
                 report.add_finding(
@@ -1101,7 +1102,8 @@ impl PackageJsonAnalyzer {
     }
 
     fn is_suspicious_package_name(&self, name: &str) -> bool {
-        let package_segment = name.rsplit('/').next().unwrap_or(name);
+        let normalized_name = name.trim();
+        let package_segment = normalized_name.rsplit('/').next().unwrap_or(normalized_name);
         let is_scoped = name.contains('/');
 
         let suspicious_prefixes = [
@@ -1121,14 +1123,20 @@ impl PackageJsonAnalyzer {
         ];
 
         for pattern in suspicious_prefixes {
-            if !is_scoped && package_segment.starts_with(pattern) && !self.is_known_legitimate(name)
+            if !is_scoped
+                && package_segment.starts_with(pattern)
+                && !self.is_known_legitimate(normalized_name)
+                && !self.is_known_legitimate(package_segment)
             {
                 return true;
             }
         }
 
         for pattern in suspicious_contains {
-            if package_segment.contains(pattern) && !self.is_known_legitimate(name) {
+            if package_segment.contains(pattern)
+                && !self.is_known_legitimate(normalized_name)
+                && !self.is_known_legitimate(package_segment)
+            {
                 return true;
             }
         }
@@ -1149,7 +1157,11 @@ impl PackageJsonAnalyzer {
                     all_lower_or_digit = false;
                 }
             }
-            if digit_count > 3 && all_lower_or_digit && !self.is_known_legitimate(name) {
+            if digit_count > 3
+                && all_lower_or_digit
+                && !self.is_known_legitimate(normalized_name)
+                && !self.is_known_legitimate(package_segment)
+            {
                 return true;
             }
         }
@@ -1211,6 +1223,7 @@ impl PackageJsonAnalyzer {
             "webpack-dev-middleware",
             "webpack-dev-server",
             "webpack-fix-default-import-plugin",
+            "webpack-hot-middleware",
             "webpack-merge",
         ];
 
@@ -1230,6 +1243,21 @@ impl PackageJsonAnalyzer {
         legitimate_prefixes
             .iter()
             .any(|prefix| name.starts_with(prefix))
+    }
+
+    fn is_same_name_github_fork(&self, name: &str, version: &str) -> bool {
+        let package_segment = name.trim().rsplit('/').next().unwrap_or(name.trim());
+        let Some(repo) = version.strip_prefix("github:") else {
+            return false;
+        };
+
+        let repo_name = repo
+            .split('#')
+            .next()
+            .and_then(|path| path.rsplit('/').next())
+            .unwrap_or("");
+
+        repo_name == package_segment
     }
 
     fn is_suspicious_domain(&self, url: &str) -> bool {
@@ -1557,6 +1585,27 @@ mod tests {
     fn test_scoped_webpack_dependency_is_not_suspicious() {
         let analyzer = PackageJsonAnalyzer::new();
         assert!(!analyzer.is_suspicious_package_name("@vercel/webpack-nft"));
+    }
+
+    #[test]
+    fn test_webpack_hot_middleware_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("webpack-hot-middleware"));
+    }
+
+    #[test]
+    fn test_scoped_legitimate_webpack_dependency_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("@scope/webpack-hot-middleware"));
+    }
+
+    #[test]
+    fn test_same_name_github_fork_is_not_suspicious_package() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(analyzer.is_same_name_github_fork(
+            "webpack-hot-middleware",
+            "github:lyswhut/webpack-hot-middleware#329c4375"
+        ));
     }
 
     #[test]

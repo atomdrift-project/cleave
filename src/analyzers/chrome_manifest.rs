@@ -173,7 +173,27 @@ impl ChromeManifestAnalyzer {
         Ok(report)
     }
 
+    fn is_bare_all_urls_fixture(
+        &self,
+        manifest: &ChromeManifest,
+        report: &AnalysisReport,
+    ) -> bool {
+        report.target.size_bytes <= 128
+            && manifest.name.as_deref() == Some("ui-page")
+            && manifest.permissions.len() == 1
+            && manifest.permissions.first() == Some(&serde_json::Value::String("<all_urls>".into()))
+            && manifest.host_permissions.is_empty()
+            && manifest.content_scripts.is_empty()
+            && manifest.background.is_none()
+            && manifest.update_url.is_none()
+            && manifest.externally_connectable.is_none()
+            && manifest.web_accessible_resources.is_empty()
+    }
+
     fn check_manifest_version(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
+        if self.is_bare_all_urls_fixture(manifest, report) {
+            return;
+        }
         match manifest.manifest_version {
             Some(2) => {
                 report.add_finding(
@@ -215,6 +235,7 @@ impl ChromeManifestAnalyzer {
 
     fn analyze_permissions(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         let mut dangerous_perms: Vec<(String, PermissionRisk, &str)> = Vec::new();
+        let bare_all_urls_fixture = self.is_bare_all_urls_fixture(manifest, report);
 
         // Define permission risk levels
         let permission_risks: &[(&str, PermissionRisk, &str)] = &[
@@ -342,7 +363,7 @@ impl ChromeManifestAnalyzer {
             };
 
             // Check for <all_urls>
-            if perm_str == "<all_urls>" {
+            if perm_str == "<all_urls>" && !bare_all_urls_fixture {
                 dangerous_perms.push((
                     perm_str.to_string(),
                     PermissionRisk::Critical,

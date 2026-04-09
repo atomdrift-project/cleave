@@ -381,7 +381,13 @@ pub fn check_extension_content_mismatch(
     let ext = file_path
         .extension()
         .map(|e| e.to_string_lossy().to_ascii_lowercase());
-    if matches!(ext.as_deref(), Some("exe") | Some("dll")) && det.file_type == fileid::FileType::Pe
+    if matches!(ext.as_deref(), Some("msi") | Some("msp"))
+        && det.file_type == fileid::FileType::OleDoc
+    {
+        return None;
+    }
+    if matches!(ext.as_deref(), Some("exe") | Some("dll") | Some("pyd"))
+        && det.file_type == fileid::FileType::Pe
     {
         return None;
     }
@@ -826,6 +832,12 @@ mod tests {
         let elf = b"\x7fELF\x02\x01\x01\x00";
         assert!(check_extension_content_mismatch(Path::new("image.jpg"), elf).is_some());
         assert!(check_extension_content_mismatch(Path::new("binary"), elf).is_none());
+    }
+
+    #[test]
+    fn bridge_msi_oledoc_is_not_mismatch() {
+        let oledoc = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1";
+        assert!(check_extension_content_mismatch(Path::new("setup.msi"), oledoc).is_none());
     }
 
     #[test]

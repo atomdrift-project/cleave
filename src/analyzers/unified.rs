@@ -1086,9 +1086,8 @@ impl UnifiedSourceAnalyzer {
 
     fn compute_metrics<'a>(&self, root: &tree_sitter::Node<'a>, content: &str) -> Metrics {
         let source = content.as_bytes();
-        let total_lines = content.lines().count() as u32;
-
         let text = text_metrics::analyze_text(content);
+        let total_lines = text.total_lines;
 
         // Single-pass AST walk extracts identifiers, strings, and functions together
         let (identifiers, strings, func_infos) = self.extract_all_from_tree(root, source);

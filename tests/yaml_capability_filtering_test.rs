@@ -93,10 +93,7 @@ fn test_windows_keylog_capability_filtered_for_elf() {
         );
         if let Some(traits) = get_traits(file) {
             // Get traits that are capabilities (capability: true)
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
 
             // Windows-specific traits should NOT appear in ELF analysis
             let windows_caps: Vec<_> = capabilities
@@ -149,10 +146,7 @@ fn test_universal_capabilities_match_all_files() {
         // Traits field may be missing if empty (skip_serializing_if)
         // Capabilities are traits with capability: true
         if let Some(traits) = get_traits(file) {
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
             eprintln!("Found {} capabilities for shell script", capabilities.len());
         } else {
             eprintln!("No traits detected for simple shell script (expected)");
@@ -192,10 +186,7 @@ fn test_python_capabilities_for_python_files() {
             file_type
         );
         if let Some(traits) = get_traits(file) {
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
             eprintln!("Found {} traits for Python file", capabilities.len());
 
             // Look for network-related capabilities
@@ -262,10 +253,7 @@ fn test_javascript_capabilities_for_js_files() {
 
         // Traits field may be missing if empty
         if let Some(traits) = get_traits(file) {
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
             eprintln!(
                 "Found {} capabilities for JavaScript file",
                 capabilities.len()
@@ -313,10 +301,7 @@ fn test_shell_capabilities_for_shell_scripts() {
             file_type
         );
         if let Some(traits) = get_traits(file) {
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
             eprintln!("Found {} traits for shell script", capabilities.len());
 
             // Look for HTTP-related capabilities
@@ -383,10 +368,7 @@ fn test_rules_without_filetype_are_universal() {
 
             // Traits field may be missing if empty
             if let Some(traits) = get_traits(file_entry) {
-                let capabilities: Vec<_> = traits
-                    .iter()
-                    .filter(|t| is_capability(t))
-                    .collect();
+                let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
                 eprintln!(
                     "File {:?} has {} capabilities",
                     file.file_name(),
@@ -435,10 +417,7 @@ fn test_composite_trait_file_type_filtering() {
             eprintln!("Found {} traits detected", traits.len());
 
             // Check that Python file gets appropriate capabilities
-            let capabilities: Vec<_> = traits
-                .iter()
-                .filter(|t| is_capability(t))
-                .collect();
+            let capabilities: Vec<_> = traits.iter().filter(|t| is_capability(t)).collect();
             eprintln!(
                 "Found {} traits for Python file with suspicious patterns",
                 capabilities.len()

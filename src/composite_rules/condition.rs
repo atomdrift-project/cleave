@@ -2003,11 +2003,10 @@ impl Condition {
             | Condition::Section { .. }
             | Condition::Structure { .. } => is_binary,
 
-            // AST requires source code
-            Condition::Ast { .. } => file_type.supports_ast_queries(),
-
-            // String-literal search is AST-only
-            Condition::StringLiteral { .. } => file_type.supports_ast_queries(),
+            // AST-backed searches require source code support
+            Condition::Ast { .. } | Condition::StringLiteral { .. } => {
+                file_type.supports_ast_queries()
+            }
 
             // All other conditions can potentially match any file type
             _ => true,

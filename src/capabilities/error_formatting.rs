@@ -530,9 +530,8 @@ fn provide_error_guidance(
     {
         guidance.push_str("\n   Valid condition types:\n");
         guidance.push_str("   • symbol     - Match symbol names (functions, methods)\n");
-        guidance.push_str(
-            "   • text       - Match human-readable text (binary strings or raw text)\n",
-        );
+        guidance
+            .push_str("   • text       - Match human-readable text (binary strings or raw text)\n");
         guidance.push_str("   • string_literal - Match AST-backed string literals only\n");
         guidance.push_str(
             "   • string_value - Deprecated compatibility alias (prefer text or string_literal)\n",
@@ -551,8 +550,9 @@ fn provide_error_guidance(
 
         // Check for common mistakes in context
         if context.contains("type: word") {
-            guidance
-                .push_str("\n   💡 Did you mean 'type: text' with a 'word:' field instead of 'type: word'?\n");
+            guidance.push_str(
+                "\n   💡 Did you mean 'type: text' with a 'word:' field instead of 'type: word'?\n",
+            );
         } else if context.contains("type: string_value") {
             guidance.push_str(
                 "\n   💡 `type: string_value` is deprecated but still supported at runtime. Use 'type: text' for general text/code search, or 'type: string_literal' for AST-backed literal-only search.\n",
@@ -567,9 +567,8 @@ fn provide_error_guidance(
         } else if context.contains("type: function") {
             guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");
         } else if context.contains("type: regex") {
-            guidance.push_str(
-                "\n   💡 Use 'type: text' with a 'regex:' field, not 'type: regex'\n",
-            );
+            guidance
+                .push_str("\n   💡 Use 'type: text' with a 'regex:' field, not 'type: regex'\n");
         }
     }
 

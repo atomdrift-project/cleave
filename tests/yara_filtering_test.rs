@@ -158,11 +158,7 @@ fn test_python_rules_filtered_for_shell_scripts() {
             // Look for any matches with severity "filtered"
             let filtered_rules: Vec<_> = yara_matches
                 .iter()
-                .filter(|m| {
-                    match_severity(m)
-                        .map(|s| s == "filtered")
-                        .unwrap_or(false)
-                })
+                .filter(|m| match_severity(m).map(|s| s == "filtered").unwrap_or(false))
                 .collect();
 
             // If we have filtered rules, verify they're for wrong file types
@@ -309,20 +305,12 @@ fn test_javascript_file_filters_non_js_rules() {
             // Count filtered vs unfiltered
             let filtered_count = yara_matches
                 .iter()
-                .filter(|m| {
-                    match_severity(m)
-                        .map(|s| s == "filtered")
-                        .unwrap_or(false)
-                })
+                .filter(|m| match_severity(m).map(|s| s == "filtered").unwrap_or(false))
                 .count();
 
             let unfiltered_count = yara_matches
                 .iter()
-                .filter(|m| {
-                    match_severity(m)
-                        .map(|s| s != "filtered")
-                        .unwrap_or(false)
-                })
+                .filter(|m| match_severity(m).map(|s| s != "filtered").unwrap_or(false))
                 .count();
 
             eprintln!(
@@ -449,11 +437,7 @@ fn test_filtered_matches_preserved() {
             let total_matches = yara_matches.len();
             let filtered_matches = yara_matches
                 .iter()
-                .filter(|m| {
-                    match_severity(m)
-                        .map(|s| s == "filtered")
-                        .unwrap_or(false)
-                })
+                .filter(|m| match_severity(m).map(|s| s == "filtered").unwrap_or(false))
                 .count();
 
             eprintln!(

@@ -587,7 +587,8 @@ pub fn run(
             let count_max_ok = count_max.is_none_or(|max| match_count <= max);
             let per_kb_min_ok = per_kb_min.is_none_or(|min| density >= min);
             let per_kb_max_ok = per_kb_max.is_none_or(|max| density <= max);
-            let matched = result.matched && count_min_ok && count_max_ok && per_kb_min_ok && per_kb_max_ok;
+            let matched =
+                result.matched && count_min_ok && count_max_ok && per_kb_min_ok && per_kb_max_ok;
 
             let mode = if internal_file_type.uses_raw_text_search() {
                 "raw-text"
@@ -623,7 +624,10 @@ pub fn run(
                 }
             } else {
                 out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
-                out.push_str(&format!("Found {} matches ({:.3}/KB)\n", match_count, density));
+                out.push_str(&format!(
+                    "Found {} matches ({:.3}/KB)\n",
+                    match_count, density
+                ));
             }
 
             (matched, match_count, out)
@@ -683,8 +687,7 @@ pub fn run(
             )
             .with_section_map(&section_map);
 
-            let result =
-                composite_rules::evaluators::eval_string_literal(&params, None, &ctx);
+            let result = composite_rules::evaluators::eval_string_literal(&params, None, &ctx);
             let match_count = result.match_count;
             let effective_size = if has_location_constraints {
                 range_end.saturating_sub(range_start)
@@ -736,7 +739,10 @@ pub fn run(
                 }
             } else {
                 out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
-                out.push_str(&format!("Found {} matches ({:.3}/KB)\n", match_count, density));
+                out.push_str(&format!(
+                    "Found {} matches ({:.3}/KB)\n",
+                    match_count, density
+                ));
                 if !internal_file_type.supports_ast_queries() {
                     out.push_str("This file type does not support AST-backed literal search.\n");
                 }

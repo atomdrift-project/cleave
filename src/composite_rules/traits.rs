@@ -1270,7 +1270,10 @@ impl TraitDefinition {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
-                timed_eval!("text", eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str())))
+                timed_eval!(
+                    "text",
+                    eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
+                )
             }
             Condition::StringLiteral {
                 exact,

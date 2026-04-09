@@ -4624,7 +4624,11 @@ mod deprecated_string_value_usage_tests {
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::path::PathBuf;
 
-    fn trait_with_types(id: &str, condition: Condition, file_types: Vec<FileType>) -> TraitDefinition {
+    fn trait_with_types(
+        id: &str,
+        condition: Condition,
+        file_types: Vec<FileType>,
+    ) -> TraitDefinition {
         TraitDefinition {
             id: id.to_string(),
             desc: "test".to_string(),

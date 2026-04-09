@@ -443,8 +443,8 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
     // Regex for function call pattern: identifier (with optional dots/parens) followed by (
     static FUNC_CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
     #[allow(clippy::expect_used)]
-    let func_call_re =
-        FUNC_CALL_RE.get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
+    let func_call_re = FUNC_CALL_RE
+        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
 
     // Import statement pattern: starts with import/from...import
     static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -518,9 +518,7 @@ enum StringValueReplacement {
 }
 
 fn classify_string_value_replacement(trait_def: &TraitDefinition) -> StringValueReplacement {
-    if trait_def.r#for.is_empty()
-        || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All))
-    {
+    if trait_def.r#for.is_empty() || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All)) {
         return StringValueReplacement::Ambiguous;
     }
 
@@ -682,10 +680,7 @@ pub(crate) fn find_string_literal_should_use_text(
 ///
 /// Source/text-only traits are flagged whenever `text` has the same semantics as
 /// `raw` for the given file types.
-pub(crate) fn find_raw_should_use_text(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
+pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
         let (exact, substr, regex, word) = match &trait_def.r#if {
             Condition::Raw {

@@ -1103,7 +1103,10 @@ impl PackageJsonAnalyzer {
 
     fn is_suspicious_package_name(&self, name: &str) -> bool {
         let normalized_name = name.trim();
-        let package_segment = normalized_name.rsplit('/').next().unwrap_or(normalized_name);
+        let package_segment = normalized_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(normalized_name);
         let is_scoped = name.contains('/');
 
         let suspicious_prefixes = [

@@ -173,11 +173,7 @@ impl ChromeManifestAnalyzer {
         Ok(report)
     }
 
-    fn is_bare_all_urls_fixture(
-        &self,
-        manifest: &ChromeManifest,
-        report: &AnalysisReport,
-    ) -> bool {
+    fn is_bare_all_urls_fixture(&self, manifest: &ChromeManifest, report: &AnalysisReport) -> bool {
         report.target.size_bytes <= 128
             && manifest.name.as_deref() == Some("ui-page")
             && manifest.permissions.len() == 1

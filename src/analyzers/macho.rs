@@ -703,9 +703,9 @@ impl MachOAnalyzer {
                 crit: determine_entitlement_criticality(
                     entitlement_key,
                     &codesig.signature_type,
-                    codesig.entitlements.contains_key(
-                        "com.apple.security.cs.disable-library-validation",
-                    ),
+                    codesig
+                        .entitlements
+                        .contains_key("com.apple.security.cs.disable-library-validation"),
                 ),
                 mbc: None,
                 attack: None,

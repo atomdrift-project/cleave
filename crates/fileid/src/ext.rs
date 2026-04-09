@@ -188,9 +188,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "service" => Some(FileType::SystemdService),
         "plist" | "resx" => Some(FileType::Plist),
         "rtf" => Some(FileType::Rtf),
-        "doc" | "msi" | "msp" | "msg" | "dot" | "ppt" | "xls" | "xlt" => {
-            Some(FileType::OleDoc)
-        }
+        "doc" | "msi" | "msp" | "msg" | "dot" | "ppt" | "xls" | "xlt" => Some(FileType::OleDoc),
         "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx" | "xltm" => {
             Some(FileType::Ooxml)
         }

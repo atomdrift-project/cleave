@@ -16,6 +16,53 @@ use tracing::{info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 
+fn analysis_error_response(error: &anyhow::Error) -> Response {
+    let (status, message) = classify_analysis_error(error.root_cause().to_string().as_str());
+    let detail = format!("{error:#}");
+
+    (
+        status,
+        Json(if detail == message {
+            serde_json::json!({ "error": message })
+        } else {
+            serde_json::json!({ "error": message, "detail": detail })
+        }),
+    )
+        .into_response()
+}
+
+fn classify_analysis_error(message: &str) -> (StatusCode, String) {
+    let normalized = message.to_ascii_lowercase();
+
+    let status = if normalized.contains("unsupported file type")
+        || normalized.contains("unsupported archive type")
+        || normalized.contains("unsupported compression")
+    {
+        StatusCode::UNSUPPORTED_MEDIA_TYPE
+    } else if normalized.contains("archive is encrypted but no passwords configured")
+        || normalized.contains("invalid ")
+        || normalized.contains("not a valid ")
+        || normalized.contains("truncated")
+        || normalized.contains("too small")
+        || normalized.contains("out of bounds")
+        || normalized.contains("empty package.json")
+        || normalized.contains("maximum archive depth")
+        || normalized.contains("maximum decode depth")
+        || normalized.contains("exceeded maximum")
+        || normalized.contains("file count limit exceeded")
+    {
+        StatusCode::UNPROCESSABLE_ENTITY
+    } else {
+        StatusCode::INTERNAL_SERVER_ERROR
+    };
+
+    (status, message.to_string())
+}
+
+fn analysis_error_status(error: &anyhow::Error) -> StatusCode {
+    classify_analysis_error(error.root_cause().to_string().as_str()).0
+}
+
 /// Health check endpoint. Returns 200 OK when healthy, 503 when memory-overloaded or thread pool saturated.
 pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
     let rss_bytes = crate::memory_tracker::current_rss().unwrap_or(0);
@@ -406,12 +453,9 @@ async fn analyze_inner(
             Json(compact).into_response()
         }
         Some(Ok(Err(e))) => {
-            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Analysis failed"})),
-            )
-                .into_response()
+            let status = analysis_error_status(&e);
+            warn!(filename = %filename, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
+            analysis_error_response(&e)
         }
         Some(Err(e)) => {
             warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
@@ -783,12 +827,9 @@ async fn analyze_path_inner(
             Json(response).into_response()
         }
         Some(Ok(Err(e))) => {
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis failed: {:?}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Analysis failed"})),
-            )
-                .into_response()
+            let status = analysis_error_status(&e);
+            warn!(path = %path_str, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
+            analysis_error_response(&e)
         }
         Some(Err(e)) => {
             warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
@@ -880,6 +921,33 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
             "rayon_global_threads": rayon::current_num_threads(),
         },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classify_analysis_error;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn classify_unsupported_file_type_as_415() {
+        let (status, message) = classify_analysis_error("Unsupported file type: Unknown");
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(message, "Unsupported file type: Unknown");
+    }
+
+    #[test]
+    fn classify_invalid_archive_as_422() {
+        let (status, message) =
+            classify_analysis_error("Archive is encrypted but no passwords configured");
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(message, "Archive is encrypted but no passwords configured");
+    }
+
+    #[test]
+    fn classify_unexpected_failure_as_500() {
+        let (status, _) = classify_analysis_error("YARA scan failed: scanner crashed");
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }
 
 /// In-flight request list — shows every analysis currently running, with elapsed time.

@@ -7,6 +7,7 @@ use crate::analyzers::{detect_file_type, FileType};
 use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::composite_rules::condition::StringValidator;
+use crate::composite_rules::context::StringParams;
 use crate::composite_rules::evaluators::symbol_string::validate_match;
 use crate::{cli, composite_rules, test_rules, types};
 use anyhow::Result;
@@ -22,7 +23,7 @@ use std::path::Path;
 /// # Arguments
 ///
 /// * `target` - Path to the file to test
-/// * `search_type` - Type of search (string, symbol, raw, kv, hex, encoded, section, metrics)
+/// * `search_type` - Type of search (text, string_literal, string_value, symbol, raw, kv, hex, encoded, section, metrics)
 /// * `method` - Match method (exact, contains, regex, word)
 /// * `pattern` - Pattern to search for
 /// * `kv_path` - Key-value path for structured data searches
@@ -180,6 +181,40 @@ pub fn run(
     // Create section map for location constraint resolution
     let section_map = composite_rules::SectionMap::from_binary(eval_data);
 
+    let internal_file_type = match file_type {
+        FileType::Pe => composite_rules::FileType::Pe,
+        FileType::Elf => composite_rules::FileType::Elf,
+        FileType::MachO => composite_rules::FileType::Macho,
+        FileType::JavaScript => composite_rules::FileType::JavaScript,
+        FileType::Python => composite_rules::FileType::Python,
+        FileType::Java => composite_rules::FileType::Java,
+        FileType::Go => composite_rules::FileType::Go,
+        FileType::Rust => composite_rules::FileType::Rust,
+        FileType::Ruby => composite_rules::FileType::Ruby,
+        FileType::Shell => composite_rules::FileType::Shell,
+        FileType::PowerShell => composite_rules::FileType::PowerShell,
+        FileType::Php => composite_rules::FileType::Php,
+        FileType::TypeScript => composite_rules::FileType::TypeScript,
+        FileType::C => composite_rules::FileType::C,
+        FileType::CSharp => composite_rules::FileType::CSharp,
+        FileType::Lua => composite_rules::FileType::Lua,
+        FileType::Perl => composite_rules::FileType::Perl,
+        FileType::Swift => composite_rules::FileType::Swift,
+        FileType::ObjectiveC => composite_rules::FileType::ObjectiveC,
+        FileType::Groovy => composite_rules::FileType::Groovy,
+        FileType::Scala => composite_rules::FileType::Scala,
+        FileType::Zig => composite_rules::FileType::Zig,
+        FileType::Elixir => composite_rules::FileType::Elixir,
+        FileType::Html => composite_rules::FileType::Html,
+        FileType::Markdown => composite_rules::FileType::Markdown,
+        FileType::PackageJson => composite_rules::FileType::PackageJson,
+        FileType::ChromeManifest => composite_rules::FileType::ChromeManifest,
+        FileType::VsixManifest => composite_rules::FileType::VsixManifest,
+        FileType::Plist => composite_rules::FileType::Plist,
+        FileType::PkgInfo => composite_rules::FileType::PkgInfo,
+        _ => composite_rules::FileType::All,
+    };
+
     // Resolve effective byte range from location constraints
     // Returns (start, end, effective_size) where effective_size is used for density calculations
     let resolve_effective_range = |section: Option<&str>,
@@ -262,6 +297,27 @@ pub fn run(
         || offset_range.is_some()
         || section_offset.is_some()
         || section_offset_range.is_some();
+
+    let build_compiled_regex = |pattern: &str| match method {
+        cli::MatchMethod::Regex => {
+            let pat = if case_insensitive {
+                format!("(?i){}", pattern)
+            } else {
+                pattern.to_string()
+            };
+            regex::Regex::new(&pat).ok()
+        }
+        cli::MatchMethod::Word => {
+            let word_pat = format!(r"\b{}\b", regex::escape(pattern));
+            let pat = if case_insensitive {
+                format!("(?i){}", word_pat)
+            } else {
+                word_pat
+            };
+            regex::Regex::new(&pat).ok()
+        }
+        _ => None,
+    };
 
     // Perform the requested search
     let (matched, _match_count, mut output): (bool, usize, String) = match search_type {
@@ -453,6 +509,236 @@ pub fn run(
                             density, max
                         ));
                     }
+                }
+            }
+
+            (matched, match_count, out)
+        }
+        cli::SearchType::Text => {
+            let effective_range = resolve_effective_range(
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+            );
+            let (range_start, range_end) = match effective_range {
+                Ok((s, e)) => (s, e),
+                Err(msg) => {
+                    let mut out = String::new();
+                    out.push_str("Search: text\n");
+                    out.push_str(&format!("Pattern: {}\n", pattern));
+                    out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
+                    out.push_str(&format!("{}\n", msg));
+                    if section_map.has_sections() {
+                        out.push_str(&format!(
+                            "Available sections: {}\n",
+                            section_map.section_names().join(", ")
+                        ));
+                    }
+                    return Ok(out);
+                }
+            };
+
+            let pattern_value = pattern.to_string();
+            let section_value = section.map(str::to_owned);
+            let compiled_regex = build_compiled_regex(pattern);
+            let params = StringParams {
+                exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
+                substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
+                regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
+                word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
+                case_insensitive,
+                compiled_regex: compiled_regex.as_ref(),
+                is_check,
+                section: section_value.as_ref(),
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                arch_clamp: None,
+            };
+
+            let ctx = composite_rules::EvaluationContext::new(
+                report,
+                binary_data,
+                internal_file_type,
+                platforms,
+                None,
+                None,
+            )
+            .with_section_map(&section_map);
+
+            let result = composite_rules::evaluators::eval_text(&params, None, &ctx, None);
+            let match_count = result.match_count;
+            let effective_size = if has_location_constraints {
+                range_end.saturating_sub(range_start)
+            } else {
+                binary_data.len()
+            };
+            let effective_size_kb = effective_size as f64 / 1024.0;
+            let density = if effective_size_kb > 0.0 {
+                match_count as f64 / effective_size_kb
+            } else {
+                0.0
+            };
+
+            let count_min_ok = match_count >= count_min;
+            let count_max_ok = count_max.is_none_or(|max| match_count <= max);
+            let per_kb_min_ok = per_kb_min.is_none_or(|min| density >= min);
+            let per_kb_max_ok = per_kb_max.is_none_or(|max| density <= max);
+            let matched = result.matched && count_min_ok && count_max_ok && per_kb_min_ok && per_kb_max_ok;
+
+            let mode = if internal_file_type.uses_raw_text_search() {
+                "raw-text"
+            } else {
+                "extracted-strings"
+            };
+
+            let mut out = String::new();
+            out.push_str(&format!("Search: text ({})\n", mode));
+            out.push_str(&format!("Pattern: {}\n", pattern));
+            if has_location_constraints {
+                out.push_str(&format!(
+                    "Search range: [{:#x}, {:#x}) of {} bytes\n",
+                    range_start,
+                    range_end,
+                    binary_data.len()
+                ));
+            }
+            out.push_str(&format!(
+                "Context: file_type={:?}, strings={}, symbols={}\n",
+                file_type, context_info.string_count, context_info.symbol_count
+            ));
+
+            if matched {
+                out.push_str(&format!(
+                    "\n{} ({} matches, {:.3}/KB)\n",
+                    "MATCHED".green().bold(),
+                    match_count,
+                    density
+                ));
+                for ev in result.evidence.iter().take(10) {
+                    out.push_str(&format!("  {}\n", ev.value));
+                }
+            } else {
+                out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
+                out.push_str(&format!("Found {} matches ({:.3}/KB)\n", match_count, density));
+            }
+
+            (matched, match_count, out)
+        }
+        cli::SearchType::StringLiteral => {
+            let effective_range = resolve_effective_range(
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+            );
+            let (range_start, range_end) = match effective_range {
+                Ok((s, e)) => (s, e),
+                Err(msg) => {
+                    let mut out = String::new();
+                    out.push_str("Search: string_literal\n");
+                    out.push_str(&format!("Pattern: {}\n", pattern));
+                    out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
+                    out.push_str(&format!("{}\n", msg));
+                    if section_map.has_sections() {
+                        out.push_str(&format!(
+                            "Available sections: {}\n",
+                            section_map.section_names().join(", ")
+                        ));
+                    }
+                    return Ok(out);
+                }
+            };
+
+            let pattern_value = pattern.to_string();
+            let section_value = section.map(str::to_owned);
+            let compiled_regex = build_compiled_regex(pattern);
+            let params = StringParams {
+                exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
+                substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
+                regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
+                word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
+                case_insensitive,
+                compiled_regex: compiled_regex.as_ref(),
+                is_check,
+                section: section_value.as_ref(),
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                arch_clamp: None,
+            };
+
+            let ctx = composite_rules::EvaluationContext::new(
+                report,
+                binary_data,
+                internal_file_type,
+                platforms,
+                None,
+                None,
+            )
+            .with_section_map(&section_map);
+
+            let result =
+                composite_rules::evaluators::eval_string_literal(&params, None, &ctx);
+            let match_count = result.match_count;
+            let effective_size = if has_location_constraints {
+                range_end.saturating_sub(range_start)
+            } else {
+                binary_data.len()
+            };
+            let effective_size_kb = effective_size as f64 / 1024.0;
+            let density = if effective_size_kb > 0.0 {
+                match_count as f64 / effective_size_kb
+            } else {
+                0.0
+            };
+            let matched = result.matched
+                && match_count >= count_min
+                && count_max.is_none_or(|max| match_count <= max)
+                && per_kb_min.is_none_or(|min| density >= min)
+                && per_kb_max.is_none_or(|max| density <= max);
+
+            let mut out = String::new();
+            out.push_str("Search: string_literal\n");
+            out.push_str(&format!("Pattern: {}\n", pattern));
+            if has_location_constraints {
+                out.push_str(&format!(
+                    "Search range: [{:#x}, {:#x}) of {} bytes\n",
+                    range_start,
+                    range_end,
+                    binary_data.len()
+                ));
+            }
+            out.push_str(&format!(
+                "Context: file_type={:?}, ast_strings={}\n",
+                file_type,
+                report
+                    .strings
+                    .iter()
+                    .filter(|s| s.section.as_deref() == Some("ast"))
+                    .count()
+            ));
+
+            if matched {
+                out.push_str(&format!(
+                    "\n{} ({} matches, {:.3}/KB)\n",
+                    "MATCHED".green().bold(),
+                    match_count,
+                    density
+                ));
+                for ev in result.evidence.iter().take(10) {
+                    out.push_str(&format!("  {}\n", ev.value));
+                }
+            } else {
+                out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
+                out.push_str(&format!("Found {} matches ({:.3}/KB)\n", match_count, density));
+                if !internal_file_type.supports_ast_queries() {
+                    out.push_str("This file type does not support AST-backed literal search.\n");
                 }
             }
 
@@ -1155,7 +1441,7 @@ pub fn run(
                     if encoding_filter.is_some() {
                         out.push_str("  Try removing --encoding to search all encoded strings\n");
                     }
-                    out.push_str("  Try `--type string` or `--type raw` instead\n");
+                    out.push_str("  Try `--type text` or `--type raw` instead\n");
                 }
             }
 
@@ -1497,6 +1783,96 @@ pub fn run(
                     output.push_str("  Found in content - try `--type raw`\n");
                 }
             }
+            cli::SearchType::Text => {
+                if internal_file_type.uses_raw_text_search() {
+                    let ast_literal_matches = {
+                        let strings: Vec<&str> = report
+                            .strings
+                            .iter()
+                            .filter(|s| s.section.as_deref() == Some("ast"))
+                            .map(|s| s.value.as_str())
+                            .collect();
+                        let exact = if method == cli::MatchMethod::Exact {
+                            Some(pattern.to_string())
+                        } else {
+                            None
+                        };
+                        let contains = if method == cli::MatchMethod::Contains {
+                            Some(pattern.to_string())
+                        } else {
+                            None
+                        };
+                        let regex = if method == cli::MatchMethod::Regex {
+                            Some(pattern.to_string())
+                        } else {
+                            None
+                        };
+                        let word = if method == cli::MatchMethod::Word {
+                            Some(pattern.to_string())
+                        } else {
+                            None
+                        };
+                        find_matching_strings(
+                            &strings,
+                            &exact,
+                            &contains,
+                            &regex,
+                            &word,
+                            case_insensitive,
+                        )
+                    };
+                    if !ast_literal_matches.is_empty() {
+                        output.push_str(&format!(
+                            "  Found in AST string literals ({} matches) - try `--type string-literal`\n",
+                            ast_literal_matches.len()
+                        ));
+                    }
+                } else {
+                    let symbols: Vec<&str> = report
+                        .imports
+                        .iter()
+                        .map(|i| i.symbol.as_str())
+                        .chain(report.exports.iter().map(|e| e.symbol.as_str()))
+                        .chain(report.functions.iter().map(|f| f.name.as_str()))
+                        .collect();
+                    let exact = if method == cli::MatchMethod::Exact {
+                        Some(pattern.to_string())
+                    } else {
+                        None
+                    };
+                    let regex = if method == cli::MatchMethod::Regex {
+                        Some(pattern.to_string())
+                    } else {
+                        None
+                    };
+                    let symbol_matches =
+                        find_matching_symbols(&symbols, &exact, &None, &regex, false);
+                    if !symbol_matches.is_empty() {
+                        output.push_str(&format!(
+                            "  Found in symbols ({} matches) - try `--type symbol`\n",
+                            symbol_matches.len()
+                        ));
+                    }
+                }
+            }
+            cli::SearchType::StringLiteral => {
+                let content = String::from_utf8_lossy(binary_data);
+                let content_matched = match method {
+                    cli::MatchMethod::Exact | cli::MatchMethod::Contains => {
+                        content.contains(pattern)
+                    }
+                    cli::MatchMethod::Regex => {
+                        regex::Regex::new(pattern).is_ok_and(|re| re.is_match(&content))
+                    }
+                    cli::MatchMethod::Word => {
+                        let word_pattern = format!(r"\b{}\b", regex::escape(pattern));
+                        regex::Regex::new(&word_pattern).is_ok_and(|re| re.is_match(&content))
+                    }
+                };
+                if content_matched {
+                    output.push_str("  Found in file text - try `--type text`\n");
+                }
+            }
             cli::SearchType::Symbol => {
                 // Check if pattern exists in strings (try exact first, then contains)
                 let strings: Vec<&str> = report.strings.iter().map(|s| s.value.as_str()).collect();
@@ -1530,7 +1906,7 @@ pub fn run(
                 );
                 if !string_matches.is_empty() {
                     output.push_str(&format!(
-                        "  Found in strings ({} matches) - try `--type string`\n",
+                        "  Found in text search corpus ({} matches) - try `--type text`\n",
                         string_matches.len()
                     ));
                 } else if method == cli::MatchMethod::Exact {
@@ -1545,7 +1921,7 @@ pub fn run(
                     );
                     if !contains_matches.is_empty() {
                         output.push_str(&format!(
-                            "  Found in strings ({} substring matches) - try `--type string --method contains`\n",
+                            "  Found in text search corpus ({} substring matches) - try `--type text --method contains`\n",
                             contains_matches.len()
                         ));
                     }
@@ -1602,7 +1978,7 @@ pub fn run(
                 );
                 if !string_matches.is_empty() {
                     output.push_str(&format!(
-                        "  Found in strings ({} matches) - try `--type string`\n",
+                        "  Found in text search corpus ({} matches) - try `--type text`\n",
                         string_matches.len()
                     ));
                 }
@@ -1639,7 +2015,7 @@ pub fn run(
                     "  Encoded search looks for decoded strings (base64, hex, xor, etc.)\n",
                 );
                 output.push_str("  Use --encoding to filter by type: --encoding base64\n");
-                output.push_str("  Try `--type string` for regular strings\n");
+                output.push_str("  Try `--type text` for regular text\n");
                 output.push_str("  Try `--type raw` for raw content search\n");
             }
             cli::SearchType::Section => {
@@ -1753,6 +2129,120 @@ pub fn run(
                             let strings: Vec<&str> = alt_report
                                 .strings
                                 .iter()
+                                .map(|s| s.value.as_str())
+                                .collect();
+                            let exact = if method == cli::MatchMethod::Exact {
+                                Some(pattern.to_string())
+                            } else {
+                                None
+                            };
+                            let contains = if method == cli::MatchMethod::Contains {
+                                Some(pattern.to_string())
+                            } else {
+                                None
+                            };
+                            let regex = if method == cli::MatchMethod::Regex {
+                                Some(pattern.to_string())
+                            } else {
+                                None
+                            };
+                            let word = if method == cli::MatchMethod::Word {
+                                Some(pattern.to_string())
+                            } else {
+                                None
+                            };
+                            let matches = find_matching_strings(
+                                &strings,
+                                &exact,
+                                &contains,
+                                &regex,
+                                &word,
+                                case_insensitive,
+                            );
+                            !matches.is_empty()
+                        }
+                        cli::SearchType::Text => {
+                            if matches!(
+                                alt_type,
+                                FileType::JavaScript
+                                    | FileType::Python
+                                    | FileType::Go
+                                    | FileType::Java
+                                    | FileType::Rust
+                                    | FileType::Ruby
+                                    | FileType::Shell
+                                    | FileType::PowerShell
+                                    | FileType::Php
+                                    | FileType::TypeScript
+                                    | FileType::C
+                                    | FileType::CSharp
+                                    | FileType::Lua
+                                    | FileType::Perl
+                                    | FileType::Swift
+                                    | FileType::ObjectiveC
+                                    | FileType::Groovy
+                                    | FileType::Scala
+                                    | FileType::Zig
+                                    | FileType::Elixir
+                                    | FileType::Html
+                                    | FileType::Markdown
+                            ) {
+                                let content = String::from_utf8_lossy(binary_data);
+                                match method {
+                                    cli::MatchMethod::Exact | cli::MatchMethod::Contains => {
+                                        content.contains(pattern)
+                                    }
+                                    cli::MatchMethod::Regex => regex::Regex::new(pattern)
+                                        .is_ok_and(|re| re.is_match(&content)),
+                                    cli::MatchMethod::Word => {
+                                        let word_pattern =
+                                            format!(r"\b{}\b", regex::escape(pattern));
+                                        regex::Regex::new(&word_pattern)
+                                            .is_ok_and(|re| re.is_match(&content))
+                                    }
+                                }
+                            } else {
+                                let strings: Vec<&str> = alt_report
+                                    .strings
+                                    .iter()
+                                    .map(|s| s.value.as_str())
+                                    .collect();
+                                let exact = if method == cli::MatchMethod::Exact {
+                                    Some(pattern.to_string())
+                                } else {
+                                    None
+                                };
+                                let contains = if method == cli::MatchMethod::Contains {
+                                    Some(pattern.to_string())
+                                } else {
+                                    None
+                                };
+                                let regex = if method == cli::MatchMethod::Regex {
+                                    Some(pattern.to_string())
+                                } else {
+                                    None
+                                };
+                                let word = if method == cli::MatchMethod::Word {
+                                    Some(pattern.to_string())
+                                } else {
+                                    None
+                                };
+                                let matches = find_matching_strings(
+                                    &strings,
+                                    &exact,
+                                    &contains,
+                                    &regex,
+                                    &word,
+                                    case_insensitive,
+                                );
+                                !matches.is_empty()
+                            }
+                        }
+                        cli::SearchType::StringLiteral => {
+                            let strings: Vec<&str> = alt_report
+                                .strings
+                                .iter()
+                                .filter(|s| s.section.as_deref() == Some("ast"))
                                 .map(|s| s.value.as_str())
                                 .collect();
                             let exact = if method == cli::MatchMethod::Exact {

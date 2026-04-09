@@ -391,9 +391,9 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
     }
 }
 
-/// Minimum substr length to recommend `string_value` over `raw` for binary types.
+/// Minimum literal length to recommend `text` over `raw` for binary types.
 /// Shorter substrings are too common in binary data to reliably match via extracted strings.
-const RAW_TO_STRING_MIN_SUBSTR_LEN: usize = 6;
+const RAW_TO_TEXT_MIN_LITERAL_LEN: usize = 5;
 
 /// Returns true if a regex pattern contains no meaningful metacharacters —
 /// i.e., it could be expressed as a simple `substr` match.
@@ -419,42 +419,32 @@ fn regex_is_effectively_literal(pattern: &str) -> bool {
     true
 }
 
-/// Detect `type: raw` conditions on binary file types that would be faster as
-/// `type: string_value`.
-///
-/// For compiled binaries (ELF, PE, Mach-O, etc.), `raw` searches the entire file
-/// content as a byte stream, while `string_value` searches only pre-extracted
-/// strings — a much smaller corpus.
-///
-/// This flags:
-/// - `raw` with `regex:` where the pattern is effectively a literal string
-///   (no metacharacters besides escaped dots)
-/// - `raw` with `substr:` where the pattern is >= 6 characters
-///
-/// Skips traits that have positional constraints (offset, section, etc.) since
-/// those legitimately need `raw` to pin matches to specific file locations.
-/// Detect `type: string_value` conditions on source file types where the pattern
-/// is clearly code structure (function calls, import statements) that will never
-/// appear as an extracted string literal.
-///
-/// For source files, string_value only searches AST-extracted string literals —
-/// the content inside quotes. A pattern like `eval(` or `import os` matches code
-/// syntax, not string values, and should use `type: raw` instead.
-///
-/// High-certainty heuristics only:
-/// - `substr`/`exact` containing `identifier(` (function call syntax)
-/// - `substr`/`exact` starting with `import ` or `from X import`
-/// - `regex` patterns matching `require\(`, `exec\(`, `import\s`, etc.
-pub(crate) fn find_string_value_should_use_raw(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
+fn condition_has_position_constraints(condition: &Condition) -> bool {
+    match condition {
+        Condition::Raw {
+            section,
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+            ..
+        } => {
+            section.is_some()
+                || offset.is_some()
+                || offset_range.is_some()
+                || section_offset.is_some()
+                || section_offset_range.is_some()
+        }
+        _ => false,
+    }
+}
+
+fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)> {
     // Regex for function call pattern: identifier (with optional dots/parens) followed by (
-    // e.g. eval(, os.popen(, Runtime.getRuntime().exec, require('foo')
     static FUNC_CALL_RE: OnceLock<regex::Regex> = OnceLock::new();
     #[allow(clippy::expect_used)]
-    let func_call_re = FUNC_CALL_RE
-        .get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
+    let func_call_re =
+        FUNC_CALL_RE.get_or_init(|| regex::Regex::new(r"[a-zA-Z_][a-zA-Z0-9_.]*\(").expect("valid regex"));
 
     // Import statement pattern: starts with import/from...import
     static IMPORT_RE: OnceLock<regex::Regex> = OnceLock::new();
@@ -473,6 +463,136 @@ pub(crate) fn find_string_value_should_use_raw(
         .expect("valid regex")
     });
 
+    match condition {
+        Condition::StringValue {
+            substr: Some(s), ..
+        }
+        | Condition::StringLiteral {
+            substr: Some(s), ..
+        } => {
+            if func_call_re.is_match(s) || import_re.is_match(s) {
+                Some((s.as_str(), "substr"))
+            } else {
+                None
+            }
+        }
+        Condition::StringValue { exact: Some(s), .. }
+        | Condition::StringLiteral { exact: Some(s), .. } => {
+            if func_call_re.is_match(s) || import_re.is_match(s) {
+                Some((s.as_str(), "exact"))
+            } else {
+                None
+            }
+        }
+        Condition::StringValue { regex: Some(s), .. }
+        | Condition::StringLiteral { regex: Some(s), .. } => {
+            if regex_code_re.is_match(s) {
+                Some((s.as_str(), "regex"))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn targets_binary_only(file_types: &[FileType]) -> bool {
+    if file_types.is_empty() || file_types.iter().any(|ft| matches!(ft, FileType::All)) {
+        return false;
+    }
+    file_types.iter().all(|ft| is_binary_file_type(*ft))
+}
+
+fn targets_raw_text_only(file_types: &[FileType]) -> bool {
+    if file_types.is_empty() || file_types.iter().any(|ft| matches!(ft, FileType::All)) {
+        return false;
+    }
+    file_types.iter().all(FileType::uses_raw_text_search)
+}
+
+#[derive(Clone, Copy)]
+enum StringValueReplacement {
+    Text,
+    StringLiteral,
+    Ambiguous,
+}
+
+fn classify_string_value_replacement(trait_def: &TraitDefinition) -> StringValueReplacement {
+    if trait_def.r#for.is_empty()
+        || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All))
+    {
+        return StringValueReplacement::Ambiguous;
+    }
+
+    if trait_def.r#for.iter().all(|ft| is_ast_source_type(*ft))
+        && pattern_targets_code_structure(&trait_def.r#if).is_none()
+    {
+        return StringValueReplacement::StringLiteral;
+    }
+
+    StringValueReplacement::Text
+}
+
+/// Detect deprecated `type: string_value` usage during validation.
+///
+/// Runtime continues to honor `string_value` for backward compatibility, but
+/// `validate` should warn and guide authors toward `text` or `string_literal`.
+pub(crate) fn find_deprecated_string_value_usage(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    for trait_def in traits {
+        if !matches!(trait_def.r#if, Condition::StringValue { .. }) {
+            continue;
+        }
+
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let line_hint = find_line_number(&source_file, &trait_def.id);
+        let location = if let Some(line) = line_hint {
+            format!("{}:{}", source_file, line)
+        } else {
+            source_file
+        };
+
+        let guidance = match classify_string_value_replacement(trait_def) {
+            StringValueReplacement::Text => {
+                if let Some((pattern_value, pattern_kind)) =
+                    pattern_targets_code_structure(&trait_def.r#if)
+                {
+                    format!(
+                        "Use `type: text` instead because this {} '{}' matches code structure, not string literals",
+                        pattern_kind, pattern_value
+                    )
+                } else {
+                    "Use `type: text` instead".to_string()
+                }
+            }
+            StringValueReplacement::StringLiteral => {
+                "Use `type: string_literal` instead".to_string()
+            }
+            StringValueReplacement::Ambiguous => {
+                "Use `type: text` for general text search, or `type: string_literal` for AST string literals".to_string()
+            }
+        };
+
+        warnings.push(format!(
+            "Deprecated type: trait '{}' in {} uses `type: string_value` — this remains supported at runtime for compatibility, but `cleave validate` warns on it. {}",
+            trait_def.id, location, guidance
+        ));
+    }
+}
+
+/// Detect `type: string_value` conditions on AST-backed source file types where the
+/// pattern is clearly code structure and should use `type: text`.
+///
+pub(crate) fn find_string_value_should_use_text(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
     for trait_def in traits {
         // Only applies to traits targeting source/script file types
         let targets_source = trait_def.r#for.iter().any(|ft| is_ast_source_type(*ft));
@@ -482,25 +602,9 @@ pub(crate) fn find_string_value_should_use_raw(
         }
 
         let (pattern_value, pattern_kind) = match &trait_def.r#if {
-            Condition::StringValue {
-                substr: Some(s), ..
-            } => {
-                if func_call_re.is_match(s) || import_re.is_match(s) {
-                    (s.as_str(), "substr")
-                } else {
-                    continue;
-                }
-            }
-            Condition::StringValue { exact: Some(s), .. } => {
-                if func_call_re.is_match(s) || import_re.is_match(s) {
-                    (s.as_str(), "exact")
-                } else {
-                    continue;
-                }
-            }
-            Condition::StringValue { regex: Some(s), .. } => {
-                if regex_code_re.is_match(s) {
-                    (s.as_str(), "regex")
+            Condition::StringValue { .. } => {
+                if let Some(match_info) = pattern_targets_code_structure(&trait_def.r#if) {
+                    match_info
                 } else {
                     continue;
                 }
@@ -522,94 +626,136 @@ pub(crate) fn find_string_value_should_use_raw(
 
         warnings.push(format!(
             "Wrong type: trait '{}' in {} uses `type: string_value` with {} '{}' on source types — \
-             this pattern matches code structure, not string literals. Use `type: raw` instead",
+             this pattern matches code structure, not string literals. Use `type: text` instead",
             trait_def.id, location, pattern_kind, pattern_value
         ));
     }
 }
 
-/// Detect `type: raw` conditions on binary file types that would be faster as
-/// `type: string_value`.
-///
-/// For compiled binaries (ELF, PE, Mach-O, etc.), `raw` searches the entire file
-/// content as a byte stream, while `string_value` searches only pre-extracted
-/// strings — a much smaller corpus.
-///
-/// This flags:
-/// - `raw` with `regex:` where the pattern is effectively a literal string
-///   (no metacharacters besides escaped dots)
-/// - `raw` with `substr:` where the pattern is >= 6 characters
-///
-/// Skips traits that have positional constraints (offset, section, etc.) since
-/// those legitimately need `raw` to pin matches to specific file locations.
-pub(crate) fn find_raw_should_use_string_value(
+/// Detect `type: string_literal` conditions on AST-backed source file types where
+/// the pattern is clearly code structure and should use `type: text`.
+pub(crate) fn find_string_literal_should_use_text(
     traits: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
     for trait_def in traits {
-        // Only applies to binary file types
-        let targets_binary = if trait_def.r#for.is_empty()
-            || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All))
-        {
-            false // "all" types includes scripts — skip
-        } else {
-            trait_def.r#for.iter().all(|ft| is_binary_file_type(*ft))
-        };
-
-        if !targets_binary {
+        let targets_source = trait_def.r#for.iter().any(|ft| is_ast_source_type(*ft));
+        if !targets_source {
             continue;
         }
 
-        // Skip if condition has positional constraints (legitimate raw use)
-        let (has_position, substr, regex) = match &trait_def.r#if {
-            Condition::Raw {
-                substr,
-                regex,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-                ..
-            } => {
-                let pinned = offset.is_some()
-                    || offset_range.is_some()
-                    || section_offset.is_some()
-                    || section_offset_range.is_some()
-                    || section.is_some();
-                (pinned, substr.as_deref(), regex.as_deref())
+        let (pattern_value, pattern_kind) = match &trait_def.r#if {
+            Condition::StringLiteral { .. } => {
+                if let Some(match_info) = pattern_targets_code_structure(&trait_def.r#if) {
+                    match_info
+                } else {
+                    continue;
+                }
             }
             _ => continue,
         };
 
-        if has_position {
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let line_hint = find_line_number(&source_file, &trait_def.id);
+        let location = if let Some(line) = line_hint {
+            format!("{}:{}", source_file, line)
+        } else {
+            source_file
+        };
+
+        warnings.push(format!(
+            "Wrong type: trait '{}' in {} uses `type: string_literal` with {} '{}' on source types — \
+             this pattern matches code structure, not string literals. Use `type: text` instead",
+            trait_def.id, location, pattern_kind, pattern_value
+        ));
+    }
+}
+
+/// Detect `type: raw` conditions that should use `type: text`.
+///
+/// Binary-only traits are flagged when the raw search is really looking for string-like
+/// content, which `text` can satisfy much faster via extracted strings.
+///
+/// Source/text-only traits are flagged whenever `text` has the same semantics as
+/// `raw` for the given file types.
+pub(crate) fn find_raw_should_use_text(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    for trait_def in traits {
+        let (exact, substr, regex, word) = match &trait_def.r#if {
+            Condition::Raw {
+                exact,
+                substr,
+                regex,
+                word,
+                ..
+            } => (
+                exact.as_deref(),
+                substr.as_deref(),
+                regex.as_deref(),
+                word.as_deref(),
+            ),
+            _ => continue,
+        };
+
+        if condition_has_position_constraints(&trait_def.r#if) {
             continue;
         }
 
-        // Skip traits with density constraints (per_kb_min, count_min >= 2) —
-        // these rely on counting occurrences across the full binary, which
-        // string_value can't reproduce.
-        let has_density = trait_def.count_min.is_some_and(|c| c >= 2)
-            || trait_def.per_kb_min.is_some()
-            || trait_def.per_kb_max.is_some();
-        if has_density {
+        let targets_binary = targets_binary_only(&trait_def.r#for);
+        let targets_text_like = targets_raw_text_only(&trait_def.r#for);
+        if !targets_binary && !targets_text_like {
             continue;
         }
 
-        let suggestion = if let Some(pattern) = regex {
-            if regex_is_effectively_literal(pattern)
-                && pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN
-            {
-                Some((pattern, "regex (literal)"))
+        let suggestion = if targets_binary {
+            let has_density = trait_def.count_min.is_some_and(|c| c >= 2)
+                || trait_def.per_kb_min.is_some()
+                || trait_def.per_kb_max.is_some();
+            if has_density {
+                continue;
+            }
+
+            if let Some(pattern) = exact.or(substr).or(word) {
+                if pattern.len() >= RAW_TO_TEXT_MIN_LITERAL_LEN {
+                    let kind = if exact.is_some() {
+                        "exact"
+                    } else if substr.is_some() {
+                        "substr"
+                    } else {
+                        "word"
+                    };
+                    Some((pattern, kind))
+                } else {
+                    None
+                }
+            } else if let Some(pattern) = regex {
+                if regex_is_effectively_literal(pattern)
+                    && pattern.len() >= RAW_TO_TEXT_MIN_LITERAL_LEN
+                {
+                    Some((pattern, "regex (literal)"))
+                } else {
+                    None
+                }
             } else {
                 None
             }
-        } else if let Some(pattern) = substr {
-            if pattern.len() >= RAW_TO_STRING_MIN_SUBSTR_LEN {
-                Some((pattern, "substr"))
+        } else if let Some(pattern) = exact.or(substr).or(regex).or(word) {
+            let kind = if exact.is_some() {
+                "exact"
+            } else if substr.is_some() {
+                "substr"
+            } else if regex.is_some() {
+                "regex"
             } else {
-                None
-            }
+                "word"
+            };
+            Some((pattern, kind))
         } else {
             None
         };
@@ -628,10 +774,33 @@ pub(crate) fn find_raw_should_use_string_value(
             };
 
             warnings.push(format!(
-                "Performance: trait '{}' in {} uses `type: raw` with {} '{}' on binary-only types — \
-                 `type: string_value` searches only extracted strings and is much faster",
-                trait_def.id, location, kind, pattern
+                "{}: trait '{}' in {} uses `type: raw` with {} '{}' — use `type: text` instead",
+                if targets_binary {
+                    "Performance"
+                } else {
+                    "Wrong type"
+                },
+                trait_def.id,
+                location,
+                kind,
+                pattern
             ));
         }
     }
+}
+
+#[allow(dead_code)]
+pub(crate) fn find_raw_should_use_string_value(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    find_raw_should_use_text(traits, warnings);
+}
+
+#[allow(dead_code)]
+pub(crate) fn find_string_value_should_use_raw(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    find_string_value_should_use_text(traits, warnings);
 }

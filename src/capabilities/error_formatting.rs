@@ -109,6 +109,10 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
     // Detect condition type
     let condition_type = if context.contains("type: raw") {
         "raw"
+    } else if context.contains("type: string_literal") {
+        "string_literal"
+    } else if context.contains("type: text") {
+        "text"
     } else if context.contains("type: string_value") {
         "string_value"
     } else if context.contains("type: symbol") {
@@ -140,13 +144,35 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "per_kb_min",
             "per_kb_max",
         ],
-        "string_value" | "raw" => &[
+        "text" | "string_value" | "string_literal" => &[
             "type",
             "exact",
             "substr",
             "regex",
             "word",
             "case_insensitive",
+            "is",
+            "not",
+            "platforms",
+            "count_min",
+            "count_max",
+            "per_kb_min",
+            "per_kb_max",
+            "section",
+            "offset",
+            "offset_range",
+            "section_offset",
+            "section_offset_range",
+        ],
+        "raw" => &[
+            "type",
+            "exact",
+            "substr",
+            "regex",
+            "word",
+            "case_insensitive",
+            "is",
+            "not",
             "count_min",
             "count_max",
             "per_kb_min",
@@ -291,9 +317,13 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
     {
         let line = line.trim_start();
         if line.starts_with("type:") {
+            let invalid_string_type = line.starts_with("type: string")
+                && !line.starts_with("type: string_value")
+                && !line.starts_with("type: string_literal")
+                && !line.starts_with("type: string_count");
             // Check if this is an invalid type
             if line.contains("type: word")
-                || line.contains("type: text")
+                || invalid_string_type
                 || line.contains("type: function")
                 || line.contains("type: regex")
             {
@@ -412,6 +442,10 @@ fn provide_error_guidance(
             // Detect condition type from context
             let condition_type = if context.contains("type: raw") {
                 Some("raw")
+            } else if context.contains("type: string_literal") {
+                Some("string_literal")
+            } else if context.contains("type: text") {
+                Some("text")
             } else if context.contains("type: string_value") {
                 Some("string_value")
             } else if context.contains("type: symbol") {
@@ -483,7 +517,7 @@ fn provide_error_guidance(
             || context.contains("per_kb_max:"))
     {
         guidance.push_str("\n   Count/density fields are not valid for 'type: kv'.\n");
-        guidance.push_str("   💡 These fields only work with 'type: string_value', 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
+        guidance.push_str("   💡 These fields only work with 'type: text', 'type: string_literal', 'type: string_value' (deprecated), 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
         guidance.push_str("   💡 KV searches query structured data and return boolean results, not frequency counts.\n");
         found_hallucination = true;
     }
@@ -496,7 +530,13 @@ fn provide_error_guidance(
     {
         guidance.push_str("\n   Valid condition types:\n");
         guidance.push_str("   • symbol     - Match symbol names (functions, methods)\n");
-        guidance.push_str("   • string     - Match string literals in the binary\n");
+        guidance.push_str(
+            "   • text       - Match human-readable text (binary strings or raw text)\n",
+        );
+        guidance.push_str("   • string_literal - Match AST-backed string literals only\n");
+        guidance.push_str(
+            "   • string_value - Deprecated compatibility alias (prefer text or string_literal)\n",
+        );
         guidance.push_str("   • raw        - Match raw file content (across boundaries)\n");
         guidance.push_str("   • hex        - Match hex patterns with wildcards\n");
         guidance.push_str("   • encoded    - Match encoded content (base64, hex, etc.)\n");
@@ -512,16 +552,23 @@ fn provide_error_guidance(
         // Check for common mistakes in context
         if context.contains("type: word") {
             guidance
-                .push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: word'?\n");
-            guidance.push_str("      Use 'string' type with 'word' field for word matching.\n");
-        } else if context.contains("type: text") {
-            guidance
-                .push_str("\n   💡 Did you mean 'type: string_value' instead of 'type: text'?\n");
+                .push_str("\n   💡 Did you mean 'type: text' with a 'word:' field instead of 'type: word'?\n");
+        } else if context.contains("type: string_value") {
+            guidance.push_str(
+                "\n   💡 `type: string_value` is deprecated but still supported at runtime. Use 'type: text' for general text/code search, or 'type: string_literal' for AST-backed literal-only search.\n",
+            );
+        } else if context.contains("type: string")
+            && !context.contains("type: string_literal")
+            && !context.contains("type: string_value")
+        {
+            guidance.push_str(
+                "\n   💡 `type: string` was removed. Use 'type: text' for general text search, or 'type: string_literal' for AST-backed literal-only search.\n",
+            );
         } else if context.contains("type: function") {
             guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");
         } else if context.contains("type: regex") {
             guidance.push_str(
-                "\n   💡 Use 'type: string_value' with 'regex' field, not 'type: regex'\n",
+                "\n   💡 Use 'type: text' with a 'regex:' field, not 'type: regex'\n",
             );
         }
     }
@@ -530,7 +577,7 @@ fn provide_error_guidance(
     if error_msg.contains("missing field") && error_msg.contains("`type`") {
         guidance.push_str("\n   Missing 'type' field in condition.\n");
         guidance.push_str("\n   Either:\n");
-        guidance.push_str("   • Add 'type:' field (symbol, string, trait, etc.)\n");
+        guidance.push_str("   • Add 'type:' field (text, symbol, raw, trait, etc.)\n");
         guidance.push_str("   • Use shorthand format with just 'id:' for trait references\n");
     }
 

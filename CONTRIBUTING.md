@@ -61,8 +61,11 @@ If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](.
 3. **Test against a real sample:**
    ```bash
    cleave test-rules /path/to/sample --rules "your-trait-id"
-   cleave test-match /path/to/sample --type string --pattern "your-pattern"
+   cleave test-match /path/to/sample --type text --pattern "your-pattern"
    ```
+
+   Use `--type text` for most human-readable patterns. Use `--type string-literal`
+   only when you specifically want AST-backed string literals from source files.
 
 4. **Run the checks:**
    ```bash

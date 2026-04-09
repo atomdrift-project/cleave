@@ -53,30 +53,8 @@ enum MatchMode {
 
 /// Check if file type supports AST parsing.
 /// Positive list: only types with a tree-sitter parser are supported.
-fn supports_ast(file_type: FileType) -> bool {
-    matches!(
-        file_type,
-        FileType::C
-            | FileType::Python
-            | FileType::JavaScript
-            | FileType::TypeScript
-            | FileType::Rust
-            | FileType::Go
-            | FileType::Java
-            | FileType::Ruby
-            | FileType::Shell
-            | FileType::Php
-            | FileType::CSharp
-            | FileType::Lua
-            | FileType::Perl
-            | FileType::PowerShell
-            | FileType::Swift
-            | FileType::ObjectiveC
-            | FileType::Groovy
-            | FileType::Scala
-            | FileType::Zig
-            | FileType::Elixir
-    )
+pub(crate) fn supports_ast(file_type: FileType) -> bool {
+    file_type.supports_ast_queries()
 }
 
 /// Evaluate unified AST condition

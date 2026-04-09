@@ -281,6 +281,78 @@ enum ConditionTagged {
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
     },
+    Text {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        word: Option<String>,
+        #[serde(default)]
+        case_insensitive: bool,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
+        #[serde(default)]
+        section: Option<String>,
+        #[serde(default)]
+        offset: Option<i64>,
+        #[serde(
+            default,
+            deserialize_with = "offset_range_serde::deserialize",
+            serialize_with = "offset_range_serde::serialize"
+        )]
+        offset_range: Option<(i64, Option<i64>)>,
+        #[serde(default)]
+        section_offset: Option<i64>,
+        #[serde(
+            default,
+            deserialize_with = "offset_range_serde::deserialize",
+            serialize_with = "offset_range_serde::serialize"
+        )]
+        section_offset_range: Option<(i64, Option<i64>)>,
+    },
+    StringLiteral {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        word: Option<String>,
+        #[serde(default)]
+        case_insensitive: bool,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
+        #[serde(default)]
+        section: Option<String>,
+        #[serde(default)]
+        offset: Option<i64>,
+        #[serde(
+            default,
+            deserialize_with = "offset_range_serde::deserialize",
+            serialize_with = "offset_range_serde::serialize"
+        )]
+        offset_range: Option<(i64, Option<i64>)>,
+        #[serde(default)]
+        section_offset: Option<i64>,
+        #[serde(
+            default,
+            deserialize_with = "offset_range_serde::deserialize",
+            serialize_with = "offset_range_serde::serialize"
+        )]
+        section_offset_range: Option<(i64, Option<i64>)>,
+    },
     Structure {
         feature: String,
         #[serde(default)]
@@ -660,6 +732,66 @@ impl From<ConditionDeser> for Condition {
                     section_offset_range,
                     compiled_regex: None,
                 },
+                ConditionTagged::Text {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                } => Condition::Text {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                    compiled_regex: None,
+                },
+                ConditionTagged::StringLiteral {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                } => Condition::StringLiteral {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                    compiled_regex: None,
+                },
                 ConditionTagged::Structure {
                     feature,
                     min_sections,
@@ -918,6 +1050,66 @@ impl From<Condition> for ConditionTagged {
                 section_offset_range,
                 compiled_regex: _,
             } => ConditionTagged::StringValue {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+            },
+            Condition::Text {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                compiled_regex: _,
+            } => ConditionTagged::Text {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+            },
+            Condition::StringLiteral {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                compiled_regex: _,
+            } => ConditionTagged::StringLiteral {
                 exact,
                 substr,
                 regex,
@@ -1213,6 +1405,116 @@ pub(crate) enum Condition {
         #[serde(skip_serializing_if = "Option::is_none")]
         platforms: Option<Vec<Platform>>,
         /// Section constraint: only match strings in this section (supports fuzzy names like "text")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        /// Absolute file offset: only match at this exact byte position (negative = from end)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
+        /// Absolute offset range: [start, end) (negative values resolved from file end)
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "offset_range_serde::deserialize"
+        )]
+        offset_range: Option<(i64, Option<i64>)>,
+        /// Section-relative offset: only match at this offset within the section
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section_offset: Option<i64>,
+        /// Section-relative offset range: [start, end) within section bounds
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "offset_range_serde::deserialize"
+        )]
+        section_offset_range: Option<(i64, Option<i64>)>,
+        /// Pre-compiled regex (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_regex: Option<regex::Regex>,
+    },
+
+    /// Match human-readable text.
+    ///
+    /// On binary-like formats this searches extracted strings for speed. On
+    /// source and structured text formats it searches raw file text.
+    Text {
+        /// Full text match (entire string or content slice must equal this)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exact: Option<String>,
+        /// Substring match (appears anywhere in text)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        substr: Option<String>,
+        /// Regex pattern match
+        #[serde(skip_serializing_if = "Option::is_none")]
+        regex: Option<String>,
+        /// Match pattern only at word boundaries (convenience for \bpattern\b)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        word: Option<String>,
+        /// If true, matching is case-insensitive
+        #[serde(default)]
+        case_insensitive: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
+        /// Platform filter - only evaluate this condition for these platforms
+        #[serde(skip_serializing_if = "Option::is_none")]
+        platforms: Option<Vec<Platform>>,
+        /// Section constraint: only match text in this section (supports fuzzy names like "text")
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section: Option<String>,
+        /// Absolute file offset: only match at this exact byte position (negative = from end)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        offset: Option<i64>,
+        /// Absolute offset range: [start, end) (negative values resolved from file end)
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "offset_range_serde::deserialize"
+        )]
+        offset_range: Option<(i64, Option<i64>)>,
+        /// Section-relative offset: only match at this offset within the section
+        #[serde(skip_serializing_if = "Option::is_none")]
+        section_offset: Option<i64>,
+        /// Section-relative offset range: [start, end) within section bounds
+        #[serde(
+            skip_serializing_if = "Option::is_none",
+            deserialize_with = "offset_range_serde::deserialize"
+        )]
+        section_offset_range: Option<(i64, Option<i64>)>,
+        /// Pre-compiled regex (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_regex: Option<regex::Regex>,
+    },
+
+    /// Match only AST-backed source-language string literals.
+    ///
+    /// This does not fall back to raw text and only works on file types with
+    /// tree-sitter support.
+    StringLiteral {
+        /// Full literal match (entire string literal must equal this)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exact: Option<String>,
+        /// Substring match (appears anywhere in the literal)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        substr: Option<String>,
+        /// Regex pattern match
+        #[serde(skip_serializing_if = "Option::is_none")]
+        regex: Option<String>,
+        /// Match pattern only at word boundaries (convenience for \bpattern\b)
+        #[serde(skip_serializing_if = "Option::is_none")]
+        word: Option<String>,
+        /// If true, matching is case-insensitive
+        #[serde(default)]
+        case_insensitive: bool,
+        /// Optional high-fidelity validation check
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        /// Exclude individual matches where evidence matches any of these patterns
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
+        /// Platform filter - only evaluate this condition for these platforms
+        #[serde(skip_serializing_if = "Option::is_none")]
+        platforms: Option<Vec<Platform>>,
+        /// Section constraint: only match literals in this section (supports fuzzy names like "text")
         #[serde(skip_serializing_if = "Option::is_none")]
         section: Option<String>,
         /// Absolute file offset: only match at this exact byte position (negative = from end)
@@ -1702,7 +2004,10 @@ impl Condition {
             | Condition::Structure { .. } => is_binary,
 
             // AST requires source code
-            Condition::Ast { .. } => file_type.is_source_code(),
+            Condition::Ast { .. } => file_type.supports_ast_queries(),
+
+            // String-literal search is AST-only
+            Condition::StringLiteral { .. } => file_type.supports_ast_queries(),
 
             // All other conditions can potentially match any file type
             _ => true,
@@ -1715,6 +2020,8 @@ impl Condition {
         match self {
             Condition::Symbol { .. } => "symbol",
             Condition::StringValue { .. } => "string_value",
+            Condition::Text { .. } => "text",
+            Condition::StringLiteral { .. } => "string_literal",
             Condition::Structure { .. } => "structure",
             Condition::ExportsCount { .. } => "exports_count",
             Condition::Trait { .. } => "trait",
@@ -1845,6 +2152,36 @@ impl Condition {
                 *section_offset_range,
                 "string_value",
             ),
+            Condition::Text {
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                ..
+            } => validate_location_constraints(
+                section,
+                *offset,
+                *offset_range,
+                *section_offset,
+                *section_offset_range,
+                "text",
+            ),
+            Condition::StringLiteral {
+                section,
+                offset,
+                offset_range,
+                section_offset,
+                section_offset_range,
+                ..
+            } => validate_location_constraints(
+                section,
+                *offset,
+                *offset_range,
+                *section_offset,
+                *section_offset_range,
+                "string_literal",
+            ),
             Condition::Raw {
                 section,
                 offset,
@@ -1917,6 +2254,8 @@ impl Condition {
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
             Condition::StringValue { regex: Some(r), .. }
+            | Condition::Text { regex: Some(r), .. }
+            | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. }
             | Condition::Ast { regex: Some(r), .. }
@@ -1942,6 +2281,8 @@ impl Condition {
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
             Condition::StringValue { regex: Some(r), .. }
+            | Condition::Text { regex: Some(r), .. }
+            | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
         };
@@ -2017,6 +2358,16 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
+            | Condition::Text {
+                exact: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
+                exact: Some(s),
+                case_insensitive: true,
+                ..
+            }
             | Condition::Raw {
                 exact: Some(s),
                 case_insensitive: true,
@@ -2032,6 +2383,16 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
+            | Condition::Text {
+                substr: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
+                substr: Some(s),
+                case_insensitive: true,
+                ..
+            }
             | Condition::Raw {
                 substr: Some(s),
                 case_insensitive: true,
@@ -2043,6 +2404,16 @@ impl Condition {
                 ..
             }
             | Condition::StringValue {
+                word: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::Text {
+                word: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2088,9 +2459,17 @@ impl Condition {
 
         match self {
             Condition::StringValue { exact: Some(s), .. }
+            | Condition::Text { exact: Some(s), .. }
+            | Condition::StringLiteral { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
             Condition::StringValue {
+                substr: Some(s), ..
+            }
+            | Condition::Text {
+                substr: Some(s), ..
+            }
+            | Condition::StringLiteral {
                 substr: Some(s), ..
             }
             | Condition::Raw {
@@ -2100,11 +2479,14 @@ impl Condition {
                 substr: Some(s), ..
             } => check_empty(s, "substr"),
             Condition::StringValue { regex: Some(s), .. }
+            | Condition::Text { regex: Some(s), .. }
+            | Condition::StringLiteral { regex: Some(s), .. }
             | Condition::Raw { regex: Some(s), .. }
             | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
-            Condition::StringValue { word: Some(s), .. } | Condition::Raw { word: Some(s), .. } => {
-                check_empty(s, "word")
-            }
+            Condition::StringValue { word: Some(s), .. }
+            | Condition::Text { word: Some(s), .. }
+            | Condition::StringLiteral { word: Some(s), .. }
+            | Condition::Raw { word: Some(s), .. } => check_empty(s, "word"),
             _ => None,
         }
     }
@@ -2130,6 +2512,16 @@ impl Condition {
                 case_insensitive: false,
                 ..
             }
+            | Condition::Text {
+                exact: Some(s),
+                case_insensitive: false,
+                ..
+            }
+            | Condition::StringLiteral {
+                exact: Some(s),
+                case_insensitive: false,
+                ..
+            }
             | Condition::Symbol { exact: Some(s), .. } => {
                 if s.len() == 1 {
                     return Some(format!(
@@ -2145,11 +2537,31 @@ impl Condition {
                 case_insensitive: false,
                 ..
             }
+            | Condition::Text {
+                substr: Some(s),
+                case_insensitive: false,
+                ..
+            }
+            | Condition::StringLiteral {
+                substr: Some(s),
+                case_insensitive: false,
+                ..
+            }
             | Condition::Symbol {
                 substr: Some(s), ..
             } => check_short(s, "substr", 3),
             // For word, warn if less than 2 characters
             Condition::StringValue {
+                word: Some(s),
+                case_insensitive: false,
+                ..
+            }
+            | Condition::Text {
+                word: Some(s),
+                case_insensitive: false,
+                ..
+            }
+            | Condition::StringLiteral {
                 word: Some(s),
                 case_insensitive: false,
                 ..
@@ -2186,6 +2598,8 @@ impl Condition {
 
         match self {
             Condition::StringValue { regex: Some(r), .. }
+            | Condition::Text { regex: Some(r), .. }
+            | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. } => {
                 if is_literal(r) {
@@ -2219,13 +2633,43 @@ impl Condition {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
+            }
+            | Condition::Text {
+                exact: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
+                exact: Some(s),
+                case_insensitive: true,
+                ..
             } => check_pattern(s, "exact"),
             Condition::StringValue {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
+            }
+            | Condition::Text {
+                substr: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
+                substr: Some(s),
+                case_insensitive: true,
+                ..
             } => check_pattern(s, "substr"),
             Condition::StringValue {
+                word: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::Text {
+                word: Some(s),
+                case_insensitive: true,
+                ..
+            }
+            | Condition::StringLiteral {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2338,6 +2782,20 @@ impl Condition {
 
         match self {
             Condition::StringValue {
+                exact,
+                substr,
+                regex,
+                word,
+                ..
+            }
+            | Condition::Text {
+                exact,
+                substr,
+                regex,
+                word,
+                ..
+            }
+            | Condition::StringLiteral {
                 exact,
                 substr,
                 regex,
@@ -2460,6 +2918,130 @@ impl Condition {
                         .map_err(|e| {
                             anyhow::anyhow!(
                                 "Failed to compile string regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
+                    });
+                }
+            }
+            Condition::Text {
+                regex,
+                word,
+                case_insensitive,
+                compiled_regex,
+                ..
+            } => {
+                if let Some(word_pattern) = word {
+                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
+                    *compiled_regex = Some(if *case_insensitive {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged("text.word", word_pattern, &compile_pattern, true)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile case-insensitive text word pattern '{}': {}",
+                                    word_pattern,
+                                    e
+                                )
+                            })?
+                    } else {
+                        compile_regex_logged("text.word", word_pattern, &regex_pattern, false)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile text word pattern '{}': {}",
+                                    word_pattern,
+                                    e
+                                )
+                            })?
+                    });
+                } else if let Some(regex_pattern) = regex {
+                    *compiled_regex = Some(if *case_insensitive {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged("text.regex", regex_pattern, &compile_pattern, true)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile case-insensitive text regex '{}': {}",
+                                    regex_pattern,
+                                    e
+                                )
+                            })?
+                    } else {
+                        compile_regex_logged("text.regex", regex_pattern, regex_pattern, false)
+                            .map_err(|e| {
+                                anyhow::anyhow!(
+                                    "Failed to compile text regex '{}': {}",
+                                    regex_pattern,
+                                    e
+                                )
+                            })?
+                    });
+                }
+            }
+            Condition::StringLiteral {
+                regex,
+                word,
+                case_insensitive,
+                compiled_regex,
+                ..
+            } => {
+                if let Some(word_pattern) = word {
+                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
+                    *compiled_regex = Some(if *case_insensitive {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged(
+                            "string_literal.word",
+                            word_pattern,
+                            &compile_pattern,
+                            true,
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile case-insensitive string_literal word pattern '{}': {}",
+                                word_pattern,
+                                e
+                            )
+                        })?
+                    } else {
+                        compile_regex_logged(
+                            "string_literal.word",
+                            word_pattern,
+                            &regex_pattern,
+                            false,
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile string_literal word pattern '{}': {}",
+                                word_pattern,
+                                e
+                            )
+                        })?
+                    });
+                } else if let Some(regex_pattern) = regex {
+                    *compiled_regex = Some(if *case_insensitive {
+                        let compile_pattern = format!("(?i){}", regex_pattern);
+                        compile_regex_logged(
+                            "string_literal.regex",
+                            regex_pattern,
+                            &compile_pattern,
+                            true,
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile case-insensitive string_literal regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
+                    } else {
+                        compile_regex_logged(
+                            "string_literal.regex",
+                            regex_pattern,
+                            regex_pattern,
+                            false,
+                        )
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile string_literal regex '{}': {}",
                                 regex_pattern,
                                 e
                             )

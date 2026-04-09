@@ -349,8 +349,8 @@ pub enum Command {
         #[arg(required = true)]
         target: String,
 
-        /// Type of search to perform (string-value, symbol, raw, kv, hex, encoded, metrics)
-        #[arg(short, long, value_enum, default_value = "string-value")]
+        /// Type of search to perform (text, string-literal, string-value [deprecated], symbol, raw, kv, hex, encoded, section, metrics)
+        #[arg(short, long, value_enum, default_value = "text")]
         r#type: SearchType,
 
         /// Match method: exact, contains, regex, or word
@@ -559,8 +559,12 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 /// Type of content to search in
 #[derive(Debug, Clone, Copy, clap::ValueEnum, PartialEq)]
 pub enum SearchType {
-    /// Search in extracted string values
+    /// Search using deprecated string_value semantics
     StringValue,
+    /// Search human-readable text (strings for binaries, raw text for source/text files)
+    Text,
+    /// Search AST-backed string literals only
+    StringLiteral,
     /// Search in symbols (imports/exports)
     Symbol,
     /// Search in raw file content

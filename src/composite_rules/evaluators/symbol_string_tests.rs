@@ -606,6 +606,82 @@ fn test_eval_string_not_exception() {
 }
 
 #[test]
+fn test_eval_text_uses_raw_search_for_source_files() {
+    let report = create_test_report();
+    let data = b"#!/bin/sh\n# password marker in comment\n".to_vec();
+    let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Shell);
+    let pattern = "password marker".to_string();
+    let params = StringParams {
+        exact: None,
+        substr: Some(&pattern),
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+
+    let result = eval_text(&params, None, &ctx, None);
+
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].method, "raw");
+}
+
+#[test]
+fn test_eval_string_literal_matches_only_ast_strings() {
+    let mut report = create_test_report();
+    report.strings.push(StringInfo {
+        value: "not_a_literal".to_string(),
+        offset: Some(0x100),
+        encoding: "utf8".to_string(),
+        string_type: None,
+        section: None,
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    report.strings.push(StringInfo {
+        value: "literal_value".to_string(),
+        offset: Some(0x200),
+        encoding: "utf8".to_string(),
+        string_type: None,
+        section: Some("ast".to_string()),
+        encoding_chain: Vec::new(),
+        fragments: None,
+    });
+    let data = vec![];
+    let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Python);
+    let pattern = "literal_value".to_string();
+    let params = StringParams {
+        exact: Some(&pattern),
+        substr: None,
+        regex: None,
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        compiled_regex: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        arch_clamp: None,
+    };
+
+    let result = eval_string_literal(&params, None, &ctx);
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, 1);
+    assert_eq!(result.evidence[0].value, "literal_value");
+    assert_eq!(result.evidence[0].source, "ast");
+}
+
+#[test]
 fn test_eval_string_in_imports() {
     let mut report = create_test_report();
     report.imports.push(Import {

@@ -2197,7 +2197,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
     }
 }
 
-/// Find traits where both `type: string` and `type: raw` exist for the same pattern
+/// Find traits where both `type: string_value` and `type: raw` exist for the same pattern
 /// at the same criticality. These should be merged to just `raw` (which is broader).
 /// Returns: Vec<(string_trait_id, raw_trait_id, pattern_description)>
 #[must_use]

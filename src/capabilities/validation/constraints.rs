@@ -607,7 +607,7 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
 /// For hex patterns, `??` full wildcards and `[N]` gaps don't count toward length,
 /// but nibble wildcards like `4?` or `?F` do (they still constrain one nibble).
 ///
-/// `type: string` patterns are excluded — string extraction already provides
+/// `type: string_value` patterns are excluded — string extraction already provides
 /// boundary context that reduces noise.
 ///
 /// Returns: `Vec<(trait_id, pattern_value, pattern_type)>`

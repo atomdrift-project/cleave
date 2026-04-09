@@ -240,6 +240,118 @@ fn symbol_matches_condition(
     false
 }
 
+#[inline]
+fn has_string_location_constraint(params: &StringParams<'_>) -> bool {
+    params.section.is_some()
+        || params.offset.is_some()
+        || params.offset_range.is_some()
+        || params.section_offset.is_some()
+        || params.section_offset_range.is_some()
+        || params.arch_clamp.is_some()
+}
+
+fn resolve_string_effective_range<'a>(
+    params: &StringParams<'a>,
+    ctx: &EvaluationContext<'_>,
+) -> Option<(u64, u64)> {
+    if has_string_location_constraint(params) {
+        let location = ContentLocationParams {
+            section: params.section.cloned(),
+            offset: params.offset,
+            offset_range: params.offset_range,
+            section_offset: params.section_offset,
+            section_offset_range: params.section_offset_range,
+            arch_clamp: params.arch_clamp,
+        };
+        let (start, end) = resolve_effective_range(&location, ctx);
+        Some((start as u64, end as u64))
+    } else {
+        None
+    }
+}
+
+fn string_match_precision(params: &StringParams<'_>) -> f32 {
+    let mut precision = 0.0f32;
+
+    if params.exact.is_some() {
+        precision += 2.0;
+    } else if params.regex.is_some() || params.word.is_some() {
+        precision += 1.5;
+    } else if params.substr.is_some() {
+        precision += 1.0;
+    }
+
+    if params.section.is_some() {
+        precision += 1.0;
+    }
+    if params.offset.is_some() {
+        precision += 1.5;
+    } else if params.offset_range.is_some()
+        || params.section_offset.is_some()
+        || params.section_offset_range.is_some()
+    {
+        precision += 1.0;
+    }
+
+    if params.case_insensitive {
+        precision *= 0.5;
+    }
+
+    precision
+}
+
+fn match_value_against_params(
+    value: &str,
+    params: &StringParams<'_>,
+    substr_lower: Option<&String>,
+) -> Option<String> {
+    if let Some(exact_str) = params.exact {
+        let matched = if params.case_insensitive {
+            value.eq_ignore_ascii_case(exact_str)
+        } else {
+            value == exact_str
+        };
+        return matched.then(|| exact_str.clone());
+    }
+
+    if let Some(contains_str) = params.substr {
+        let matched = if params.case_insensitive {
+            if let Some(pattern_lower) = substr_lower {
+                value.to_lowercase().contains(pattern_lower.as_str())
+            } else {
+                value.to_lowercase().contains(&contains_str.to_lowercase())
+            }
+        } else {
+            value.contains(contains_str)
+        };
+        return matched.then(|| value.to_string());
+    }
+
+    if let Some(re) = params.compiled_regex {
+        return re.find(value).map(|mat| mat.as_str().to_string());
+    }
+
+    if let Some(regex_pattern) = params.regex {
+        if let Ok(re) = super::build_regex(regex_pattern, params.case_insensitive) {
+            return re.find(value).map(|mat| mat.as_str().to_string());
+        }
+    }
+
+    None
+}
+
+fn cached_text_evidence(cached: &[Evidence]) -> Vec<Evidence> {
+    cached
+        .iter()
+        .filter(|ev| ev.source == "string_extractor")
+        .map(|ev| {
+            let mut ev = ev.clone();
+            ev.method = "text".to_string();
+            ev
+        })
+        .collect()
+}
+
 /// Evaluate string condition - searches in properly extracted/bounded strings,
 /// as well as imports and exports if they match the string criteria.
 ///
@@ -583,6 +695,235 @@ pub(crate) fn eval_string<'a, 'b>(
         match_count,
         warnings: Vec::new(),
         precision,
+        matched_trait_ids: Vec::new(),
+    }
+}
+
+/// Evaluate text condition.
+///
+/// On source and structured text formats this delegates to raw-content search.
+/// On binary-like formats it searches extracted strings only.
+#[must_use]
+pub(crate) fn eval_text<'a, 'b>(
+    params: &StringParams<'a>,
+    trait_not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'b>,
+    trait_id: Option<&str>,
+) -> ConditionResult {
+    if ctx.file_type.uses_raw_text_search() {
+        let location = ContentLocationParams {
+            section: params.section.cloned(),
+            offset: params.offset,
+            offset_range: params.offset_range,
+            section_offset: params.section_offset,
+            section_offset_range: params.section_offset_range,
+            arch_clamp: params.arch_clamp,
+        };
+        return eval_raw(
+            params.exact,
+            params.substr,
+            params.regex,
+            params.word,
+            params.case_insensitive,
+            params.is_check,
+            params.compiled_regex,
+            trait_not,
+            &location,
+            ctx,
+            trait_id,
+        );
+    }
+
+    let effective_range = resolve_string_effective_range(params, ctx);
+    let has_location_constraint = has_string_location_constraint(params);
+
+    if !has_location_constraint && trait_not.is_none() && params.is_check.is_none() {
+        if let Some(trait_idx) = ctx.current_trait_idx {
+            if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
+                let evidence = cached_text_evidence(cached);
+                if !evidence.is_empty() {
+                    return ConditionResult {
+                        matched: true,
+                        match_count: evidence.len(),
+                        evidence,
+                        warnings: Vec::new(),
+                        precision: string_match_precision(params),
+                        matched_trait_ids: Vec::new(),
+                    };
+                }
+            }
+        }
+    }
+
+    if let Some(exact_str) = params.exact {
+        if effective_range.is_none() {
+            let mut evidence = Vec::new();
+
+            if params.case_insensitive {
+                if let Some(match_list) = ctx
+                    .get_string_exact_index_ci()
+                    .get(&exact_str.to_lowercase())
+                {
+                    for (i, (original_value, source, offset)) in match_list.iter().enumerate() {
+                        if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
+                            continue;
+                        }
+                        let excluded_by_not = trait_not
+                            .map(|exceptions| {
+                                exceptions.iter().any(|exc| exc.matches(original_value))
+                            })
+                            .unwrap_or(false);
+                        let excluded_by_is = !validate_match(original_value, params.is_check);
+
+                        if !excluded_by_not && !excluded_by_is {
+                            evidence.push(Evidence {
+                                method: "text".to_string(),
+                                source: source.to_string(),
+                                value: original_value.to_string(),
+                                location: offset.map(|o| format!("{:#x}", o)),
+                                ..Default::default()
+                            });
+                        }
+                    }
+                }
+            } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
+                for (i, (source, offset)) in match_list.iter().enumerate() {
+                    if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
+                        continue;
+                    }
+                    let excluded_by_not = trait_not
+                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
+                        .unwrap_or(false);
+                    let excluded_by_is = !validate_match(exact_str, params.is_check);
+
+                    if !excluded_by_not && !excluded_by_is {
+                        evidence.push(Evidence {
+                            method: "text".to_string(),
+                            source: source.to_string(),
+                            value: exact_str.to_string(),
+                            location: offset.map(|o| format!("{:#x}", o)),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+
+            return ConditionResult {
+                matched: !evidence.is_empty(),
+                match_count: evidence.len(),
+                evidence,
+                warnings: Vec::new(),
+                precision: string_match_precision(params),
+                matched_trait_ids: Vec::new(),
+            };
+        }
+    }
+
+    let substr_lower = if params.case_insensitive {
+        params.substr.map(|s| s.to_lowercase())
+    } else {
+        None
+    };
+
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+
+    for string_info in &ctx.report.strings {
+        if !offset_in_range(string_info.offset, effective_range) {
+            continue;
+        }
+
+        if let Some(match_value) =
+            match_value_against_params(&string_info.value, params, substr_lower.as_ref())
+        {
+            let excluded_by_not = trait_not
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
+                .unwrap_or(false);
+            let excluded_by_is = !validate_match(&match_value, params.is_check);
+
+            if !excluded_by_not && !excluded_by_is {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "text".to_string(),
+                        source: "string_extractor".to_string(),
+                        value: match_value,
+                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: string_match_precision(params),
+        matched_trait_ids: Vec::new(),
+    }
+}
+
+/// Evaluate string-literal condition using AST-derived string entries only.
+#[must_use]
+pub(crate) fn eval_string_literal<'a, 'b>(
+    params: &StringParams<'a>,
+    trait_not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'b>,
+) -> ConditionResult {
+    if !ctx.file_type.supports_ast_queries() {
+        return ConditionResult::no_match();
+    }
+
+    let effective_range = resolve_string_effective_range(params, ctx);
+    let substr_lower = if params.case_insensitive {
+        params.substr.map(|s| s.to_lowercase())
+    } else {
+        None
+    };
+
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+
+    for string_info in &ctx.report.strings {
+        if string_info.section.as_deref() != Some("ast") {
+            continue;
+        }
+        if !offset_in_range(string_info.offset, effective_range) {
+            continue;
+        }
+
+        if let Some(match_value) =
+            match_value_against_params(&string_info.value, params, substr_lower.as_ref())
+        {
+            let excluded_by_not = trait_not
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
+                .unwrap_or(false);
+            let excluded_by_is = !validate_match(&match_value, params.is_check);
+
+            if !excluded_by_not && !excluded_by_is {
+                match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "string_literal".to_string(),
+                        source: "ast".to_string(),
+                        value: match_value,
+                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: string_match_precision(params),
         matched_trait_ids: Vec::new(),
     }
 }

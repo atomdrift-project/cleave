@@ -4232,7 +4232,7 @@ mod raw_should_use_string_value_tests {
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("MobileDeviceUpdater"));
-        assert!(warnings[0].contains("string_value"));
+        assert!(warnings[0].contains("type: text"));
     }
 
     #[test]
@@ -4269,12 +4269,13 @@ mod raw_should_use_string_value_tests {
     }
 
     #[test]
-    fn skips_non_binary_types() {
+    fn flags_source_types() {
         let mut t = binary_trait("t/script", raw_substr("long_pattern_here"));
         t.r#for = vec![FileType::Shell];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
     }
 
     #[test]
@@ -4396,6 +4397,16 @@ mod raw_should_use_string_value_tests {
         find_raw_should_use_string_value(&traits, &mut warnings);
         assert!(warnings.is_empty());
     }
+
+    #[test]
+    fn flags_raw_on_source_type() {
+        let mut t = binary_trait("t/source-raw", raw_substr("document.cookie"));
+        t.r#for = vec![FileType::JavaScript];
+        let mut warnings = Vec::new();
+        find_raw_should_use_string_value(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
+    }
 }
 
 #[cfg(test)]
@@ -4496,7 +4507,7 @@ mod string_value_should_use_raw_tests {
         let mut warnings = Vec::new();
         find_string_value_should_use_raw(&[t], &mut warnings);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: raw"));
+        assert!(warnings[0].contains("type: text"));
     }
 
     #[test]
@@ -4604,5 +4615,192 @@ mod string_value_should_use_raw_tests {
         let mut warnings = Vec::new();
         find_string_value_should_use_raw(&[t], &mut warnings);
         assert_eq!(warnings.len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod deprecated_string_value_usage_tests {
+    use crate::capabilities::validation::patterns::find_deprecated_string_value_usage;
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use std::path::PathBuf;
+
+    fn trait_with_types(id: &str, condition: Condition, file_types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 0.8,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: condition,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: file_types,
+            for_from_groups: false,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    fn string_value_substr(pattern: &str) -> Condition {
+        Condition::StringValue {
+            exact: None,
+            substr: Some(pattern.to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+        }
+    }
+
+    #[test]
+    fn ast_literal_prefers_string_literal() {
+        let t = trait_with_types(
+            "t::password",
+            string_value_substr("password"),
+            vec![FileType::Python],
+        );
+        let mut warnings = Vec::new();
+        find_deprecated_string_value_usage(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("supported at runtime"));
+        assert!(warnings[0].contains("type: string_literal"));
+    }
+
+    #[test]
+    fn ast_code_structure_prefers_text() {
+        let t = trait_with_types(
+            "t::eval",
+            string_value_substr("eval("),
+            vec![FileType::Python],
+        );
+        let mut warnings = Vec::new();
+        find_deprecated_string_value_usage(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
+        assert!(warnings[0].contains("code structure"));
+    }
+
+    #[test]
+    fn mixed_types_prefers_text() {
+        let t = trait_with_types(
+            "t::mixed",
+            string_value_substr("password"),
+            vec![FileType::Python, FileType::Elf],
+        );
+        let mut warnings = Vec::new();
+        find_deprecated_string_value_usage(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
+    }
+
+    #[test]
+    fn binary_only_prefers_text() {
+        let t = trait_with_types(
+            "t::binary",
+            string_value_substr("kernel32.dll"),
+            vec![FileType::Pe],
+        );
+        let mut warnings = Vec::new();
+        find_deprecated_string_value_usage(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
+    }
+
+    #[test]
+    fn unscoped_rule_gets_ambiguous_guidance() {
+        let t = trait_with_types(
+            "t::all",
+            string_value_substr("password"),
+            vec![FileType::All],
+        );
+        let mut warnings = Vec::new();
+        find_deprecated_string_value_usage(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
+        assert!(warnings[0].contains("type: string_literal"));
+    }
+}
+
+#[cfg(test)]
+mod string_literal_should_use_text_tests {
+    use crate::capabilities::validation::patterns::find_string_literal_should_use_text;
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use std::path::PathBuf;
+
+    fn source_trait(id: &str, condition: Condition, file_type: FileType) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 0.8,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: condition,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![file_type],
+            for_from_groups: false,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn flags_code_structure_pattern() {
+        let t = source_trait(
+            "t::literal-eval",
+            Condition::StringLiteral {
+                exact: None,
+                substr: Some("eval(".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+            },
+            FileType::Python,
+        );
+        let mut warnings = Vec::new();
+        find_string_literal_should_use_text(&[t], &mut warnings);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
     }
 }

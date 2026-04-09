@@ -110,8 +110,9 @@ pub(crate) use composite::{
 
 // Pattern quality checks
 pub(crate) use patterns::{
-    find_non_capturing_groups, find_raw_should_use_string_value, find_short_pattern_warnings,
-    find_slow_regex_patterns, find_string_value_should_use_raw,
+    find_deprecated_string_value_usage, find_non_capturing_groups,
+    find_raw_should_use_text, find_short_pattern_warnings, find_slow_regex_patterns,
+    find_string_literal_should_use_text,
 };
 
 // Taxonomy validation

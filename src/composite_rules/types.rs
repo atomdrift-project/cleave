@@ -343,6 +343,55 @@ impl FileType {
         )
     }
 
+    /// Returns true if this file type supports tree-sitter-backed AST queries.
+    #[must_use]
+    pub(crate) fn supports_ast_queries(&self) -> bool {
+        matches!(
+            self,
+            FileType::C
+                | FileType::Python
+                | FileType::JavaScript
+                | FileType::TypeScript
+                | FileType::Rust
+                | FileType::Go
+                | FileType::Java
+                | FileType::Ruby
+                | FileType::Shell
+                | FileType::Php
+                | FileType::CSharp
+                | FileType::Lua
+                | FileType::Perl
+                | FileType::PowerShell
+                | FileType::Swift
+                | FileType::ObjectiveC
+                | FileType::Groovy
+                | FileType::Scala
+                | FileType::Zig
+                | FileType::Elixir
+        )
+    }
+
+    /// Returns true when `type: text` should search raw file content for this file type.
+    ///
+    /// Text-mode uses raw content for source and other ASCII/UTF-8 structured formats,
+    /// and uses extracted strings for binary-like formats.
+    #[must_use]
+    pub(crate) fn uses_raw_text_search(&self) -> bool {
+        self.is_source_code()
+            || matches!(
+                self,
+                FileType::PackageJson
+                    | FileType::ChromeManifest
+                    | FileType::VsixManifest
+                    | FileType::CargoToml
+                    | FileType::PyProjectToml
+                    | FileType::GithubActions
+                    | FileType::ComposerJson
+                    | FileType::PkgInfo
+                    | FileType::Plist
+            )
+    }
+
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
     #[must_use]
     pub(crate) fn has_sections(&self) -> bool {

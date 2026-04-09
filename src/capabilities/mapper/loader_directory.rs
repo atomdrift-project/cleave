@@ -18,7 +18,8 @@ use crate::capabilities::validation::{
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_composite_only_wellknown_files, find_depth_violations,
+    find_composite_only_wellknown_files, find_deprecated_string_value_usage,
+    find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
@@ -30,10 +31,10 @@ use crate::capabilities::validation::{
     find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
     find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_raw_should_use_string_value, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
     find_redundant_needs_one, find_short_pattern_warnings, find_should_use_defaults,
     find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_pattern_duplicates, find_string_value_should_use_raw, find_too_short_patterns,
+    find_string_literal_should_use_text, find_string_pattern_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
@@ -1031,16 +1032,19 @@ impl super::CapabilityMapper {
             find_non_capturing_groups(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
 
-            // Detect raw patterns on binary types that would be faster as string_value
+            // Detect raw patterns on binary types that would be faster as text
             let step_start = std::time::Instant::now();
-            tracing::trace!("Step 1h3/15: Detecting raw patterns that should use string_value");
-            find_raw_should_use_string_value(&trait_definitions, &mut warnings);
+            tracing::trace!("Step 1h3/15: Detecting raw patterns that should use text");
+            find_raw_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h3 completed in {:?}", step_start.elapsed());
 
-            // Detect string_value patterns on source types that should use raw
+            // Detect deprecated string_value usage and string_literal patterns that should use text
             let step_start = std::time::Instant::now();
-            tracing::trace!("Step 1h4/15: Detecting string_value patterns that should use raw");
-            find_string_value_should_use_raw(&trait_definitions, &mut warnings);
+            tracing::trace!(
+                "Step 1h4/15: Detecting deprecated string_value usage and literal-only text mismatches"
+            );
+            find_deprecated_string_value_usage(&trait_definitions, &mut warnings);
+            find_string_literal_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
 
             // Check for exact patterns contained by substr patterns (redundancy)
@@ -2034,13 +2038,15 @@ impl super::CapabilityMapper {
             let collisions = find_string_content_collisions(&trait_definitions);
             if !collisions.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} trait pairs have string/raw type collisions",
+                    "\n❌ ERROR: {} trait pairs have deprecated string_value/raw type collisions",
                     collisions.len()
                 );
                 eprintln!(
-                    "   When both `type: string` and `type: raw` exist for the same pattern,"
+                    "   When both deprecated `type: string_value` and `type: raw` exist for the same pattern,"
                 );
-                eprintln!("   merge to `raw` only (it's broader and includes string matches):\n");
+                eprintln!(
+                    "   remove the legacy `string_value` rule. Keep `raw` only for byte-precise matching; otherwise prefer a single `text` rule:\n"
+                );
                 for (string_id, raw_id, pattern) in &collisions {
                     let string_source = rule_source_files
                         .get(string_id)

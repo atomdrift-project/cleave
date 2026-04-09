@@ -83,7 +83,7 @@ impl GenericAnalyzer {
             FileType::Batch => "batch",
             FileType::Vbs => "vbs",
             FileType::GithubActions => "github-actions",
-            FileType::SystemdService => "systemd-service",
+            FileType::SystemdService => "systemd",
             FileType::PkgInfo => "pkg-info",
             FileType::Plist => "plist",
             FileType::Html => "html",

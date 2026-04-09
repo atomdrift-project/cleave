@@ -606,7 +606,7 @@ impl UnifiedSourceAnalyzer {
             // Create ArchiveEntry metadata (same as archive files)
             let entry_metadata = crate::types::ArchiveEntry {
                 path: virtual_path.clone(),
-                file_type: format!("{:?}", payload.detected_type).to_lowercase(),
+                file_type: payload.detected_type.report_file_type(),
                 sha256: crate::analyzers::utils::calculate_sha256(&payload_content),
                 size_bytes: payload_content.len() as u64,
             };
@@ -688,7 +688,7 @@ impl UnifiedSourceAnalyzer {
                 // Create ArchiveEntry metadata
                 let entry_metadata = crate::types::ArchiveEntry {
                     path: virtual_path.clone(),
-                    file_type: format!("{:?}", payload.detected_type).to_lowercase(),
+                    file_type: payload.detected_type.report_file_type(),
                     sha256: crate::analyzers::utils::calculate_sha256(&payload_content),
                     size_bytes: payload_content.len() as u64,
                 };

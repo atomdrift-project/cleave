@@ -179,7 +179,7 @@ pub(crate) fn create_analysis_report(
 
         let target = types::TargetInfo {
             path: path.display().to_string(),
-            file_type: format!("{:?}", file_type).to_lowercase(),
+            file_type: file_type.report_file_type(),
             size_bytes: binary_data.len() as u64,
             sha256,
             architectures: None,

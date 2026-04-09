@@ -3655,7 +3655,7 @@ defaults:
   crit: notable
   conf: 0.8
   platforms: [linux, unix]
-  for: [systemd-service]
+  for: [systemd]
 
 traits:
   - id: exec-start
@@ -3717,7 +3717,7 @@ defaults:
   crit: notable
   conf: 0.8
   platforms: [linux, unix]
-  for: [systemd-service]
+  for: [systemd]
 
 traits:
   - id: exec-start

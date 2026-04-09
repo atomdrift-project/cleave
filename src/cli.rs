@@ -612,6 +612,13 @@ pub enum DetectFileType {
     /// Shell script
     Shell,
     /// systemd service unit file
+    #[value(
+        name = "systemd",
+        alias("systemd-service"),
+        alias("systemd_service"),
+        alias("service"),
+        alias(".service")
+    )]
     SystemdService,
     /// Raw/binary content
     Raw,
@@ -634,6 +641,7 @@ pub enum OutputFormat {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use clap::ValueEnum;
 
     #[test]
     fn test_parse_paths_without_subcommand() {
@@ -659,6 +667,18 @@ mod tests {
         if let Some(Command::Analyze { targets }) = args.command {
             assert_eq!(targets, vec!["file.bin"]);
         }
+    }
+
+    #[test]
+    fn test_detect_file_type_prefers_systemd_name() {
+        assert_eq!(
+            DetectFileType::from_str("systemd", false).unwrap(),
+            DetectFileType::SystemdService
+        );
+        assert_eq!(
+            DetectFileType::from_str("systemd-service", false).unwrap(),
+            DetectFileType::SystemdService
+        );
     }
 
     #[test]

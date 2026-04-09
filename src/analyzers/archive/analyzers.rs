@@ -242,7 +242,7 @@ impl ArchiveAnalyzer {
                 let entry_metadata = ArchiveEntry {
                     path: entry_path.clone(),
                     file_type: detect_file_type(entry.path())
-                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .map(|ft| ft.report_file_type())
                         .unwrap_or_else(|_| "unknown".to_string()),
                     sha256: calculate_sha256(&file_data),
                     size_bytes: file_data.len() as u64,
@@ -385,7 +385,7 @@ impl ArchiveAnalyzer {
                 let entry_metadata = ArchiveEntry {
                     path: entry_path.clone(),
                     file_type: detect_file_type(entry.path())
-                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .map(|ft| ft.report_file_type())
                         .unwrap_or_else(|_| "unknown".to_string()),
                     sha256: calculate_sha256(&file_data),
                     size_bytes: file_data.len() as u64,
@@ -687,7 +687,7 @@ impl ArchiveAnalyzer {
                 let entry_metadata = ArchiveEntry {
                     path: entry_path.clone(),
                     file_type: detect_file_type(entry.path())
-                        .map(|ft| format!("{:?}", ft).to_lowercase())
+                        .map(|ft| ft.report_file_type())
                         .unwrap_or_else(|_| "unknown".to_string()),
                     sha256: calculate_sha256(&file_data),
                     size_bytes: file_data.len() as u64,

@@ -1644,12 +1644,15 @@ mod tests {
                 "js".to_string(),
                 "ts".to_string(),
                 "rb".to_string(),
+                "systemd-service".to_string(),
+                "systemd".to_string(),
             ],
             &mut warnings,
         );
         assert!(result.types.contains(&RuleFileType::Python));
         assert!(result.types.contains(&RuleFileType::JavaScript)); // "ts" also maps to JavaScript
         assert!(result.types.contains(&RuleFileType::Ruby));
+        assert!(result.types.contains(&RuleFileType::SystemdService));
         assert!(warnings.is_empty());
     }
 

@@ -586,6 +586,15 @@ impl FileType {
         )
     }
 
+    /// Canonical file type string used in analysis reports.
+    #[must_use]
+    pub(crate) fn report_file_type(&self) -> String {
+        match self {
+            FileType::SystemdService => "systemd".to_string(),
+            _ => format!("{:?}", self).to_lowercase(),
+        }
+    }
+
     /// Get YARA rule filetypes that are relevant for this file type
     /// Returns a list of filetype identifiers to match against YARA metadata
     #[must_use]
@@ -860,5 +869,11 @@ mod tests {
             FileType::from(fileid::FileType::Markdown),
             FileType::Markdown
         );
+    }
+
+    #[test]
+    fn bridge_report_file_type_uses_systemd_alias() {
+        assert_eq!(FileType::SystemdService.report_file_type(), "systemd");
+        assert_eq!(FileType::Elf.report_file_type(), "elf");
     }
 }

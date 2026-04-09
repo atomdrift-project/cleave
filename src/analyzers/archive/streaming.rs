@@ -126,7 +126,7 @@ impl ArchiveAnalyzer {
         let mut file_analysis = FileAnalysis::new(
             0, // ID will be assigned later when aggregating
             self.format_entry_path(relative_path),
-            format!("{:?}", file_type).to_lowercase(),
+            file_type.report_file_type(),
             sha256.clone(),
             size,
         );

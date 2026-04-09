@@ -196,10 +196,16 @@ pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<P
 pub(crate) fn symlink_escapes(symlink_path: &Path, target: &str, dest_dir: &Path) -> bool {
     let target_path = Path::new(target);
     let symlink_str = symlink_path.to_string_lossy();
+    let symlink_name = symlink_path
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or_default();
 
     if target_path.is_absolute()
         && (target == "/usr/bin/python3" || target == "/usr/bin/python")
-        && symlink_str.contains("/node_gyp_bins/python")
+        && (symlink_str.contains("/node_gyp_bins/python")
+            || symlink_name == "python3"
+            || symlink_name == "python")
     {
         return false;
     }

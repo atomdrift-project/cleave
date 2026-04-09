@@ -35,6 +35,10 @@ const MIN_ENCODED_SIZE: usize = 20;
 /// Tiny ELF/PE headers are common in tests and fixtures and are not useful standalone payloads.
 const MIN_BASE64_EXECUTABLE_SIZE: usize = 256;
 
+/// Minimum decoded size for compressed payloads embedded as base64.
+/// Tiny gzip members are common in source test fixtures and should not spawn nested findings.
+const MIN_BASE64_COMPRESSED_SIZE: usize = 160;
+
 /// Maximum number of strings to analyze per file
 const MAX_STRINGS_TO_ANALYZE: usize = 100;
 
@@ -843,6 +847,9 @@ fn detect_base64_binary(
     if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
         return None;
     }
+    if matches!(inner_type, "gz" | "zip" | "xz" | "bz2") && decoded.len() < MIN_BASE64_COMPRESSED_SIZE {
+        return None;
+    }
     let offset = string_info.offset.unwrap_or(0);
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
@@ -1414,10 +1421,10 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_detect_base64_binary_gzip() {
-        // 75 bytes → 100 chars base64 (no padding needed since 75 is divisible by 3)
-        let mut payload = Vec::with_capacity(75);
+        // Keep this above the compressed-payload floor so real wrappers still detect.
+        let mut payload = Vec::with_capacity(192);
         payload.extend_from_slice(&[0x1F, 0x8B, 0x08, 0x00]); // gzip magic
-        payload.resize(75, 0u8);
+        payload.resize(192, 0u8);
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
         assert!(

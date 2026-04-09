@@ -274,9 +274,9 @@ fn test_shell_script_base64_gzip_detected() {
     use base64::Engine;
 
     let tmp = TempDir::new().unwrap();
-    // 75 bytes → 100 base64 chars (>= MIN_BASE64_LEN)
+    // Keep this above the compressed-payload floor so wrapper detection still fires.
     let mut payload = vec![0x1Fu8, 0x8B, 0x08, 0x00]; // gzip magic + CM + FLG
-    payload.resize(75, 0u8);
+    payload.resize(192, 0u8);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
 
     let script = format!(

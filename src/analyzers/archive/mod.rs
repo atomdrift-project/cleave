@@ -268,7 +268,10 @@ fn path_looks_synthetic_edge_case(name: &str) -> bool {
 }
 
 fn is_benign_archive_symlink_escape(path: &str) -> bool {
-    path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python")
+    let path = path.trim();
+
+    (path.contains("/node_gyp_bins/python3") || path.contains("/node_gyp_bins/python"))
+        && (path.ends_with("-> /usr/bin/python3") || path.ends_with("-> /usr/bin/python"))
 }
 
 fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {

@@ -7,11 +7,12 @@
 ///
 /// Rules are compiled into separate tiered sets so each scan only processes the
 /// subset relevant to the target file type. Every scan typically runs the
-/// tier-specific set(s) plus the `Generic` set.
+/// tier-specific set(s) plus the `CrossFormat` set. Residual unclassified
+/// third-party rules land in `Unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum YaraTier {
-    /// Rules with no filetype constraint or residual fallback rules.
-    Generic,
+    /// Rules intentionally broad across multiple formats or curated broad rules.
+    CrossFormat,
     /// PE / DLL / EXE rules.
     Pe,
     /// ELF / SO / KO rules.
@@ -24,18 +25,21 @@ pub enum YaraTier {
     Script,
     /// Document and container format rules.
     Doc,
+    /// Residual unclassified third-party rules that still need audit.
+    Unknown,
 }
 
 impl YaraTier {
     /// All tier variants in a fixed order for iteration and reporting.
     pub const ALL: &'static [Self] = &[
-        Self::Generic,
+        Self::CrossFormat,
         Self::Pe,
         Self::Elf,
         Self::MachO,
         Self::ScriptJs,
         Self::Script,
         Self::Doc,
+        Self::Unknown,
     ];
 
     /// Classify a set of filetype strings into a YARA tier.
@@ -45,41 +49,56 @@ impl YaraTier {
             match *ft {
                 "pe" | "exe" | "dll" | "sys" => return Self::Pe,
                 "elf" | "so" | "ko" => return Self::Elf,
-                "macho" | "dylib" | "kext" => return Self::MachO,
+                "macho" | "mach" | "mach-o" | "dylib" | "kext" => return Self::MachO,
                 "js" | "mjs" | "cjs" | "jsx" | "ts" | "tsx" | "mts" | "cts" => {
                     return Self::ScriptJs;
                 }
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "php" | "rb" | "pl" | "pm" | "lua"
                 | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba" | "java" | "jar"
-                | "class" | "jsp" | "aspx" | "asp" => return Self::Script,
+                | "class" | "jsp" | "aspx" | "asp" | "apk" | "dex" => return Self::Script,
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                | "msg" | "lnk" | "zip" | "iso" | "img" | "one" | "onepkg" => return Self::Doc,
+                | "msg" | "lnk" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi" | "cab"
+                | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" | "vhd"
+                | "vmdk" => return Self::Doc,
                 _ => {}
             }
         }
-        Self::Generic
+        Self::Unknown
     }
 
     /// Map the `file_type_filter` strings passed by callers to a tier.
     #[must_use]
     pub fn from_filter(filter: Option<&[&str]>) -> Self {
         match filter {
-            None => Self::Generic,
+            None => Self::Unknown,
             Some(types) => Self::from_filetypes(types),
         }
     }
 
     /// Determine the ordered tier scan set for a target filter.
     ///
-    /// Most files scan their specific tier plus `Generic`. JS/TS files scan the
-    /// JS-specific tier plus `Generic`; non-JS script rules should not ride
-    /// along on every JavaScript file.
+    /// Most files scan their specific tier(s) plus `CrossFormat`. Residual
+    /// `Unknown` rules are scanned only when the target file type is itself
+    /// unknown, so they can be audited without penalizing every typed scan.
     #[must_use]
     pub fn scan_order(filter: Option<&[&str]>) -> Vec<Self> {
-        match Self::from_filter(filter) {
-            Self::Generic => vec![Self::Generic],
-            Self::ScriptJs => vec![Self::ScriptJs, Self::Generic],
-            tier => vec![tier, Self::Generic],
+        match filter {
+            None => vec![Self::CrossFormat, Self::Unknown],
+            Some(types) => {
+                let mut tiers: Vec<Self> = types
+                    .iter()
+                    .map(|ft| Self::from_filetypes(&[*ft]))
+                    .filter(|tier| *tier != Self::Unknown)
+                    .collect();
+                tiers.sort_by_key(|tier| Self::ALL.iter().position(|candidate| candidate == tier));
+                tiers.dedup();
+                if tiers.is_empty() {
+                    vec![Self::CrossFormat, Self::Unknown]
+                } else {
+                    tiers.push(Self::CrossFormat);
+                    tiers
+                }
+            }
         }
     }
 
@@ -87,13 +106,14 @@ impl YaraTier {
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::Generic => "generic",
+            Self::CrossFormat => "cross-format",
             Self::Pe => "pe",
             Self::Elf => "elf",
             Self::MachO => "macho",
             Self::ScriptJs => "script-js",
             Self::Script => "script",
             Self::Doc => "doc",
+            Self::Unknown => "unknown",
         }
     }
 
@@ -115,8 +135,7 @@ impl YaraTier {
                 if let Some(val) = trimmed.split('=').nth(1) {
                     let val = val.trim().trim_matches('"').trim_matches('\'');
                     let types: Vec<&str> = val.split(',').map(str::trim).collect();
-                    let tier = Self::from_filetypes(&types);
-                    if tier != Self::Generic {
+                    if let Some(tier) = classify_rule_filetypes(&types) {
                         return tier;
                     }
                 }
@@ -156,8 +175,7 @@ impl YaraTier {
         // 1a. Explicit header tags in the rule declaration
         let tagged = infer_filetypes_from_tags(&header_tags);
         if !tagged.is_empty() {
-            let tier = Self::from_filetypes(&tagged);
-            if tier != Self::Generic {
+            if let Some(tier) = classify_rule_filetypes(&tagged) {
                 return tier;
             }
         }
@@ -165,8 +183,7 @@ impl YaraTier {
         // 1b. Metadata prose/URLs often carry specific filetype hints.
         let metadata_inferred = infer_filetypes_from_metadata_text(&metadata_hint_text);
         if !metadata_inferred.is_empty() {
-            let tier = Self::from_filetypes(&metadata_inferred);
-            if tier != Self::Generic {
+            if let Some(tier) = classify_rule_filetypes(&metadata_inferred) {
                 if matches!(tier, Self::Script | Self::ScriptJs | Self::Doc) {
                     if let Some(binary_tier) =
                         preferred_binary_tier(rule_name, namespace, os_meta.as_deref())
@@ -181,14 +198,9 @@ impl YaraTier {
         // 1c. Use os metadata only when all inferred filetypes land in one tier.
         if let Some(ref os) = os_meta {
             let inferred = infer_filetypes(rule_name, Some(os));
-            if !inferred.is_empty() {
-                let first_tier = Self::from_filetypes(&inferred);
-                let mixed = inferred.iter().any(|ft| {
-                    let t = Self::from_filetypes(&[ft]);
-                    t != Self::Generic && t != first_tier
-                });
-                if !mixed && first_tier != Self::Generic {
-                    return first_tier;
+            if let Some(tier) = classify_rule_filetypes(&inferred) {
+                if tier != Self::CrossFormat {
+                    return tier;
                 }
             }
         }
@@ -207,7 +219,7 @@ impl YaraTier {
         // 3. Magic byte patterns
         if let Some(ft) = filetype_from_magic(&lower) {
             let tier = Self::from_filetypes(&[ft]);
-            if tier != Self::Generic {
+            if tier != Self::Unknown {
                 return tier;
             }
         }
@@ -219,18 +231,75 @@ impl YaraTier {
 
         // 5. Infer from rule name
         let inferred = infer_filetypes(rule_name, os_meta.as_deref());
-        if !inferred.is_empty() {
-            return Self::from_filetypes(&inferred);
+        if let Some(tier) = classify_rule_filetypes(&inferred) {
+            return tier;
         }
 
         // 6. Infer from namespace
         let ns_inferred = infer_filetypes_from_namespace(namespace, os_meta.as_deref());
-        if !ns_inferred.is_empty() {
-            return Self::from_filetypes(&ns_inferred);
+        if let Some(tier) = classify_rule_filetypes(&ns_inferred) {
+            return tier;
         }
 
-        Self::Generic
+        let namespace_lower = namespace.to_ascii_lowercase();
+        let rule_name_lower = rule_name.to_ascii_lowercase();
+        if namespace_lower
+            .split('.')
+            .any(|part| matches!(part, "multi" | "any" | "all"))
+            || rule_name_lower.starts_with("multi_")
+        {
+            return Self::CrossFormat;
+        }
+
+        if looks_intentionally_broad(
+            &rule_name_lower,
+            &namespace_lower,
+            &metadata_hint_text,
+            os_meta.as_deref(),
+        ) {
+            return Self::CrossFormat;
+        }
+
+        Self::Unknown
     }
+}
+
+fn split_text_tokens(lower: &str) -> impl Iterator<Item = &str> {
+    lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+}
+
+fn has_exact_token(lower: &str, needle: &str) -> bool {
+    split_text_tokens(lower).any(|token| token == needle)
+}
+
+fn looks_intentionally_broad(
+    rule_name_lower: &str,
+    namespace_lower: &str,
+    metadata_hint_text: &str,
+    os_meta: Option<&str>,
+) -> bool {
+    let broad_os = os_meta.is_some_and(|os| {
+        split_text_tokens(&os.to_ascii_lowercase())
+            .any(|token| matches!(token, "all" | "any" | "multi"))
+    });
+    let broad_name = split_text_tokens(rule_name_lower)
+        .any(|token| matches!(token, "any" | "multi" | "all"));
+    let broad_ns = namespace_lower
+        .split('.')
+        .any(|part| matches!(part, "any" | "multi" | "all"));
+    let metadata_lower = metadata_hint_text.to_ascii_lowercase();
+    let broad_text = metadata_lower.contains("any file")
+        || metadata_lower.contains("any files")
+        || metadata_lower.contains("any format")
+        || metadata_lower.contains("cross-platform")
+        || metadata_lower.contains("cross platform")
+        || metadata_lower.contains("multi-platform")
+        || metadata_lower.contains("multi platform")
+        || metadata_lower.contains("multiple file types");
+
+    broad_os && (broad_name || broad_ns || broad_text)
 }
 
 fn extract_header_tags(rule_text: &str) -> Vec<String> {
@@ -809,6 +878,36 @@ fn infer_binary_filetypes_from_name_and_os(
     rule_name: &str,
     os_meta: Option<&str>,
 ) -> Vec<&'static str> {
+    let lower = rule_name.to_ascii_lowercase();
+    let tokens: Vec<&str> = split_text_tokens(&lower).collect();
+    if tokens
+        .iter()
+        .any(|token| matches!(*token, "pe" | "exe" | "dll" | "sys" | "driver"))
+        || lower.contains("portable executable")
+        || lower.contains(".net executable")
+        || lower.contains("dotnet executable")
+        || lower.contains("ps2exe")
+    {
+        return vec!["pe", "dll"];
+    }
+
+    if tokens
+        .iter()
+        .any(|token| matches!(*token, "elf" | "elf32" | "elf64" | "so" | "ko"))
+        || lower.contains("shared object")
+    {
+        return vec!["elf", "so"];
+    }
+
+    if tokens
+        .iter()
+        .any(|token| matches!(*token, "macho" | "mach" | "dylib" | "kext"))
+        || lower.contains("mach-o")
+        || lower.contains("macho")
+    {
+        return vec!["macho", "dylib"];
+    }
+
     if let Some(os) = os_meta {
         let mut types: Vec<&'static str> = Vec::new();
         for token in os.to_lowercase().split(',').map(str::trim) {
@@ -843,22 +942,43 @@ fn infer_binary_filetypes_from_name_and_os(
     vec![]
 }
 
+fn classify_rule_filetypes(filetypes: &[&str]) -> Option<YaraTier> {
+    let mut tiers: Vec<YaraTier> = filetypes
+        .iter()
+        .map(|ft| YaraTier::from_filetypes(&[*ft]))
+        .filter(|tier| *tier != YaraTier::Unknown)
+        .collect();
+
+    tiers.sort_by_key(|tier| YaraTier::ALL.iter().position(|candidate| candidate == tier));
+    tiers.dedup();
+
+    match tiers.as_slice() {
+        [] => None,
+        [tier] => Some(*tier),
+        _ => Some(YaraTier::CrossFormat),
+    }
+}
+
 fn preferred_binary_tier(
     rule_name: &str,
     namespace: &str,
     os_meta: Option<&str>,
 ) -> Option<YaraTier> {
-    let name_tier = YaraTier::from_filetypes(&infer_filetypes(rule_name, os_meta));
-    if matches!(name_tier, YaraTier::Pe | YaraTier::Elf | YaraTier::MachO) {
-        return Some(name_tier);
+    if let Some(name_tier) = classify_rule_filetypes(&infer_filetypes(rule_name, os_meta)) {
+        if matches!(name_tier, YaraTier::Pe | YaraTier::Elf | YaraTier::MachO) {
+            return Some(name_tier);
+        }
     }
 
-    let namespace_tier = YaraTier::from_filetypes(&infer_filetypes_from_namespace(namespace, None));
-    if matches!(
-        namespace_tier,
-        YaraTier::Pe | YaraTier::Elf | YaraTier::MachO
-    ) {
-        return Some(namespace_tier);
+    if let Some(namespace_tier) =
+        classify_rule_filetypes(&infer_filetypes_from_namespace(namespace, None))
+    {
+        if matches!(
+            namespace_tier,
+            YaraTier::Pe | YaraTier::Elf | YaraTier::MachO
+        ) {
+            return Some(namespace_tier);
+        }
     }
 
     None
@@ -900,7 +1020,11 @@ pub fn infer_filetypes_from_metadata_text(text: &str) -> Vec<&'static str> {
     if !doc_types.is_empty() {
         return doc_types;
     }
-    script_filetypes_from_text(text)
+    let script_types = script_filetypes_from_text(text);
+    if !script_types.is_empty() {
+        return script_types;
+    }
+    infer_binary_filetypes_from_name_and_os(text, None)
 }
 
 /// Infer filetypes from explicit YARA rule header tags.
@@ -1177,9 +1301,17 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "lnk" | "lnkr" => return vec!["lnk"],
             "iso" | "img" => return vec!["iso", "img"],
             "zip" | "zipcrypto" => return vec!["zip"],
+            "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" => {
+                return vec!["gzip"];
+            }
+            "cab" | "msi" => return vec!["cab"],
+            "vhd" | "vmdk" => return vec!["vhd"],
             "msg" => return vec!["msg"],
             _ => {}
         }
+    }
+    if lower.contains("embeddedpdf") || lower.contains("adobepdf") {
+        return vec!["pdf"];
     }
     vec![]
 }
@@ -1203,6 +1335,7 @@ pub fn script_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
             "shell" | "bash" | "sh" | "zsh" => return vec!["sh", "bash", "zsh"],
             "java" | "jar" | "class" => return vec!["jar", "class", "java"],
+            "apk" | "dex" => return vec!["apk", "dex"],
             "ruby" | "rb" => return vec!["rb"],
             "perl" | "pl" | "pm" => return vec!["pl", "pm"],
             "lua" => return vec!["lua"],
@@ -1396,11 +1529,148 @@ rule VOLEXITY_Susp_Php_Fileinput_Eval : FILE
     fn test_scan_order() {
         assert_eq!(
             YaraTier::scan_order(Some(&["ts", "tsx", "js"])),
-            vec![YaraTier::ScriptJs, YaraTier::Generic]
+            vec![YaraTier::ScriptJs, YaraTier::CrossFormat]
         );
         assert_eq!(
             YaraTier::scan_order(Some(&["ps1"])),
-            vec![YaraTier::Script, YaraTier::Generic]
+            vec![YaraTier::Script, YaraTier::CrossFormat]
+        );
+        assert_eq!(
+            YaraTier::scan_order(Some(&["jar", "zip"])),
+            vec![YaraTier::Script, YaraTier::Doc, YaraTier::CrossFormat]
+        );
+        assert_eq!(
+            YaraTier::scan_order(None),
+            vec![YaraTier::CrossFormat, YaraTier::Unknown]
+        );
+    }
+
+    #[test]
+    fn test_cross_format_and_unknown_classification() {
+        let cross_format = r#"
+rule mixed_windows_linux_payload {
+    meta:
+        filetypes = "pe,elf"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule("mixed_windows_linux_payload", cross_format, "3p.test.multi"),
+            YaraTier::CrossFormat
+        );
+
+        let unknown = r#"
+rule opaque_family_name {
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule("opaque_family_name", unknown, "3p.test.unknown"),
+            YaraTier::Unknown
+        );
+    }
+
+    #[test]
+    fn test_additional_filetype_aliases_and_name_heuristics() {
+        assert_eq!(YaraTier::from_filetypes(&["apk"]), YaraTier::Script);
+        assert_eq!(YaraTier::from_filetypes(&["vhd"]), YaraTier::Doc);
+        assert_eq!(YaraTier::from_filetypes(&["mach"]), YaraTier::MachO);
+
+        assert_eq!(
+            infer_filetypes("kimsuky_downloader_pe", None),
+            vec!["pe", "dll"]
+        );
+        assert_eq!(
+            infer_filetypes("APT29_wellmess_elf", None),
+            vec!["elf", "so"]
+        );
+        assert_eq!(
+            infer_filetypes("malware_unknown_machOdownloader", None),
+            vec!["macho", "dylib"]
+        );
+        assert_eq!(
+            infer_filetypes("RUSSIANPANDA_Solarmarker_Loader_PS2EXE", None),
+            vec!["pe", "dll"]
+        );
+    }
+
+    #[test]
+    fn test_metadata_text_handles_android_and_containers() {
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects Dex files containing GuardZoo strings."),
+            vec!["apk", "dex"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("fake gzip provided by CC"),
+            vec!["gzip"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detect suspicious VHD file with APT28 artefacts inside"),
+            vec!["vhd"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects Embedded PDFs which can start malicious content"),
+            vec!["pdf"]
+        );
+    }
+
+    #[test]
+    fn test_classify_rule_additional_filetype_examples() {
+        let apk_rule = r#"
+rule SEKOIA_Apt_Yemen_Apk_Guardzoo : FILE
+{
+    meta:
+        description = "Detects Dex files containing GuardZoo strings."
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Yemen_Apk_Guardzoo",
+                apk_rule,
+                "3p.test.android"
+            ),
+            YaraTier::Script
+        );
+
+        let vhd_rule = r#"
+rule ARKBIRD_SOLG_APT_APT28_VHD_Nov_2020_1 : FILE
+{
+    meta:
+        description = "Detect suspicious VHD file with APT28 artefacts inside"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "ARKBIRD_SOLG_APT_APT28_VHD_Nov_2020_1",
+                vhd_rule,
+                "3p.test.container"
+            ),
+            YaraTier::Doc
+        );
+
+        let broad_rule = r#"
+rule VOLEXITY_Susp_Any_Jarischf_User_Path : FILE MEMORY
+{
+    meta:
+        description = "Detects paths embedded in released projects."
+        os = "all"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "VOLEXITY_Susp_Any_Jarischf_User_Path",
+                broad_rule,
+                "3p.test.any"
+            ),
+            YaraTier::CrossFormat
         );
     }
 
@@ -1451,7 +1721,7 @@ rule VOLEXITY_Susp_Php_Fileinput_Eval : FILE
                     "js" | "ts" | "script-js" => YaraTier::ScriptJs,
                     "script" => YaraTier::Script,
                     "doc" => YaraTier::Doc,
-                    "generic" => YaraTier::Generic,
+                    "generic" => YaraTier::CrossFormat,
                     other => {
                         failures.push(format!(
                             "Unknown filetype directory: {}/{}",
@@ -1520,5 +1790,133 @@ rule VOLEXITY_Susp_Php_Fileinput_Eval : FILE
             }
         }
         None
+    }
+
+    #[test]
+    #[ignore]
+    fn test_audit_third_party_residual_tiers() {
+        fn collect_rule_files(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>) {
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    collect_rule_files(&path, files);
+                } else if path
+                    .extension()
+                    .and_then(|ext| ext.to_str())
+                    .map(|ext| ext == "yar" || ext == "yara")
+                    .unwrap_or(false)
+                {
+                    files.push(path);
+                }
+            }
+        }
+
+        fn split_rules(source: &str) -> Vec<(String, bool, &str)> {
+            let mut starts: Vec<(usize, String, bool)> = Vec::new();
+            for (offset, line) in source
+                .match_indices('\n')
+                .map(|(i, _)| (i + 1, &source[i + 1..]))
+            {
+                let trimmed = line.trim_start();
+                let is_private = trimmed.starts_with("private rule ");
+                let rest = if is_private {
+                    trimmed.strip_prefix("private rule ")
+                } else {
+                    trimmed.strip_prefix("rule ")
+                };
+                if let Some(rest) = rest {
+                    if let Some(name) = rest.split_whitespace().next() {
+                        starts.push((offset, name.trim_end_matches('{').to_string(), is_private));
+                    }
+                }
+            }
+            if source.starts_with("rule ") || source.starts_with("private rule ") {
+                let trimmed = source.trim_start();
+                let is_private = trimmed.starts_with("private rule ");
+                let rest = if is_private {
+                    trimmed.strip_prefix("private rule ")
+                } else {
+                    trimmed.strip_prefix("rule ")
+                };
+                if let Some(rest) = rest {
+                    if let Some(name) = rest.split_whitespace().next() {
+                        starts.insert(0, (0, name.trim_end_matches('{').to_string(), is_private));
+                    }
+                }
+            }
+
+            let mut rules = Vec::new();
+            for (idx, (start, name, is_private)) in starts.iter().enumerate() {
+                let end = starts
+                    .get(idx + 1)
+                    .map(|next| next.0)
+                    .unwrap_or(source.len());
+                rules.push((name.clone(), *is_private, &source[*start..end]));
+            }
+            rules
+        }
+
+        let traits_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("cleave-traits")
+            .join("third-party");
+
+        if !traits_dir.exists() {
+            return;
+        }
+
+        let mut files = Vec::new();
+        collect_rule_files(&traits_dir, &mut files);
+        files.sort();
+
+        let mut counts: std::collections::HashMap<YaraTier, usize> =
+            std::collections::HashMap::new();
+        let mut cross_format = Vec::new();
+        let mut unknown = Vec::new();
+
+        for path in files {
+            let Ok(source) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let rel = path.strip_prefix(&traits_dir).unwrap_or(&path);
+            let ns = format!(
+                "3p.{}",
+                rel.with_extension("").to_string_lossy().replace('/', ".")
+            );
+            for (name, is_private, rule_text) in split_rules(&source) {
+                if is_private {
+                    continue;
+                }
+                let tier = YaraTier::classify_rule(&name, rule_text, &ns);
+                *counts.entry(tier).or_default() += 1;
+                match tier {
+                    YaraTier::CrossFormat => cross_format.push(format!("{} (ns={})", name, ns)),
+                    YaraTier::Unknown => unknown.push(format!("{} (ns={})", name, ns)),
+                    _ => {}
+                }
+            }
+        }
+
+        cross_format.sort();
+        unknown.sort();
+
+        eprintln!("\n=== Residual Tier Audit ===");
+        for tier in YaraTier::ALL {
+            let count = counts.get(tier).copied().unwrap_or(0);
+            eprintln!("  {:12}: {}", tier.label(), count);
+        }
+        eprintln!("\n=== Cross-Format Rules ({}) ===", cross_format.len());
+        for name in &cross_format {
+            eprintln!("  {name}");
+        }
+        eprintln!("\n=== Unknown Rules ({}) ===", unknown.len());
+        for name in &unknown {
+            eprintln!("  {name}");
+        }
     }
 }

@@ -370,31 +370,11 @@ pub fn check_extension_content_mismatch(
         return None;
     }
     let det = fileid::detect(file_path, file_data)?;
-    if !det.extension_mismatch() {
-        return None;
-    }
+    // Only flag when the extension explicitly maps to a *different* known type.
+    // Unknown/unrecognized extensions (e.g. .elf, .so, .ko, .bin) are not mismatches.
+    let ext_type = det.extension_type()?;
     let content_desc = format!("{:?}", det.file_type);
-    let ext_desc = det.extension_type().map_or_else(
-        || {
-            file_path.extension().map_or("unknown".to_string(), |e| {
-                format!("{} file", e.to_string_lossy())
-            })
-        },
-        |ft| format!("{ft:?}"),
-    );
-    let ext = file_path
-        .extension()
-        .map(|e| e.to_string_lossy().to_ascii_lowercase());
-    if matches!(ext.as_deref(), Some("msi") | Some("msp"))
-        && det.file_type == fileid::FileType::OleDoc
-    {
-        return None;
-    }
-    if matches!(ext.as_deref(), Some("exe") | Some("dll") | Some("pyd"))
-        && det.file_type == fileid::FileType::Pe
-    {
-        return None;
-    }
+    let ext_desc = format!("{ext_type:?}");
     Some((ext_desc, content_desc))
 }
 

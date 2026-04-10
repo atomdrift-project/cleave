@@ -74,93 +74,78 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     if let Ok(file_type) = detect_file_type(path) {
         match file_type {
             FileType::Elf | FileType::MachO | FileType::Pe => {
-                // Binary file - extract symbols with addresses
+                // Binary file — use goblin first, fall back to rizin if goblin finds no exports.
+                let report = analyze_binary_report(path, &file_type)?;
 
-                // Use radare2 for comprehensive symbol extraction
-                if Radare2Analyzer::is_available() {
+                for import in &report.imports {
+                    symbols.push(SymbolInfo {
+                        name: import.symbol.clone(),
+                        address: None,
+                        library: import.library.clone(),
+                        symbol_type: "import".to_string(),
+                        source: import.source.clone(),
+                    });
+                }
+                for export in &report.exports {
+                    symbols.push(SymbolInfo {
+                        name: export.symbol.clone(),
+                        address: export.offset.clone(),
+                        library: None,
+                        symbol_type: "export".to_string(),
+                        source: export.source.clone(),
+                    });
+                }
+                for func in &report.functions {
+                    symbols.push(SymbolInfo {
+                        name: func.name.clone(),
+                        address: func.offset.clone(),
+                        library: None,
+                        symbol_type: "function".to_string(),
+                        source: func.source.clone(),
+                    });
+                }
+
+                // Fall back to rizin when goblin found no exports (e.g. stripped or obfuscated).
+                if report.exports.is_empty() && Radare2Analyzer::is_available() {
                     let r2 = Radare2Analyzer::new();
                     if let Ok((r2_imports, r2_exports, r2_symbols)) = r2.extract_all_symbols(path) {
-                        // Add imports
+                        // Replace goblin imports with rizin's (likely more complete)
+                        symbols.retain(|s| s.symbol_type != "import");
                         for imp in r2_imports {
                             symbols.push(SymbolInfo {
                                 name: imp.name.trim_start_matches('_').to_string(),
                                 address: None,
                                 library: imp.lib_name,
                                 symbol_type: "import".to_string(),
-                                source: "radare2".to_string(),
+                                source: "rizin".to_string(),
                             });
                         }
-
-                        // Add exports
                         for exp in r2_exports {
                             symbols.push(SymbolInfo {
                                 name: exp.name.trim_start_matches('_').to_string(),
                                 address: Some(format!("0x{:x}", exp.vaddr)),
                                 library: None,
                                 symbol_type: "export".to_string(),
-                                source: "radare2".to_string(),
+                                source: "rizin".to_string(),
                             });
                         }
-
-                        // Add other symbols (functions, etc.)
                         for sym in r2_symbols {
-                            let sym_type = if sym.symbol_type == "FUNC" || sym.symbol_type == "func"
-                            {
+                            let sym_type = if sym.symbol_type == "FUNC" || sym.symbol_type == "func" {
                                 "function"
                             } else {
                                 &sym.symbol_type
                             };
-
                             let clean_name = sym.name.trim_start_matches('_').to_string();
-
-                            // Skip if already added as import or export
-                            let already_added = symbols.iter().any(|s| s.name == clean_name);
-                            if !already_added {
+                            if !symbols.iter().any(|s| s.name == clean_name) {
                                 symbols.push(SymbolInfo {
                                     name: clean_name,
                                     address: Some(format!("0x{:x}", sym.vaddr)),
                                     library: None,
                                     symbol_type: sym_type.to_lowercase(),
-                                    source: "radare2".to_string(),
+                                    source: "rizin".to_string(),
                                 });
                             }
                         }
-                    }
-                } else {
-                    // Fallback to goblin-based analysis
-                    let report = analyze_binary_report(path, &file_type)?;
-
-                    // Add imports
-                    for import in report.imports {
-                        symbols.push(SymbolInfo {
-                            name: import.symbol.clone(),
-                            address: None,
-                            library: import.library,
-                            symbol_type: "import".to_string(),
-                            source: import.source,
-                        });
-                    }
-
-                    // Add exports
-                    for export in report.exports {
-                        symbols.push(SymbolInfo {
-                            name: export.symbol,
-                            address: export.offset,
-                            library: None,
-                            symbol_type: "export".to_string(),
-                            source: export.source,
-                        });
-                    }
-
-                    // Add functions
-                    for func in report.functions {
-                        symbols.push(SymbolInfo {
-                            name: func.name,
-                            address: func.offset,
-                            library: None,
-                            symbol_type: "function".to_string(),
-                            source: func.source,
-                        });
                     }
                 }
             }

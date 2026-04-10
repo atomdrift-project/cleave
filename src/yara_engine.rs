@@ -76,9 +76,9 @@ struct RawRule {
 
 /// YARA-X engine for pattern-based detection.
 ///
-/// Rules are compiled into tiered sets by file type. Each scan runs two passes:
-/// 1. The tier matching the target file type (e.g. PE rules for a PE file)
-/// 2. The CrossFormat tier (applies to all typed files)
+/// Rules are compiled into tiered sets by file type. Typed scans run the tier
+/// matching the target file type plus the `CrossFormat` tier. Untyped scans can
+/// additionally include the `Raw` and residual `Unknown` tiers.
 ///
 /// Scanners are cached per-thread to avoid expensive re-creation.
 #[derive(Debug)]
@@ -132,6 +132,7 @@ impl YaraEngine {
     ///
     /// Rules are compiled into separate per-tier `yara_x::Rules` sets:
     /// - **CrossFormat**: built-in rules + inline trait YARA + intentionally broad rules
+    /// - **Raw**: explicit raw/blob/shellcode rules that exclude normal container magic
     /// - **Pe/Elf/MachO/ScriptJs/Script/Doc**: rules classified by file type
     /// - **Unknown**: residual third-party rules still needing audit
     ///
@@ -245,6 +246,8 @@ impl YaraEngine {
             .remove(&YaraTier::CrossFormat)
             .unwrap_or_default();
         tier_sources.insert(YaraTier::CrossFormat, cross_format_sources);
+        let raw_sources = tier_sources.remove(&YaraTier::Raw).unwrap_or_default();
+        tier_sources.insert(YaraTier::Raw, raw_sources);
         let unknown_sources = tier_sources.remove(&YaraTier::Unknown).unwrap_or_default();
         tier_sources.insert(YaraTier::Unknown, unknown_sources);
 
@@ -472,7 +475,8 @@ impl YaraEngine {
     /// Performs a staged scan:
     /// 1. **CrossFormat tier** — broad curated rules that intentionally apply across formats
     /// 2. **File-type tier(s)** — rules matching the target file type (PE, ELF, etc.)
-    /// 3. **Unknown tier** — only when the target file type is unknown
+    /// 3. **Raw tier** — explicit raw/blob rules for untyped inputs
+    /// 4. **Unknown tier** — only when the target file type is unknown
     ///
     /// Scanners are cached per-thread to avoid expensive re-creation.
     ///
@@ -1846,7 +1850,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 10;
+const CACHE_VERSION: u32 = 11;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {

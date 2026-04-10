@@ -94,7 +94,9 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
                 }
                 return vec![Platform::Linux];
             }
-            "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => return vec![Platform::MacOS],
+            "Mac" | "mac" | "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => {
+                return vec![Platform::MacOS];
+            }
             "Android" | "android" => return vec![Platform::Android],
             "iOS" | "ios" => return vec![Platform::Ios],
             _ => {}
@@ -633,6 +635,14 @@ mod tests {
     fn test_platforms_from_osx_prefix() {
         assert_eq!(
             platforms_from_name_and_os("OSX_Stealer_Bar", None),
+            vec![Platform::MacOS]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_mac_token() {
+        assert_eq!(
+            platforms_from_name_and_os("SEKOIA_Downloader_Mac_Smooth_Operator", None),
             vec![Platform::MacOS]
         );
     }

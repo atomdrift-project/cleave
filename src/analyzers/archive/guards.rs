@@ -70,6 +70,7 @@ pub(crate) struct ExtractionGuard {
 }
 
 impl ExtractionGuard {
+    #[cfg(test)]
     pub(crate) fn new() -> Self {
         Self {
             total_bytes: AtomicU64::new(0),

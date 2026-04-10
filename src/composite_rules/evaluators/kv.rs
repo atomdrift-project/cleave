@@ -774,8 +774,8 @@ fn normalize_systemd_key(raw: &str) -> String {
             let next = chars.get(idx + 1);
             let prev_is_lower_or_digit =
                 prev.is_some_and(|c| c.is_ascii_lowercase() || c.is_ascii_digit());
-            let prev_is_upper = prev.is_some_and(|c| c.is_ascii_uppercase());
-            let next_is_lower = next.is_some_and(|c| c.is_ascii_lowercase());
+            let prev_is_upper = prev.is_some_and(char::is_ascii_uppercase);
+            let next_is_lower = next.is_some_and(char::is_ascii_lowercase);
 
             if is_upper
                 && !out.is_empty()

@@ -481,12 +481,9 @@ impl FileType {
     #[must_use]
     pub(crate) fn from_str(file_type: &str) -> FileType {
         match file_type.to_lowercase().as_str() {
-            "elf" => FileType::Elf,
-            "macho" => FileType::Macho,
-            "pe" | "exe" => FileType::Pe,
-            "dylib" => FileType::Macho,
-            "so" => FileType::Elf,
-            "dll" => FileType::Pe,
+            "elf" | "so" => FileType::Elf,
+            "macho" | "dylib" => FileType::Macho,
+            "pe" | "exe" | "dll" => FileType::Pe,
             "shell" | "shellscript" | "shell_script" => FileType::Shell,
             "batch" | "bat" | "cmd" => FileType::Batch,
             "python" | "python_script" => FileType::Python,

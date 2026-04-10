@@ -420,12 +420,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 ],
                 "unknown" => vec![RuleFileType::Unknown],
                 // Binary formats
-                "elf" => vec![RuleFileType::Elf],
-                "macho" => vec![RuleFileType::Macho],
-                "pe" => vec![RuleFileType::Pe],
-                "dylib" => vec![RuleFileType::Macho],
-                "so" => vec![RuleFileType::Elf],
-                "dll" => vec![RuleFileType::Pe],
+                "elf" | "so" => vec![RuleFileType::Elf],
+                "macho" | "dylib" => vec![RuleFileType::Macho],
+                "pe" | "dll" => vec![RuleFileType::Pe],
                 // Scripting languages (fullname + extension)
                 "shell" | "sh" => vec![RuleFileType::Shell],
                 "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],

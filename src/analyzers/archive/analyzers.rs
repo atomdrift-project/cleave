@@ -180,14 +180,14 @@ impl ArchiveAnalyzer {
         file_path: &Path,
         relative_path: &str,
         data: &[u8],
-        file_type: FileType,
-        sha256: String,
+        file_type: &FileType,
+        sha256: &str,
     ) -> Result<Option<AnalysisReport>> {
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled");
         }
 
-        if let Some(reason) = self.archive_member_analysis_skip_reason(&file_type) {
+        if let Some(reason) = self.archive_member_analysis_skip_reason(file_type) {
             tracing::debug!(
                 relative_path,
                 file_type = %file_type.report_file_type(),
@@ -215,13 +215,13 @@ impl ArchiveAnalyzer {
                     .map(Some)
             }
         } else if let Some(analyzer) =
-            crate::analyzers::analyzer_for_file_type_arc(&file_type, self.capability_mapper.clone())
+            crate::analyzers::analyzer_for_file_type_arc(file_type, self.capability_mapper.clone())
         {
             let opts = crate::analyzers::stng_analysis_opts(4);
             let stng_strings = stng::extract_strings_with_options(data, &opts);
-            let extract_payloads = Self::should_extract_archive_payloads(&file_type);
+            let extract_payloads = Self::should_extract_archive_payloads(file_type);
             let skip_rizin_reason =
-                Self::archive_member_rizin_skip_reason(relative_path, &file_type);
+                Self::archive_member_rizin_skip_reason(relative_path, file_type);
             let payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {
@@ -237,7 +237,7 @@ impl ArchiveAnalyzer {
             )
             .with_backing_path(file_path)
             .with_skip_rizin_if(skip_rizin_reason.is_some())
-            .with_sha256(sha256.clone())
+            .with_sha256(sha256.to_string())
             .at_depth((self.current_depth + 1) as u32);
             input.cancellation = self.cancelled.clone();
 
@@ -260,7 +260,7 @@ impl ArchiveAnalyzer {
             let mut report = analyzer.analyze_input(&input)?;
             if let Some(ref yara_engine) = self.yara_engine {
                 if let Some(reason) =
-                    Self::archive_member_yara_skip_reason(relative_path, &file_type, data.len())
+                    Self::archive_member_yara_skip_reason(relative_path, file_type, data.len())
                 {
                     tracing::debug!(
                         relative_path,
@@ -270,7 +270,7 @@ impl ArchiveAnalyzer {
                         "Skipping archive member YARA scan"
                     );
                 } else {
-                    let yara_filetypes = Self::archive_member_yara_filetypes(&file_type);
+                    let yara_filetypes = Self::archive_member_yara_filetypes(file_type);
                     let yara_filter = if yara_filetypes.is_empty() {
                         None
                     } else {
@@ -537,8 +537,8 @@ impl ArchiveAnalyzer {
                 entry.path(),
                 &relative_path,
                 &file_data,
-                file_type,
-                sha256,
+                &file_type,
+                &sha256,
             ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -692,8 +692,8 @@ impl ArchiveAnalyzer {
                 entry.path(),
                 &relative_path,
                 &file_data,
-                file_type,
-                sha256,
+                &file_type,
+                &sha256,
             ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -992,8 +992,8 @@ impl ArchiveAnalyzer {
                 entry.path(),
                 &relative_path,
                 &file_data,
-                file_type,
-                sha256,
+                &file_type,
+                &sha256,
             ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -1230,7 +1230,13 @@ impl ArchiveAnalyzer {
             .and_then(|n| n.to_str())
             .unwrap_or("extracted")
             .to_string();
-        match self.analyze_extracted_member(file_path, &relative_path, &data, file_type, sha256)? {
+        match self.analyze_extracted_member(
+            file_path,
+            &relative_path,
+            &data,
+            &file_type,
+            &sha256,
+        )? {
             Some(report) => Ok(report),
             None => anyhow::bail!("Non-program file type, skipping: {}", file_path.display()),
         }
@@ -1272,12 +1278,11 @@ mod tests {
             None
         );
 
-        let all_files_analyzer = ArchiveAnalyzer::new().with_analysis_options(Arc::new(
-            crate::AnalysisOptions {
+        let all_files_analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
                 all_files: true,
                 ..crate::AnalysisOptions::default()
-            },
-        ));
+            }));
         assert_eq!(
             all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
             None

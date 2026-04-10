@@ -130,7 +130,8 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                             });
                         }
                         for sym in r2_symbols {
-                            let sym_type = if sym.symbol_type == "FUNC" || sym.symbol_type == "func" {
+                            let sym_type = if sym.symbol_type == "FUNC" || sym.symbol_type == "func"
+                            {
                                 "function"
                             } else {
                                 &sym.symbol_type

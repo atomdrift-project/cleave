@@ -289,20 +289,26 @@ impl YaraEngine {
         let inline_count = self.compiled_inline_namespaces.len();
 
         // 1. Built-in YARA rule files → tiered using the same classifier as third-party rules
-        let (mut builtin_tier_sources, builtin_rule_contexts, builtin_count) = if traits_dir.exists() {
-            Self::collect_builtin_sources_tiered(&traits_dir)
-        } else {
-            (HashMap::new(), HashMap::new(), 0)
-        };
+        let (mut builtin_tier_sources, builtin_rule_contexts, builtin_count) =
+            if traits_dir.exists() {
+                Self::collect_builtin_sources_tiered(&traits_dir)
+            } else {
+                (HashMap::new(), HashMap::new(), 0)
+            };
         self.rule_contexts.extend(builtin_rule_contexts);
 
         // 2. Third-party rules → classified into per-tier source lists
-        let (mut tier_sources, third_party_rule_contexts, third_party_count, vt_skipped, disabled_count) =
-            if enable_third_party && third_party_dir.exists() {
-                Self::collect_third_party_sources_tiered(&third_party_dir)
-            } else {
-                (HashMap::new(), HashMap::new(), 0, 0, 0)
-            };
+        let (
+            mut tier_sources,
+            third_party_rule_contexts,
+            third_party_count,
+            vt_skipped,
+            disabled_count,
+        ) = if enable_third_party && third_party_dir.exists() {
+            Self::collect_third_party_sources_tiered(&third_party_dir)
+        } else {
+            (HashMap::new(), HashMap::new(), 0, 0, 0)
+        };
         self.rule_contexts.extend(third_party_rule_contexts);
 
         let total_count = builtin_count + third_party_count + inline_count;
@@ -1009,7 +1015,13 @@ impl YaraEngine {
             tier_counts.len().max(1),
         );
 
-        (tier_sources, rule_contexts, total, vt_skipped, disabled_count)
+        (
+            tier_sources,
+            rule_contexts,
+            total,
+            vt_skipped,
+            disabled_count,
+        )
     }
 
     fn derive_rule_context(rule_name: &str, rule_text: &str, namespace: &str) -> RuleContext {
@@ -1108,7 +1120,8 @@ impl YaraEngine {
             }
         }
         if filetypes.is_empty() {
-            let inferred = yara_classify::infer_filetypes_from_namespace(namespace, os_meta.as_deref());
+            let inferred =
+                yara_classify::infer_filetypes_from_namespace(namespace, os_meta.as_deref());
             if !inferred.is_empty() {
                 filetypes = inferred
                     .iter()
@@ -1601,7 +1614,8 @@ impl YaraEngine {
             }
 
             if rule_filetypes.is_empty() {
-                let inferred = yara_classify::infer_filetypes_from_metadata_text(&metadata_hint_text);
+                let inferred =
+                    yara_classify::infer_filetypes_from_metadata_text(&metadata_hint_text);
                 if !inferred.is_empty() {
                     rule_filetypes = inferred
                         .iter()

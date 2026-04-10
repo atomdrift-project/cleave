@@ -924,6 +924,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::classify_analysis_error;
     use axum::http::StatusCode;

@@ -924,7 +924,11 @@ composite_rules:
 
     #[test]
     fn test_new() {
-        let analyzer = ArchiveAnalyzer::new();
+        let analyzer =
+            ArchiveAnalyzer::new().with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
         assert_eq!(analyzer.max_depth, 3);
         assert_eq!(analyzer.current_depth, 0);
     }
@@ -2491,10 +2495,10 @@ composite_rules:
         let options = zip::write::FileOptions::<()>::default()
             .compression_method(zip::CompressionMethod::Stored);
 
-        zip.start_file("test.txt", options).unwrap();
-        std::io::Write::write_all(&mut zip, b"test content").unwrap();
-        zip.start_file("script.sh", options).unwrap();
-        std::io::Write::write_all(&mut zip, b"#!/bin/sh\necho hello").unwrap();
+        zip.start_file("hello.py", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"import os\nprint('hello')").unwrap();
+        zip.start_file("subdir/data.py", options).unwrap();
+        std::io::Write::write_all(&mut zip, b"import sys\nprint('data')").unwrap();
 
         zip.finish().unwrap();
 
@@ -2944,7 +2948,12 @@ composite_rules:
         }
 
         let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        let analyzer = ArchiveAnalyzer::new()
+            .with_sample_extraction(config)
+            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&gz_path).expect("analyze .gz");
 

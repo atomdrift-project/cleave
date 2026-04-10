@@ -47,7 +47,11 @@ impl MachOAnalyzer {
     }
 
     fn unpack_macho_version(version: u32) -> (u32, u32, u32) {
-        ((version >> 16) & 0xffff, (version >> 8) & 0xff, version & 0xff)
+        (
+            (version >> 16) & 0xffff,
+            (version >> 8) & 0xff,
+            version & 0xff,
+        )
     }
 
     /// Creates a new Mach-O analyzer with default configuration
@@ -205,7 +209,7 @@ impl MachOAnalyzer {
         // Initialize metrics with Mach-O header info
         let mut macho_metrics = MachoMetrics {
             file_type: macho.header.filetype,
-            cpu_type: macho.header.cputype as u32,
+            cpu_type: macho.header.cputype,
             cpu_subtype: macho.header.cpusubtype,
             flags: macho.header.flags,
             class_bits: if macho.is_64 { 64 } else { 32 },
@@ -231,8 +235,7 @@ impl MachOAnalyzer {
                 goblin::mach::load_command::CommandVariant::BuildVersion(command) => {
                     let (min_os_major, min_os_minor, min_os_patch) =
                         Self::unpack_macho_version(command.minos);
-                    let (sdk_major, sdk_minor, sdk_patch) =
-                        Self::unpack_macho_version(command.sdk);
+                    let (sdk_major, sdk_minor, sdk_patch) = Self::unpack_macho_version(command.sdk);
                     macho_metrics.build_version_present = true;
                     macho_metrics.build_platform = command.platform;
                     macho_metrics.min_os_major = min_os_major;
@@ -571,7 +574,9 @@ impl MachOAnalyzer {
         }
 
         if let Some(uuid) = macho.load_commands.iter().find_map(|lc| match &lc.command {
-            goblin::mach::load_command::CommandVariant::Uuid(command) => Some(hex::encode(command.uuid)),
+            goblin::mach::load_command::CommandVariant::Uuid(command) => {
+                Some(hex::encode(command.uuid))
+            }
             _ => None,
         }) {
             Self::push_metadata_finding(

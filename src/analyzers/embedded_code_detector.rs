@@ -1268,10 +1268,15 @@ mod tests {
 
     #[test]
     fn test_dedup_identical_base64_binary_payloads() {
-        let payload = "H4sIAAAAAAAAAwMAAAAAAAAAAAA=";
+        use base64::Engine;
+
+        let mut payload = Vec::with_capacity(192);
+        payload.extend_from_slice(&[0x1F, 0x8B, 0x08, 0x00]);
+        payload.resize(192, 0u8);
+        let payload = base64::engine::general_purpose::STANDARD.encode(&payload);
         let strings = vec![
-            make_string_info_at_offset(payload, 0x230),
-            make_string_info_at_offset(payload, 0x231),
+            make_string_info_at_offset(&payload, 0x230),
+            make_string_info_at_offset(&payload, 0x231),
         ];
         let mapper = Arc::new(CapabilityMapper::default());
 

@@ -814,12 +814,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         path.display()
     );
 
-    // Skip unknown file types at the top level unless all_files is set — consistent with
-    // directory scan behavior. Recursive calls (analysis_depth > 0) always proceed because
-    // an extracted payload may not have a recognisable extension.
-    if analysis_depth == 0 && file_type == FileType::Unknown && !options.all_files {
-        anyhow::bail!("Unknown file type, skipping: {}", path.display());
-    }
+    // Explicit file analysis should still run for unknown top-level inputs so callers can
+    // inspect ad hoc files directly. Directory scans keep their own pre-filtering logic.
 
     // Get file size for memory tracking (from loaded data, avoiding a metadata syscall)
     let file_size = file_data.len() as u64;

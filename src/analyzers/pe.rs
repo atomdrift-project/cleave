@@ -8,12 +8,12 @@ use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use chrono::TimeZone;
-use goblin::pe::PE;
 use goblin::pe::optional_header::{
     MAGIC_32, MAGIC_64, OFFSET_WINDOWS_FIELDS_32_CHECKSUM, OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
     SIZEOF_STANDARD_FIELDS_32, SIZEOF_STANDARD_FIELDS_64,
 };
 use goblin::pe::resource::{RT_GROUP_ICON, RT_ICON};
+use goblin::pe::PE;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -74,12 +74,12 @@ fn pe_checksum_field_offset(pe: &PE<'_>, data_len: usize) -> Option<usize> {
     let opt = pe.header.optional_header.as_ref()?;
 
     let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_32
-            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
-        MAGIC_64 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_64
-            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        MAGIC_32 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
+        }
+        MAGIC_64 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
+        }
         _ => return None,
     };
 
@@ -171,7 +171,10 @@ fn pdb_filename(bytes: &[u8]) -> Option<String> {
 fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
     const SIGNING_TIME_OID: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
 
-    if let Some(idx) = data.windows(SIGNING_TIME_OID.len()).position(|w| w == SIGNING_TIME_OID) {
+    if let Some(idx) = data
+        .windows(SIGNING_TIME_OID.len())
+        .position(|w| w == SIGNING_TIME_OID)
+    {
         let tail = &data[idx + SIGNING_TIME_OID.len()..];
         for offset in 0..tail.len().min(32).saturating_sub(2) {
             let tag = tail[offset];

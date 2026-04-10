@@ -66,9 +66,8 @@ impl YaraTier {
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
                 | "msg" | "lnk" | "rdp" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi"
                 | "cab" | "txt" | "text" | "log" | "xml" | "json" | "ini" | "cfg" | "conf"
-                | "ovpn"
-                | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" | "vhd"
-                | "vmdk" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
+                | "ovpn" | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar"
+                | "vhd" | "vmdk" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
                 _ => {}
             }
         }
@@ -268,8 +267,7 @@ impl YaraTier {
             .split('.')
             .any(|part| matches!(part, "multi" | "any" | "all"))
             || rule_name_lower.starts_with("multi_")
-            || split_text_tokens(&rule_name_lower)
-                .any(|token| matches!(token, "multi" | "eicar"))
+            || split_text_tokens(&rule_name_lower).any(|token| matches!(token, "multi" | "eicar"))
         {
             return Self::CrossFormat;
         }
@@ -303,8 +301,8 @@ fn looks_intentionally_broad(
         split_text_tokens(&os.to_ascii_lowercase())
             .any(|token| matches!(token, "all" | "any" | "multi"))
     });
-    let broad_name = split_text_tokens(rule_name_lower)
-        .any(|token| matches!(token, "any" | "multi" | "all"));
+    let broad_name =
+        split_text_tokens(rule_name_lower).any(|token| matches!(token, "any" | "multi" | "all"));
     let broad_ns = namespace_lower
         .split('.')
         .any(|part| matches!(part, "any" | "multi" | "all"));
@@ -334,7 +332,10 @@ fn extract_header_tags(rule_text: &str) -> Vec<String> {
 }
 
 fn is_explicit_raw_blob_rule(rule_name: &str, lower_source: &str) -> bool {
-    let condensed: String = lower_source.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let condensed: String = lower_source
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
     let excludes_known_binary_magic = condensed.contains("uint16(0)!=0x5a4d")
         || condensed.contains("uint16be(0)!=0x4d5a")
         || condensed.contains("uint32(0)!=0x464c457f")
@@ -778,13 +779,8 @@ mod indicators {
         "vbscript",
     ];
 
-    pub(super) const SCRIPT_JS_NAME: &[&str] = &[
-        "javascript",
-        "jscript",
-        "jslib",
-        "electronapp",
-        "nodejs",
-    ];
+    pub(super) const SCRIPT_JS_NAME: &[&str] =
+        &["javascript", "jscript", "jslib", "electronapp", "nodejs"];
 
     pub(super) const SCRIPT_GENERIC_NAME: &[&str] = &[
         "webshell",
@@ -1245,14 +1241,13 @@ fn script_filetypes_from_text_inner(
             "powershell" | "ps1" | "psm1" | "psd1" | "psh" | "ps" => {
                 return vec!["ps1", "psm1", "psd1"];
             }
-            "python" | "py" | "pyc" => return vec!["py", "pyc"],
+            "python" | "py" | "pyc" | "ironpython" => return vec!["py", "pyc"],
             "javascript" | "jscript" | "js" | "mjs" | "cjs" => return vec!["js", "mjs", "cjs"],
             "jslib" | "nodejs" | "electron" | "electronapp" => {
                 return vec!["js", "mjs", "cjs"];
             }
             "php" => return vec!["php"],
             "autoit" | "au3" => return vec!["au3"],
-            "ironpython" => return vec!["py", "pyc"],
             "jsp" => return vec!["jsp"],
             "aspx" => return vec!["aspx"],
             "asp" => return vec!["asp"],
@@ -1318,10 +1313,10 @@ pub fn infer_filetypes_from_tags(tags: &[String]) -> Vec<&'static str> {
     for tag in tags {
         let upper = tag.to_ascii_uppercase();
         match upper.as_str() {
-            "PE" | "EXE" | "DLL" | "SYS" => return vec!["pe", "dll"],
-            "WINMALWARE" | "WINDOWSMALWARE" => return vec!["pe", "dll"],
-            "ELF" | "SO" | "KO" => return vec!["elf", "so"],
-            "LINUXMALWARE" => return vec!["elf", "so"],
+            "PE" | "EXE" | "DLL" | "SYS" | "WINMALWARE" | "WINDOWSMALWARE" => {
+                return vec!["pe", "dll"];
+            }
+            "ELF" | "SO" | "KO" | "LINUXMALWARE" => return vec!["elf", "so"],
             "MACHO" | "MACH_O" | "MACH-O" | "DYLIB" | "KEXT" => {
                 return vec!["macho", "dylib"];
             }
@@ -1528,8 +1523,7 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
         return Some("ole");
     }
 
-    if condensed.contains("uint32(0)==0x25504446")
-        || condensed.contains("uint32be(0)==0x25504446")
+    if condensed.contains("uint32(0)==0x25504446") || condensed.contains("uint32be(0)==0x25504446")
     {
         return Some("pdf");
     }
@@ -1628,13 +1622,12 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "office" | "word" | "excel" | "olefile" | "ole" | "macro" | "maldoc" => {
                 return vec!["doc", "docx", "xls", "xlsx", "ole"];
             }
-            "securepreferences" => return vec!["json"],
+            "securepreferences" | "json" => return vec!["json"],
             "onenote" | "one" | "onepkg" => return vec!["one", "onepkg"],
             "lnk" | "lnkr" | "shortcut" => return vec!["lnk"],
             "rdp" => return vec!["rdp"],
             "readme" | "txt" | "text" => return vec!["txt"],
             "xml" => return vec!["xml"],
-            "json" => return vec!["json"],
             "ini" => return vec!["ini"],
             "cfg" | "conf" => return vec!["cfg", "conf", "ini"],
             "openvpn" | "ovpn" => return vec!["ovpn"],
@@ -1644,19 +1637,16 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "svg" => return vec!["svg"],
             "eps" => return vec!["eps"],
             "eml" => return vec!["eml"],
-            "outlook" => return vec!["msg"],
+            "outlook" | "msg" => return vec!["msg"],
             "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" => {
                 return vec!["gzip"];
             }
             "cab" | "msi" => return vec!["cab"],
             "vhd" | "vmdk" => return vec!["vhd"],
-            "msg" => return vec!["msg"],
             _ => {}
         }
     }
-    if lower.contains("embeddedpdf")
-        || lower.contains("embedded pdf")
-        || lower.contains("adobepdf")
+    if lower.contains("embeddedpdf") || lower.contains("embedded pdf") || lower.contains("adobepdf")
     {
         return vec!["pdf"];
     }
@@ -1716,6 +1706,7 @@ pub fn script_filetypes_from_rule_name(text: &str) -> Vec<&'static str> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1784,10 +1775,7 @@ mod tests {
             infer_filetypes_from_tags(&["PowerShell".to_string()]),
             vec!["ps1", "psm1", "psd1"]
         );
-        assert_eq!(
-            infer_filetypes_from_tags(&["LOG".to_string()]),
-            vec!["log"]
-        );
+        assert_eq!(infer_filetypes_from_tags(&["LOG".to_string()]), vec!["log"]);
         assert_eq!(
             infer_filetypes_from_tags(&["LINUXMALWARE".to_string()]),
             vec!["elf", "so"]
@@ -1854,12 +1842,30 @@ mod tests {
         assert_eq!(filetype_from_magic("uint16(0) == 0x457f"), Some("elf"));
         assert_eq!(filetype_from_magic("int16(0) == 0x5A4D"), Some("pe"));
         assert_eq!(filetype_from_magic("int32be(0) == 0x7f454c46"), Some("elf"));
-        assert_eq!(filetype_from_magic("uint32be(0x0) == 0x7F454C46"), Some("elf"));
-        assert_eq!(filetype_from_magic("uint32be(0) == 0xcffaedfe"), Some("macho"));
-        assert_eq!(filetype_from_magic("uint32be(0) == 0xcafebabe"), Some("macho"));
-        assert_eq!(filetype_from_magic("uint32be(0) == 0x504B0304"), Some("zip"));
-        assert_eq!(filetype_from_magic("uint32be(0) == 0xD0CF11E0"), Some("ole"));
-        assert_eq!(filetype_from_magic("uint32be(0) == 0x6465780A"), Some("dex"));
+        assert_eq!(
+            filetype_from_magic("uint32be(0x0) == 0x7F454C46"),
+            Some("elf")
+        );
+        assert_eq!(
+            filetype_from_magic("uint32be(0) == 0xcffaedfe"),
+            Some("macho")
+        );
+        assert_eq!(
+            filetype_from_magic("uint32be(0) == 0xcafebabe"),
+            Some("macho")
+        );
+        assert_eq!(
+            filetype_from_magic("uint32be(0) == 0x504B0304"),
+            Some("zip")
+        );
+        assert_eq!(
+            filetype_from_magic("uint32be(0) == 0xD0CF11E0"),
+            Some("ole")
+        );
+        assert_eq!(
+            filetype_from_magic("uint32be(0) == 0x6465780A"),
+            Some("dex")
+        );
         assert!(has_module_reference("pe.number_of_sections > 3", "pe."));
         assert!(!has_module_reference("recipe.format", "pe."));
     }
@@ -2344,11 +2350,15 @@ rule opaque_family_name {
             vec!["gzip"]
         );
         assert_eq!(
-            infer_filetypes_from_metadata_text("Detect suspicious VHD file with APT28 artefacts inside"),
+            infer_filetypes_from_metadata_text(
+                "Detect suspicious VHD file with APT28 artefacts inside"
+            ),
             vec!["vhd"]
         );
         assert_eq!(
-            infer_filetypes_from_metadata_text("Detects Embedded PDFs which can start malicious content"),
+            infer_filetypes_from_metadata_text(
+                "Detects Embedded PDFs which can start malicious content"
+            ),
             vec!["pdf"]
         );
         assert_eq!(
@@ -2364,7 +2374,9 @@ rule opaque_family_name {
             vec!["sct", "wsf"]
         );
         assert_eq!(
-            infer_filetypes_from_metadata_text("Detect samples of the Android banking trojan BRATA"),
+            infer_filetypes_from_metadata_text(
+                "Detect samples of the Android banking trojan BRATA"
+            ),
             vec!["apk", "dex"]
         );
         assert_eq!(
@@ -2399,11 +2411,7 @@ rule SEKOIA_Apt_Yemen_Apk_Guardzoo : FILE
 }
 "#;
         assert_eq!(
-            YaraTier::classify_rule(
-                "SEKOIA_Apt_Yemen_Apk_Guardzoo",
-                apk_rule,
-                "3p.test.android"
-            ),
+            YaraTier::classify_rule("SEKOIA_Apt_Yemen_Apk_Guardzoo", apk_rule, "3p.test.android"),
             YaraTier::Script
         );
 
@@ -2472,7 +2480,11 @@ rule RUSSIANPANDA_Darkgate_Autoit
 }
 "#;
         assert_eq!(
-            YaraTier::classify_rule("RUSSIANPANDA_Darkgate_Autoit", autoit_rule, "3p.test.autoit"),
+            YaraTier::classify_rule(
+                "RUSSIANPANDA_Darkgate_Autoit",
+                autoit_rule,
+                "3p.test.autoit"
+            ),
             YaraTier::Script
         );
 
@@ -3009,11 +3021,7 @@ rule Jupyter
 }
 "#;
         assert_eq!(
-            YaraTier::classify_rule(
-                "Jupyter",
-                jupyter_rule,
-                "3p.bartblaze.crimeware.Jupyter"
-            ),
+            YaraTier::classify_rule("Jupyter", jupyter_rule, "3p.bartblaze.crimeware.Jupyter"),
             YaraTier::ScriptJs
         );
 

@@ -70,12 +70,12 @@ const PLATFORM_NAMES: &[&str] = &[
 /// Directory name segments that add no semantic meaning.
 /// These make the taxonomy harder to navigate and provide no value for ML classification.
 const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
-    "advanced",   // subjective
-    "api",        // almost everything is an API
-    "assorted",   // dumping ground
-    "atomic",     // vague
-    "base",       // too vague
-    "basic",      // meaningless
+    "advanced", // subjective
+    "api",      // almost everything is an API
+    "assorted", // dumping ground
+    "atomic",   // vague
+    "base",     // too vague
+    "basic",    // meaningless
     "behavior",
     "behaviors",
     "component",

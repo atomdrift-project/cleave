@@ -25,6 +25,31 @@ pub(crate) struct MachOAnalyzer {
 }
 
 impl MachOAnalyzer {
+    fn push_metadata_finding(
+        report: &mut AnalysisReport,
+        id: &str,
+        desc: &str,
+        method: &str,
+        source: &str,
+        value: String,
+    ) {
+        report.findings.push(
+            Finding::structural(id.to_string(), desc.to_string(), 1.0)
+                .with_criticality(Criticality::Baseline)
+                .with_evidence(vec![Evidence {
+                    method: method.to_string(),
+                    source: source.to_string(),
+                    value,
+                    location: None,
+                    ..Default::default()
+                }]),
+        );
+    }
+
+    fn unpack_macho_version(version: u32) -> (u32, u32, u32) {
+        ((version >> 16) & 0xffff, (version >> 8) & 0xff, version & 0xff)
+    }
+
     /// Creates a new Mach-O analyzer with default configuration
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -178,22 +203,83 @@ impl MachOAnalyzer {
         let _ = self.analyze_sections(&macho, data, &mut report);
 
         // Initialize metrics with Mach-O header info
-        let rpath_count = macho
-            .load_commands
-            .iter()
-            .filter(|lc| {
-                matches!(
-                    lc.command,
-                    goblin::mach::load_command::CommandVariant::Rpath(_)
-                )
-            })
-            .count() as u32;
-
-        let macho_metrics = MachoMetrics {
+        let mut macho_metrics = MachoMetrics {
             file_type: macho.header.filetype,
-            rpath_count,
+            cpu_type: macho.header.cputype as u32,
+            cpu_subtype: macho.header.cpusubtype,
+            flags: macho.header.flags,
+            class_bits: if macho.is_64 { 64 } else { 32 },
+            little_endian: macho.little_endian,
+            entry_point: macho.entry,
+            old_style_entry: macho.old_style_entry,
+            load_command_count: macho.header.ncmds as u32,
+            load_commands_size: macho.header.sizeofcmds,
+            rpath_count: macho.rpaths.len() as u32,
+            install_name_present: macho.name.is_some(),
             ..Default::default()
         };
+
+        for lc in &macho.load_commands {
+            match &lc.command {
+                goblin::mach::load_command::CommandVariant::CodeSignature(cs) => {
+                    macho_metrics.has_code_signature = true;
+                    macho_metrics.code_signature_size = cs.datasize;
+                }
+                goblin::mach::load_command::CommandVariant::Uuid(_) => {
+                    macho_metrics.uuid_present = true;
+                }
+                goblin::mach::load_command::CommandVariant::BuildVersion(command) => {
+                    let (min_os_major, min_os_minor, min_os_patch) =
+                        Self::unpack_macho_version(command.minos);
+                    let (sdk_major, sdk_minor, sdk_patch) =
+                        Self::unpack_macho_version(command.sdk);
+                    macho_metrics.build_version_present = true;
+                    macho_metrics.build_platform = command.platform;
+                    macho_metrics.min_os_major = min_os_major;
+                    macho_metrics.min_os_minor = min_os_minor;
+                    macho_metrics.min_os_patch = min_os_patch;
+                    macho_metrics.sdk_major = sdk_major;
+                    macho_metrics.sdk_minor = sdk_minor;
+                    macho_metrics.sdk_patch = sdk_patch;
+                    macho_metrics.build_tool_count = command.ntools;
+                }
+                goblin::mach::load_command::CommandVariant::SourceVersion(command) => {
+                    macho_metrics.source_version_present = true;
+                    macho_metrics.source_version = command.version;
+                }
+                goblin::mach::load_command::CommandVariant::Main(_) => {
+                    macho_metrics.main_command_present = true;
+                }
+                goblin::mach::load_command::CommandVariant::Unixthread(_) => {
+                    macho_metrics.unixthread_command_present = true;
+                }
+                goblin::mach::load_command::CommandVariant::LoadWeakDylib(_) => {
+                    macho_metrics.dylib_count += 1;
+                    macho_metrics.weak_dylib_count += 1;
+                }
+                goblin::mach::load_command::CommandVariant::ReexportDylib(_) => {
+                    macho_metrics.dylib_count += 1;
+                    macho_metrics.reexport_dylib_count += 1;
+                }
+                goblin::mach::load_command::CommandVariant::LoadUpwardDylib(_) => {
+                    macho_metrics.dylib_count += 1;
+                    macho_metrics.upward_dylib_count += 1;
+                }
+                goblin::mach::load_command::CommandVariant::LazyLoadDylib(_) => {
+                    macho_metrics.dylib_count += 1;
+                    macho_metrics.lazy_dylib_count += 1;
+                }
+                goblin::mach::load_command::CommandVariant::LoadDylib(_) => {
+                    macho_metrics.dylib_count += 1;
+                }
+                goblin::mach::load_command::CommandVariant::LoadDylinker(_)
+                | goblin::mach::load_command::CommandVariant::IdDylinker(_)
+                | goblin::mach::load_command::CommandVariant::DyldEnvironment(_) => {
+                    macho_metrics.dylinker_present = true;
+                }
+                _ => {}
+            }
+        }
 
         // Always compute basic binary metrics (even if radare2 fails)
         let binary_metrics = crate::types::BinaryMetrics {
@@ -301,7 +387,6 @@ impl MachOAnalyzer {
                     }
 
                     if let Some(ref mut macho_metrics) = metrics.macho {
-                        macho_metrics.has_code_signature = codesig_data.is_some();
                         macho_metrics.has_entitlements = !codesig_data
                             .as_ref()
                             .map(|c| c.entitlements.is_empty())
@@ -483,6 +568,56 @@ impl MachOAnalyzer {
                     ..Default::default()
                 }],
             });
+        }
+
+        if let Some(uuid) = macho.load_commands.iter().find_map(|lc| match &lc.command {
+            goblin::mach::load_command::CommandVariant::Uuid(command) => Some(hex::encode(command.uuid)),
+            _ => None,
+        }) {
+            Self::push_metadata_finding(
+                report,
+                "metadata/build/reproducible::macho-uuid",
+                "Mach-O UUID present",
+                "load_command",
+                "goblin",
+                uuid,
+            );
+        }
+
+        if let Some(name) = macho.name {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::macho-install-name",
+                "Mach-O install name present",
+                "lc_id_dylib",
+                "goblin",
+                name.to_string(),
+            );
+        }
+
+        for dylib in &macho.libs {
+            if *dylib == "self" || macho.name.is_some_and(|name| name == *dylib) {
+                continue;
+            }
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::macho-dylib",
+                "Mach-O linked dylib",
+                "load_dylib",
+                "goblin",
+                (*dylib).to_string(),
+            );
+        }
+
+        for rpath in &macho.rpaths {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::macho-rpath",
+                "Mach-O runtime search path",
+                "rpath",
+                "goblin",
+                (*rpath).to_string(),
+            );
         }
     }
 

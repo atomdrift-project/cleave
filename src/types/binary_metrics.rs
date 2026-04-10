@@ -97,9 +97,39 @@ pub struct BinaryMetrics {
     /// Position Independent Executable
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_pie: bool,
+    /// Raw format-native entry point value
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub entry_point: u64,
+    /// Entry point is expressed as a relative virtual address
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_point_is_rva: bool,
+    /// Entry point is outside the primary expected code section
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_in_nonstandard_section: bool,
     /// Relocation count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub relocation_count: u32,
+    /// Linked dependency count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dependency_count: u32,
+    /// Runtime library search path count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub runtime_search_path_count: u32,
+    /// Debug-reference count across format-specific debug tables/sections
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_reference_count: u32,
+    /// Stable build/provenance identifier present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub provenance_id_present: bool,
+    /// Stable build/provenance identifier length in bytes
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub provenance_id_length: u32,
+    /// Has embedded signature metadata
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_signature: bool,
+    /// Embedded signature validates successfully, if checked
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_valid: Option<bool>,
 
     // === Sections ===
     /// Total section count
@@ -438,6 +468,24 @@ pub struct ElfMetrics {
     /// ELF file type (header.e_type)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub e_type: u32,
+    /// ELF machine type (header.e_machine)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub e_machine: u32,
+    /// ELF class in bits (32 or 64)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub class_bits: u32,
+    /// Little endian encoding
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub little_endian: bool,
+    /// Entry point address
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub entry_point: u64,
+    /// Program header count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub program_header_count: u32,
+    /// Section header count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub section_header_count: u32,
     /// Entry point not in .text
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_not_in_text: bool,
@@ -449,12 +497,24 @@ pub struct ElfMetrics {
     /// Number of needed libraries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub needed_libs: u32,
+    /// Interpreter present (PT_INTERP)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_interpreter: bool,
+    /// SONAME present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_soname: bool,
     /// RPATH set
     #[serde(default, skip_serializing_if = "is_false")]
     pub rpath_set: bool,
+    /// Number of RPATH entries
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub rpath_count: u32,
     /// RUNPATH set
     #[serde(default, skip_serializing_if = "is_false")]
     pub runpath_set: bool,
+    /// Number of RUNPATH entries
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub runpath_count: u32,
     /// DT_INIT_ARRAY count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub init_array_count: u32,
@@ -466,6 +526,12 @@ pub struct ElfMetrics {
     /// Hidden visibility symbols
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub hidden_symbols: u32,
+    /// Dynamic symbol table count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dynsym_count: u32,
+    /// Static symbol table count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub symtab_count: u32,
     /// GNU hash present
     #[serde(default, skip_serializing_if = "is_false")]
     pub gnu_hash_present: bool,
@@ -477,6 +543,18 @@ pub struct ElfMetrics {
     /// Maximum p_memsz across all LOAD segments
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub load_segment_max_p_memsz: u64,
+    /// Dynamic RELA relocation count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dynrela_count: u32,
+    /// Dynamic REL relocation count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dynrel_count: u32,
+    /// PLT relocation count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub pltreloc_count: u32,
+    /// Section relocation groups count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub section_relocation_group_count: u32,
 
     // === Security Features ===
     /// RELRO status
@@ -505,6 +583,21 @@ pub struct ElfMetrics {
     /// Has .note section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_note: bool,
+    /// Total ELF note count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub note_count: u32,
+    /// GNU build-id note present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub build_id_present: bool,
+    /// GNU build-id length in bytes
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub build_id_length: u32,
+    /// .gnu_debuglink section present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub debuglink_present: bool,
+    /// Number of debug-related sections
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_section_count: u32,
 }
 
 /// PE-specific metrics
@@ -770,23 +863,65 @@ pub struct MachoMetrics {
     /// Mach-O file type (header.filetype)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub file_type: u32,
+    /// CPU type (header.cputype)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_type: u32,
+    /// CPU subtype (header.cpusubtype)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cpu_subtype: u32,
+    /// Header flags bitfield
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub flags: u32,
+    /// Mach-O class in bits (32 or 64)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub class_bits: u32,
+    /// Little endian encoding
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub little_endian: bool,
     /// Universal (fat) binary
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_universal: bool,
     /// Slice count (for universal)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub slice_count: u32,
+    /// Virtual entry point address
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub entry_point: u64,
+    /// Entry point came from legacy LC_UNIXTHREAD
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub old_style_entry: bool,
 
     // === Load Commands ===
     /// Load command count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub load_command_count: u32,
+    /// Header sizeofcmds value
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub load_commands_size: u32,
     /// Has code signature
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_code_signature: bool,
     /// Signature valid
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_valid: Option<bool>,
+    /// UUID load command present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub uuid_present: bool,
+    /// Build-version load command present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub build_version_present: bool,
+    /// Source-version load command present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub source_version_present: bool,
+    /// Main entrypoint command present (LC_MAIN)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub main_command_present: bool,
+    /// Legacy LC_UNIXTHREAD entrypoint present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub unixthread_command_present: bool,
+    /// Code signature blob size in bytes
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub code_signature_size: u32,
 
     // === Segments ===
     /// __LINKEDIT size
@@ -824,12 +959,56 @@ pub struct MachoMetrics {
     /// dylib dependency count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dylib_count: u32,
+    /// Re-exported dylib count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub reexport_dylib_count: u32,
     /// Weak dylib count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub weak_dylib_count: u32,
+    /// Upward dylib count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub upward_dylib_count: u32,
+    /// Lazy-loaded dylib count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub lazy_dylib_count: u32,
     /// @rpath count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rpath_count: u32,
+    /// Install name present (LC_ID_DYLIB)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub install_name_present: bool,
+    /// Dynamic linker load command present
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dylinker_present: bool,
+
+    // === Build Metadata ===
+    /// Build platform from LC_BUILD_VERSION
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub build_platform: u32,
+    /// Minimum OS major version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub min_os_major: u32,
+    /// Minimum OS minor version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub min_os_minor: u32,
+    /// Minimum OS patch version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub min_os_patch: u32,
+    /// SDK major version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sdk_major: u32,
+    /// SDK minor version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sdk_minor: u32,
+    /// SDK patch version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sdk_patch: u32,
+    /// Build tool version entry count
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub build_tool_count: u32,
+    /// Encoded source version value
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub source_version: u64,
 
     // === Hardened Runtime ===
     /// Hardened runtime enabled

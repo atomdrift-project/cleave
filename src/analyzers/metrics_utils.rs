@@ -278,6 +278,35 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                     macho.slice_count = archs.len() as u32;
                 }
             }
+
+            binary.entry_point = macho.entry_point;
+            binary.dependency_count = macho.dylib_count;
+            binary.runtime_search_path_count = macho.rpath_count;
+            binary.provenance_id_present = macho.uuid_present;
+            binary.provenance_id_length = if macho.uuid_present { 16 } else { 0 };
+            binary.has_signature = macho.has_code_signature;
+            binary.signature_valid = macho.signature_valid;
+        }
+    } else if file_type == "elf" {
+        if let Some(ref elf) = metrics.elf {
+            binary.entry_point = elf.entry_point;
+            binary.entry_in_nonstandard_section = elf.entry_not_in_text;
+            binary.dependency_count = elf.needed_libs;
+            binary.runtime_search_path_count = elf.rpath_count + elf.runpath_count;
+            binary.debug_reference_count =
+                elf.debug_section_count + u32::from(elf.debuglink_present);
+            binary.provenance_id_present = elf.build_id_present;
+            binary.provenance_id_length = elf.build_id_length;
+        }
+    } else if file_type == "pe" {
+        if let Some(ref pe) = metrics.pe {
+            binary.entry_point = pe.entry_point_rva as u64;
+            binary.entry_point_is_rva = true;
+            binary.entry_in_nonstandard_section = pe.entry_in_nonstandard_section;
+            binary.dependency_count = pe.import_dll_count;
+            binary.debug_reference_count = pe.debug_directory_entries;
+            binary.has_signature = pe.has_signature;
+            binary.signature_valid = pe.signature_valid;
         }
     }
 }

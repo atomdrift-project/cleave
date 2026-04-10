@@ -11,6 +11,7 @@ use crate::types::binary_metrics::ElfMetrics;
 use crate::types::*;
 use anyhow::{Context, Result};
 use goblin::elf::Elf;
+use goblin::elf::note::NT_GNU_BUILD_ID;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -30,6 +31,36 @@ pub(crate) struct ElfAnalyzer {
 }
 
 impl ElfAnalyzer {
+    fn push_metadata_finding(
+        report: &mut AnalysisReport,
+        id: &str,
+        desc: &str,
+        method: &str,
+        value: String,
+    ) {
+        report.findings.push(
+            Finding::structural(id.to_string(), desc.to_string(), 1.0)
+                .with_criticality(Criticality::Baseline)
+                .with_evidence(vec![Evidence {
+                    method: method.to_string(),
+                    source: "goblin".to_string(),
+                    value,
+                    location: None,
+                    ..Default::default()
+                }]),
+        );
+    }
+
+    fn gnu_debuglink_name(section_data: &[u8]) -> Option<String> {
+        let nul = section_data.iter().position(|&b| b == 0)?;
+        if nul == 0 {
+            return None;
+        }
+        std::str::from_utf8(&section_data[..nul])
+            .ok()
+            .map(ToString::to_string)
+    }
+
     /// Creates a new ELF analyzer with default configuration
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -138,7 +169,7 @@ impl ElfAnalyzer {
                 report.target.architectures = Some(vec![self.arch_name(&elf)]);
 
                 // Compute ELF-specific metrics
-                let elf_metrics = self.compute_elf_metrics(&elf);
+                let elf_metrics = self.compute_elf_metrics(&elf, data);
                 let symbols_found = !elf.syms.is_empty();
 
                 // Calculate code_size from goblin section flags (more accurate than radare2)
@@ -162,7 +193,7 @@ impl ElfAnalyzer {
                     },
                     || {
                         // Analyze header and structure
-                        self.analyze_structure(&elf, &mut report);
+                        self.analyze_structure(&elf, data, &mut report);
 
                         // Extract dynamic symbols and map to capabilities
                         self.analyze_dynamic_symbols(&elf, data, &mut report);
@@ -534,7 +565,7 @@ impl ElfAnalyzer {
         report
     }
 
-    fn analyze_structure<'a>(&self, elf: &Elf<'a>, report: &mut AnalysisReport) {
+    fn analyze_structure<'a>(&self, elf: &Elf<'a>, data: &[u8], report: &mut AnalysisReport) {
         // Binary format
         report.structure.push(StructuralFeature {
             id: "binary/format/elf".to_string(),
@@ -590,6 +621,104 @@ impl ElfAnalyzer {
                     ..Default::default()
                 }],
             });
+        }
+
+        if let Some(interpreter) = elf.interpreter {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::elf-interpreter",
+                "ELF program interpreter present",
+                "pt_interp",
+                interpreter.to_string(),
+            );
+        }
+
+        if let Some(soname) = elf.soname {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::elf-soname",
+                "ELF SONAME present",
+                "dt_soname",
+                soname.to_string(),
+            );
+        }
+
+        for needed in &elf.libraries {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::elf-needed-lib",
+                "ELF needed library",
+                "dt_needed",
+                (*needed).to_string(),
+            );
+        }
+
+        for rpath in &elf.rpaths {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::elf-rpath",
+                "ELF RPATH entry",
+                "dt_rpath",
+                (*rpath).to_string(),
+            );
+        }
+
+        for runpath in &elf.runpaths {
+            Self::push_metadata_finding(
+                report,
+                "metadata/binary/linking::elf-runpath",
+                "ELF RUNPATH entry",
+                "dt_runpath",
+                (*runpath).to_string(),
+            );
+        }
+
+        if let Some(note_iter) = elf.iter_note_sections(data, None) {
+            for note in note_iter.flatten() {
+                if note.name == "GNU" && note.n_type == NT_GNU_BUILD_ID {
+                    report.findings.push(
+                        Finding::structural(
+                            "metadata/build/reproducible::elf-build-id".to_string(),
+                            "ELF GNU build-id note present".to_string(),
+                            1.0,
+                        )
+                        .with_criticality(Criticality::Baseline)
+                        .with_evidence(vec![Evidence {
+                            method: "note".to_string(),
+                            source: "goblin".to_string(),
+                            value: hex::encode(note.desc),
+                            location: None,
+                            ..Default::default()
+                        }]),
+                    );
+                    break;
+                }
+            }
+        }
+
+        for section in &elf.section_headers {
+            let Some(name) = elf.shdr_strtab.get_at(section.sh_name) else {
+                continue;
+            };
+            if name != ".gnu_debuglink" {
+                continue;
+            }
+
+            let offset = section.sh_offset as usize;
+            let size = section.sh_size as usize;
+            if offset.saturating_add(size) > data.len() || size == 0 {
+                continue;
+            }
+
+            if let Some(debuglink) = Self::gnu_debuglink_name(&data[offset..offset + size]) {
+                Self::push_metadata_finding(
+                    report,
+                    "metadata/build/debug::elf-debuglink",
+                    ".gnu_debuglink reference present",
+                    "section",
+                    debuglink,
+                );
+            }
         }
     }
 
@@ -752,13 +881,29 @@ impl ElfAnalyzer {
         }
     }
     /// Compute ELF-specific metrics from parsed ELF binary
-    fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>) -> ElfMetrics {
+    fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>, data: &[u8]) -> ElfMetrics {
         use goblin::elf::dynamic::*;
         use goblin::elf::program_header::*;
         use goblin::elf::sym::STB_LOCAL;
 
         let mut metrics = ElfMetrics {
             e_type: elf.header.e_type as u32,
+            e_machine: elf.header.e_machine as u32,
+            class_bits: if elf.is_64 { 64 } else { 32 },
+            little_endian: elf.little_endian,
+            entry_point: elf.entry,
+            program_header_count: elf.program_headers.len() as u32,
+            section_header_count: elf.section_headers.len() as u32,
+            has_interpreter: elf.interpreter.is_some(),
+            has_soname: elf.soname.is_some(),
+            rpath_count: elf.rpaths.len() as u32,
+            runpath_count: elf.runpaths.len() as u32,
+            dynsym_count: elf.dynsyms.len() as u32,
+            symtab_count: elf.syms.len() as u32,
+            dynrela_count: elf.dynrelas.len() as u32,
+            dynrel_count: elf.dynrels.len() as u32,
+            pltreloc_count: elf.pltrelocs.len() as u32,
+            section_relocation_group_count: elf.shdr_relocs.len() as u32,
             ..Default::default()
         };
 
@@ -883,7 +1028,21 @@ impl ElfAnalyzer {
                     ".got" | ".got.plt" => metrics.has_got = true,
                     ".eh_frame" => metrics.has_eh_frame = true,
                     n if n.starts_with(".note") => metrics.has_note = true,
+                    ".gnu_debuglink" => metrics.debuglink_present = true,
+                    n if n.starts_with(".debug") || n == ".zdebug" || n.starts_with(".zdebug") => {
+                        metrics.debug_section_count += 1;
+                    }
                     _ => {}
+                }
+            }
+        }
+
+        if let Some(note_iter) = elf.iter_note_sections(data, None) {
+            for note in note_iter.flatten() {
+                metrics.note_count += 1;
+                if note.name == "GNU" && note.n_type == NT_GNU_BUILD_ID {
+                    metrics.build_id_present = true;
+                    metrics.build_id_length = note.desc.len() as u32;
                 }
             }
         }

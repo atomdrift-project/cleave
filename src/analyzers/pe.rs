@@ -7,6 +7,7 @@ use crate::strings::StringExtractor;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
+use chrono::TimeZone;
 use goblin::pe::PE;
 use goblin::pe::optional_header::{
     MAGIC_32, MAGIC_64, OFFSET_WINDOWS_FIELDS_32_CHECKSUM, OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
@@ -128,6 +129,25 @@ fn entry_section_name(pe: &PE<'_>) -> Option<String> {
     })
 }
 
+fn is_standard_entry_section(name: &str) -> bool {
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".text" | "text" | ".code" | "code" | ".itext" | "init" | ".init"
+    )
+}
+
+fn fill_timestamp_parts_u32(timestamp: u32, year: &mut u32, month: &mut u32, day: &mut u32) {
+    if timestamp == 0 {
+        return;
+    }
+    if let Some(dt) = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp as i64, 0) {
+        use chrono::Datelike;
+        *year = dt.year().max(0) as u32;
+        *month = dt.month();
+        *day = dt.day();
+    }
+}
+
 fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
     if pe_offset <= 0x40 || pe_offset > data.len() {
         return false;
@@ -146,6 +166,59 @@ fn pdb_filename(bytes: &[u8]) -> Option<String> {
     } else {
         Some(String::from_utf8_lossy(trimmed).to_string())
     }
+}
+
+fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
+    const SIGNING_TIME_OID: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
+
+    if let Some(idx) = data.windows(SIGNING_TIME_OID.len()).position(|w| w == SIGNING_TIME_OID) {
+        let tail = &data[idx + SIGNING_TIME_OID.len()..];
+        for offset in 0..tail.len().min(32).saturating_sub(2) {
+            let tag = tail[offset];
+            let len = tail[offset + 1] as usize;
+            let start = offset + 2;
+            let end = start + len;
+            if end > tail.len() {
+                break;
+            }
+
+            let value = &tail[start..end];
+            let parsed = match (tag, len) {
+                (0x17, 13) => {
+                    let s = std::str::from_utf8(value).ok()?;
+                    let year = s[0..2].parse::<i32>().ok()?;
+                    let year = if year >= 50 { 1900 + year } else { 2000 + year };
+                    let month = s[2..4].parse::<u32>().ok()?;
+                    let day = s[4..6].parse::<u32>().ok()?;
+                    let hour = s[6..8].parse::<u32>().ok()?;
+                    let minute = s[8..10].parse::<u32>().ok()?;
+                    let second = s[10..12].parse::<u32>().ok()?;
+                    chrono::Utc
+                        .with_ymd_and_hms(year, month, day, hour, minute, second)
+                        .single()
+                }
+                (0x18, 15) => {
+                    let s = std::str::from_utf8(value).ok()?;
+                    let year = s[0..4].parse::<i32>().ok()?;
+                    let month = s[4..6].parse::<u32>().ok()?;
+                    let day = s[6..8].parse::<u32>().ok()?;
+                    let hour = s[8..10].parse::<u32>().ok()?;
+                    let minute = s[10..12].parse::<u32>().ok()?;
+                    let second = s[12..14].parse::<u32>().ok()?;
+                    chrono::Utc
+                        .with_ymd_and_hms(year, month, day, hour, minute, second)
+                        .single()
+                }
+                _ => None,
+            };
+
+            if parsed.is_some() {
+                return parsed;
+            }
+        }
+    }
+
+    None
 }
 
 impl PEAnalyzer {
@@ -1206,19 +1279,24 @@ impl PEAnalyzer {
 
         let timestamp = pe.header.coff_header.time_date_stamp;
         metrics.timestamp = timestamp;
+        fill_timestamp_parts_u32(
+            timestamp,
+            &mut metrics.timestamp_year,
+            &mut metrics.timestamp_month,
+            &mut metrics.timestamp_day,
+        );
         metrics.machine = pe.header.coff_header.machine as u32;
         metrics.characteristics = pe.header.coff_header.characteristics as u32;
+        metrics.number_of_sections = pe.header.coff_header.number_of_sections as u32;
         metrics.entry_point_rva = pe.entry;
         metrics.entry_section = entry_section_name(pe);
 
         // Timestamp anomaly check
-        if timestamp < 631152000 {
-            // Before 1990
-            metrics.timestamp_anomaly = true;
-        } else if timestamp > chrono::Utc::now().timestamp() as u32 + 31536000 {
-            // More than 1 year in future
-            metrics.timestamp_anomaly = true;
-        }
+        metrics.timestamp_is_zero = timestamp == 0;
+        metrics.timestamp_pre_2000 = timestamp > 0 && timestamp < 946684800;
+        metrics.timestamp_in_future = timestamp > chrono::Utc::now().timestamp() as u32 + 31536000;
+        metrics.timestamp_anomaly =
+            metrics.timestamp_is_zero || timestamp < 631152000 || metrics.timestamp_in_future;
 
         let pe_offset = pe.header.dos_header.pe_pointer as usize;
         metrics.dos_stub_modified = dos_stub_modified(data, pe_offset);
@@ -1255,20 +1333,46 @@ impl PEAnalyzer {
         if let Some(opt) = &pe.header.optional_header {
             metrics.checksum = opt.windows_fields.check_sum;
             metrics.checksum_present = metrics.checksum != 0;
+            metrics.checksum_missing = metrics.checksum == 0;
             metrics.file_alignment = opt.windows_fields.file_alignment;
             metrics.section_alignment = opt.windows_fields.section_alignment;
             metrics.subsystem = opt.windows_fields.subsystem as u32;
             metrics.dll_characteristics = opt.windows_fields.dll_characteristics as u32;
+            metrics.image_base = opt.windows_fields.image_base;
+            metrics.size_of_image = opt.windows_fields.size_of_image;
+            metrics.size_of_headers = opt.windows_fields.size_of_headers;
+            metrics.linker_major_version = opt.standard_fields.major_linker_version as u32;
+            metrics.linker_minor_version = opt.standard_fields.minor_linker_version as u32;
 
             if let Some(checksum_offset) = pe_checksum_field_offset(pe, data.len()) {
                 metrics.computed_checksum = compute_pe_checksum(data, checksum_offset);
                 if metrics.checksum != 0 {
                     metrics.checksum_valid = metrics.checksum == metrics.computed_checksum;
+                    metrics.checksum_matches = metrics.checksum_valid;
+                    metrics.checksum_mismatch = !metrics.checksum_valid;
                 }
             }
 
             if let Some(debug_data) = &pe.debug_data {
-                metrics.debug_directory_entries = debug_data.entries().count() as u32;
+                let entries: Vec<_> = debug_data.entries().filter_map(Result::ok).collect();
+                metrics.debug_directory_entries = entries.len() as u32;
+                let mut debug_timestamps: Vec<u32> = entries
+                    .iter()
+                    .map(|entry| entry.time_date_stamp)
+                    .filter(|&ts| ts != 0)
+                    .collect();
+                if !debug_timestamps.is_empty() {
+                    debug_timestamps.sort_unstable();
+                    debug_timestamps.dedup();
+                    metrics.debug_timestamp_unique_count = debug_timestamps.len() as u32;
+                    metrics.debug_timestamp_min = *debug_timestamps.first().unwrap_or(&0);
+                    metrics.debug_timestamp_max = *debug_timestamps.last().unwrap_or(&0);
+                    metrics.debug_timestamp_consistent = debug_timestamps.len() == 1;
+                }
+                metrics.debug_timestamp_nonzero_count = entries
+                    .iter()
+                    .filter(|entry| entry.time_date_stamp != 0)
+                    .count() as u32;
                 if let Some(info) = debug_data.codeview_pdb70_debug_info {
                     metrics.pdb_path = pdb_filename(info.filename);
                 } else if let Some(info) = debug_data.codeview_pdb20_debug_info {
@@ -1289,6 +1393,16 @@ impl PEAnalyzer {
                         let pkcs7_data = &cert_data[8..];
                         if !pkcs7_data.is_empty() && pkcs7_data[0] == 0x30 {
                             metrics.has_signature = true;
+
+                            if let Some(dt) = parse_asn1_signing_time(pkcs7_data) {
+                                use chrono::Datelike;
+                                metrics.signing_time = dt.timestamp() as u64;
+                                metrics.signing_time_year = dt.year().max(0) as u32;
+                                metrics.signing_time_month = dt.month();
+                                metrics.signing_time_day = dt.day();
+                                metrics.signing_time_before_timestamp =
+                                    dt.timestamp() < metrics.timestamp as i64;
+                            }
 
                             // Simple extraction of common names from certificate chain
                             let cn_oid = [0x55, 0x04, 0x03];
@@ -1351,6 +1465,21 @@ impl PEAnalyzer {
 
         metrics.certificate_count = pe.certificates.len() as u32;
         metrics.import_dll_count = pe.libraries.len() as u32;
+        metrics.entry_in_nonstandard_section = metrics
+            .entry_section
+            .as_deref()
+            .is_some_and(|name| !is_standard_entry_section(name));
+
+        if let Some(export_data) = &pe.export_data {
+            metrics.export_timestamp = export_data.export_directory_table.time_date_stamp;
+            metrics.export_timestamp_present = metrics.export_timestamp != 0;
+            fill_timestamp_parts_u32(
+                metrics.export_timestamp,
+                &mut metrics.export_timestamp_year,
+                &mut metrics.export_timestamp_month,
+                &mut metrics.export_timestamp_day,
+            );
+        }
 
         // Check for overlay data (appended after PE image, excluding signature)
         // This can be:
@@ -1437,6 +1566,14 @@ impl PEAnalyzer {
             metrics.resource_count = resource_data.count() as u32;
             metrics.version_info_present = resource_data.version_info.is_some();
             metrics.manifest_present = resource_data.manifest_data.is_some();
+            metrics.resource_timestamp = resource_data.image_resource_directory.time_date_stamp;
+            metrics.resource_timestamp_present = metrics.resource_timestamp != 0;
+            fill_timestamp_parts_u32(
+                metrics.resource_timestamp,
+                &mut metrics.resource_timestamp_year,
+                &mut metrics.resource_timestamp_month,
+                &mut metrics.resource_timestamp_day,
+            );
             metrics.icon_count = resource_data
                 .entries()
                 .filter_map(Result::ok)

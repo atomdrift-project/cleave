@@ -514,12 +514,24 @@ pub struct PeMetrics {
     /// COFF timestamp as Unix epoch seconds
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub timestamp: u32,
+    /// Timestamp calendar year in UTC
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub timestamp_year: u32,
+    /// Timestamp month in UTC (1-12)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub timestamp_month: u32,
+    /// Timestamp day of month in UTC (1-31)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub timestamp_day: u32,
     /// PE machine type (COFF header)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub machine: u32,
     /// COFF characteristics bitfield
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub characteristics: u32,
+    /// Number of sections from the COFF header
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub number_of_sections: u32,
     /// Entry point RVA
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub entry_point_rva: u32,
@@ -527,14 +539,23 @@ pub struct PeMetrics {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_section: Option<String>,
     /// Optional header checksum value
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    #[serde(default)]
     pub checksum: u32,
     /// Whether the optional header checksum field is populated
     #[serde(default)]
     pub checksum_present: bool,
+    /// Checksum field is zero / absent
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checksum_missing: bool,
     /// Recomputed PE checksum
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub computed_checksum: u32,
+    /// Stored checksum matches recomputed checksum
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checksum_matches: bool,
+    /// Stored checksum does not match recomputed checksum
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub checksum_mismatch: bool,
     /// File alignment from the optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub file_alignment: u32,
@@ -547,6 +568,21 @@ pub struct PeMetrics {
     /// DLL characteristics bitfield
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dll_characteristics: u32,
+    /// Preferred image base
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub image_base: u64,
+    /// SizeOfImage from optional header
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub size_of_image: u32,
+    /// SizeOfHeaders from optional header
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub size_of_headers: u32,
+    /// Major linker version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub linker_major_version: u32,
+    /// Minor linker version
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub linker_minor_version: u32,
     /// Number of distinct imported DLLs
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub import_dll_count: u32,
@@ -562,11 +598,77 @@ pub struct PeMetrics {
     /// Certificate table size in bytes
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub certificate_table_size: u64,
+    /// Export directory timestamp as Unix epoch seconds
+    #[serde(default)]
+    pub export_timestamp: u32,
+    /// Export timestamp field is populated
+    #[serde(default)]
+    pub export_timestamp_present: bool,
+    /// Export timestamp calendar year in UTC
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub export_timestamp_year: u32,
+    /// Export timestamp month in UTC (1-12)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub export_timestamp_month: u32,
+    /// Export timestamp day of month in UTC (1-31)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub export_timestamp_day: u32,
+    /// Resource directory timestamp as Unix epoch seconds
+    #[serde(default)]
+    pub resource_timestamp: u32,
+    /// Resource timestamp field is populated
+    #[serde(default)]
+    pub resource_timestamp_present: bool,
+    /// Resource timestamp calendar year in UTC
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub resource_timestamp_year: u32,
+    /// Resource timestamp month in UTC (1-12)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub resource_timestamp_month: u32,
+    /// Resource timestamp day of month in UTC (1-31)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub resource_timestamp_day: u32,
+    /// Number of non-zero debug directory timestamps
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_timestamp_nonzero_count: u32,
+    /// Number of unique non-zero debug timestamps
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_timestamp_unique_count: u32,
+    /// Minimum non-zero debug timestamp
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_timestamp_min: u32,
+    /// Maximum non-zero debug timestamp
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_timestamp_max: u32,
+    /// All non-zero debug timestamps are identical
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub debug_timestamp_consistent: bool,
+    /// Authenticode signing time as Unix epoch seconds, if present
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub signing_time: u64,
+    /// Signing time calendar year in UTC
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub signing_time_year: u32,
+    /// Signing time month in UTC (1-12)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub signing_time_month: u32,
+    /// Signing time day of month in UTC (1-31)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub signing_time_day: u32,
 
     // === Header Anomalies ===
     /// Timestamp anomaly (future or ancient)
     #[serde(default, skip_serializing_if = "is_false")]
     pub timestamp_anomaly: bool,
+    /// Timestamp field is zero
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timestamp_is_zero: bool,
+    /// Timestamp is before year 2000
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timestamp_pre_2000: bool,
+    /// Timestamp is more than one year in the future
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub timestamp_in_future: bool,
     /// Checksum valid
     #[serde(default, skip_serializing_if = "is_false")]
     pub checksum_valid: bool,
@@ -576,6 +678,9 @@ pub struct PeMetrics {
     /// DOS stub modified
     #[serde(default, skip_serializing_if = "is_false")]
     pub dos_stub_modified: bool,
+    /// Signing time occurs before the PE COFF timestamp
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signing_time_before_timestamp: bool,
 
     // === Sections ===
     /// Resource section size
@@ -587,6 +692,9 @@ pub struct PeMetrics {
     /// Unusual section alignment
     #[serde(default, skip_serializing_if = "is_false")]
     pub unusual_alignment: bool,
+    /// Entry point not in a standard code section name
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_in_nonstandard_section: bool,
 
     // === Imports ===
     /// Delay-load imports

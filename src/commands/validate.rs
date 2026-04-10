@@ -34,10 +34,16 @@ fn run_ground_truth_checks() -> Result<()> {
     eprintln!("\nRunning ground-truth checks...");
     let mut failures = Vec::new();
 
-    // /bin/ls: benign system utility with xattr/stat/symlink/group-lookup capabilities.
-    // Expected score 4-12. Higher indicates false positives or inflated findings
-    // that violate TAXONOMY.md guidance.
-    check_binary_score("/bin/ls", 4, 12, &mut failures);
+    // /bin/ls: benign system utility with xattr/stat/symlink/group-lookup/ACL capabilities.
+    // Higher indicates false positives or inflated findings that violate TAXONOMY.md guidance.
+    check_binary_score("/bin/ls", 1, 15, &mut failures);
+
+    // /bin/sh: minimal shell stub (macOS). Only exec and platform-signing traits.
+    check_binary_score("/bin/sh", 1, 10, &mut failures);
+
+    // /usr/bin/curl: network transfer tool with HTTP/SOCKS/OAuth/TLS/crypto capabilities.
+    // Higher indicates trait inflation for legitimate network behaviors.
+    check_binary_score("/usr/bin/curl", 5, 30, &mut failures);
 
     if failures.is_empty() {
         eprintln!("✅ All ground-truth checks passed.");
@@ -68,20 +74,9 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
     };
 
     match cleave::analyze_file(path, &options) {
-        Ok(report) => {
-            // Score is computed per-file; for a single file the root is files[0]
-            // but pre-finalize it's on the report itself.
-            let score = if let Some(file) = report.files.first() {
-                file.score
-            } else {
-                // Pre-finalize: compute from findings directly
-                let raw: f32 = report
-                    .findings
-                    .iter()
-                    .map(|f| f.crit.score_weight() as f32 * f.conf)
-                    .sum();
-                raw.ceil() as u32
-            };
+        Ok(mut report) => {
+            report.finalize();
+            let score = report.files.first().map_or(0, |f| f.score);
 
             if score < min {
                 failures.push(format!(

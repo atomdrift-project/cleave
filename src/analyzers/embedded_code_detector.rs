@@ -312,10 +312,28 @@ fn looks_like_ansi_color_helper(value: &str) -> bool {
         && value.contains(": m")
 }
 
+fn looks_like_cli_help_snippet(value: &str) -> bool {
+    let long_option_count = value.match_indices("--").count();
+
+    long_option_count >= 2
+        && (value.contains('<')
+            || value.contains("option")
+            || value.contains("options")
+            || value.contains("curl --help")
+            || value.contains("curl --manual")
+            || value.contains("Use ")
+            || value.contains("Consider ")
+            || value.contains("Failed to "))
+}
+
 /// Additional heuristic to filter out false positive shell detection (like foreign languages)
 fn is_real_shell(value: &str) -> bool {
     // NOTE: shebang (#!) is NOT shell — it's a kernel execve directive.
     // A string starting with #!/usr/bin/env ruby is Ruby, not shell.
+
+    if looks_like_cli_help_snippet(value) {
+        return false;
+    }
 
     // Look for common shell keywords/patterns that are rare in natural language
     let strong_keywords = [
@@ -1527,5 +1545,11 @@ IAAAAAAAsDyZDwU=";
         let bytes = vec![0x41u8, 0x00, 0x42]; // odd length
         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
         assert!(decode_utf16le(&b64).is_none());
+    }
+
+    #[test]
+    fn test_is_real_shell_rejects_cli_help_snippet() {
+        let s = "Binary output can mess up your terminal. Use \"--output -\" to tell curl to output it to your terminal anyway, or consider \"--output <FILE>\".";
+        assert!(!is_real_shell(s));
     }
 }

@@ -64,6 +64,22 @@ impl ArchiveAnalyzer {
         crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type).is_some()
     }
 
+    fn archive_member_analysis_skip_reason(&self, file_type: &FileType) -> Option<&'static str> {
+        if self
+            .analysis_options
+            .as_ref()
+            .is_some_and(|opts| opts.all_files)
+        {
+            return None;
+        }
+
+        if !file_type.is_program() {
+            return Some("non-program archive member and all_files is false");
+        }
+
+        None
+    }
+
     fn archive_member_yara_skip_reason(
         relative_path: &str,
         file_type: &FileType,
@@ -166,9 +182,19 @@ impl ArchiveAnalyzer {
         data: &[u8],
         file_type: FileType,
         sha256: String,
-    ) -> Result<AnalysisReport> {
+    ) -> Result<Option<AnalysisReport>> {
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled");
+        }
+
+        if let Some(reason) = self.archive_member_analysis_skip_reason(&file_type) {
+            tracing::debug!(
+                relative_path,
+                file_type = %file_type.report_file_type(),
+                reason,
+                "Skipping archive member analysis"
+            );
+            return Ok(None);
         }
 
         let result = if matches!(file_type, FileType::Archive | FileType::Jar) {
@@ -186,6 +212,7 @@ impl ArchiveAnalyzer {
                     .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
                     .join()
                     .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?
+                    .map(Some)
             }
         } else if let Some(analyzer) =
             crate::analyzers::analyzer_for_file_type_arc(&file_type, self.capability_mapper.clone())
@@ -289,15 +316,16 @@ impl ArchiveAnalyzer {
                     }
                 }
             }
-            Ok(report)
+            Ok(Some(report))
         } else {
             Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))
         };
 
         match &result {
-            Ok(_) => {
+            Ok(Some(_)) => {
                 SUCCESSFUL_ANALYSES.fetch_add(1, Ordering::Relaxed);
             }
+            Ok(None) => {}
             Err(_) => {
                 FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
             }
@@ -515,7 +543,7 @@ impl ArchiveAnalyzer {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
-                Ok(file_report) => {
+                Ok(Some(file_report)) => {
                     files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     trace!(
                         "Analyzed archive member {}: {} findings",
@@ -609,6 +637,7 @@ impl ArchiveAnalyzer {
                         all_files.push(nested_file);
                     }
                 }
+                Ok(None) => {}
             }
         });
 
@@ -669,7 +698,7 @@ impl ArchiveAnalyzer {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
-                Ok(file_report) => {
+                Ok(Some(file_report)) => {
                     files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     trace!(
                         "Analyzed archive member {}: {} findings",
@@ -770,6 +799,7 @@ impl ArchiveAnalyzer {
                         all_files.push(nested_file);
                     }
                 }
+                Ok(None) => {}
             }
         });
 
@@ -968,7 +998,7 @@ impl ArchiveAnalyzer {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
-                Ok(file_report) => {
+                Ok(Some(file_report)) => {
                     files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     trace!(
                         "Analyzed archive member {}: {} findings",
@@ -1091,6 +1121,7 @@ impl ArchiveAnalyzer {
                         all_files.push(nested_file);
                     }
                 }
+                Ok(None) => {}
             }
         });
 
@@ -1199,7 +1230,10 @@ impl ArchiveAnalyzer {
             .and_then(|n| n.to_str())
             .unwrap_or("extracted")
             .to_string();
-        self.analyze_extracted_member(file_path, &relative_path, &data, file_type, sha256)
+        match self.analyze_extracted_member(file_path, &relative_path, &data, file_type, sha256)? {
+            Some(report) => Ok(report),
+            None => anyhow::bail!("Non-program file type, skipping: {}", file_path.display()),
+        }
     }
 }
 
@@ -1207,6 +1241,7 @@ impl ArchiveAnalyzer {
 mod tests {
     use super::ArchiveAnalyzer;
     use crate::analyzers::FileType;
+    use std::sync::Arc;
 
     #[test]
     fn archive_member_yara_filetypes_use_detected_binary_type() {
@@ -1219,5 +1254,37 @@ mod tests {
             vec!["pe", "exe", "dll", "bat", "ps1"]
         );
         assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
+    }
+
+    #[test]
+    fn archive_member_analysis_skip_matches_all_files_policy() {
+        let default_analyzer = ArchiveAnalyzer::new();
+        assert_eq!(
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
+            Some("non-program archive member and all_files is false")
+        );
+        assert_eq!(
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
+            Some("non-program archive member and all_files is false")
+        );
+        assert_eq!(
+            default_analyzer.archive_member_analysis_skip_reason(&FileType::Pe),
+            None
+        );
+
+        let all_files_analyzer = ArchiveAnalyzer::new().with_analysis_options(Arc::new(
+            crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            },
+        ));
+        assert_eq!(
+            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Unknown),
+            None
+        );
+        assert_eq!(
+            all_files_analyzer.archive_member_analysis_skip_reason(&FileType::Html),
+            None
+        );
     }
 }

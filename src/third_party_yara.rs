@@ -207,7 +207,7 @@ fn doc_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
 /// Returns empty vec if no scripting signal is found.
 #[cfg(test)]
 fn script_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
-    yara_classify::script_filetypes_from_text(rule_name)
+    yara_classify::script_filetypes_from_rule_name(rule_name)
 }
 
 /// Log the inferred filetype association for a YARA rule at debug level.

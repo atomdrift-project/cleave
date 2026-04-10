@@ -76,6 +76,10 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "atomic",     // vague
     "base",       // too vague
     "basic",      // meaningless
+    "behavior",
+    "behaviors",
+    "component",
+    "components",
     "category",   // dumping ground
     "combos",     // vague
     "code",       // vague

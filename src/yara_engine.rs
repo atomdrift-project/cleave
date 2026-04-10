@@ -65,6 +65,57 @@ pub(crate) fn clear_engine_scanner_cache() {
     });
 }
 
+fn rule_context_key(namespace: &str, rule_name: &str) -> String {
+    format!("{namespace}\u{1f}{rule_name}")
+}
+
+fn extract_header_tags_from_source(rule_text: &str) -> Vec<String> {
+    let header = rule_text.split('{').next().unwrap_or(rule_text);
+    let Some((_, tags)) = header.split_once(':') else {
+        return Vec::new();
+    };
+    tags.split_whitespace()
+        .map(str::trim)
+        .filter(|tag| !tag.is_empty())
+        .map(std::string::ToString::to_string)
+        .collect()
+}
+
+fn platform_label(platform: &crate::composite_rules::Platform) -> &'static str {
+    match platform {
+        crate::composite_rules::Platform::Windows => "windows",
+        crate::composite_rules::Platform::Linux => "linux",
+        crate::composite_rules::Platform::Unix => "unix",
+        crate::composite_rules::Platform::MacOS => "macos",
+        crate::composite_rules::Platform::Android => "android",
+        crate::composite_rules::Platform::Ios => "ios",
+        crate::composite_rules::Platform::All => "all",
+    }
+}
+
+fn looks_like_unix_shell_payload(lower_source: &str) -> bool {
+    [
+        "/bin/sh",
+        "/bin/bash",
+        "/etc/ld.so.preload",
+        "/etc/crontab",
+        "/proc/self",
+        "chmod +x",
+        "chmod a+x",
+        "sh | sh",
+        "exec bash --login",
+        "mkfifo fifo ; nc.traditional -u",
+        "< fifo | { bash -i; } > fifo",
+        "wget ",
+        "curl ",
+        "tmsh",
+        "big-ip",
+        "launchctl",
+    ]
+    .iter()
+    .any(|needle| lower_source.contains(needle))
+}
+
 /// Raw match data collected from a YARA scan before processing into `YaraMatch`.
 struct RawRule {
     name: String,
@@ -72,6 +123,21 @@ struct RawRule {
     tags: Vec<String>,
     metadata: Vec<(String, String)>,
     patterns: Vec<(String, Vec<(usize, usize)>)>,
+}
+
+/// Rule metadata derived once from the full source text and cached alongside tiers.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, Default)]
+struct RuleContext {
+    filetypes: Vec<String>,
+    filetype_source: String,
+    platforms: Vec<String>,
+    os_meta: Option<String>,
+    arch_context: Option<String>,
+}
+
+struct SplitSource {
+    tiers: HashMap<YaraTier, String>,
+    contexts: HashMap<String, RuleContext>,
 }
 
 /// YARA-X engine for pattern-based detection.
@@ -85,6 +151,8 @@ struct RawRule {
 pub(crate) struct YaraEngine {
     /// Per-tier compiled rule sets. `CrossFormat` is always present when loaded.
     tiers: HashMap<YaraTier, yara_x::Rules>,
+    /// Full-rule-derived sidecar metadata keyed by `(namespace, rule_name)`.
+    rule_contexts: HashMap<String, RuleContext>,
     /// Namespaces compiled into the combined engine from inline trait YARA conditions.
     /// Used to split scan results: inline matches (keyed here) go to trait evaluation;
     /// all other matches are returned as regular YARA findings.
@@ -103,6 +171,7 @@ impl YaraEngine {
     pub(crate) fn new() -> Self {
         Self {
             tiers: HashMap::new(),
+            rule_contexts: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -113,6 +182,7 @@ impl YaraEngine {
     pub(crate) fn new_with_mapper(_capability_mapper: CapabilityMapper) -> Self {
         Self {
             tiers: HashMap::new(),
+            rule_contexts: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -123,6 +193,7 @@ impl YaraEngine {
     pub(crate) fn new_for_test() -> Self {
         Self {
             tiers: HashMap::new(),
+            rule_contexts: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
     }
@@ -155,6 +226,10 @@ impl YaraEngine {
         // Override third-party setting via environment (for tests that need YARA but not 14k rules)
         let enable_third_party =
             enable_third_party && std::env::var("CLEAVE_BUILTIN_YARA_ONLY").is_err();
+
+        self.tiers.clear();
+        self.rule_contexts.clear();
+        self.compiled_inline_namespaces.clear();
 
         tracing::info!("Loading YARA rules");
 
@@ -214,19 +289,21 @@ impl YaraEngine {
         let inline_count = self.compiled_inline_namespaces.len();
 
         // 1. Built-in YARA rule files → tiered using the same classifier as third-party rules
-        let (mut builtin_tier_sources, builtin_count) = if traits_dir.exists() {
+        let (mut builtin_tier_sources, builtin_rule_contexts, builtin_count) = if traits_dir.exists() {
             Self::collect_builtin_sources_tiered(&traits_dir)
         } else {
-            (HashMap::new(), 0)
+            (HashMap::new(), HashMap::new(), 0)
         };
+        self.rule_contexts.extend(builtin_rule_contexts);
 
         // 2. Third-party rules → classified into per-tier source lists
-        let (mut tier_sources, third_party_count, vt_skipped, disabled_count) =
+        let (mut tier_sources, third_party_rule_contexts, third_party_count, vt_skipped, disabled_count) =
             if enable_third_party && third_party_dir.exists() {
                 Self::collect_third_party_sources_tiered(&third_party_dir)
             } else {
-                (HashMap::new(), 0, 0, 0)
+                (HashMap::new(), HashMap::new(), 0, 0, 0)
             };
+        self.rule_contexts.extend(third_party_rule_contexts);
 
         let total_count = builtin_count + third_party_count + inline_count;
         if total_count == 0 {
@@ -704,10 +781,14 @@ impl YaraEngine {
     /// Collect built-in YARA rule sources from the traits directory, classifying each rule into
     /// a tier with the same splitter used for third-party collections.
     ///
-    /// Returns `(tier_sources, builtin_file_count)`.
+    /// Returns `(tier_sources, rule_contexts, builtin_file_count)`.
     fn collect_builtin_sources_tiered(
         dir: &Path,
-    ) -> (HashMap<YaraTier, Vec<(String, String)>>, usize) {
+    ) -> (
+        HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
+        usize,
+    ) {
         let third_party_dir = crate::cache::third_party_path();
         let rule_files: Vec<PathBuf> = WalkDir::new(dir)
             .follow_links(false)
@@ -733,25 +814,26 @@ impl YaraEngine {
             tracing::warn!(
                 "failed to compile YARA rule-start regex; skipping built-in YARA preprocessing"
             );
-            return (HashMap::new(), 0);
+            return (HashMap::new(), HashMap::new(), 0);
         };
 
-        let processed: Vec<HashMap<YaraTier, String>> = rule_files
+        let processed: Vec<SplitSource> = rule_files
             .par_iter()
             .filter_map(|path| {
                 let bytes = fs::read(path).ok()?;
                 let raw_source = String::from_utf8_lossy(&bytes);
                 let source = yara_classify::inject_condition_filetype_hints(&raw_source);
                 let mut split = Self::split_monolithic_by_tier(&source, "traits", re);
-                if let Some(unknown_source) = split.remove(&YaraTier::Unknown) {
+                if let Some(unknown_source) = split.tiers.remove(&YaraTier::Unknown) {
                     split
+                        .tiers
                         .entry(YaraTier::CrossFormat)
                         .and_modify(|existing| existing.push_str(&unknown_source))
                         .or_insert(unknown_source);
                 }
                 tracing::trace!(
                     path = %path.display(),
-                    tiers = ?split.keys().map(|tier| tier.label()).collect::<Vec<_>>(),
+                    tiers = ?split.tiers.keys().map(|tier| tier.label()).collect::<Vec<_>>(),
                     "Collected built-in YARA source"
                 );
                 Some(split)
@@ -759,10 +841,12 @@ impl YaraEngine {
             .collect();
 
         let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
+        let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
 
         for split in processed {
-            for (tier, source) in split {
+            rule_contexts.extend(split.contexts);
+            for (tier, source) in split.tiers {
                 tier_sources
                     .entry(tier)
                     .or_default()
@@ -775,7 +859,7 @@ impl YaraEngine {
             tracing::info!("Built-in tier {:?}: {} source(s)", tier, count);
         }
 
-        (tier_sources, rule_files.len())
+        (tier_sources, rule_contexts, rule_files.len())
     }
 
     /// Collect third-party YARA rule sources, classifying each rule into a tier.
@@ -784,12 +868,13 @@ impl YaraEngine {
     /// Large monolithic files (like YARAForge's single .yar with ~11K rules) are split
     /// per-rule so each rule goes to the correct tier.
     ///
-    /// Returns `(tier_sources, total_source_count, vt_skipped, disabled_count)`.
+    /// Returns `(tier_sources, rule_contexts, total_source_count, vt_skipped, disabled_count)`.
     /// `tier_sources` maps each `YaraTier` to its list of `(namespace, source)` pairs.
     fn collect_third_party_sources_tiered(
         dir: &Path,
     ) -> (
         HashMap<YaraTier, Vec<(String, String)>>,
+        HashMap<String, RuleContext>,
         usize,
         usize,
         usize,
@@ -817,13 +902,13 @@ impl YaraEngine {
             tracing::warn!(
                 "failed to compile YARA rule-start regex; skipping third-party YARA preprocessing"
             );
-            return (HashMap::new(), 0, 0, 0);
+            return (HashMap::new(), HashMap::new(), 0, 0, 0);
         };
 
         struct Processed {
             path: PathBuf,
             namespace: String,
-            split: HashMap<YaraTier, String>,
+            split: SplitSource,
             vt_stripped: usize,
             disabled_stripped: usize,
         }
@@ -887,6 +972,7 @@ impl YaraEngine {
             .collect();
 
         let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
+        let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
         let mut total = 0;
         let mut vt_skipped = 0;
         let mut disabled_count = 0;
@@ -902,8 +988,9 @@ impl YaraEngine {
             }
             vt_skipped += p.vt_stripped;
             disabled_count += p.disabled_stripped;
+            rule_contexts.extend(p.split.contexts);
 
-            for (tier, tier_source) in p.split {
+            for (tier, tier_source) in p.split.tiers {
                 tier_sources
                     .entry(tier)
                     .or_default()
@@ -922,7 +1009,140 @@ impl YaraEngine {
             tier_counts.len().max(1),
         );
 
-        (tier_sources, total, vt_skipped, disabled_count)
+        (tier_sources, rule_contexts, total, vt_skipped, disabled_count)
+    }
+
+    fn derive_rule_context(rule_name: &str, rule_text: &str, namespace: &str) -> RuleContext {
+        let lower = rule_text.to_ascii_lowercase();
+        let tags = extract_header_tags_from_source(rule_text);
+        let mut filetypes: Vec<String> = Vec::new();
+        let mut filetype_source = "none".to_string();
+        let mut os_meta: Option<String> = None;
+        let mut arch_context: Option<String> = None;
+        let mut metadata_hint_text = String::new();
+
+        for line in lower.lines() {
+            let trimmed = line.trim();
+            if (trimmed.starts_with("filetype") || trimmed.starts_with("filetypes"))
+                && trimmed.contains('=')
+            {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    filetypes = val
+                        .split(',')
+                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    if !filetypes.is_empty() {
+                        filetype_source = "metadata".to_string();
+                    }
+                }
+            }
+            if trimmed.starts_with("os") && trimmed.contains('=') {
+                let after_os = &trimmed[2..];
+                if after_os.starts_with(' ') || after_os.starts_with('=') {
+                    if let Some(val) = trimmed.split('=').nth(1) {
+                        let val = val.trim().trim_matches('"').trim_matches('\'');
+                        if !val.is_empty() {
+                            os_meta = Some(val.to_string());
+                        }
+                    }
+                }
+            }
+            if trimmed.starts_with("arch_context") && trimmed.contains('=') {
+                if let Some(val) = trimmed.split('=').nth(1) {
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    if !val.is_empty() {
+                        arch_context = Some(val.to_string());
+                    }
+                }
+            }
+            if let Some((key, val)) = trimmed.split_once('=') {
+                let key = key.trim();
+                if matches!(
+                    key,
+                    "description"
+                        | "source_url"
+                        | "reference"
+                        | "category"
+                        | "classification"
+                        | "threat_name"
+                        | "scan_context"
+                        | "tags"
+                ) {
+                    if !metadata_hint_text.is_empty() {
+                        metadata_hint_text.push(' ');
+                    }
+                    metadata_hint_text.push_str(val.trim().trim_matches('"').trim_matches('\''));
+                }
+            }
+        }
+
+        if filetypes.is_empty() {
+            let inferred = yara_classify::infer_filetypes_from_tags(&tags);
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "tag".to_string();
+            }
+        }
+        if filetypes.is_empty() {
+            let inferred = yara_classify::infer_filetypes_from_metadata_text(&metadata_hint_text);
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "metadata-text".to_string();
+            }
+        }
+        if filetypes.is_empty() {
+            let inferred = yara_classify::infer_filetypes(rule_name, os_meta.as_deref());
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "rule-name".to_string();
+            }
+        }
+        if filetypes.is_empty() {
+            let inferred = yara_classify::infer_filetypes_from_namespace(namespace, os_meta.as_deref());
+            if !inferred.is_empty() {
+                filetypes = inferred
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect();
+                filetype_source = "namespace".to_string();
+            }
+        }
+
+        let mut platforms: Vec<String> =
+            crate::third_party_yara::platforms_from_name_and_os(rule_name, os_meta.as_deref())
+                .iter()
+                .map(platform_label)
+                .map(std::string::ToString::to_string)
+                .collect();
+
+        if platforms.is_empty()
+            && filetypes
+                .iter()
+                .any(|ft| matches!(ft.as_str(), "sh" | "bash" | "zsh"))
+        {
+            platforms.push("unix".to_string());
+        }
+        if platforms.is_empty() && looks_like_unix_shell_payload(&lower) {
+            platforms.push("unix".to_string());
+        }
+
+        RuleContext {
+            filetypes,
+            filetype_source,
+            platforms,
+            os_meta,
+            arch_context,
+        }
     }
 
     /// Split a large monolithic YARA source into per-tier chunks.
@@ -934,7 +1154,7 @@ impl YaraEngine {
         source: &str,
         namespace: &str,
         rule_re: &regex::Regex,
-    ) -> HashMap<YaraTier, String> {
+    ) -> SplitSource {
         // Extract imports from top of file
         let mut imports = String::new();
         for line in source.lines() {
@@ -992,12 +1212,15 @@ impl YaraEngine {
 
         // Classify each public rule
         let mut tier_rules: HashMap<YaraTier, Vec<&str>> = HashMap::new();
+        let mut contexts: HashMap<String, RuleContext> = HashMap::new();
         for r in &rules {
             if r.is_private {
                 continue;
             }
             let rule_text = &source[r.start..r.end];
             let tier = YaraTier::classify_rule(r.name, rule_text, namespace);
+            let context = Self::derive_rule_context(r.name, rule_text, namespace);
+            contexts.insert(rule_context_key(namespace, r.name), context);
             tier_rules.entry(tier).or_default().push(rule_text);
         }
 
@@ -1017,7 +1240,10 @@ impl YaraEngine {
             result.insert(tier, s);
         }
 
-        result
+        SplitSource {
+            tiers: result,
+            contexts,
+        }
     }
 
     /// Filter out disabled rules from YARA source.
@@ -1280,7 +1506,7 @@ impl YaraEngine {
         let mut mbc_code: Option<String> = None;
         let mut attack_code: Option<String> = None;
         let mut rule_filetypes: Vec<String> = Vec::new();
-        let mut filetype_source = "none"; // tracks where the filetype came from
+        let mut filetype_source = "none".to_string(); // tracks where the filetype came from
         let mut os_meta: Option<String> = None;
         let mut arch_context_meta: Option<String> = None;
         let mut metadata_hint_text = String::new();
@@ -1324,7 +1550,7 @@ impl YaraEngine {
                         .split(',')
                         .map(|s| s.trim().to_lowercase())
                         .collect();
-                    filetype_source = "metadata";
+                    filetype_source = "metadata".to_string();
                 }
                 "os" => os_meta = Some(value_str.to_lowercase()),
                 "arch_context" => arch_context_meta = Some(value_str.to_lowercase()),
@@ -1339,52 +1565,74 @@ impl YaraEngine {
             }
         }
 
-        // Infer filetypes from explicit rule tags (e.g., `: PE`, `: ELF`, `: PHP`)
-        if rule_filetypes.is_empty() {
-            let inferred = yara_classify::infer_filetypes_from_tags(tags);
-            if !inferred.is_empty() {
-                rule_filetypes = inferred
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                filetype_source = "tag";
-            }
-        }
+        let context_key = rule_context_key(&namespace, &rule_name);
+        let precompiled_context = self.rule_contexts.get(&context_key);
 
-        if rule_filetypes.is_empty() {
-            let inferred = yara_classify::infer_filetypes_from_metadata_text(&metadata_hint_text);
-            if !inferred.is_empty() {
-                rule_filetypes = inferred
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                filetype_source = "metadata-text";
+        if let Some(ctx) = precompiled_context {
+            if !ctx.filetypes.is_empty() {
+                rule_filetypes = ctx.filetypes.clone();
+                filetype_source = format!("precompiled-{}", ctx.filetype_source);
             }
-        }
-
-        if rule_filetypes.is_empty() {
-            let inferred = yara_classify::infer_filetypes(&rule_name, os_meta.as_deref());
-            if !inferred.is_empty() {
-                rule_filetypes = inferred
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                filetype_source = "rule-name";
+            if os_meta.is_none() {
+                os_meta = ctx.os_meta.clone();
             }
-        }
+            if arch_context_meta.is_none() {
+                arch_context_meta = ctx.arch_context.clone();
+            }
+            if !ctx.platforms.is_empty() {
+                tracing::debug!(
+                    rule = %rule_name,
+                    namespace = %namespace,
+                    platforms = ?ctx.platforms,
+                    "YARA rule platform association"
+                );
+            }
+        } else {
+            // Infer filetypes from explicit rule tags (e.g., `: PE`, `: ELF`, `: PHP`)
+            if rule_filetypes.is_empty() {
+                let inferred = yara_classify::infer_filetypes_from_tags(tags);
+                if !inferred.is_empty() {
+                    rule_filetypes = inferred
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    filetype_source = "tag".to_string();
+                }
+            }
 
-        // For third-party rules: if still no filetype, try the namespace filename component.
-        // e.g. namespace "3p.RussianPanda95.VanillaTempest.win_mal_TextShell" → "win_mal_TextShell"
-        // → "win" token → Windows → ["pe", "dll"]
-        if rule_filetypes.is_empty() && is_third_party {
-            let inferred =
-                yara_classify::infer_filetypes_from_namespace(&namespace, os_meta.as_deref());
-            if !inferred.is_empty() {
-                rule_filetypes = inferred
-                    .iter()
-                    .map(std::string::ToString::to_string)
-                    .collect();
-                filetype_source = "namespace";
+            if rule_filetypes.is_empty() {
+                let inferred = yara_classify::infer_filetypes_from_metadata_text(&metadata_hint_text);
+                if !inferred.is_empty() {
+                    rule_filetypes = inferred
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    filetype_source = "metadata-text".to_string();
+                }
+            }
+
+            if rule_filetypes.is_empty() {
+                let inferred = yara_classify::infer_filetypes(&rule_name, os_meta.as_deref());
+                if !inferred.is_empty() {
+                    rule_filetypes = inferred
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    filetype_source = "rule-name".to_string();
+                }
+            }
+
+            // For third-party rules: if still no filetype, try the namespace filename component.
+            if rule_filetypes.is_empty() && is_third_party {
+                let inferred =
+                    yara_classify::infer_filetypes_from_namespace(&namespace, os_meta.as_deref());
+                if !inferred.is_empty() {
+                    rule_filetypes = inferred
+                        .iter()
+                        .map(std::string::ToString::to_string)
+                        .collect();
+                    filetype_source = "namespace".to_string();
+                }
             }
         }
 
@@ -1393,7 +1641,7 @@ impl YaraEngine {
             &rule_name,
             &namespace,
             &rule_filetypes,
-            filetype_source,
+            &filetype_source,
         );
 
         if let Some(filter_types) = file_type_filter {
@@ -1631,6 +1879,7 @@ impl YaraEngine {
             builtin_count: usize,
             third_party_count: usize,
             inline_namespaces: Vec<String>,
+            rule_contexts: HashMap<String, RuleContext>,
             tiers: Vec<CacheTierEntry>,
         }
         #[derive(serde::Serialize)]
@@ -1645,6 +1894,7 @@ impl YaraEngine {
             builtin_count,
             third_party_count,
             inline_namespaces: self.compiled_inline_namespaces.clone(),
+            rule_contexts: self.rule_contexts.clone(),
             tiers: Vec::new(),
         };
         // Estimate manifest size (will recalculate after filling offsets)
@@ -1672,6 +1922,7 @@ impl YaraEngine {
             builtin_count,
             third_party_count,
             inline_namespaces: self.compiled_inline_namespaces.clone(),
+            rule_contexts: self.rule_contexts.clone(),
             tiers: tier_entries,
         };
         let manifest_json =
@@ -1699,6 +1950,7 @@ impl YaraEngine {
                     builtin_count,
                     third_party_count,
                     inline_namespaces: self.compiled_inline_namespaces.clone(),
+                    rule_contexts: self.rule_contexts.clone(),
                     tiers: entries,
                 };
                 let j = serde_json::to_vec(&m).context("Failed to serialize manifest")?;
@@ -1794,6 +2046,8 @@ impl YaraEngine {
             builtin_count: usize,
             third_party_count: usize,
             inline_namespaces: Vec<String>,
+            #[serde(default)]
+            rule_contexts: HashMap<String, RuleContext>,
             tiers: Vec<CacheTierEntry>,
         }
         #[derive(serde::Deserialize)]
@@ -1835,6 +2089,7 @@ impl YaraEngine {
         let t2 = std::time::Instant::now();
 
         self.compiled_inline_namespaces = manifest.inline_namespaces;
+        self.rule_contexts = manifest.rule_contexts;
 
         tracing::debug!(
             "YARA cache load: manifest={:?}, tiers={:?} ({} tier(s))",
@@ -1850,7 +2105,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 11;
+const CACHE_VERSION: u32 = 12;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {
@@ -2811,6 +3066,132 @@ rule APT10_ChChes_lnk {
     }
 
     #[test]
+    fn test_rule_context_marks_unix_shell_payload_without_shell_script_filetype() {
+        let source = r#"
+rule SIGNATURE_BASE_MAL_Payload_F5_BIG_IP_Exploitations_Jul20_1 : CVE_2020_5902 FILE
+{
+    meta:
+        description = "Detects code found in report on exploits against CVE-2020-5902 F5 BIG-IP vulnerability by NCC group"
+    strings:
+        $x1 = "rm -f /etc/ld.so.preload" ascii fullword
+        $x2 = "chmod +x /var/log/F5-logcheck" ascii
+        $x3 = ".sh | sh" ascii
+    condition:
+        1 of them
+}
+"#;
+        let ctx = YaraEngine::derive_rule_context(
+            "SIGNATURE_BASE_MAL_Payload_F5_BIG_IP_Exploitations_Jul20_1",
+            source,
+            "3p.YARAForge.yara-rules-full",
+        );
+        assert!(ctx.filetypes.is_empty());
+        assert_eq!(ctx.platforms, vec!["unix".to_string()]);
+    }
+
+    #[test]
+    fn test_rule_context_keeps_shell_script_filetype_for_bash_rule_names() {
+        let source = r#"
+rule Linux_Backdoor_Bash_e427876d : FILE
+{
+    condition:
+        true
+}
+"#;
+        let ctx = YaraEngine::derive_rule_context(
+            "Linux_Backdoor_Bash_e427876d",
+            source,
+            "3p.elastic.Linux_Backdoor_Bash",
+        );
+        assert_eq!(
+            ctx.filetypes,
+            vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()]
+        );
+        assert_eq!(ctx.platforms, vec!["linux".to_string()]);
+    }
+
+    #[test]
+    fn test_rule_context_marks_tinyshell_shell_snippet_as_unix_platform() {
+        let source = r#"
+rule SEKOIA_Malware_Tinyshell_Strings : FILE
+{
+    strings:
+        $ = "_tsh_runshell"
+        $ = "exec bash --login"
+    condition:
+        all of them
+}
+"#;
+        let ctx = YaraEngine::derive_rule_context(
+            "SEKOIA_Malware_Tinyshell_Strings",
+            source,
+            "3p.YARAForge.yara-rules-full",
+        );
+        assert!(ctx.filetypes.is_empty());
+        assert_eq!(ctx.platforms, vec!["unix".to_string()]);
+    }
+
+    #[test]
+    fn test_rule_context_preserves_arch_context_metadata() {
+        let source = r#"
+rule ELASTIC_Windows_Generic_Threat : FILE
+{
+    meta:
+        os = "windows"
+        arch_context = "x64"
+    condition:
+        true
+}
+"#;
+        let ctx = YaraEngine::derive_rule_context(
+            "ELASTIC_Windows_Generic_Threat",
+            source,
+            "3p.elastic.windows",
+        );
+        assert_eq!(ctx.arch_context.as_deref(), Some("x64"));
+        assert_eq!(ctx.platforms, vec!["windows".to_string()]);
+    }
+
+    #[test]
+    fn test_cache_roundtrip_preserves_rule_contexts() {
+        let mut engine = YaraEngine::new_for_test();
+        engine
+            .load_rule_source(r#"rule test_rule { strings: $a = "abc" condition: $a }"#)
+            .unwrap();
+        engine.rule_contexts.insert(
+            rule_context_key("", "test_rule"),
+            RuleContext {
+                filetypes: vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()],
+                filetype_source: "cache-roundtrip".to_string(),
+                platforms: vec!["unix".to_string()],
+                os_meta: Some("linux".to_string()),
+                arch_context: Some("x64".to_string()),
+            },
+        );
+
+        let tmp = tempfile::tempdir().unwrap();
+        let cache_path = tmp.path().join("test.yarc");
+        engine.save_to_cache(&cache_path, 7, 11).unwrap();
+
+        let mut restored = YaraEngine::new_for_test();
+        let counts = restored.load_from_cache(&cache_path).unwrap();
+        assert_eq!(counts, (7, 11));
+
+        let ctx = restored
+            .rule_contexts
+            .get(&rule_context_key("", "test_rule"))
+            .expect("cached rule context restored");
+        assert_eq!(
+            ctx.filetypes,
+            vec!["sh".to_string(), "bash".to_string(), "zsh".to_string()]
+        );
+        assert_eq!(ctx.filetype_source, "cache-roundtrip");
+        assert_eq!(ctx.platforms, vec!["unix".to_string()]);
+        assert_eq!(ctx.os_meta.as_deref(), Some("linux"));
+        assert_eq!(ctx.arch_context.as_deref(), Some("x64"));
+    }
+
+    #[test]
     fn test_js_scan_order_includes_script_fallback() {
         assert_eq!(
             YaraTier::scan_order(Some(&["ts", "tsx", "js"])),
@@ -2904,16 +3285,19 @@ rule builtin_generic_rule {
         );
 
         let js_tier = split
+            .tiers
             .get(&YaraTier::ScriptJs)
             .expect("js rule classified into script-js tier");
         assert!(js_tier.contains("builtin_js_rule"));
 
         let pe_tier = split
+            .tiers
             .get(&YaraTier::Pe)
             .expect("pe rule classified into pe tier");
         assert!(pe_tier.contains("builtin_pe_rule"));
 
         let unknown_tier = split
+            .tiers
             .get(&YaraTier::Unknown)
             .expect("residual unknown tier preserved before built-in promotion");
         assert!(unknown_tier.contains("builtin_generic_rule"));
@@ -3066,15 +3450,15 @@ rule builtin_generic_rule {
         } else {
             (HashMap::new(), Vec::new())
         };
-        let (builtin_tier_sources, _) = if traits_dir.exists() {
+        let (builtin_tier_sources, _, _) = if traits_dir.exists() {
             YaraEngine::collect_builtin_sources_tiered(&traits_dir)
         } else {
-            (HashMap::new(), 0)
+            (HashMap::new(), HashMap::new(), 0)
         };
-        let (mut third_party_sources, _, _, _) = if third_party_dir.exists() {
+        let (mut third_party_sources, _, _, _, _) = if third_party_dir.exists() {
             YaraEngine::collect_third_party_sources_tiered(&third_party_dir)
         } else {
-            (HashMap::new(), 0, 0, 0)
+            (HashMap::new(), HashMap::new(), 0, 0, 0)
         };
 
         let mut tier_names: HashMap<YaraTier, Vec<String>> = HashMap::new();

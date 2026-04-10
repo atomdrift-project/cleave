@@ -60,11 +60,13 @@ impl YaraTier {
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "php" | "rb" | "pl" | "pm" | "lua"
                 | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba" | "java" | "jar"
                 | "class" | "jsp" | "aspx" | "asp" | "apk" | "dex" | "hta" | "au3" | "sct"
-                | "wsf" => {
+                | "wsf" | "awk" | "tcl" => {
                     return Self::Script;
                 }
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                | "msg" | "lnk" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi" | "cab"
+                | "msg" | "lnk" | "rdp" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi"
+                | "cab" | "txt" | "text" | "log" | "xml" | "json" | "ini" | "cfg" | "conf"
+                | "ovpn"
                 | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" | "vhd"
                 | "vmdk" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
                 _ => {}
@@ -231,6 +233,11 @@ impl YaraTier {
             if tier != Self::Unknown {
                 return tier;
             }
+        }
+
+        // Rules that gate on a shebang header are still targeting script files.
+        if has_shebang_magic(&lower) {
+            return Self::Script;
         }
 
         // 3a. Explicit raw/blob rules should not be forced into PE/ELF/Mach-O.
@@ -554,6 +561,7 @@ mod indicators {
         "qakbot",
         "qbot",
         "icedid",
+        "xworm",
         "bazarloader",
         "formbook",
         "lokibot",
@@ -685,7 +693,40 @@ mod indicators {
         "jokerspy",
     ];
 
-    pub(super) const SCRIPT_BODY: &[&str] = &[
+    pub(super) const SCRIPT_JS_BODY: &[&str] = &[
+        "activexobject",
+        "document.createelement",
+        "navigator.useragent",
+        "navigator.language",
+        "navigator.plugins",
+        "window.window===window",
+        "self.self===self",
+        "window.location.replace(",
+        "window.rtcpeerconnection",
+        "document.getelementbyid(",
+        "document.referrer",
+        "module.exports",
+        "btoa(",
+        "xmlhttprequest",
+        "eval(function(p,a,c,k,",
+        ".split_data = function",
+        "loadjs =",
+        "screen.colordepth",
+        "packetproc = function",
+        "request.request.url",
+        "plugin_timeout*1000",
+        "canvas.getcontext('2d",
+        "window.moveto",
+        "window.resizeto",
+        "window.moveto -",
+        "window.resizeto 0",
+        "var __addr__=",
+        "var __hwid__=",
+        "var __xkey__=",
+        "javascript",
+    ];
+
+    pub(super) const SCRIPT_GENERIC_BODY: &[&str] = &[
         "<?php",
         "<?=",
         "base64_decode(",
@@ -693,14 +734,13 @@ mod indicators {
         "str_rot13(",
         "preg_replace(",
         "function_exists(",
+        "@echo off",
         "-encodedcommand",
         "invoke-expression",
         "new-object system.net",
         "invoke-webrequest",
         "downloadstring(",
         "iex(",
-        "activexobject",
-        "document.createelement",
         "import subprocess",
         "import socket",
         "php ",
@@ -711,22 +751,54 @@ mod indicators {
         "<scriptlet>",
         "<registration progid=",
         "language=\"vbscript\"",
-        "navigator.useragent",
-        "window.window===window",
-        "self.self===self",
+        "[io.file]::",
+        "[system.net.webrequest]::",
+        "[system.text.encoding]::",
+        "system.io.file]::",
+        "response.getwriter().write(",
+        "response.binarywrite(",
+        "request.headers.get(",
+        "$_session",
+        "@set_time_limit(",
+        "extract_session_readbuf(",
+        "headers.add('authorization'",
+        "headers.add('cookie'",
+        "getresponsestream()",
+        "get-random -count",
+        "application.getrealpath(",
+        "[parameter(position",
+        "[string]$",
+        "for($",
+        "[environment]::newline",
+        "out-file -filepath",
+        ".padright(",
         "ruby ",
         "perl ",
         "autoit",
         "vbscript",
-        "javascript",
     ];
 
-    pub(super) const SCRIPT_NAME: &[&str] = &[
+    pub(super) const SCRIPT_JS_NAME: &[&str] = &[
+        "javascript",
+        "jscript",
+        "jslib",
+        "electronapp",
+        "nodejs",
+    ];
+
+    pub(super) const SCRIPT_GENERIC_NAME: &[&str] = &[
         "webshell",
         "php",
         "python",
+        "pydoor",
         "powershell",
         "_asp",
+        "_script_",
+        "_scripts",
+        "userscript",
+        "opscript",
+        "malscript",
+        "p0wned",
         "ruby",
         "perl",
         "lua",
@@ -736,8 +808,9 @@ mod indicators {
         "hta",
         "jse",
         "wsf",
-        "javascript",
-        "jscript",
+        "powershower",
+        "tclsh",
+        "awk",
     ];
 
     pub(super) const DOC_BODY: &[&str] = &[
@@ -760,6 +833,17 @@ mod indicators {
         "thisdocument",
         "maldoc",
         ": maldoc",
+        "full address:s:",
+        "redirectprinters",
+        "redirectclipboard",
+        "<service name=\\\"catalina\\\">",
+        "ajp/1.3",
+        "begindata",
+        "host1:",
+        "port1:",
+        "[defaultinstall]",
+        "registerdlls=ourdll",
+        "signature=\"$windows nt$\"",
     ];
 
     pub(super) const DOC_NAME: &[&str] = &[
@@ -768,6 +852,7 @@ mod indicators {
         "_rtf_",
         "_ole_",
         "_lnk_",
+        "_rdp_",
         "maldoc",
         "excelmacro",
         "_xls",
@@ -777,6 +862,21 @@ mod indicators {
         "_xlsm",
         "_msi_",
         "onenote",
+        "htmlsmuggling",
+        "phishing_page",
+        "webpage",
+        "readme",
+        "userconfig",
+        "_log_",
+        "_config_file",
+        "forensic",
+        "_xml_",
+        "_json_",
+        "_ini_",
+        "_cfg_",
+        "_conf_",
+        "_output",
+        "_outputs",
         "_msg_",
         "_cab_",
         "_iso_",
@@ -788,7 +888,7 @@ mod indicators {
 
 fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
     let name_lower = rule_name.to_ascii_lowercase();
-    let mut s = [0u32; 5];
+    let mut s = [0u32; 6];
 
     let description = body_lower
         .lines()
@@ -870,15 +970,20 @@ fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
         }
     }
 
-    for &ind in indicators::SCRIPT_BODY {
+    for &ind in indicators::SCRIPT_JS_BODY {
         if body_lower.contains(ind) {
             s[3] += 1;
+        }
+    }
+    for &ind in indicators::SCRIPT_GENERIC_BODY {
+        if body_lower.contains(ind) {
+            s[4] += 1;
         }
     }
 
     for &ind in indicators::DOC_BODY {
         if body_lower.contains(ind) {
-            s[4] += 1;
+            s[5] += 1;
         }
     }
 
@@ -897,14 +1002,19 @@ fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
             s[2] += 1;
         }
     }
-    for &ind in indicators::SCRIPT_NAME {
+    for &ind in indicators::SCRIPT_JS_NAME {
         if name_lower.contains(ind) {
             s[3] += 1;
         }
     }
-    for &ind in indicators::DOC_NAME {
+    for &ind in indicators::SCRIPT_GENERIC_NAME {
         if name_lower.contains(ind) {
             s[4] += 1;
+        }
+    }
+    for &ind in indicators::DOC_NAME {
+        if name_lower.contains(ind) {
+            s[5] += 1;
         }
     }
 
@@ -912,6 +1022,7 @@ fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
         YaraTier::Pe,
         YaraTier::Elf,
         YaraTier::MachO,
+        YaraTier::ScriptJs,
         YaraTier::Script,
         YaraTier::Doc,
     ];
@@ -1092,7 +1203,12 @@ fn push_unique_types(dest: &mut Vec<&'static str>, src: &[&'static str]) {
 /// 3. Platform signals (`Win32_`, `Linux_`, `MacOS_`, `os = "windows"`, ...)
 #[must_use]
 pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
-    let specific_types = infer_filetypes_from_metadata_text(rule_name);
+    let specific_types = doc_filetypes_from_text(rule_name);
+    if !specific_types.is_empty() {
+        return specific_types;
+    }
+
+    let specific_types = script_filetypes_from_rule_name(rule_name);
     if !specific_types.is_empty() {
         return specific_types;
     }
@@ -1119,6 +1235,83 @@ pub fn infer_filetypes_from_metadata_text(text: &str) -> Vec<&'static str> {
     infer_binary_filetypes_from_name_and_os(text, None)
 }
 
+fn script_filetypes_from_text_inner(
+    text: &str,
+    shell_tokens_imply_script: bool,
+) -> Vec<&'static str> {
+    let lower = text.to_ascii_lowercase();
+    for token in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
+        match token {
+            "powershell" | "ps1" | "psm1" | "psd1" | "psh" | "ps" => {
+                return vec!["ps1", "psm1", "psd1"];
+            }
+            "python" | "py" | "pyc" => return vec!["py", "pyc"],
+            "javascript" | "jscript" | "js" | "mjs" | "cjs" => return vec!["js", "mjs", "cjs"],
+            "jslib" | "nodejs" | "electron" | "electronapp" => {
+                return vec!["js", "mjs", "cjs"];
+            }
+            "php" => return vec!["php"],
+            "autoit" | "au3" => return vec!["au3"],
+            "ironpython" => return vec!["py", "pyc"],
+            "jsp" => return vec!["jsp"],
+            "aspx" => return vec!["aspx"],
+            "asp" => return vec!["asp"],
+            "hta" => return vec!["hta"],
+            "sct" | "scriptlet" => return vec!["sct", "wsf"],
+            "vbs" | "vbscript" | "vba" => return vec!["vbs", "vba"],
+            "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
+            "powershower" => return vec!["ps1", "psm1", "psd1"],
+            "awk" => return vec!["awk"],
+            "tcl" | "tclsh" => return vec!["tcl"],
+            "shell" | "bash" | "sh" | "zsh" if shell_tokens_imply_script => {
+                return vec!["sh", "bash", "zsh"];
+            }
+            "java" | "jar" | "class" => return vec!["jar", "class", "java"],
+            "apk" | "dex" | "android" => return vec!["apk", "dex"],
+            "ruby" | "rb" => return vec!["rb"],
+            "perl" | "pl" | "pm" => return vec!["pl", "pm"],
+            "lua" => return vec!["lua"],
+            token if token.starts_with("webshell") => return vec!["php", "jsp", "aspx", "asp"],
+            token if token.contains("powershell") => return vec!["ps1", "psm1", "psd1"],
+            _ => {}
+        }
+    }
+    if lower.contains("webshell") {
+        return vec!["php", "jsp", "aspx", "asp"];
+    }
+    if lower.contains("powershell") {
+        return vec!["ps1", "psm1", "psd1"];
+    }
+    if !shell_tokens_imply_script && looks_like_shell_script_text(&lower) {
+        return vec!["sh", "bash", "zsh"];
+    }
+    vec![]
+}
+
+fn looks_like_shell_script_text(lower: &str) -> bool {
+    lower.contains("#!/bin/sh")
+        || lower.contains("#!/bin/bash")
+        || lower.contains("#!/usr/bin/python")
+        || lower.contains("#!/usr/bin/env python")
+        || lower.contains("#!/usr/bin/env bash")
+        || lower.contains("#!/usr/bin/env sh")
+        || lower.contains("shell script")
+        || lower.contains("bash script")
+        || lower.contains("zsh script")
+        || lower.contains("sh script")
+        || lower.contains("shell-script")
+        || lower.contains("bash-script")
+        || lower.contains("zsh-script")
+}
+
+fn has_shebang_magic(lower_source: &str) -> bool {
+    let condensed: String = lower_source
+        .chars()
+        .filter(|c| !c.is_ascii_whitespace())
+        .collect();
+    condensed.contains("uint16(0)==0x2123") || condensed.contains("uint16be(0)==0x2321")
+}
+
 /// Infer filetypes from explicit YARA rule header tags.
 #[must_use]
 pub fn infer_filetypes_from_tags(tags: &[String]) -> Vec<&'static str> {
@@ -1126,16 +1319,26 @@ pub fn infer_filetypes_from_tags(tags: &[String]) -> Vec<&'static str> {
         let upper = tag.to_ascii_uppercase();
         match upper.as_str() {
             "PE" | "EXE" | "DLL" | "SYS" => return vec!["pe", "dll"],
+            "WINMALWARE" | "WINDOWSMALWARE" => return vec!["pe", "dll"],
             "ELF" | "SO" | "KO" => return vec!["elf", "so"],
+            "LINUXMALWARE" => return vec!["elf", "so"],
             "MACHO" | "MACH_O" | "MACH-O" | "DYLIB" | "KEXT" => {
                 return vec!["macho", "dylib"];
             }
+            "OSXMALWARE" | "MACOSMALWARE" => return vec!["macho", "dylib"],
             "PDF" => return vec!["pdf"],
             "RTF" => return vec!["rtf", "doc"],
             "LNK" | "LNKR" => return vec!["lnk"],
             "ONENOTE" | "ONE" | "ONEPKG" => return vec!["one", "onepkg"],
             "ISO" | "IMG" => return vec!["iso", "img"],
             "ZIP" => return vec!["zip"],
+            "LOG" => return vec!["log"],
+            "TXT" | "TEXT" => return vec!["txt"],
+            "XML" => return vec!["xml"],
+            "JSON" => return vec!["json"],
+            "INI" => return vec!["ini"],
+            "CFG" | "CONF" | "CONFIG" => return vec!["cfg", "conf", "ini"],
+            "OVPN" => return vec!["ovpn"],
             "HTML" | "HTM" => return vec!["html"],
             "SVG" => return vec!["svg"],
             "EPS" => return vec!["eps"],
@@ -1231,6 +1434,8 @@ fn source_has_magic_condition(source: &str) -> bool {
         || lower.contains("0x7f454c46")
         || lower.contains("0x457f")
         || lower.contains("0x7f45")
+        || lower.contains("0xcafebabe")
+        || lower.contains("0xbebafeca")
         || lower.contains("0xfeedface")
         || lower.contains("0xcefaedfe")
         || lower.contains("0xfeedfacf")
@@ -1271,6 +1476,9 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     let condensed: String = lower.chars().filter(|c| !c.is_ascii_whitespace()).collect();
 
     if condensed.contains("uint16(0)==0x5a4d")
+        || condensed.contains("int16(0)==0x5a4d")
+        || condensed.contains("uint32be(0)==0x5a4d")
+        || condensed.contains("int32be(0)==0x5a4d")
         || condensed.contains("uint16be(0)==0x4d5a")
         || has_module_reference(&lower, "pe.")
     {
@@ -1278,15 +1486,26 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     }
 
     if condensed.contains("uint32(0)==0x464c457f")
+        || condensed.contains("int32(0)==0x464c457f")
         || condensed.contains("uint32be(0)==0x7f454c46")
+        || condensed.contains("int32be(0)==0x7f454c46")
+        || condensed.contains("uint32(0x0)==0x464c457f")
+        || condensed.contains("int32(0x0)==0x464c457f")
+        || condensed.contains("uint32be(0x0)==0x7f454c46")
+        || condensed.contains("int32be(0x0)==0x7f454c46")
         || condensed.contains("uint16(0)==0x457f")
+        || condensed.contains("int16(0)==0x457f")
         || condensed.contains("uint16be(0)==0x7f45")
         || has_module_reference(&lower, "elf.")
     {
         return Some("elf");
     }
 
-    if condensed.contains("uint32(0)==0xfeedface")
+    if condensed.contains("uint32(0)==0xcafebabe")
+        || condensed.contains("uint32be(0)==0xcafebabe")
+        || condensed.contains("uint32(0)==0xbebafeca")
+        || condensed.contains("uint32be(0)==0xbebafeca")
+        || condensed.contains("uint32(0)==0xfeedface")
         || condensed.contains("uint32be(0)==0xfeedface")
         || condensed.contains("uint32(0)==0xcefaedfe")
         || condensed.contains("uint32be(0)==0xcefaedfe")
@@ -1409,11 +1628,19 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "office" | "word" | "excel" | "olefile" | "ole" | "macro" | "maldoc" => {
                 return vec!["doc", "docx", "xls", "xlsx", "ole"];
             }
+            "securepreferences" => return vec!["json"],
             "onenote" | "one" | "onepkg" => return vec!["one", "onepkg"],
             "lnk" | "lnkr" | "shortcut" => return vec!["lnk"],
+            "rdp" => return vec!["rdp"],
+            "readme" | "txt" | "text" => return vec!["txt"],
+            "xml" => return vec!["xml"],
+            "json" => return vec!["json"],
+            "ini" => return vec!["ini"],
+            "cfg" | "conf" => return vec!["cfg", "conf", "ini"],
+            "openvpn" | "ovpn" => return vec!["ovpn"],
             "iso" | "img" => return vec!["iso", "img"],
             "zip" | "zipcrypto" => return vec!["zip"],
-            "html" | "htm" => return vec!["html"],
+            "html" | "htm" | "htmlsmuggling" => return vec!["html"],
             "svg" => return vec!["svg"],
             "eps" => return vec!["eps"],
             "eml" => return vec!["eml"],
@@ -1433,48 +1660,59 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
     {
         return vec!["pdf"];
     }
+    if lower.contains("config file")
+        || lower.contains("configuration file")
+        || lower.contains("userconfig")
+    {
+        return vec!["cfg", "conf", "ini"];
+    }
+    if lower.contains("log file")
+        || lower.contains("log files")
+        || lower.contains("logs generated")
+        || lower.contains("found in logs")
+        || lower.contains("indicators found in logs")
+        || lower.contains("forensic artifact")
+        || lower.contains("forensic artifacts")
+        || lower.contains("forensic artefact")
+        || lower.contains("forensic artefacts")
+        || lower.contains("forensic artificats")
+    {
+        return vec!["log", "txt"];
+    }
+    if lower.contains("output file")
+        || lower.contains("output files")
+        || lower.contains("output of")
+        || lower.contains("outputs of")
+        || lower.contains("system info output")
+        || lower.contains("dump output")
+        || lower.contains("password dump file")
+        || lower.contains("hash dump output file")
+    {
+        return vec!["txt", "log"];
+    }
+    if lower.contains("phishing page")
+        || lower.contains("web page")
+        || lower.contains("webpage")
+        || lower.contains("html smuggling")
+    {
+        return vec!["html"];
+    }
     vec![]
 }
 
 /// Infer filetype constraints from scripting language signals in free-form text.
 #[must_use]
 pub fn script_filetypes_from_text(text: &str) -> Vec<&'static str> {
-    let lower = text.to_ascii_lowercase();
-    for token in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
-        match token {
-            "powershell" | "ps1" | "psm1" | "psd1" | "psh" | "ps" => {
-                return vec!["ps1", "psm1", "psd1"];
-            }
-            "python" | "py" | "pyc" => return vec!["py", "pyc"],
-            "javascript" | "jscript" | "js" | "mjs" | "cjs" => return vec!["js", "mjs", "cjs"],
-            "php" => return vec!["php"],
-            "autoit" | "au3" => return vec!["au3"],
-            "ironpython" => return vec!["py", "pyc"],
-            "jsp" => return vec!["jsp"],
-            "aspx" => return vec!["aspx"],
-            "asp" => return vec!["asp"],
-            "hta" => return vec!["hta"],
-            "sct" | "scriptlet" => return vec!["sct", "wsf"],
-            "vbs" | "vbscript" | "vba" => return vec!["vbs", "vba"],
-            "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
-            "shell" | "bash" | "sh" | "zsh" => return vec!["sh", "bash", "zsh"],
-            "java" | "jar" | "class" => return vec!["jar", "class", "java"],
-            "apk" | "dex" | "android" => return vec!["apk", "dex"],
-            "ruby" | "rb" => return vec!["rb"],
-            "perl" | "pl" | "pm" => return vec!["pl", "pm"],
-            "lua" => return vec!["lua"],
-            token if token.starts_with("webshell") => return vec!["php", "jsp", "aspx", "asp"],
-            token if token.contains("powershell") => return vec!["ps1", "psm1", "psd1"],
-            _ => {}
-        }
-    }
-    if lower.contains("webshell") {
-        return vec!["php", "jsp", "aspx", "asp"];
-    }
-    if lower.contains("powershell") {
-        return vec!["ps1", "psm1", "psd1"];
-    }
-    vec![]
+    script_filetypes_from_text_inner(text, false)
+}
+
+/// Infer script filetypes from rule names.
+///
+/// Rule names intentionally use stronger shorthand than metadata prose, so
+/// tokens like `Bash` or `Shell` are treated as script-specific here.
+#[must_use]
+pub fn script_filetypes_from_rule_name(text: &str) -> Vec<&'static str> {
+    script_filetypes_from_text_inner(text, true)
 }
 
 #[cfg(test)]
@@ -1546,6 +1784,54 @@ mod tests {
             infer_filetypes_from_tags(&["PowerShell".to_string()]),
             vec!["ps1", "psm1", "psd1"]
         );
+        assert_eq!(
+            infer_filetypes_from_tags(&["LOG".to_string()]),
+            vec!["log"]
+        );
+        assert_eq!(
+            infer_filetypes_from_tags(&["LINUXMALWARE".to_string()]),
+            vec!["elf", "so"]
+        );
+        assert_eq!(
+            infer_filetypes_from_tags(&["WINMALWARE".to_string()]),
+            vec!["pe", "dll"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects malicious RDP files"),
+            vec!["rdp"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects some kind of HTMLSmuggling used by APT28"),
+            vec!["html"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects APT28 Phishing page"),
+            vec!["html"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text(
+                "https://example.invalid/yara_rules/apt_lazarus_backdoored_jslib.yar"
+            ),
+            vec!["js", "mjs", "cjs"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text(
+                "https://example.invalid/yara_rules/apt_luckymouse_compromised_electronapp.yar"
+            ),
+            vec!["js", "mjs", "cjs"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects clean version of PowerShower"),
+            vec!["ps1", "psm1", "psd1"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Auto-generated rule - file README.cup.NOPEN"),
+            vec!["txt"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("OpenVPN configuration artifact"),
+            vec!["ovpn"]
+        );
     }
 
     #[test]
@@ -1563,9 +1849,14 @@ mod tests {
     #[test]
     fn test_magic_and_module_detection() {
         assert_eq!(filetype_from_magic("uint16(0) == 0x5A4D"), Some("pe"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0x5A4D"), Some("pe"));
         assert_eq!(filetype_from_magic("uint32(0) == 0x464c457f"), Some("elf"));
         assert_eq!(filetype_from_magic("uint16(0) == 0x457f"), Some("elf"));
+        assert_eq!(filetype_from_magic("int16(0) == 0x5A4D"), Some("pe"));
+        assert_eq!(filetype_from_magic("int32be(0) == 0x7f454c46"), Some("elf"));
+        assert_eq!(filetype_from_magic("uint32be(0x0) == 0x7F454C46"), Some("elf"));
         assert_eq!(filetype_from_magic("uint32be(0) == 0xcffaedfe"), Some("macho"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0xcafebabe"), Some("macho"));
         assert_eq!(filetype_from_magic("uint32be(0) == 0x504B0304"), Some("zip"));
         assert_eq!(filetype_from_magic("uint32be(0) == 0xD0CF11E0"), Some("ole"));
         assert_eq!(filetype_from_magic("uint32be(0) == 0x6465780A"), Some("dex"));
@@ -1618,6 +1909,283 @@ rule suspicious_node_implant : FILE
         assert_eq!(
             YaraTier::classify_rule("suspicious_node_implant", js_source, "3p.test.javascript"),
             YaraTier::ScriptJs
+        );
+
+        let rdp_source = r#"
+rule SEKOIA_Apt_Apt29_Malicious_Rdp_File : FILE
+{
+    meta:
+        description = "Detects malicious RDP files"
+        source_url = "https://example.invalid/apt_apt29_malicious_rdp_file.yar"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Apt29_Malicious_Rdp_File",
+                rdp_source,
+                "3p.test.rdp"
+            ),
+            YaraTier::Doc
+        );
+
+        let html_smuggling_source = r#"
+rule SEKOIA_Apt_Apt28_Htmlsmuggling : FILE
+{
+    meta:
+        description = "Detects some kind of HTMLSmuggling used by APT28"
+        source_url = "https://example.invalid/apt_apt28_htmlsmuggling.yar"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Apt28_Htmlsmuggling",
+                html_smuggling_source,
+                "3p.test.html"
+            ),
+            YaraTier::Doc
+        );
+
+        let jslib_source = r#"
+rule SEKOIA_Apt_Lazarus_Backdoored_Jslib : FILE
+{
+    meta:
+        description = "Detects InvisibleFerret based on common ressource."
+        source_url = "https://example.invalid/apt_lazarus_backdoored_jslib.yar"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Lazarus_Backdoored_Jslib",
+                jslib_source,
+                "3p.test.jslib"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let electron_source = r#"
+rule SEKOIA_Apt_Luckymouse_Compromised_Electronapp : FILE
+{
+    meta:
+        description = "Detects compromised ElectronApp"
+        source_url = "https://example.invalid/apt_luckymouse_compromised_electronapp.yar"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Luckymouse_Compromised_Electronapp",
+                electron_source,
+                "3p.test.electron"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let powershower_source = r#"
+rule SEKOIA_Apt_Cloudatlas_Powershower_Clean : FILE
+{
+    meta:
+        description = "Detects clean version of PowerShower"
+        source_url = "https://example.invalid/apt_cloudatlas_powershower_clean.yar"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Cloudatlas_Powershower_Clean",
+                powershower_source,
+                "3p.test.ps1"
+            ),
+            YaraTier::Script
+        );
+
+        let readme_source = r#"
+rule SIGNATURE_BASE_FVEY_Shadowbroker_README_Cup
+{
+    meta:
+        description = "Auto-generated rule - file README.cup.NOPEN"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_FVEY_Shadowbroker_README_Cup",
+                readme_source,
+                "3p.test.readme"
+            ),
+            YaraTier::Doc
+        );
+
+        let log_source = r#"
+rule SIGNATURE_BASE_LOG_F5_BIGIP_Exploitation_Artefacts_CVE_2021_22986_Mar21_1 : LOG
+{
+    meta:
+        description = "Detects forensic artefacts indicating successful exploitation of F5 BIG IP appliances"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_LOG_F5_BIGIP_Exploitation_Artefacts_CVE_2021_22986_Mar21_1",
+                log_source,
+                "3p.test.log"
+            ),
+            YaraTier::Doc
+        );
+    }
+
+    #[test]
+    fn test_classify_rule_content_hints_for_scripts_and_configs() {
+        let js_source = r#"
+rule SEKOIA_Apt_Tortoiseshell_Wateringhole_Script : FILE
+{
+    strings:
+        $ = "btoa(document.referrer)"
+        $ = "navigator.language"
+        $ = "window.RTCPeerConnection"
+        $ = "sha256(canvas.toDataURL("
+    condition:
+        3 of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Tortoiseshell_Wateringhole_Script",
+                js_source,
+                "3p.test.browserjs"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let ps_source = r#"
+rule SEKOIA_Apt_Cloudatlas_Powershower_Clean : FILE
+{
+    strings:
+        $ = "[io.file]::WriteAllBytes($zipfile"
+        $ = "System.IO.File]::Exists($p_t"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Cloudatlas_Powershower_Clean",
+                ps_source,
+                "3p.test.ps-body"
+            ),
+            YaraTier::Script
+        );
+
+        let tomcat_source = r#"
+rule SIGNATURE_BASE_VUL_Tomcat_Catalina_CVE_2020_1938 : FILE
+{
+    strings:
+        $h1 = "<?xml "
+        $a1 = "<Service name=\"Catalina\">"
+        $v1 = "<Connector port=\"8009\" protocol=\"AJP/1.3\" redirectPort=\"8443\"/>"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_VUL_Tomcat_Catalina_CVE_2020_1938",
+                tomcat_source,
+                "3p.test.tomcat"
+            ),
+            YaraTier::Doc
+        );
+    }
+
+    #[test]
+    fn test_classify_rule_additional_magic_and_tag_variants() {
+        let linux_tag_source = r#"
+rule DEADBITS_Watchdog_Botnet : BOTNET LINUXMALWARE EXPLOITATION CVE_2019_11581
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "DEADBITS_Watchdog_Botnet",
+                linux_tag_source,
+                "3p.test.deadbits"
+            ),
+            YaraTier::Elf
+        );
+
+        let signed_elf_source = r#"
+rule SEKOIA_Apt_Apt31_Pakdoor : FILE
+{
+    condition:
+        int32be ( 0 ) == 0x7f454c46 and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Apt31_Pakdoor",
+                signed_elf_source,
+                "3p.test.pakdoor"
+            ),
+            YaraTier::Elf
+        );
+
+        let offset_elf_source = r#"
+rule SECUINFRA_RANSOM_Esxiargs_Ransomware_Encryptor_Feb23
+{
+    condition:
+        uint32be( 0x0 ) == 0x7F454C46 and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SECUINFRA_RANSOM_Esxiargs_Ransomware_Encryptor_Feb23",
+                offset_elf_source,
+                "3p.test.esxiargs"
+            ),
+            YaraTier::Elf
+        );
+
+        let fat_macho_source = r#"
+rule SEKOIA_Apt_Cloudmensis_Spyagent_Strings : FILE
+{
+    condition:
+        uint32be( 0 ) == 0xcafebabe and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Cloudmensis_Spyagent_Strings",
+                fat_macho_source,
+                "3p.test.cloudmensis"
+            ),
+            YaraTier::MachO
+        );
+
+        let signed_pe_source = r#"
+rule SIGNATURE_BASE_APT_NK_Lazarus_RC4_Loop : FILE
+{
+    condition:
+        int16 ( 0 ) == 0x5a4d and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_APT_NK_Lazarus_RC4_Loop",
+                signed_pe_source,
+                "3p.test.lazarus"
+            ),
+            YaraTier::Pe
         );
     }
 
@@ -1807,6 +2375,16 @@ rule opaque_family_name {
             infer_filetypes_from_metadata_text("Outlook reminder exploit message"),
             vec!["msg"]
         );
+        assert!(
+            infer_filetypes_from_metadata_text(
+                "Detects code found in report on exploits against CVE-2020-5902 F5 BIG-IP vulnerability by NCC group"
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Suspicious bash script downloader"),
+            vec!["sh", "bash", "zsh"]
+        );
     }
 
     #[test]
@@ -1895,6 +2473,370 @@ rule RUSSIANPANDA_Darkgate_Autoit
 "#;
         assert_eq!(
             YaraTier::classify_rule("RUSSIANPANDA_Darkgate_Autoit", autoit_rule, "3p.test.autoit"),
+            YaraTier::Script
+        );
+
+        let powgoop_decoded_rule = r#"
+rule SEKOIA_Apt_Muddywater_Powgoop_Decoded : FILE
+{
+    strings:
+        $h1 = "[System.Net.WebRequest]::Create(" ascii wide
+        $h2 = "Headers.Add('Authorization'" ascii wide
+        $h3 = "Headers.Add('Cookie',('value=' + $ec + ';')" ascii wide
+        $h4 = "GetResponseStream()" ascii wide
+        $c1 = "return (65..90) + (97..122) | Get-Random -Count" ascii wide
+    condition:
+        3 of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Muddywater_Powgoop_Decoded",
+                powgoop_decoded_rule,
+                "3p.test.powgoop"
+            ),
+            YaraTier::Script
+        );
+
+        let sysrvbot_tomcat_rule = r#"
+rule backdoor_SysrvBot_tomcat {
+    strings:
+        $s1 = "&echo ----file ROOT good----" ascii
+        $s2 = "application.getRealPath(\"tomcat.jsp\").split(\"\\\\tomcat.jsp\");" ascii
+        $s3 = "ldr.sh?tomcat)|bash" ascii
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "backdoor_SysrvBot_tomcat",
+                sysrvbot_tomcat_rule,
+                "3p.JPCERT.sysrvbot"
+            ),
+            YaraTier::Script
+        );
+
+        let mimipenguin_rule = r#"
+rule SIGNATURE_BASE_Mimipenguin_1 : FILE
+{
+    strings:
+        $x1 = "def _dump_target_processes(self):" fullword ascii
+    condition:
+        uint16( 0 ) == 0x2123 and $x1
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Mimipenguin_1",
+                mimipenguin_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let waterpamola_js_rule = r#"
+rule WaterPamola_stealjs_str {
+    strings:
+        $str1 = "eval(function(p,a,c,k,"
+        $str2 = "XMLHttpRequest"
+        $str3 = "application/x-www-form-urlencoded"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "WaterPamola_stealjs_str",
+                waterpamola_js_rule,
+                "3p.JPCERT.waterpamola"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let batcopier_rule = r#"
+rule SEKOIA_Apt_Unk_Batcopier_Strings : FILE
+{
+    strings:
+        $ = "@echo off"
+        $ = "echo F|xcopy"
+        $ = "attrib +r +s +h"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Unk_Batcopier_Strings",
+                batcopier_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let bypassgodzilla_rule = r#"
+rule SEKOIA_Tool_Bypassgodzilla : FILE
+{
+    strings:
+        $jsp_1a = "response.getWriter().write(\""
+        $asp_1 = "[\"payload\"]).CreateInstance(\"LY\");"
+        $php_1 = "=(\"!\"^\"@\").'ss'.Chr(\"101\").'rs';"
+        $php_3 = "*/isset($_SESSION/*"
+        $php_4 = "@set_time_limit(Chr(\"48\"))"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Tool_Bypassgodzilla",
+                bypassgodzilla_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let pivotnacci_webshell_rule = r#"
+rule SEKOIA_Tool_Pivotnacci_Webshell : FILE
+{
+    strings:
+        $ = "Response.BinaryWrite(newBuff)"
+        $ = "Request.Headers.Get(ID_HEADER)"
+        $ = "extract_session_readbuf($conn_id"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Tool_Pivotnacci_Webshell",
+                pivotnacci_webshell_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let proxynotshell_log_rule = r#"
+rule SIGNATURE_BASE_EXPL_Exchange_Proxynotshell_Patterns_CVE_2022_41040_Oct22_1 : SCRIPT
+{
+    meta:
+        description = "Detects successful ProxyNotShell exploitation attempts in log files"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_EXPL_Exchange_Proxynotshell_Patterns_CVE_2022_41040_Oct22_1",
+                proxynotshell_log_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let barracuda_forensics_rule = r#"
+rule SIGNATURE_BASE_APT_UNC4841_ESG_Barracuda_CVE_2023_2868_Forensic_Artifacts_Jun23_1 : SCRIPT
+{
+    meta:
+        description = "Detects forensic artifacts found in the exploitation of CVE-2023-2868 in Barracuda ESG devices by UNC4841"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_APT_UNC4841_ESG_Barracuda_CVE_2023_2868_Forensic_Artifacts_Jun23_1",
+                barracuda_forensics_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let casper_output_rule = r#"
+rule SIGNATURE_BASE_Casper_Systeminformation_Output
+{
+    meta:
+        description = "Casper French Espionage Malware - System Info Output"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Casper_Systeminformation_Output",
+                casper_output_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let gsecdump_output_rule = r#"
+rule SIGNATURE_BASE_Gsecdump_Password_Dump_File : FILE
+{
+    meta:
+        description = "Detects a gsecdump output file"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Gsecdump_Password_Dump_File",
+                gsecdump_output_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let ntlm_output_rule = r#"
+rule SIGNATURE_BASE_NTLM_Dump_Output
+{
+    meta:
+        description = "NTML Hash Dump output file - John/LC format"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_NTLM_Dump_Output",
+                ntlm_output_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let recon_outputs_rule = r#"
+rule SIGNATURE_BASE_SUSP_Recon_Outputs_Jun20_1 : FILE
+{
+    meta:
+        description = "Detects outputs of many different commands often used for reconnaissance purposes"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_SUSP_Recon_Outputs_Jun20_1",
+                recon_outputs_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let scanbox_rule = r#"
+rule SEKOIA_Apt_Scanbox_Framework_Not_Obfuscated : FILE
+{
+    strings:
+        $ = ".fun.split_data = function"
+        $ = "loadjs ="
+        $ = "info.color = screen.colorDepth"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Scanbox_Framework_Not_Obfuscated",
+                scanbox_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let sharpext_rule = r#"
+rule SEKOIA_Apt_Kimsuky_Sharpext_Devtoolmodule_Strings : FILE
+{
+    strings:
+        $ = "packetProc = function"
+        $ = "var url = request.request.url"
+        $ = "https://mail"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Kimsuky_Sharpext_Devtoolmodule_Strings",
+                sharpext_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let powerexchange_rule = r#"
+rule SEKOIA_Apt_Oilrig_Powerexchange : FILE
+{
+    strings:
+        $ = "($h.value).PadRight((($h.value).Length+($h.value).Length%4),'=')"
+        $ = "[Environment]::NewLine+$_.Exception.Message | Out-File -FilePath"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Oilrig_Powerexchange",
+                powerexchange_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let securepreferences_rule = r#"
+rule SEKOIA_Apt_Kimsuky_Sharpext_Compromised_Securepreferences
+{
+    meta:
+        description = "Detects compromised Chrome SecurePreferences file"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Apt_Kimsuky_Sharpext_Compromised_Securepreferences",
+                securepreferences_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let guloader_unpacker_rule = r#"
+rule SEKOIA_Guloader_Unpacker : FILE
+{
+    strings:
+        $p1 = "([Parameter(Position = 0)] [Type[]] $" base64
+        $p2 = "}else {" base64
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Guloader_Unpacker",
+                guloader_unpacker_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let guloader_unpacker_decoded_rule = r#"
+rule SEKOIA_Guloader_Unpacker_Decoded : FILE
+{
+    strings:
+        $s1 = "([String]$"
+        $s2 = "For($"
+        $s3 = ",[Parameter(Position = 1)] [Type] $"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Guloader_Unpacker_Decoded",
+                guloader_unpacker_decoded_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
             YaraTier::Script
         );
 
@@ -2018,6 +2960,182 @@ rule SEKOIA_Downloader_Mac_Smooth_Operator : FILE
                 "3p.test.macos"
             ),
             YaraTier::MachO
+        );
+
+        let sharpnbtscan_rule = r#"
+rule SEKOIA_Tool_Sharpnbtscan_Strings : FILE
+{
+    condition:
+        uint32be( 0 ) == 0x5A4D and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Tool_Sharpnbtscan_Strings",
+                sharpnbtscan_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Pe
+        );
+
+        let malscript_rule = r#"
+rule MalScript_Tricks
+{
+    strings:
+        $s1 = "window.moveTo -"
+        $s2 = "window.resizeTo 0"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "MalScript_Tricks",
+                malscript_rule,
+                "3p.bartblaze.generic.MalScript_Tricks"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let jupyter_rule = r#"
+rule Jupyter
+{
+    strings:
+        $ = "var __addr__="
+        $ = "var __hwid__="
+        $ = "var __xkey__="
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "Jupyter",
+                jupyter_rule,
+                "3p.bartblaze.crimeware.Jupyter"
+            ),
+            YaraTier::ScriptJs
+        );
+
+        let systembc_config_rule = r#"
+rule SystemBC_Config
+{
+    strings:
+        $ = "BEGINDATA"
+        $ = "HOST1:"
+        $ = "PORT1:"
+        $ = "TOR:"
+    condition:
+        3 of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SystemBC_Config",
+                systembc_config_rule,
+                "3p.bartblaze.crimeware.SystemBC"
+            ),
+            YaraTier::Doc
+        );
+
+        let ta18_scripts_rule = r#"
+rule SIGNATURE_BASE_TA18_074A_Scripts : FILE
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_TA18_074A_Scripts",
+                ta18_scripts_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let moveit_log_rule = r#"
+rule SIGNATURE_BASE_LOG_EXPL_Moveit_Exploitation_Indicator_Jun23_1
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_LOG_EXPL_Moveit_Exploitation_Indicator_Jun23_1",
+                moveit_log_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let fourelementsword_config_rule = r#"
+rule SIGNATURE_BASE_Fourelementsword_Config_File
+{
+    strings:
+        $s1 = "RegisterDlls=OurDll"
+        $s2 = "[DefaultInstall]"
+        $s3 = "Signature=\"$Windows NT$\""
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Fourelementsword_Config_File",
+                fourelementsword_config_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
+        );
+
+        let ares_pydoor_rule = r#"
+rule BlackTech_AresPYDoor_str
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "BlackTech_AresPYDoor_str",
+                ares_pydoor_rule,
+                "3p.JPCERT.blacktech"
+            ),
+            YaraTier::Script
+        );
+
+        let p0wned_rule = r#"
+rule SIGNATURE_BASE_Hacktool_Strings_P0Wnedshell : FILE
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Hacktool_Strings_P0Wnedshell",
+                p0wned_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Script
+        );
+
+        let forensic_name_rule = r#"
+rule SIGNATURE_BASE_Nautilus_Forensic_Artificats
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Nautilus_Forensic_Artificats",
+                forensic_name_rule,
+                "3p.YARAForge.yara-rules-full"
+            ),
+            YaraTier::Doc
         );
     }
 
@@ -2261,6 +3379,7 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
         let mut counts: std::collections::HashMap<YaraTier, usize> =
             std::collections::HashMap::new();
         let mut cross_format = Vec::new();
+        let mut raw = Vec::new();
         let mut unknown = Vec::new();
 
         for path in files {
@@ -2280,6 +3399,7 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
                 *counts.entry(tier).or_default() += 1;
                 match tier {
                     YaraTier::CrossFormat => cross_format.push(format!("{} (ns={})", name, ns)),
+                    YaraTier::Raw => raw.push(format!("{} (ns={})", name, ns)),
                     YaraTier::Unknown => unknown.push(format!("{} (ns={})", name, ns)),
                     _ => {}
                 }
@@ -2287,6 +3407,7 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
         }
 
         cross_format.sort();
+        raw.sort();
         unknown.sort();
 
         eprintln!("\n=== Residual Tier Audit ===");
@@ -2296,6 +3417,10 @@ rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
         }
         eprintln!("\n=== Cross-Format Rules ({}) ===", cross_format.len());
         for name in &cross_format {
+            eprintln!("  {name}");
+        }
+        eprintln!("\n=== Raw Rules ({}) ===", raw.len());
+        for name in &raw {
             eprintln!("  {name}");
         }
         eprintln!("\n=== Unknown Rules ({}) ===", unknown.len());

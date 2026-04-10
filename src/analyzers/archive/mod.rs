@@ -2826,7 +2826,12 @@ composite_rules:
         }
 
         let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        let analyzer = ArchiveAnalyzer::new()
+            .with_sample_extraction(config)
+            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&zip_path).expect("analyze zip");
 
@@ -2887,7 +2892,12 @@ composite_rules:
         }
 
         let config = SampleExtractionConfig::new(extract_dir.path().to_path_buf());
-        let analyzer = ArchiveAnalyzer::new().with_sample_extraction(config);
+        let analyzer = ArchiveAnalyzer::new()
+            .with_sample_extraction(config)
+            .with_analysis_options(Arc::new(crate::AnalysisOptions {
+                all_files: true,
+                ..crate::AnalysisOptions::default()
+            }));
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&tar_gz_path).expect("analyze tar.gz");
 

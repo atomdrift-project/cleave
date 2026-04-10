@@ -4,7 +4,7 @@
 //! the nested sub_reports approach. Each file (including archive members and
 //! decoded payloads) gets its own FileAnalysis entry.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
@@ -202,6 +202,14 @@ impl FileAnalysis {
         let mut counts = FindingCounts::default();
         let mut scores_by_group: FxHashMap<String, f32> = FxHashMap::default();
 
+        // Build set of component IDs referenced by composite findings so that
+        // only components that contributed to a composite are scored.
+        let referenced_components: FxHashSet<&str> = self
+            .findings
+            .iter()
+            .flat_map(|f| f.trait_refs.iter().map(String::as_str))
+            .collect();
+
         for finding in &self.findings {
             match finding.crit {
                 Criticality::Hostile => counts.hostile += 1,
@@ -210,7 +218,17 @@ impl FileAnalysis {
                 _ => {}
             }
 
-            let score = finding.crit.score_weight() as f32 * finding.conf;
+            let score = match finding.crit {
+                Criticality::Baseline => 0.2 * finding.conf,
+                Criticality::Component => {
+                    if referenced_components.contains(finding.id.as_str()) {
+                        0.3 * finding.conf
+                    } else {
+                        0.0
+                    }
+                }
+                _ => finding.crit.score_weight() as f32 * finding.conf,
+            };
 
             // Group by top 3 directory components
             // e.g., "objectives/well-known/malware/trickbot" -> "objectives/well-known/malware"
@@ -500,8 +518,8 @@ mod tests {
                 .with_criticality(Criticality::Baseline),
         );
         fa.compute_summary();
-        // baseline findings don't contribute to score
-        assert_eq!(fa.score, 0);
+        // baseline findings contribute 0.2 * conf; ceil(0.2 * 0.1) = 1
+        assert_eq!(fa.score, 1);
         assert!(fa.counts.is_none());
     }
 

@@ -24,7 +24,7 @@
 
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
-use crate::analyzers::{detect_file_type, Analyzer};
+use crate::analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 use crate::types::*;
 use anyhow::Result;
 use rayon::prelude::*;
@@ -45,6 +45,8 @@ static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 /// Total number of failed archive member analyses
 static FAILED_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
+const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 500;
+
 /// Log archive analysis statistics.
 #[allow(dead_code)]
 pub(crate) fn log_archive_analysis_stats() {
@@ -58,6 +60,133 @@ pub(crate) fn log_archive_analysis_stats() {
 }
 
 impl ArchiveAnalyzer {
+    fn nested_archive_analyzer(&self, relative_path: &str) -> ArchiveAnalyzer {
+        let nested_prefix = match &self.archive_path_prefix {
+            Some(prefix) => format!("{}!{}", prefix, relative_path),
+            None => relative_path.to_string(),
+        };
+
+        let mut nested = ArchiveAnalyzer::new()
+            .with_depth(self.current_depth + 1)
+            .with_archive_prefix(nested_prefix);
+
+        if let Some(ref mapper) = self.capability_mapper {
+            nested = nested.with_capability_mapper_arc(mapper.clone());
+        }
+        if let Some(ref engine) = self.yara_engine {
+            nested = nested.with_yara_arc(engine.clone());
+        }
+        if !self.zip_passwords.is_empty() {
+            nested = nested.with_zip_passwords_arc(self.zip_passwords.clone());
+        }
+        if let Some(ref config) = self.sample_extraction {
+            nested = nested.with_sample_extraction(config.clone());
+        }
+        if let Some(ref flag) = self.cancelled {
+            nested = nested.with_cancellation(flag.clone());
+        }
+        if let Some(ref opts) = self.analysis_options {
+            nested = nested.with_analysis_options(opts.clone());
+        }
+
+        nested
+    }
+
+    fn analyze_extracted_member(
+        &self,
+        file_path: &Path,
+        relative_path: &str,
+        data: &[u8],
+        file_type: FileType,
+        sha256: String,
+    ) -> Result<AnalysisReport> {
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled");
+        }
+
+        let result = if matches!(file_type, FileType::Archive | FileType::Jar) {
+            if self.current_depth + 1 >= self.max_depth {
+                Err(anyhow::anyhow!(
+                    "Nested archive at max depth ({})",
+                    self.max_depth
+                ))
+            } else {
+                let nested = self.nested_archive_analyzer(relative_path);
+                let path = file_path.to_path_buf();
+                std::thread::Builder::new()
+                    .stack_size(8 * 1024 * 1024)
+                    .spawn(move || nested.analyze(&path))
+                    .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
+                    .join()
+                    .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?
+            }
+        } else if let Some(analyzer) =
+            crate::analyzers::analyzer_for_file_type_arc(&file_type, self.capability_mapper.clone())
+        {
+            let opts = crate::analyzers::stng_analysis_opts(4);
+            let stng_strings = stng::extract_strings_with_options(data, &opts);
+            let payloads =
+                crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
+            let logical_path = Path::new(relative_path);
+            let mut input = AnalysisInput::with_payloads(
+                logical_path,
+                data,
+                &stng_strings,
+                &payloads,
+                file_type.clone(),
+            )
+            .with_sha256(sha256.clone())
+            .at_depth((self.current_depth + 1) as u32);
+            input.cancellation = self.cancelled.clone();
+
+            tracing::debug!(
+                relative_path,
+                file_type = %file_type.report_file_type(),
+                string_count = stng_strings.len(),
+                payload_count = payloads.len(),
+                "Analyzing archive member via unified AnalysisInput path"
+            );
+
+            let mut report = analyzer.analyze_input(&input)?;
+            if let Some(ref yara_engine) = self.yara_engine {
+                let yara_start = std::time::Instant::now();
+                match yara_engine.scan_bytes(data) {
+                    Ok(matches) => {
+                        let elapsed_ms = yara_start.elapsed().as_millis();
+                        if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
+                            tracing::warn!(
+                                relative_path,
+                                file_type = %file_type.report_file_type(),
+                                size_kb = data.len() / 1024,
+                                elapsed_ms = elapsed_ms as u64,
+                                matches = matches.len(),
+                                "Slow archive member YARA scan"
+                            );
+                        }
+                        report.yara_matches = matches;
+                    }
+                    Err(e) => {
+                        debug!("YARA scan failed for {}: {}", relative_path, e);
+                    }
+                }
+            }
+            Ok(report)
+        } else {
+            Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))
+        };
+
+        match &result {
+            Ok(_) => {
+                SUCCESSFUL_ANALYSES.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+                FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        result
+    }
+
     /// Analyze JAR-like archives (JAR, WAR, EAR, APK, AAR) with optimized class file handling.
     ///
     /// JAR analysis is optimized with a three-phase approach:
@@ -237,22 +366,33 @@ impl ArchiveAnalyzer {
             let entry_path = self.format_entry_path(&relative_path);
             let archive_location = self.format_evidence_location(&relative_path);
 
-            // Collect archive entry metadata
-            if let Ok(file_data) = std::fs::read(entry.path()) {
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: detect_file_type(entry.path())
-                        .map(|ft| ft.report_file_type())
-                        .unwrap_or_else(|_| "unknown".to_string()),
-                    sha256: calculate_sha256(&file_data),
-                    size_bytes: file_data.len() as u64,
-                };
-                if let Ok(mut entries) = collected_archive_entries.lock() {
-                    entries.push(entry_metadata);
+            let file_data = match std::fs::read(entry.path()) {
+                Ok(data) => data,
+                Err(e) => {
+                    debug!("Failed to read archive member {}: {}", entry_path, e);
+                    return;
                 }
+            };
+            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+            let sha256 = calculate_sha256(&file_data);
+
+            let entry_metadata = ArchiveEntry {
+                path: entry_path.clone(),
+                file_type: file_type.report_file_type(),
+                sha256: sha256.clone(),
+                size_bytes: file_data.len() as u64,
+            };
+            if let Ok(mut entries) = collected_archive_entries.lock() {
+                entries.push(entry_metadata);
             }
 
-            match self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_member(
+                entry.path(),
+                &relative_path,
+                &file_data,
+                file_type,
+                sha256,
+            ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
@@ -380,36 +520,33 @@ impl ArchiveAnalyzer {
             let entry_path = self.format_entry_path(&relative_path);
             let archive_location = self.format_evidence_location(&relative_path);
 
-            // Collect archive entry metadata
-            if let Ok(file_data) = std::fs::read(entry.path()) {
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: detect_file_type(entry.path())
-                        .map(|ft| ft.report_file_type())
-                        .unwrap_or_else(|_| "unknown".to_string()),
-                    sha256: calculate_sha256(&file_data),
-                    size_bytes: file_data.len() as u64,
-                };
-                if let Ok(mut entries) = collected_archive_entries.lock() {
-                    entries.push(entry_metadata);
+            let file_data = match std::fs::read(entry.path()) {
+                Ok(data) => data,
+                Err(e) => {
+                    debug!("Failed to read archive member {}: {}", entry_path, e);
+                    return;
                 }
+            };
+            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+            let sha256 = calculate_sha256(&file_data);
+
+            let entry_metadata = ArchiveEntry {
+                path: entry_path.clone(),
+                file_type: file_type.report_file_type(),
+                sha256: sha256.clone(),
+                size_bytes: file_data.len() as u64,
+            };
+            if let Ok(mut entries) = collected_archive_entries.lock() {
+                entries.push(entry_metadata);
             }
 
-            // Run YARA on non-class files
-            if let Some(ref yara_engine) = self.yara_engine {
-                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                    if let Ok(mut all_yara) = collected_yara.lock() {
-                        for yara_match in matches {
-                            if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                                all_yara.push(yara_match);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Run file-type-specific analysis
-            match self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_member(
+                entry.path(),
+                &relative_path,
+                &file_data,
+                file_type,
+                sha256,
+            ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
@@ -682,35 +819,33 @@ impl ArchiveAnalyzer {
             let entry_path = self.format_entry_path(&relative_path);
             let archive_location = self.format_evidence_location(&relative_path);
 
-            // Collect archive entry metadata
-            if let Ok(file_data) = std::fs::read(entry.path()) {
-                let entry_metadata = ArchiveEntry {
-                    path: entry_path.clone(),
-                    file_type: detect_file_type(entry.path())
-                        .map(|ft| ft.report_file_type())
-                        .unwrap_or_else(|_| "unknown".to_string()),
-                    sha256: calculate_sha256(&file_data),
-                    size_bytes: file_data.len() as u64,
-                };
-                if let Ok(mut entries) = collected_archive_entries.lock() {
-                    entries.push(entry_metadata);
+            let file_data = match std::fs::read(entry.path()) {
+                Ok(data) => data,
+                Err(e) => {
+                    debug!("Failed to read archive member {}: {}", entry_path, e);
+                    return;
                 }
+            };
+            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+            let sha256 = calculate_sha256(&file_data);
+
+            let entry_metadata = ArchiveEntry {
+                path: entry_path.clone(),
+                file_type: file_type.report_file_type(),
+                sha256: sha256.clone(),
+                size_bytes: file_data.len() as u64,
+            };
+            if let Ok(mut entries) = collected_archive_entries.lock() {
+                entries.push(entry_metadata);
             }
 
-            // Run YARA scan on extracted file if engine is available
-            if let Some(ref yara_engine) = self.yara_engine {
-                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                    if let Ok(mut all_yara) = collected_yara.lock() {
-                        for yara_match in matches {
-                            if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                                all_yara.push(yara_match);
-                            }
-                        }
-                    }
-                }
-            }
-
-            match self.analyze_extracted_file(entry.path()) {
+            match self.analyze_extracted_member(
+                entry.path(),
+                &relative_path,
+                &file_data,
+                file_type,
+                sha256,
+            ) {
                 Err(e) => {
                     debug!("Failed to analyze archive member {}: {}", entry_path, e);
                 }
@@ -931,81 +1066,20 @@ impl ArchiveAnalyzer {
     /// # Returns
     /// * `Ok(AnalysisReport)` - Analysis report from appropriate analyzer
     /// * `Err` - If file type unsupported or analysis fails
+    #[allow(dead_code)] // Legacy shim while archive callers finish migrating to the shared member path
     pub(super) fn analyze_extracted_file(&self, file_path: &Path) -> Result<AnalysisReport> {
         if self.is_cancelled() {
             anyhow::bail!("Analysis cancelled");
         }
 
-        // Detect file type
+        let data = std::fs::read(file_path)?;
         let file_type = detect_file_type(file_path)?;
-
-        // Handle nested archives specially (depth limits, prefix propagation)
-        if file_type == crate::analyzers::FileType::Archive {
-            if self.current_depth + 1 >= self.max_depth {
-                return Err(anyhow::anyhow!(
-                    "Nested archive at max depth ({})",
-                    self.max_depth
-                ));
-            }
-
-            // Build the prefix for nested paths
-            let file_name = file_path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("nested");
-            let nested_prefix = match &self.archive_path_prefix {
-                Some(prefix) => format!("{}!{}", prefix, file_name),
-                None => file_name.to_string(),
-            };
-
-            // Create nested analyzer with incremented depth and path prefix
-            let mut nested = ArchiveAnalyzer::new()
-                .with_depth(self.current_depth + 1)
-                .with_archive_prefix(nested_prefix);
-
-            // Propagate configuration
-            if let Some(ref mapper) = self.capability_mapper {
-                nested = nested.with_capability_mapper_arc(mapper.clone());
-            }
-            if let Some(ref engine) = self.yara_engine {
-                nested = nested.with_yara_arc(engine.clone());
-            }
-            if !self.zip_passwords.is_empty() {
-                nested = nested.with_zip_passwords_arc(self.zip_passwords.clone());
-            }
-            if let Some(ref flag) = self.cancelled {
-                nested = nested.with_cancellation(flag.clone());
-            }
-
-            // Spawn on a dedicated thread to guarantee a fresh stack —
-            // recursive archive analysis can exhaust the rayon worker stack.
-            let path = file_path.to_path_buf();
-            let result = std::thread::Builder::new()
-                .stack_size(8 * 1024 * 1024)
-                .spawn(move || nested.analyze(&path))
-                .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
-                .join()
-                .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?;
-            return result;
-        }
-
-        // Use the centralized factory for all other file types
-        let result = if let Some(analyzer) =
-            crate::analyzers::analyzer_for_file_type_arc(&file_type, self.capability_mapper.clone())
-        {
-            analyzer.analyze(file_path)
-        } else {
-            Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))
-        };
-
-        match &result {
-            Ok(_) => {
-                SUCCESSFUL_ANALYSES.fetch_add(1, Ordering::Relaxed);
-            }
-            Err(_) => {
-                FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-        result
+        let sha256 = calculate_sha256(&data);
+        let relative_path = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("extracted")
+            .to_string();
+        self.analyze_extracted_member(file_path, &relative_path, &data, file_type, sha256)
     }
 }

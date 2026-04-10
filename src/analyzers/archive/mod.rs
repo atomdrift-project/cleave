@@ -4,7 +4,6 @@ pub(crate) mod analyzers;
 mod guards;
 // #[cfg(test)]
 // mod guards_test;
-pub(crate) mod streaming;
 mod system_packages;
 mod tar;
 mod utils;
@@ -25,7 +24,7 @@ use std::sync::Arc;
 
 use ::zip::ZipArchive;
 use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
-use utils::{calculate_file_sha256, calculate_sha256, detect_archive_type};
+use utils::{calculate_sha256, detect_archive_type};
 
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
@@ -537,342 +536,32 @@ impl ArchiveAnalyzer {
     where
         F: Fn(&FileAnalysis) + Send + Sync,
     {
-        use streaming::StreamingFileResult;
-
-        // Log BEFORE processing archive to capture OOM crashes
-        tracing::info!(
-            "Starting archive analysis: {} (depth: {})",
-            file_path.display(),
-            self.current_depth
-        );
-
-        let start = std::time::Instant::now();
-
-        // Prevent infinite recursion
-        if self.current_depth >= self.max_depth {
-            anyhow::bail!("Maximum archive depth ({}) exceeded", self.max_depth);
-        }
-
-        // Create target info
-        tracing::debug!("Opening archive file: {}", file_path.display());
-        let file = std::fs::File::open(file_path)?;
-        let metadata = file.metadata()?;
-        let size_bytes = metadata.len();
-
         tracing::debug!(
-            "Archive file size: {} bytes for: {}",
-            size_bytes,
-            file_path.display()
+            path = %file_path.display(),
+            "analyze_streaming() now delegates to the unified archive analysis path"
         );
-
-        let sha256 = calculate_file_sha256(file_path).unwrap_or_else(|_| "unknown".to_string());
-
-        let target = TargetInfo {
-            path: file_path.display().to_string(),
-            file_type: detect_archive_type(file_path).to_string(),
-            size_bytes,
-            sha256,
-            architectures: None,
-        };
-
-        let mut report = AnalysisReport::new(target);
-        report
-            .metadata
-            .tools_used
-            .push("streaming_analyzer".to_string());
-
-        // Track aggregate data incrementally (instead of accumulating all files)
-        let files_analyzed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let max_depth = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
-        let score = std::sync::Arc::new(std::sync::Mutex::new(0.0_f32));
-        let counts = std::sync::Arc::new(std::sync::Mutex::new(FindingCounts::default()));
-
-        // Collect findings from all nested files for container-level composite evaluation
-        // This enables cross-file patterns like "npm package with .dll" where package.json
-        // is in one file and .dll in another.
-        let nested_findings = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Finding>::new()));
-
-        let files_analyzed_clone = files_analyzed.clone();
-        let max_depth_clone = max_depth.clone();
-        let score_clone = score.clone();
-        let counts_clone = counts.clone();
-        let nested_findings_clone = nested_findings.clone();
-
-        // Helper to update aggregates from a FileAnalysis
-        let update_aggregates = |file: &FileAnalysis| {
-            let current_max = max_depth_clone.load(std::sync::atomic::Ordering::Relaxed);
-            if file.depth > current_max {
-                max_depth_clone.store(file.depth, std::sync::atomic::Ordering::Relaxed);
-            }
-
-            if file.score > 0 {
-                if let Ok(mut s) = score_clone.lock() {
-                    *s += file.score as f32;
-                }
-            }
-
-            if let Some(file_counts) = &file.counts {
-                if let Ok(mut counts) = counts_clone.lock() {
+        let mut report = self.analyze_archive(file_path)?;
+        for file in &report.files {
+            on_file(file);
+        }
+        if report.summary.is_none() {
+            let mut counts = FindingCounts::default();
+            let mut score = 0.0_f32;
+            for file in &report.files {
+                if let Some(file_counts) = &file.counts {
                     counts.hostile += file_counts.hostile;
                     counts.suspicious += file_counts.suspicious;
                     counts.notable += file_counts.notable;
                 }
+                score += file.score as f32;
             }
-
-            // Collect findings for container-level composite evaluation
-            if !file.findings.is_empty() {
-                if let Ok(mut findings) = nested_findings_clone.lock() {
-                    // LIMIT: Prevent unbounded memory growth from massive archives.
-                    // 50k findings is enough for even the most complex legitimate packages
-                    // (e.g. large node_modules). Beyond this, we prioritize system stability.
-                    if findings.len() < 50_000 {
-                        findings.extend(file.findings.iter().cloned());
-                    } else if findings.len() == 50_000 {
-                        // Log once when we hit the limit
-                        tracing::warn!(
-                            "Archive findings limit reached (50,000) - skipping further collection for cross-file composites"
-                        );
-                        // Increment so we don't log every time
-                        findings.push(Finding {
-                            id: "internal/limit-reached".to_string(),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-        };
-
-        // Determine archive type - use magic detection for ambiguous extensions
-        let archive_type = utils::detect_archive_type_with_magic(file_path)
-            .unwrap_or_else(|_| detect_archive_type(file_path));
-        let summary = match archive_type {
-            "tar" | "tar.gz" | "tgz" | "tar.bz2" | "tbz" | "tbz2" | "tar.xz" | "txz"
-            | "tar.zst" | "tzst" => {
-                self.analyze_tar_streaming(file_path, |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-
-                    // Update aggregates incrementally (don't accumulate files)
-                    files_analyzed_clone.fetch_add(
-                        1 + result.nested_files.len() as u32,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    update_aggregates(&result.file_analysis);
-                    for nested in &result.nested_files {
-                        update_aggregates(nested);
-                    }
-                })?
-            }
-            "zip" | "jar" | "war" | "ear" | "aar" | "egg" | "whl" | "phar" | "nupkg" | "vsix"
-            | "xpi" | "ipa" | "epub" => {
-                self.analyze_zip_streaming(file_path, |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-
-                    files_analyzed_clone.fetch_add(
-                        1 + result.nested_files.len() as u32,
-                        std::sync::atomic::Ordering::Relaxed,
-                    );
-                    update_aggregates(&result.file_analysis);
-                    for nested in &result.nested_files {
-                        update_aggregates(nested);
-                    }
-                })?
-            }
-            // Handle "apk" that wasn't resolved by magic (fallback to zip for Android)
-            "apk" => self.analyze_zip_streaming(file_path, |result: StreamingFileResult| {
-                on_file(&result.file_analysis);
-
-                files_analyzed_clone.fetch_add(
-                    1 + result.nested_files.len() as u32,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                update_aggregates(&result.file_analysis);
-                for nested in &result.nested_files {
-                    update_aggregates(nested);
-                }
-            })?,
-            "deb" => self.analyze_deb_streaming(file_path, |result: StreamingFileResult| {
-                on_file(&result.file_analysis);
-
-                files_analyzed_clone.fetch_add(
-                    1 + result.nested_files.len() as u32,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                update_aggregates(&result.file_analysis);
-                for nested in &result.nested_files {
-                    update_aggregates(nested);
-                }
-            })?,
-            "rpm" => self.analyze_rpm_streaming(file_path, |result: StreamingFileResult| {
-                on_file(&result.file_analysis);
-
-                files_analyzed_clone.fetch_add(
-                    1 + result.nested_files.len() as u32,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                update_aggregates(&result.file_analysis);
-                for nested in &result.nested_files {
-                    update_aggregates(nested);
-                }
-            })?,
-            "7z" => self.analyze_7z_streaming(file_path, |result: StreamingFileResult| {
-                on_file(&result.file_analysis);
-
-                files_analyzed_clone.fetch_add(
-                    1 + result.nested_files.len() as u32,
-                    std::sync::atomic::Ordering::Relaxed,
-                );
-                update_aggregates(&result.file_analysis);
-                for nested in &result.nested_files {
-                    update_aggregates(nested);
-                }
-            })?,
-            "gz" => self.analyze_single_compressed_streaming(
-                file_path,
-                "gzip",
-                |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    update_aggregates(&result.file_analysis);
-                },
-            )?,
-            "xz" => self.analyze_single_compressed_streaming(
-                file_path,
-                "xz",
-                |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    update_aggregates(&result.file_analysis);
-                },
-            )?,
-            "bz2" => self.analyze_single_compressed_streaming(
-                file_path,
-                "bzip2",
-                |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    update_aggregates(&result.file_analysis);
-                },
-            )?,
-            "zst" => self.analyze_single_compressed_streaming(
-                file_path,
-                "zstd",
-                |result: StreamingFileResult| {
-                    on_file(&result.file_analysis);
-                    files_analyzed_clone.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    update_aggregates(&result.file_analysis);
-                },
-            )?,
-            _ => {
-                // Fall back to non-streaming for unsupported formats (rar, pkg)
-                return self.analyze_archive(file_path);
-            }
-        };
-
-        let suppress_path_traversal =
-            should_suppress_path_traversal_findings(file_path, &summary.hostile_reasons);
-        push_archive_hostile_findings(
-            &mut report,
-            summary.hostile_reasons,
-            "streaming_analyzer",
-            suppress_path_traversal,
-        );
-
-        // Add structural feature
-        report.structure.push(StructuralFeature {
-            id: format!("archive/{}", archive_type),
-            desc: format!("{} archive", archive_type),
-            evidence: vec![Evidence {
-                method: "extension".to_string(),
-                source: "streaming_analyzer".to_string(),
-                value: file_path
-                    .extension()
-                    .and_then(|e| e.to_str())
-                    .unwrap_or("unknown")
-                    .to_string(),
-                location: None,
+            report.summary = Some(ReportSummary {
+                files_analyzed: report.files.len() as u32,
+                counts,
+                score: score.ceil() as u32,
                 ..Default::default()
-            }],
-        });
-
-        // Container-level composite evaluation: re-evaluate composite rules against
-        // all nested findings to detect cross-file patterns like:
-        // - "npm package with suspicious DLL" (package.json in one file + .dll in another)
-        // - "Python package with compiled binary" (setup.py + .so/.pyd files)
-        if let Some(mapper) = &self.capability_mapper {
-            let mut collected_findings = match std::sync::Arc::try_unwrap(nested_findings) {
-                Ok(mutex) => mutex.into_inner().unwrap_or_default(),
-                Err(arc) => arc.lock().map(|g| g.clone()).unwrap_or_default(),
-            };
-
-            // Evaluate basename traits against archive entry names.
-            // Per-file analyzers can't match basename traits because extracted
-            // files use temp paths; we evaluate them here with the real names.
-            let entry_names: Vec<String> = report
-                .archive_contents
-                .iter()
-                .map(|e| e.path.clone())
-                .collect();
-            if !entry_names.is_empty() {
-                let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
-                collected_findings.extend(basename_findings);
-            }
-
-            let container_findings = mapper.evaluate_container_composites(
-                &report,
-                &collected_findings,
-                &report.target.file_type,
-            );
-
-            // Add container-level findings to the report
-            for finding in container_findings {
-                // Update counts for container-level findings
-                if let Ok(mut counts) = counts.lock() {
-                    match finding.crit {
-                        Criticality::Hostile => counts.hostile += 1,
-                        Criticality::Suspicious => counts.suspicious += 1,
-                        Criticality::Notable => counts.notable += 1,
-                        _ => {}
-                    }
-                }
-                if let Ok(mut s) = score.lock() {
-                    *s += finding.crit.score_weight() as f32 * finding.conf;
-                }
-                report.findings.push(finding);
-            }
+            });
         }
-
-        // Create summary from incrementally computed aggregates (no files accumulated)
-        let final_counts = match std::sync::Arc::try_unwrap(counts) {
-            Ok(mutex) => mutex
-                .into_inner()
-                .map_err(|e| anyhow::anyhow!("Failed to unwrap counts mutex: {}", e))?,
-            Err(arc) => arc
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock counts: {}", e))?
-                .clone(),
-        };
-        let final_score = match std::sync::Arc::try_unwrap(score) {
-            Ok(mutex) => mutex
-                .into_inner()
-                .map_err(|e| anyhow::anyhow!("Failed to unwrap score mutex: {}", e))?,
-            Err(arc) => *arc
-                .lock()
-                .map_err(|e| anyhow::anyhow!("Failed to lock score: {}", e))?,
-        };
-
-        let _ = max_depth; // derivable from files[].depth, no longer stored in summary
-        report.summary = Some(ReportSummary {
-            files_analyzed: files_analyzed.load(std::sync::atomic::Ordering::Relaxed),
-            counts: final_counts,
-            score: final_score.ceil() as u32,
-            ..Default::default()
-        });
-        // Files are kept in the report — callers need per-file data for
-        // the compact JSON output (per-file scores, findings, extracted_path).
-
-        // Set timing
-        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-
         Ok(report)
     }
 

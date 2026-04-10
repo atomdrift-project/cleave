@@ -1,6 +1,6 @@
 //! ELF binary analyzer for Linux executables.
 //!
-//! Analyzes ELF binaries using radare2/rizin and string extraction.
+//! Analyzes ELF binaries using goblin, stng, and selective rizin deep analysis.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -141,6 +141,8 @@ impl ElfAnalyzer {
 
                 // Calculate code_size from goblin section flags (more accurate than radare2)
                 let code_size = Some(self.compute_code_size(&elf));
+                let needs_r2_strings =
+                    stng_strings.is_none() && self.preextracted_strings.is_none();
 
                 // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
                 let (r2_inner, _) = rayon::join(
@@ -152,6 +154,7 @@ impl ElfAnalyzer {
                             file_path,
                             symbols_found,
                             true, // goblin_success
+                            needs_r2_strings,
                             precomputed_sha256,
                         ))
                     },
@@ -1018,12 +1021,22 @@ impl Analyzer for ElfAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data, None);
-        self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, &data, None, None);
-        crate::path_mapper::analyze_and_link_paths(&mut report);
-        crate::env_mapper::analyze_and_link_env_vars(&mut report);
-        Ok(report)
+        let opts = crate::analyzers::stng_analysis_opts(4);
+        let strings = stng::extract_strings_with_options(&data, &opts);
+        tracing::debug!(
+            path = %file_path.display(),
+            strings = strings.len(),
+            string_mode = "stng-local",
+            reason = "legacy analyze() path without pre-extracted AnalysisInput",
+            "ELF analyzer extracting strings locally before analyze_input"
+        );
+        let input = AnalysisInput::with_strings(
+            file_path,
+            &data,
+            &strings,
+            crate::analyzers::FileType::Elf,
+        );
+        self.analyze_input(&input)
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

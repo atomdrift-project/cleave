@@ -238,10 +238,12 @@ impl MachOAnalyzer {
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports
             let has_symbols = macho.symbols().count() > 0;
+            let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
             if let Ok(batched) = self.radare2.extract_batched(
                 file_path,
                 has_symbols,
                 true, // goblin_success
+                needs_r2_strings,
                 precomputed_sha256,
             ) {
                 // Compute metrics from batched data (radare2-specific metrics)
@@ -1120,47 +1122,22 @@ impl Analyzer for MachOAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-
-        // Get all architecture slices (for FAT binaries) or the single slice (for thin binaries)
-        let arch_ranges = self.all_arch_ranges(&data);
-
-        // Use preferred arch for structural analysis (imports, exports, strings, etc.)
-        let preferred_range = self.preferred_arch_range(&data);
-        let preferred_data = &data[preferred_range];
-        let mut report = self.analyze_structural(file_path, preferred_data, None);
-        self.apply_fat_metadata(&mut report, &data);
-
-        // For FAT binaries, re-extract strings from the entire file so offsets are file-relative.
-        // This ensures offset_range constraints (like [-2200, -100]) work correctly.
-        let is_fat = arch_ranges.len() > 1;
-        if is_fat && self.preextracted_strings.is_none() {
-            report.strings = self.string_extractor.extract_smart(&data, None);
-            // Update string count metric
-            if let Some(ref mut metrics) = report.metrics {
-                if let Some(ref mut binary_metrics) = metrics.binary {
-                    binary_metrics.string_count = report.strings.len() as u32;
-                }
-            }
-        }
-
-        // Evaluate traits against binary data.
-        // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
-        // For thin binaries, evaluate against the single slice (same as full file).
-        if is_fat {
-            // Full file evaluation - strings and offsets are file-relative
-            self.capability_mapper
-                .evaluate_and_merge_findings(&mut report, &data, None, None);
-        } else {
-            // Thin binary - single slice is the whole file
-            self.capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                preferred_data,
-                None,
-                None,
-            );
-        }
-
-        Ok(report)
+        let opts = crate::analyzers::stng_analysis_opts(4);
+        let strings = stng::extract_strings_with_options(&data, &opts);
+        tracing::debug!(
+            path = %file_path.display(),
+            strings = strings.len(),
+            string_mode = "stng-local",
+            reason = "legacy analyze() path without pre-extracted AnalysisInput",
+            "Mach-O analyzer extracting strings locally before analyze_input"
+        );
+        let input = AnalysisInput::with_strings(
+            file_path,
+            &data,
+            &strings,
+            crate::analyzers::FileType::MachO,
+        );
+        self.analyze_input(&input)
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

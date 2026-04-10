@@ -344,6 +344,7 @@ impl PEAnalyzer {
         let has_symbols = pe.is_none_or(|pe| {
             !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
         });
+        let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
         let (r2_result, _) = rayon::join(
             || {
                 if self.is_cancelled() || !Radare2Analyzer::is_available() {
@@ -353,6 +354,7 @@ impl PEAnalyzer {
                     file_path,
                     has_symbols,
                     goblin_ok,
+                    needs_r2_strings,
                     precomputed_sha256,
                 ))
             },
@@ -1564,10 +1566,18 @@ impl Analyzer for PEAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let mut report = self.analyze_structural(file_path, &data, None);
-        self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, &data, None, None);
-        Ok(report)
+        let opts = crate::analyzers::stng_analysis_opts(4);
+        let strings = stng::extract_strings_with_options(&data, &opts);
+        tracing::debug!(
+            path = %file_path.display(),
+            strings = strings.len(),
+            string_mode = "stng-local",
+            reason = "legacy analyze() path without pre-extracted AnalysisInput",
+            "PE analyzer extracting strings locally before analyze_input"
+        );
+        let input =
+            AnalysisInput::with_strings(file_path, &data, &strings, crate::analyzers::FileType::Pe);
+        self.analyze_input(&input)
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

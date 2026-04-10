@@ -304,11 +304,36 @@ pub(crate) struct BatchedAnalysis {
     pub functions: Vec<R2Function>,
     pub sections: Vec<R2Section>,
     pub strings: Vec<R2String>,
+    #[serde(default = "default_true")]
+    pub strings_extracted: bool,
     #[serde(default)]
     pub imports: Vec<R2Import>,
     /// True if rizin analysis timed out and returned no batched results.
     #[serde(default)]
     pub timed_out: bool,
+}
+
+const fn default_true() -> bool {
+    true
+}
+
+#[derive(Clone, Copy, Debug)]
+enum RizinMode {
+    MetadataOnly,
+    StringsOnly,
+    FunctionsOnly,
+    Full,
+}
+
+impl RizinMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::MetadataOnly => "metadata-only",
+            Self::StringsOnly => "strings-only",
+            Self::FunctionsOnly => "functions-only",
+            Self::Full => "full",
+        }
+    }
 }
 
 /// Radare2 integration for deep binary analysis
@@ -399,35 +424,21 @@ impl Radare2Analyzer {
     ///
     /// `goblin_success`: when true, redundant structural analysis (`iSj`, `iij`) is skipped
     /// in rizin, as goblin has already successfully provided this data.
+    ///
+    /// `include_strings`: when false, `izj` is skipped and callers are expected to rely on
+    /// pre-extracted `stng` strings instead.
     pub(crate) fn extract_batched(
         &self,
         file_path: &Path,
         has_symbols: bool,
         goblin_success: bool,
+        include_strings: bool,
         precomputed_sha256: Option<String>,
     ) -> Result<BatchedAnalysis> {
         let t_start = std::time::Instant::now();
 
-        debug!(
-            "Running radare2 batched analysis on {:?} (goblin_success={})",
-            file_path, goblin_success
-        );
-
         // Use precomputed SHA256 for cache lookup if available
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
-
-        // Check cache first (skipped in debug builds or when CLEAVE_SKIP_CACHE is set)
-        let skip_cache = crate::cache::skip_cache();
-        if !skip_cache {
-            if let Some(ref hash) = sha256 {
-                if let Some(cached) = Self::load_from_cache(hash) {
-                    debug!("radare2 cache hit for {}", hash);
-                    return Ok(cached);
-                } else {
-                    trace!("radare2 cache miss for {}", hash);
-                }
-            }
-        }
 
         // Check file size - skip expensive function analysis for large binaries
         // Binaries >5MB take minutes to analyze with 'aa'
@@ -435,6 +446,67 @@ impl Radare2Analyzer {
 
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
+        let mode = match (!skip_function_analysis, include_strings) {
+            (false, false) => RizinMode::MetadataOnly,
+            (false, true) => RizinMode::StringsOnly,
+            (true, false) => RizinMode::FunctionsOnly,
+            (true, true) => RizinMode::Full,
+        };
+        let function_reason = if file_size > MAX_SIZE_FOR_FULL_ANALYSIS {
+            format!(
+                "function analysis disabled: file {} MB exceeds {} MB threshold",
+                file_size / 1024 / 1024,
+                MAX_SIZE_FOR_FULL_ANALYSIS / 1024 / 1024
+            )
+        } else if !has_symbols {
+            "function analysis disabled: no symbols/imports/sections discovered pre-rizin"
+                .to_string()
+        } else {
+            "function analysis enabled: symbol/structure hints suggest aflj is worthwhile"
+                .to_string()
+        };
+        let string_reason = if include_strings {
+            "string extraction enabled: no pre-extracted stng strings available".to_string()
+        } else {
+            "string extraction disabled: using existing stng strings".to_string()
+        };
+
+        debug!(
+            path = %file_path.display(),
+            mode = mode.label(),
+            goblin_success,
+            has_symbols,
+            include_strings,
+            file_size_mb = file_size / 1024 / 1024,
+            function_reason = %function_reason,
+            string_reason = %string_reason,
+            "Running radare2 batched analysis"
+        );
+
+        // Check cache first (skipped in debug builds or when CLEAVE_SKIP_CACHE is set)
+        let skip_cache = crate::cache::skip_cache();
+        if !skip_cache {
+            if let Some(ref hash) = sha256 {
+                if let Some(cached) = Self::load_from_cache(hash) {
+                    if !include_strings || cached.strings_extracted {
+                        debug!(
+                            path = %file_path.display(),
+                            mode = mode.label(),
+                            cached_strings = cached.strings_extracted,
+                            "radare2 cache hit"
+                        );
+                        return Ok(cached);
+                    }
+                    trace!(
+                        path = %file_path.display(),
+                        mode = mode.label(),
+                        "radare2 cache entry missing requested strings"
+                    );
+                } else {
+                    trace!(path = %file_path.display(), mode = mode.label(), "radare2 cache miss");
+                }
+            }
+        }
 
         if file_size > MAX_SIZE_FOR_FULL_ANALYSIS {
             debug!(
@@ -470,7 +542,9 @@ impl Radare2Analyzer {
         if !goblin_success {
             commands.push("iSj");
         }
-        commands.push("izj");
+        if include_strings {
+            commands.push("izj");
+        }
         if !goblin_success {
             commands.push("iij");
         }
@@ -503,10 +577,13 @@ impl Radare2Analyzer {
                 let err_str = e.to_string();
                 if err_str.contains("timed out") {
                     warn!(
+                        path = %file_path.display(),
+                        mode = mode.label(),
                         "Rizin analysis timed out after 60s; continuing without batched rizin data"
                     );
                     // Return result with timed_out flag set - consumers can add finding
                     return Ok(BatchedAnalysis {
+                        strings_extracted: include_strings,
                         timed_out: true,
                         ..Default::default()
                     });
@@ -545,10 +622,15 @@ impl Radare2Analyzer {
             Vec::new()
         };
 
-        let strings: Vec<R2String> = parse_json_part(parts.get(part_idx))
-            .and_then(|j| serde_json::from_str(&j).ok())
-            .unwrap_or_default();
-        part_idx += 1;
+        let strings: Vec<R2String> = if include_strings {
+            let parsed = parse_json_part(parts.get(part_idx))
+                .and_then(|j| serde_json::from_str(&j).ok())
+                .unwrap_or_default();
+            part_idx += 1;
+            parsed
+        } else {
+            Vec::new()
+        };
 
         let imports = if !goblin_success {
             parse_json_part(parts.get(part_idx))
@@ -559,6 +641,8 @@ impl Radare2Analyzer {
         };
 
         debug!(
+            path = %file_path.display(),
+            mode = mode.label(),
             elapsed_ms = t_start.elapsed().as_millis(),
             functions = functions.len(),
             sections = sections.len(),
@@ -571,6 +655,7 @@ impl Radare2Analyzer {
             functions,
             sections,
             strings,
+            strings_extracted: include_strings,
             imports,
             timed_out: false,
         };

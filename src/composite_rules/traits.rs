@@ -841,15 +841,8 @@ impl TraitDefinition {
                     | FileType::Xpi
             )
         });
-        let wants_binary_family = self.r#for.iter().any(|ft| {
-            matches!(
-                ft,
-                FileType::Elf | FileType::Macho | FileType::Pe | FileType::Class | FileType::Pyc
-            )
-        });
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
-            || (matches!(ctx.file_type, FileType::Unknown) && wants_binary_family)
             || (matches!(ctx.file_type, FileType::All | FileType::Archive) && wants_archive_family);
 
         if !file_type_match {
@@ -1853,15 +1846,8 @@ impl CompositeTrait {
                     | FileType::Xpi
             )
         });
-        let wants_binary_family = self.r#for.iter().any(|ft| {
-            matches!(
-                ft,
-                FileType::Elf | FileType::Macho | FileType::Pe | FileType::Class | FileType::Pyc
-            )
-        });
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
-            || (matches!(ctx.file_type, FileType::Unknown) && wants_binary_family)
             || (matches!(ctx.file_type, FileType::All | FileType::Archive) && wants_archive_family);
 
         if !file_type_match {

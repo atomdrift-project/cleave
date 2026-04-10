@@ -814,6 +814,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         path.display()
     );
 
+    // Skip unknown file types at the top level unless all_files is set — consistent with
+    // directory scan behavior. Recursive calls (analysis_depth > 0) always proceed because
+    // an extracted payload may not have a recognisable extension.
+    if analysis_depth == 0 && file_type == FileType::Unknown && !options.all_files {
+        anyhow::bail!("Unknown file type, skipping: {}", path.display());
+    }
+
     // Get file size for memory tracking (from loaded data, avoiding a metadata syscall)
     let file_size = file_data.len() as u64;
 
@@ -2025,7 +2032,10 @@ mod tests {
         #[allow(clippy::expect_used)]
         tmp.as_file().write_all(code).expect("write test content");
 
-        let options = AnalysisOptions::default();
+        let options = AnalysisOptions {
+            all_files: true,
+            ..AnalysisOptions::default()
+        };
         let mapper = shared_resources::capability_mapper_with_options(&options)
             .expect("mapper should load for depth-zero test");
 

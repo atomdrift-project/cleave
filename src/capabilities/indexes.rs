@@ -40,17 +40,8 @@ fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
     }
 }
 
-fn binary_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
-    match file_type {
-        RuleFileType::Unknown => &[
-            RuleFileType::Elf,
-            RuleFileType::Macho,
-            RuleFileType::Pe,
-            RuleFileType::Class,
-            RuleFileType::Pyc,
-        ],
-        _ => &[],
-    }
+fn binary_family_types(_file_type: &RuleFileType) -> &'static [RuleFileType] {
+    &[]
 }
 
 /// Index of trait indices by file type for fast lookup.

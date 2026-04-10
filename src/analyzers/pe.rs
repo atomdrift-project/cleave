@@ -438,14 +438,26 @@ impl PEAnalyzer {
         // Detect and handle tampered PE (junk prefix before MZ header)
         let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
 
-        // Try to parse with goblin (strict → permissive fallback)
-        let (pe_parsed, parse_err) = match PE::parse(pe_data) {
-            Ok(pe) => (Some(pe), None),
-            Err(strict_err) => {
+        // Try to parse with goblin (strict → permissive fallback). Both calls are
+        // wrapped in `catch_unwind` because goblin's PE parser is known to panic on
+        // certain malformed inputs (e.g. out-of-range slice indexing in the resource
+        // directory walker, goblin/src/pe/resource.rs). A caught panic is converted
+        // into a synthetic `Malformed` error so the existing rizin fallback path in
+        // `analyze_pe` runs just as it would for a returned `Err`.
+        let strict_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            PE::parse(pe_data)
+        }));
+        let (pe_parsed, parse_err) = match strict_result {
+            Ok(Ok(pe)) => (Some(pe), None),
+            Ok(Err(strict_err)) => {
                 let permissive_opts = goblin::pe::options::ParseOptions::default()
                     .with_parse_mode(goblin::options::ParseMode::Permissive);
-                match PE::parse_with_opts(pe_data, &permissive_opts) {
-                    Ok(pe) => {
+                let permissive_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        PE::parse_with_opts(pe_data, &permissive_opts)
+                    }));
+                match permissive_result {
+                    Ok(Ok(pe)) => {
                         tracing::debug!(
                             "PE strict parse failed ({}) but permissive succeeded for {}",
                             strict_err,
@@ -453,7 +465,62 @@ impl PEAnalyzer {
                         );
                         (Some(pe), None)
                     }
-                    Err(e) => (None, Some(e)),
+                    Ok(Err(e)) => (None, Some(e)),
+                    Err(panic) => {
+                        tracing::debug!(
+                            "PE permissive parse panicked for {}: {}",
+                            logical_path.display(),
+                            panic_message(&*panic)
+                        );
+                        (
+                            None,
+                            Some(goblin::error::Error::Malformed(format!(
+                                "goblin permissive parse panicked: {}; strict error: {strict_err}",
+                                panic_message(&*panic)
+                            ))),
+                        )
+                    }
+                }
+            }
+            Err(panic) => {
+                let permissive_opts = goblin::pe::options::ParseOptions::default()
+                    .with_parse_mode(goblin::options::ParseMode::Permissive);
+                let permissive_result =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        PE::parse_with_opts(pe_data, &permissive_opts)
+                    }));
+                match permissive_result {
+                    Ok(Ok(pe)) => {
+                        tracing::debug!(
+                            "PE strict parse panicked ({}) but permissive succeeded for {}",
+                            panic_message(&*panic),
+                            logical_path.display()
+                        );
+                        (Some(pe), None)
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!(
+                            "PE strict parse panicked for {}: {}",
+                            logical_path.display(),
+                            panic_message(&*panic)
+                        );
+                        (None, Some(e))
+                    }
+                    Err(perm_panic) => {
+                        tracing::debug!(
+                            "PE strict and permissive parses both panicked for {}: strict={}, permissive={}",
+                            logical_path.display(),
+                            panic_message(&*panic),
+                            panic_message(&*perm_panic)
+                        );
+                        (
+                            None,
+                            Some(goblin::error::Error::Malformed(format!(
+                                "goblin parse panicked: {}",
+                                panic_message(&*panic)
+                            ))),
+                        )
+                    }
                 }
             }
         };
@@ -1919,6 +1986,17 @@ impl Analyzer for PEAnalyzer {
 
 /// Count exports whose first instruction jumps/calls to the same target as another export.
 ///
+/// Best-effort extraction of a panic payload's message string for logging.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
 /// Malware often aliases multiple export names to a single function via stub thunks.
 /// This decodes the first instruction at each export RVA and groups by jump target.
 fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> u32 {

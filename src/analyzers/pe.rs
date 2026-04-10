@@ -8,6 +8,11 @@ use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use goblin::pe::PE;
+use goblin::pe::optional_header::{
+    MAGIC_32, MAGIC_64, OFFSET_WINDOWS_FIELDS_32_CHECKSUM, OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+    SIZEOF_STANDARD_FIELDS_32, SIZEOF_STANDARD_FIELDS_64,
+};
+use goblin::pe::resource::{RT_GROUP_ICON, RT_ICON};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -59,6 +64,87 @@ fn pe_overlay_bounds_excluding_certificate(pe: &PE<'_>, data: &[u8]) -> Option<(
         Some((sections_end, overlay_end))
     } else {
         None
+    }
+}
+
+fn pe_checksum_field_offset(pe: &PE<'_>, data_len: usize) -> Option<usize> {
+    let pe_offset = pe.header.dos_header.pe_pointer as usize;
+    let optional_header_offset = pe_offset + 4 + 20;
+    let opt = pe.header.optional_header.as_ref()?;
+
+    let checksum_offset = match opt.standard_fields.magic {
+        MAGIC_32 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_32
+            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
+        MAGIC_64 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_64
+            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        _ => return None,
+    };
+
+    (checksum_offset + 4 <= data_len).then_some(checksum_offset)
+}
+
+fn compute_pe_checksum(data: &[u8], checksum_offset: usize) -> u32 {
+    let mut sum: u64 = 0;
+    let mut i = 0usize;
+
+    while i + 1 < data.len() {
+        if i == checksum_offset {
+            i += 4;
+            continue;
+        }
+
+        sum += u16::from_le_bytes([data[i], data[i + 1]]) as u64;
+        sum = (sum & 0xffff) + (sum >> 16);
+        i += 2;
+    }
+
+    if i < data.len() {
+        sum += data[i] as u64;
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+
+    sum = (sum & 0xffff) + (sum >> 16);
+    sum += data.len() as u64;
+    sum as u32
+}
+
+fn entry_section_name(pe: &PE<'_>) -> Option<String> {
+    let entry = pe.entry;
+    pe.sections.iter().find_map(|section| {
+        let start = section.virtual_address;
+        let span = section.virtual_size.max(section.size_of_raw_data);
+        let end = start.saturating_add(span);
+        if entry >= start && entry < end {
+            Some(
+                String::from_utf8_lossy(&section.name)
+                    .trim_matches(char::from(0))
+                    .to_string(),
+            )
+        } else {
+            None
+        }
+    })
+}
+
+fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
+    if pe_offset <= 0x40 || pe_offset > data.len() {
+        return false;
+    }
+
+    let stub = &data[0x40..pe_offset];
+    !stub
+        .windows(b"This program cannot be run in DOS mode".len())
+        .any(|w| w == b"This program cannot be run in DOS mode")
+}
+
+fn pdb_filename(bytes: &[u8]) -> Option<String> {
+    let trimmed = bytes.split(|b| *b == 0).next()?.trim_ascii();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(String::from_utf8_lossy(trimmed).to_string())
     }
 }
 
@@ -1118,8 +1204,14 @@ impl PEAnalyzer {
 
         let mut metrics = PeMetrics::default();
 
-        // Timestamp anomaly check
         let timestamp = pe.header.coff_header.time_date_stamp;
+        metrics.timestamp = timestamp;
+        metrics.machine = pe.header.coff_header.machine as u32;
+        metrics.characteristics = pe.header.coff_header.characteristics as u32;
+        metrics.entry_point_rva = pe.entry;
+        metrics.entry_section = entry_section_name(pe);
+
+        // Timestamp anomaly check
         if timestamp < 631152000 {
             // Before 1990
             metrics.timestamp_anomaly = true;
@@ -1128,9 +1220,10 @@ impl PEAnalyzer {
             metrics.timestamp_anomaly = true;
         }
 
+        let pe_offset = pe.header.dos_header.pe_pointer as usize;
+        metrics.dos_stub_modified = dos_stub_modified(data, pe_offset);
+
         // Check for Rich header (between DOS and PE signature)
-        let dos_header = pe.header.dos_header;
-        let pe_offset = dos_header.pe_pointer as usize;
         if pe_offset > 0x80 {
             // Rich header typically found here
             for i in (0x80..pe_offset.min(0x200)).step_by(4) {
@@ -1144,16 +1237,6 @@ impl PEAnalyzer {
         // Check for .NET by looking for .NET-specific sections
         for section in &pe.sections {
             if let Ok(name) = section.name() {
-                if name == ".text" && section.virtual_size > 0 {
-                    // Check for .NET by looking for mscoree.dll import
-                    for import in &pe.imports {
-                        if import.dll.to_lowercase().contains("mscoree") {
-                            metrics.is_dotnet = true;
-                            break;
-                        }
-                    }
-                }
-
                 // Check resource section
                 if name == ".rsrc" {
                     metrics.rsrc_size = section.size_of_raw_data as u64;
@@ -1169,10 +1252,33 @@ impl PEAnalyzer {
             }
         }
 
-        // Check for code signature (Authenticode)
         if let Some(opt) = &pe.header.optional_header {
+            metrics.checksum = opt.windows_fields.check_sum;
+            metrics.checksum_present = metrics.checksum != 0;
+            metrics.file_alignment = opt.windows_fields.file_alignment;
+            metrics.section_alignment = opt.windows_fields.section_alignment;
+            metrics.subsystem = opt.windows_fields.subsystem as u32;
+            metrics.dll_characteristics = opt.windows_fields.dll_characteristics as u32;
+
+            if let Some(checksum_offset) = pe_checksum_field_offset(pe, data.len()) {
+                metrics.computed_checksum = compute_pe_checksum(data, checksum_offset);
+                if metrics.checksum != 0 {
+                    metrics.checksum_valid = metrics.checksum == metrics.computed_checksum;
+                }
+            }
+
+            if let Some(debug_data) = &pe.debug_data {
+                metrics.debug_directory_entries = debug_data.entries().count() as u32;
+                if let Some(info) = debug_data.codeview_pdb70_debug_info {
+                    metrics.pdb_path = pdb_filename(info.filename);
+                } else if let Some(info) = debug_data.codeview_pdb20_debug_info {
+                    metrics.pdb_path = pdb_filename(info.filename);
+                }
+            }
+
             if let Some(Some(cert_table_entry)) = opt.data_directories.data_directories.get(4) {
                 let cert_table = &cert_table_entry.1;
+                metrics.certificate_table_size = cert_table.size as u64;
                 // Note: virt_addr in security directory is actually a file offset
                 let offset = cert_table.virtual_address as usize;
                 let size = cert_table.size as usize;
@@ -1233,7 +1339,18 @@ impl PEAnalyzer {
                     }
                 }
             }
+
+            if opt
+                .data_directories
+                .get_delay_import_descriptor()
+                .is_some_and(|dir| dir.size > 0)
+            {
+                metrics.delay_load_imports = 1;
+            }
         }
+
+        metrics.certificate_count = pe.certificates.len() as u32;
+        metrics.import_dll_count = pe.libraries.len() as u32;
 
         // Check for overlay data (appended after PE image, excluding signature)
         // This can be:
@@ -1270,6 +1387,28 @@ impl PEAnalyzer {
             }
         }
 
+        let import_names: HashSet<String> = pe
+            .imports
+            .iter()
+            .map(|import| import.name.to_ascii_lowercase())
+            .collect();
+        if import_names.contains("loadlibrarya")
+            || import_names.contains("loadlibraryw")
+            || import_names.contains("getprocaddress")
+            || import_names.contains("ldrloaddll")
+            || import_names.contains("ldrgetprocedureaddress")
+        {
+            metrics.api_hashing_indicators += 1;
+        }
+        metrics.suspicious_import_combo = (import_names.contains("virtualalloc")
+            || import_names.contains("virtualallocex"))
+            && (import_names.contains("writeprocessmemory")
+                || import_names.contains("ntwritevirtualmemory")
+                || import_names.contains("rtlmovememory"))
+            && (import_names.contains("virtualprotect")
+                || import_names.contains("virtualprotectex")
+                || import_names.contains("ntprotectvirtualmemory"));
+
         // Export forwarders (exports with "." in name indicating forwarding)
         for export in &pe.exports {
             if let Some(name) = export.name {
@@ -1292,6 +1431,32 @@ impl PEAnalyzer {
             {
                 metrics.unusual_alignment = true;
             }
+        }
+
+        if let Some(resource_data) = &pe.resource_data {
+            metrics.resource_count = resource_data.count() as u32;
+            metrics.version_info_present = resource_data.version_info.is_some();
+            metrics.manifest_present = resource_data.manifest_data.is_some();
+            metrics.icon_count = resource_data
+                .entries()
+                .filter_map(Result::ok)
+                .filter(|entry| matches!(entry.id(), Some(RT_ICON | RT_GROUP_ICON)))
+                .count() as u32;
+        }
+
+        if let Some(clr_data) = &pe.clr_data {
+            metrics.is_dotnet = true;
+            metrics.clr_version = Some(format!(
+                "{}.{}",
+                clr_data.cor20_header.major_runtime_version,
+                clr_data.cor20_header.minor_runtime_version
+            ));
+            metrics.mixed_mode =
+                !clr_data.cor20_header.is_il_only() || clr_data.cor20_header.is_native_entrypoint();
+        }
+
+        if let Some(tls_data) = &pe.tls_data {
+            metrics.tls_callbacks = tls_data.callbacks.len() as u32;
         }
 
         metrics

@@ -510,6 +510,59 @@ pub struct ElfMetrics {
 /// PE-specific metrics
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PeMetrics {
+    // === Raw Header Fields (ML / anomaly-friendly) ===
+    /// COFF timestamp as Unix epoch seconds
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub timestamp: u32,
+    /// PE machine type (COFF header)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub machine: u32,
+    /// COFF characteristics bitfield
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub characteristics: u32,
+    /// Entry point RVA
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub entry_point_rva: u32,
+    /// Section containing the entry point RVA
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry_section: Option<String>,
+    /// Optional header checksum value
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub checksum: u32,
+    /// Whether the optional header checksum field is populated
+    #[serde(default)]
+    pub checksum_present: bool,
+    /// Recomputed PE checksum
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub computed_checksum: u32,
+    /// File alignment from the optional header
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub file_alignment: u32,
+    /// Section alignment from the optional header
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub section_alignment: u32,
+    /// Windows subsystem value
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub subsystem: u32,
+    /// DLL characteristics bitfield
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dll_characteristics: u32,
+    /// Number of distinct imported DLLs
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub import_dll_count: u32,
+    /// Number of debug directory entries
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub debug_directory_entries: u32,
+    /// PDB path from CodeView debug info, if present
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdb_path: Option<String>,
+    /// Number of attribute certificates
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub certificate_count: u32,
+    /// Certificate table size in bytes
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub certificate_table_size: u64,
+
     // === Header Anomalies ===
     /// Timestamp anomaly (future or ancient)
     #[serde(default, skip_serializing_if = "is_false")]

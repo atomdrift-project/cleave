@@ -172,9 +172,6 @@ impl super::CapabilityMapper {
                 RuleFileType::Elf
                     | RuleFileType::Macho
                     | RuleFileType::Pe
-                    | RuleFileType::Dll
-                    | RuleFileType::So
-                    | RuleFileType::Dylib
                     | RuleFileType::Jpeg
                     | RuleFileType::Png
                     | RuleFileType::Pdf

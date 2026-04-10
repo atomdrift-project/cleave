@@ -3493,10 +3493,10 @@ mod excessive_file_types_tests {
                 FileType::Elf,
                 FileType::Macho,
                 FileType::Pe,
-                FileType::Dylib,
-                FileType::So,
-                FileType::Dll,
-                FileType::Python, // not the canonical `binaries` set
+                FileType::Class,
+                FileType::Pyc,
+                FileType::Python,
+                FileType::Shell, // not the canonical `binaries` set
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -3522,9 +3522,6 @@ mod excessive_file_types_tests {
                 FileType::Elf,
                 FileType::Macho,
                 FileType::Pe,
-                FileType::Dylib,
-                FileType::So,
-                FileType::Dll,
                 FileType::Class,
                 FileType::Pyc,
             ],
@@ -3651,9 +3648,6 @@ mod excessive_file_types_tests {
             FileType::Elf,
             FileType::Macho,
             FileType::Pe,
-            FileType::Dylib,
-            FileType::So,
-            FileType::Dll,
             FileType::Class,
             FileType::Pyc,
         ];
@@ -3674,7 +3668,7 @@ mod excessive_file_types_tests {
             FileType::Elixir,
         ];
         let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
-        assert_eq!(combined.len(), 33);
+        assert_eq!(combined.len(), 30);
         let traits = vec![trait_with_for("test::multi-group", combined)];
         let result = find_excessive_file_types(&traits, &[]);
         assert!(
@@ -3719,10 +3713,10 @@ mod excessive_file_types_tests {
                 FileType::Elf,
                 FileType::Macho,
                 FileType::Pe,
-                FileType::Dylib,
-                FileType::So,
-                FileType::Dll,
-                FileType::Python, // not the canonical `binaries` set
+                FileType::Class,
+                FileType::Pyc,
+                FileType::Python,
+                FileType::Shell, // not the canonical `binaries` set
             ],
             for_from_groups: false,
             size_min: None,
@@ -3755,9 +3749,6 @@ mod excessive_file_types_tests {
                 FileType::Elf,
                 FileType::Macho,
                 FileType::Pe,
-                FileType::Dylib,
-                FileType::So,
-                FileType::Dll,
                 FileType::Class,
                 FileType::Pyc,
                 FileType::C,
@@ -3780,8 +3771,6 @@ mod excessive_file_types_tests {
             vec![
                 FileType::Elf,
                 FileType::Macho,
-                FileType::Dylib,
-                FileType::So,
                 FileType::Class,
                 FileType::Pyc,
                 FileType::Shell,
@@ -3809,8 +3798,6 @@ mod excessive_file_types_tests {
             vec![
                 FileType::Elf,
                 FileType::Macho,
-                FileType::Dylib,
-                FileType::So,
                 FileType::Class,
                 FileType::Pyc,
                 FileType::Shell,
@@ -4373,9 +4360,9 @@ mod raw_should_use_string_value_tests {
     }
 
     #[test]
-    fn flags_dylib_and_so_types() {
-        let mut t = binary_trait("t/dylib", raw_substr("long_pattern_here"));
-        t.r#for = vec![FileType::Dylib];
+    fn flags_macho_type() {
+        let mut t = binary_trait("t/macho", raw_substr("long_pattern_here"));
+        t.r#for = vec![FileType::Macho];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert_eq!(warnings.len(), 1);

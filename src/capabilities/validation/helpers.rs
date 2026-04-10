@@ -13,12 +13,7 @@ use super::super::parsing::{parse_file_types, parse_platforms};
 pub(super) fn is_binary_file_type(ft: RuleFileType) -> bool {
     matches!(
         ft,
-        RuleFileType::Elf
-            | RuleFileType::Macho
-            | RuleFileType::Pe
-            | RuleFileType::Dylib
-            | RuleFileType::So
-            | RuleFileType::Dll
+        RuleFileType::Elf | RuleFileType::Macho | RuleFileType::Pe
     )
 }
 

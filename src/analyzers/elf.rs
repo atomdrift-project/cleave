@@ -599,18 +599,34 @@ impl ElfAnalyzer {
         _data: &[u8],
         report: &mut AnalysisReport,
     ) {
-        // Analyze dynamic symbols (imports)
         for dynsym in &elf.dynsyms {
-            if let Some(name) = elf.dynstrtab.get_at(dynsym.st_name) {
-                // Add to imports
+            let Some(name) = elf.dynstrtab.get_at(dynsym.st_name) else {
+                continue;
+            };
+            if dynsym.st_shndx == goblin::elf::section_header::SHN_UNDEF as usize {
+                // Undefined symbol — resolved from another library (import)
                 report.imports.push(Import::new(name, None, "goblin"));
-
-                // Check for IFUNC (LOOS type 10) - highly relevant for supply chain hijacks
-                if dynsym.st_type() == 10 {
+                if let Some(cap) = self.capability_mapper.lookup(name, "goblin") {
+                    if !report.findings.iter().any(|c| c.id == cap.id) {
+                        report.findings.push(cap);
+                    }
+                }
+            } else if dynsym.st_bind() == goblin::elf::sym::STB_GLOBAL {
+                // Defined GLOBAL symbol — exported from this binary
+                report.exports.push(Export::new(
+                    name,
+                    Some(format!("{:#x}", dynsym.st_value)),
+                    "goblin",
+                ));
+            }
+            // IFUNC resolvers (STT_GNU_IFUNC) are notable regardless of import/export direction
+            if dynsym.st_type() == 10 {
+                let clean_name = crate::types::binary::normalize_symbol(name);
+                if !report.findings.iter().any(|f| f.desc.contains(&clean_name)) {
                     report.findings.push(Finding {
                         kind: FindingKind::Capability,
                         id: "feat/binary/elf/ifunc".to_string(),
-                        desc: format!("ELF IFUNC resolver: {}", name),
+                        desc: format!("ELF IFUNC resolver: {}", clean_name),
                         crit: Criticality::Notable,
                         conf: 1.0,
                         mbc: None,
@@ -623,36 +639,30 @@ impl ElfAnalyzer {
                             location: Some(format!("{:#x}", dynsym.st_value)),
                             ..Default::default()
                         }],
-
                         match_count: 0,
                         source_file: None,
                     });
                 }
-
-                // Map to capability
-                if let Some(cap) = self.capability_mapper.lookup(name, "goblin") {
-                    if !report.findings.iter().any(|c| c.id == cap.id) {
-                        report.findings.push(cap);
-                    }
-                }
             }
         }
 
-        // Analyze regular symbols for exports
+        // Analyze static symbol table (.symtab) for any additional exports not in .dynsym
         for sym in &elf.syms {
             let st_type = sym.st_type();
             if sym.st_bind() == goblin::elf::sym::STB_GLOBAL
                 && (st_type == goblin::elf::sym::STT_FUNC || st_type == 10)
             {
                 if let Some(name) = elf.strtab.get_at(sym.st_name) {
+                    // Skip symbols already captured via dynsyms to avoid duplication
+                    if report.exports.iter().any(|e| e.symbol == name) {
+                        continue;
+                    }
                     let clean_name = crate::types::binary::normalize_symbol(name);
                     report.exports.push(Export::new(
                         name,
                         Some(format!("{:#x}", sym.st_value)),
                         "goblin",
                     ));
-
-                    // Also flag IFUNC in regular symbols
                     if st_type == 10
                         && !report.findings.iter().any(|f| f.desc.contains(&clean_name))
                     {
@@ -672,7 +682,6 @@ impl ElfAnalyzer {
                                 location: Some(format!("{:#x}", sym.st_value)),
                                 ..Default::default()
                             }],
-
                             match_count: 0,
                             source_file: None,
                         });

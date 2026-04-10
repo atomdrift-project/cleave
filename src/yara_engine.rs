@@ -33,12 +33,12 @@ fn rule_start_re() -> Option<&'static regex::Regex> {
 const MAX_PATTERN_MATCHES: usize = 100_000;
 
 /// Maximum scanners to cache per thread in the engine tier cache.
-/// Typically 1-3 tiers are scanned per file (generic + file-type family), so 4 is generous.
+/// Typically 1-3 tiers are scanned per file (cross-format + file-type family), so 4 is generous.
 const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
 
 // Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
 // Avoids expensive `Scanner::new()` on every file (wasmtime VM instantiation).
-// Each rayon worker thread caches its own scanners (typically 2: generic + file-type).
+// Each rayon worker thread caches its own scanners (typically 2: cross-format + file-type).
 // Bounded to prevent memory explosion across many threads.
 thread_local! {
     static ENGINE_SCANNER_CACHE: RefCell<lru::LruCache<usize, yara_x::Scanner<'static>>> = {
@@ -78,12 +78,12 @@ struct RawRule {
 ///
 /// Rules are compiled into tiered sets by file type. Each scan runs two passes:
 /// 1. The tier matching the target file type (e.g. PE rules for a PE file)
-/// 2. The Generic tier (applies to all files)
+/// 2. The CrossFormat tier (applies to all typed files)
 ///
 /// Scanners are cached per-thread to avoid expensive re-creation.
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
-    /// Per-tier compiled rule sets. `Generic` always present when loaded.
+    /// Per-tier compiled rule sets. `CrossFormat` is always present when loaded.
     tiers: HashMap<YaraTier, yara_x::Rules>,
     /// Namespaces compiled into the combined engine from inline trait YARA conditions.
     /// Used to split scan results: inline matches (keyed here) go to trait evaluation;
@@ -131,10 +131,12 @@ impl YaraEngine {
     /// Uses cache if available and valid.
     ///
     /// Rules are compiled into separate per-tier `yara_x::Rules` sets:
-    /// - **Generic**: built-in rules + inline trait YARA + uncategorized third-party
-    /// - **Pe/Elf/MachO/ScriptJs/Script/Doc**: third-party rules classified by file type
+    /// - **CrossFormat**: built-in rules + inline trait YARA + intentionally broad rules
+    /// - **Pe/Elf/MachO/ScriptJs/Script/Doc**: rules classified by file type
+    /// - **Unknown**: residual third-party rules still needing audit
     ///
-    /// Each scan runs two passes: the tier matching the target + Generic.
+    /// Each typed scan runs the tier matching the target + CrossFormat. Unknown
+    /// rules are only scanned when the target file type is itself unknown.
     ///
     /// Environment variables:
     /// - `CLEAVE_SKIP_YARA=1`: Skip YARA entirely (for fast unit tests)
@@ -238,9 +240,13 @@ impl YaraEngine {
             tier_sources.entry(tier).or_default().extend(sources);
         }
 
-        // Ensure the Generic tier exists even if only a residual fallback set remains.
-        let generic_sources = tier_sources.remove(&YaraTier::Generic).unwrap_or_default();
-        tier_sources.insert(YaraTier::Generic, generic_sources);
+        // Ensure residual tiers exist even if empty so cache manifests stay stable.
+        let cross_format_sources = tier_sources
+            .remove(&YaraTier::CrossFormat)
+            .unwrap_or_default();
+        tier_sources.insert(YaraTier::CrossFormat, cross_format_sources);
+        let unknown_sources = tier_sources.remove(&YaraTier::Unknown).unwrap_or_default();
+        tier_sources.insert(YaraTier::Unknown, unknown_sources);
 
         // Phase 2: build all tiers in parallel.
         //
@@ -340,7 +346,7 @@ impl YaraEngine {
             let mut tiers = Vec::new();
             for filetype in declared_for {
                 let tier = YaraTier::from_filetypes(&[filetype.as_str()]);
-                if tier != YaraTier::Generic && !tiers.contains(&tier) {
+                if tier != YaraTier::Unknown && !tiers.contains(&tier) {
                     tiers.push(tier);
                 }
             }
@@ -351,12 +357,12 @@ impl YaraEngine {
 
         if let Some(rule_name) = Self::extract_rule_name_from_source(source) {
             let tier = YaraTier::classify_rule(&rule_name, source, namespace);
-            if tier != YaraTier::Generic {
+            if tier != YaraTier::Unknown {
                 return vec![tier];
             }
         }
 
-        vec![YaraTier::Generic]
+        vec![YaraTier::CrossFormat]
     }
 
     /// Parse trait YAML files and collect all `type: yara` conditions into tiered source lists.
@@ -463,9 +469,10 @@ impl YaraEngine {
 
     /// Scan binary data and split results into regular YARA matches and inline trait results.
     ///
-    /// Performs a two-pass scan:
-    /// 1. **Generic tier** — always runs (built-in rules, inline trait YARA, uncategorized third-party)
-    /// 2. **File-type tier** — runs only the rules matching the target file type (PE, ELF, etc.)
+    /// Performs a staged scan:
+    /// 1. **CrossFormat tier** — broad curated rules that intentionally apply across formats
+    /// 2. **File-type tier(s)** — rules matching the target file type (PE, ELF, etc.)
+    /// 3. **Unknown tier** — only when the target file type is unknown
     ///
     /// Scanners are cached per-thread to avoid expensive re-creation.
     ///
@@ -731,7 +738,13 @@ impl YaraEngine {
                 let bytes = fs::read(path).ok()?;
                 let raw_source = String::from_utf8_lossy(&bytes);
                 let source = yara_classify::inject_condition_filetype_hints(&raw_source);
-                let split = Self::split_monolithic_by_tier(&source, "traits", re);
+                let mut split = Self::split_monolithic_by_tier(&source, "traits", re);
+                if let Some(unknown_source) = split.remove(&YaraTier::Unknown) {
+                    split
+                        .entry(YaraTier::CrossFormat)
+                        .and_modify(|existing| existing.push_str(&unknown_source))
+                        .or_insert(unknown_source);
+                }
                 tracing::trace!(
                     path = %path.display(),
                     tiers = ?split.keys().map(|tier| tier.label()).collect::<Vec<_>>(),
@@ -1805,7 +1818,7 @@ impl YaraEngine {
                 .iter()
                 .find(|t| t.label() == entry.label)
                 .copied()
-                .unwrap_or(YaraTier::Generic);
+                .unwrap_or(YaraTier::Unknown);
 
             tracing::debug!(
                 "Loaded tier '{}': {} rules",
@@ -1833,7 +1846,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 9;
+const CACHE_VERSION: u32 = 10;
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {
@@ -1844,13 +1857,13 @@ impl Default for YaraEngine {
 
 #[cfg(test)]
 impl YaraEngine {
-    /// Compile YARA rules from source text into the Generic tier. For tests only.
+    /// Compile YARA rules from source text into the CrossFormat tier. For tests only.
     fn load_rule_source(&mut self, source: &str) -> Result<()> {
         let mut compiler = yara_x::Compiler::new();
         compiler
             .add_source(source.as_bytes())
             .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-        self.tiers.insert(YaraTier::Generic, compiler.build());
+        self.tiers.insert(YaraTier::CrossFormat, compiler.build());
         Ok(())
     }
 }
@@ -2656,7 +2669,7 @@ rule DisableMe {
                     "js" | "ts" | "script-js" => YaraTier::ScriptJs,
                     "script" => YaraTier::Script,
                     "doc" => YaraTier::Doc,
-                    "generic" => YaraTier::Generic,
+                    "generic" => YaraTier::CrossFormat,
                     other => {
                         failures.push(format!(
                             "Unknown filetype directory: {}/{}",
@@ -2797,11 +2810,11 @@ rule APT10_ChChes_lnk {
     fn test_js_scan_order_includes_script_fallback() {
         assert_eq!(
             YaraTier::scan_order(Some(&["ts", "tsx", "js"])),
-            vec![YaraTier::ScriptJs, YaraTier::Generic]
+            vec![YaraTier::ScriptJs, YaraTier::CrossFormat]
         );
         assert_eq!(
             YaraTier::scan_order(Some(&["ps1"])),
-            vec![YaraTier::Script, YaraTier::Generic]
+            vec![YaraTier::Script, YaraTier::CrossFormat]
         );
     }
 
@@ -2896,10 +2909,10 @@ rule builtin_generic_rule {
             .expect("pe rule classified into pe tier");
         assert!(pe_tier.contains("builtin_pe_rule"));
 
-        let generic_tier = split
-            .get(&YaraTier::Generic)
-            .expect("generic fallback tier preserved");
-        assert!(generic_tier.contains("builtin_generic_rule"));
+        let unknown_tier = split
+            .get(&YaraTier::Unknown)
+            .expect("residual unknown tier preserved before built-in promotion");
+        assert!(unknown_tier.contains("builtin_generic_rule"));
     }
 
     /// Extract the rule name from YARA source text.
@@ -2931,7 +2944,8 @@ rule builtin_generic_rule {
             .join("third-party");
 
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
-        let mut generic_names: Vec<String> = Vec::new();
+        let mut cross_format_names: Vec<String> = Vec::new();
+        let mut unknown_names: Vec<String> = Vec::new();
 
         // Walk all .yar files
         for entry in walkdir::WalkDir::new(&traits_dir)
@@ -2976,8 +2990,14 @@ rule builtin_generic_rule {
 
                 let tier = YaraTier::classify_rule(name, rule_text, &ns);
                 *tier_counts.entry(tier).or_default() += 1;
-                if tier == YaraTier::Generic {
-                    generic_names.push(format!("{} (ns={})", name, ns));
+                match tier {
+                    YaraTier::CrossFormat => {
+                        cross_format_names.push(format!("{} (ns={})", name, ns));
+                    }
+                    YaraTier::Unknown => {
+                        unknown_names.push(format!("{} (ns={})", name, ns));
+                    }
+                    _ => {}
                 }
             }
         }
@@ -2991,10 +3011,18 @@ rule builtin_generic_rule {
         }
         eprintln!("  {:8}: {}", "TOTAL", total);
 
-        // Sort and print Generic rules
-        generic_names.sort();
-        eprintln!("\n=== Generic Rules ({}) ===", generic_names.len());
-        for name in &generic_names {
+        cross_format_names.sort();
+        eprintln!(
+            "\n=== Cross-Format Rules ({}) ===",
+            cross_format_names.len()
+        );
+        for name in &cross_format_names {
+            eprintln!("  {name}");
+        }
+
+        unknown_names.sort();
+        eprintln!("\n=== Unknown Rules ({}) ===", unknown_names.len());
+        for name in &unknown_names {
             eprintln!("  {name}");
         }
     }

@@ -971,9 +971,6 @@ pub(crate) fn find_excessive_file_types(
         FileType::Elf,
         FileType::Macho,
         FileType::Pe,
-        FileType::Dylib,
-        FileType::So,
-        FileType::Dll,
         FileType::Class,
         FileType::Pyc,
     ];

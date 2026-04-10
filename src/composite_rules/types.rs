@@ -178,12 +178,6 @@ pub(crate) enum FileType {
     Macho,
     /// PE binary (Windows executable)
     Pe,
-    /// macOS dynamic library (.dylib)
-    Dylib,
-    /// Linux shared object (.so)
-    So,
-    /// Windows dynamic-link library (.dll)
-    Dll,
     /// Java bytecode class file
     Class,
     /// Python compiled bytecode (.pyc)
@@ -398,15 +392,7 @@ impl FileType {
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
     #[must_use]
     pub(crate) fn has_sections(&self) -> bool {
-        matches!(
-            self,
-            FileType::Elf
-                | FileType::Macho
-                | FileType::Pe
-                | FileType::Dylib
-                | FileType::So
-                | FileType::Dll
-        )
+        matches!(self, FileType::Elf | FileType::Macho | FileType::Pe)
     }
 
     /// Returns a list of all concrete file types (excluding All)
@@ -417,9 +403,6 @@ impl FileType {
             FileType::Elf,
             FileType::Macho,
             FileType::Pe,
-            FileType::Dylib,
-            FileType::So,
-            FileType::Dll,
             FileType::Class,
             FileType::Pyc,
             // Source code formats
@@ -501,9 +484,9 @@ impl FileType {
             "elf" => FileType::Elf,
             "macho" => FileType::Macho,
             "pe" | "exe" => FileType::Pe,
-            "dylib" => FileType::Dylib,
-            "so" => FileType::So,
-            "dll" => FileType::Dll,
+            "dylib" => FileType::Macho,
+            "so" => FileType::Elf,
+            "dll" => FileType::Pe,
             "shell" | "shellscript" | "shell_script" => FileType::Shell,
             "batch" | "bat" | "cmd" => FileType::Batch,
             "python" | "python_script" => FileType::Python,

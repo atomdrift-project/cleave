@@ -347,9 +347,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Elf,
                     RuleFileType::Macho,
                     RuleFileType::Pe,
-                    RuleFileType::Dylib,
-                    RuleFileType::So,
-                    RuleFileType::Dll,
                     RuleFileType::Class,
                     RuleFileType::Pyc,
                 ],
@@ -426,9 +423,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "elf" => vec![RuleFileType::Elf],
                 "macho" => vec![RuleFileType::Macho],
                 "pe" => vec![RuleFileType::Pe],
-                "dylib" => vec![RuleFileType::Dylib],
-                "so" => vec![RuleFileType::So],
-                "dll" => vec![RuleFileType::Dll],
+                "dylib" => vec![RuleFileType::Macho],
+                "so" => vec![RuleFileType::Elf],
+                "dll" => vec![RuleFileType::Pe],
                 // Scripting languages (fullname + extension)
                 "shell" | "sh" => vec![RuleFileType::Shell],
                 "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],
@@ -575,9 +572,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
 /// Skipped when either list contains an `All` sentinel (unconstrained).
 ///
 /// Platform support:
-/// - PE / DLL / Batch / VBS → windows
-/// - ELF / SO               → linux, unix, android
-/// - Mach-O / Dylib         → macos, ios
+/// - PE / Batch / VBS → windows
+/// - ELF              → linux, unix, android
+/// - Mach-O           → macos, ios
 /// - Shell                  → linux, unix, macos, android, ios (not windows)
 pub(crate) fn resolve_platform_filetype_conflicts(
     id: &str,
@@ -602,11 +599,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
         // Silently filter incompatible types from group expansions
         file_types.retain(|ft| {
             match ft {
-                RuleFileType::Pe | RuleFileType::Dll | RuleFileType::Batch | RuleFileType::Vbs => {
-                    has_windows
-                }
-                RuleFileType::Elf | RuleFileType::So => has_unix,
-                RuleFileType::Macho | RuleFileType::Dylib => has_apple,
+                RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => has_windows,
+                RuleFileType::Elf => has_unix,
+                RuleFileType::Macho => has_apple,
                 RuleFileType::Shell => has_unix || has_apple,
                 _ => true, // Platform-agnostic types (Python, JavaScript, etc.) always kept
             }
@@ -615,11 +610,11 @@ pub(crate) fn resolve_platform_filetype_conflicts(
         // Warn on explicitly specified incompatible types
         for ft in file_types.iter() {
             let (supported, required) = match ft {
-                RuleFileType::Pe | RuleFileType::Dll | RuleFileType::Batch | RuleFileType::Vbs => {
+                RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => {
                     (has_windows, "windows")
                 }
-                RuleFileType::Elf | RuleFileType::So => (has_unix, "linux, unix, or android"),
-                RuleFileType::Macho | RuleFileType::Dylib => (has_apple, "macos or ios"),
+                RuleFileType::Elf => (has_unix, "linux, unix, or android"),
+                RuleFileType::Macho => (has_apple, "macos or ios"),
                 RuleFileType::Shell => {
                     (has_unix || has_apple, "linux, unix, macos, android, or ios")
                 }
@@ -1228,11 +1223,11 @@ mod tests {
         resolve_platform_filetype_conflicts(
             "test",
             &[Platform::Windows],
-            &mut vec![RuleFileType::Pe, RuleFileType::Dll, RuleFileType::Batch],
+            &mut vec![RuleFileType::Pe, RuleFileType::Batch],
             false,
             &mut w,
         );
-        assert!(w.is_empty(), "Windows + PE/DLL/Batch should be valid");
+        assert!(w.is_empty(), "Windows + PE/Batch should be valid");
     }
 
     #[test]
@@ -1241,11 +1236,11 @@ mod tests {
         resolve_platform_filetype_conflicts(
             "test",
             &[Platform::Linux, Platform::Unix, Platform::Android],
-            &mut vec![RuleFileType::Elf, RuleFileType::So],
+            &mut vec![RuleFileType::Elf],
             false,
             &mut w,
         );
-        assert!(w.is_empty(), "Linux/Unix/Android + ELF/SO should be valid");
+        assert!(w.is_empty(), "Linux/Unix/Android + ELF should be valid");
     }
 
     #[test]
@@ -1254,11 +1249,11 @@ mod tests {
         resolve_platform_filetype_conflicts(
             "test",
             &[Platform::MacOS, Platform::Ios],
-            &mut vec![RuleFileType::Macho, RuleFileType::Dylib],
+            &mut vec![RuleFileType::Macho],
             false,
             &mut w,
         );
-        assert!(w.is_empty(), "macOS/iOS + Mach-O/Dylib should be valid");
+        assert!(w.is_empty(), "macOS/iOS + Mach-O should be valid");
     }
 
     #[test]
@@ -1289,19 +1284,6 @@ mod tests {
             w[0].contains("linux, unix, or android"),
             "message should name required platforms"
         );
-    }
-
-    #[test]
-    fn test_conflict_windows_so() {
-        let mut w = Vec::new();
-        resolve_platform_filetype_conflicts(
-            "rule.test",
-            &[Platform::Windows],
-            &mut vec![RuleFileType::So],
-            false,
-            &mut w,
-        );
-        assert_eq!(w.len(), 1);
     }
 
     #[test]
@@ -1359,19 +1341,6 @@ mod tests {
             "rule.test",
             &[Platform::Unix],
             &mut vec![RuleFileType::Pe],
-            false,
-            &mut w,
-        );
-        assert_eq!(w.len(), 1);
-    }
-
-    #[test]
-    fn test_conflict_android_dll() {
-        let mut w = Vec::new();
-        resolve_platform_filetype_conflicts(
-            "rule.test",
-            &[Platform::Android],
-            &mut vec![RuleFileType::Dll],
             false,
             &mut w,
         );
@@ -1510,17 +1479,17 @@ mod tests {
 
     #[test]
     fn test_conflict_partial_multiplatform() {
-        // windows+unix covers pe+elf fine, but dylib still needs macos/ios
+        // windows+unix covers pe+elf fine, but macho still needs macos/ios
         let mut w = Vec::new();
         resolve_platform_filetype_conflicts(
             "rule.test",
             &[Platform::Windows, Platform::Unix],
-            &mut vec![RuleFileType::Pe, RuleFileType::Elf, RuleFileType::Dylib],
+            &mut vec![RuleFileType::Pe, RuleFileType::Elf, RuleFileType::Macho],
             false,
             &mut w,
         );
-        assert_eq!(w.len(), 1, "only dylib should be flagged: {w:?}");
-        assert!(w[0].contains("Dylib") || w[0].contains("macos"));
+        assert_eq!(w.len(), 1, "only macho should be flagged: {w:?}");
+        assert!(w[0].contains("Macho") || w[0].contains("macos"));
     }
 
     // ==================== from_groups filtering Tests ====================
@@ -1532,22 +1501,16 @@ mod tests {
             RuleFileType::Elf,
             RuleFileType::Macho,
             RuleFileType::Pe,
-            RuleFileType::Dylib,
-            RuleFileType::So,
-            RuleFileType::Dll,
             RuleFileType::Class,
             RuleFileType::Pyc,
         ];
         resolve_platform_filetype_conflicts("test", &[Platform::MacOS], &mut ft, true, &mut w);
         assert!(w.is_empty(), "from_groups should not warn: {w:?}");
         assert!(ft.contains(&RuleFileType::Macho));
-        assert!(ft.contains(&RuleFileType::Dylib));
         assert!(ft.contains(&RuleFileType::Class));
         assert!(ft.contains(&RuleFileType::Pyc));
         assert!(!ft.contains(&RuleFileType::Pe));
-        assert!(!ft.contains(&RuleFileType::Dll));
         assert!(!ft.contains(&RuleFileType::Elf));
-        assert!(!ft.contains(&RuleFileType::So));
     }
 
     #[test]

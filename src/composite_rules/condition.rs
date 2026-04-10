@@ -1987,15 +1987,7 @@ impl Condition {
         use super::FileType;
 
         // Binary section analysis requires PE/ELF/Mach-O format
-        let is_binary = matches!(
-            file_type,
-            FileType::Elf
-                | FileType::Macho
-                | FileType::Pe
-                | FileType::Dll
-                | FileType::So
-                | FileType::Dylib
-        );
+        let is_binary = matches!(file_type, FileType::Elf | FileType::Macho | FileType::Pe);
 
         match self {
             // Section analysis is binary-only

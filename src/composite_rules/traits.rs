@@ -844,14 +844,7 @@ impl TraitDefinition {
         let wants_binary_family = self.r#for.iter().any(|ft| {
             matches!(
                 ft,
-                FileType::Elf
-                    | FileType::Macho
-                    | FileType::Pe
-                    | FileType::Dll
-                    | FileType::So
-                    | FileType::Dylib
-                    | FileType::Class
-                    | FileType::Pyc
+                FileType::Elf | FileType::Macho | FileType::Pe | FileType::Class | FileType::Pyc
             )
         });
         let file_type_match = self.r#for.contains(&FileType::All)
@@ -1863,14 +1856,7 @@ impl CompositeTrait {
         let wants_binary_family = self.r#for.iter().any(|ft| {
             matches!(
                 ft,
-                FileType::Elf
-                    | FileType::Macho
-                    | FileType::Pe
-                    | FileType::Dll
-                    | FileType::So
-                    | FileType::Dylib
-                    | FileType::Class
-                    | FileType::Pyc
+                FileType::Elf | FileType::Macho | FileType::Pe | FileType::Class | FileType::Pyc
             )
         });
         let file_type_match = self.r#for.contains(&FileType::All)

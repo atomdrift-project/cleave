@@ -7,12 +7,15 @@
 ///
 /// Rules are compiled into separate tiered sets so each scan only processes the
 /// subset relevant to the target file type. Every scan typically runs the
-/// tier-specific set(s) plus the `CrossFormat` set. Residual unclassified
-/// third-party rules land in `Unknown`.
+/// tier-specific set(s) plus the `CrossFormat` set. Explicit raw blob rules
+/// land in `Raw`, and residual unclassified third-party rules land in
+/// `Unknown`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum YaraTier {
     /// Rules intentionally broad across multiple formats or curated broad rules.
     CrossFormat,
+    /// Explicit raw/shellcode/blob rules that exclude normal container magic.
+    Raw,
     /// PE / DLL / EXE rules.
     Pe,
     /// ELF / SO / KO rules.
@@ -33,6 +36,7 @@ impl YaraTier {
     /// All tier variants in a fixed order for iteration and reporting.
     pub const ALL: &'static [Self] = &[
         Self::CrossFormat,
+        Self::Raw,
         Self::Pe,
         Self::Elf,
         Self::MachO,
@@ -55,11 +59,14 @@ impl YaraTier {
                 }
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "php" | "rb" | "pl" | "pm" | "lua"
                 | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba" | "java" | "jar"
-                | "class" | "jsp" | "aspx" | "asp" | "apk" | "dex" => return Self::Script,
+                | "class" | "jsp" | "aspx" | "asp" | "apk" | "dex" | "hta" | "au3" | "sct"
+                | "wsf" => {
+                    return Self::Script;
+                }
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
                 | "msg" | "lnk" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi" | "cab"
                 | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" | "vhd"
-                | "vmdk" => return Self::Doc,
+                | "vmdk" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
                 _ => {}
             }
         }
@@ -80,10 +87,11 @@ impl YaraTier {
     /// Most files scan their specific tier(s) plus `CrossFormat`. Residual
     /// `Unknown` rules are scanned only when the target file type is itself
     /// unknown, so they can be audited without penalizing every typed scan.
+    /// `Raw` rules are also reserved for untyped inputs.
     #[must_use]
     pub fn scan_order(filter: Option<&[&str]>) -> Vec<Self> {
         match filter {
-            None => vec![Self::CrossFormat, Self::Unknown],
+            None => vec![Self::CrossFormat, Self::Raw, Self::Unknown],
             Some(types) => {
                 let mut tiers: Vec<Self> = types
                     .iter()
@@ -93,7 +101,7 @@ impl YaraTier {
                 tiers.sort_by_key(|tier| Self::ALL.iter().position(|candidate| candidate == tier));
                 tiers.dedup();
                 if tiers.is_empty() {
-                    vec![Self::CrossFormat, Self::Unknown]
+                    vec![Self::CrossFormat, Self::Raw, Self::Unknown]
                 } else {
                     tiers.push(Self::CrossFormat);
                     tiers
@@ -107,6 +115,7 @@ impl YaraTier {
     pub fn label(self) -> &'static str {
         match self {
             Self::CrossFormat => "cross-format",
+            Self::Raw => "raw",
             Self::Pe => "pe",
             Self::Elf => "elf",
             Self::MachO => "macho",
@@ -224,6 +233,11 @@ impl YaraTier {
             }
         }
 
+        // 3a. Explicit raw/blob rules should not be forced into PE/ELF/Mach-O.
+        if is_explicit_raw_blob_rule(rule_name, &lower) {
+            return Self::Raw;
+        }
+
         // 4. Content-based scoring
         if let Some(tier) = classify_by_content(rule_name, &lower) {
             return tier;
@@ -247,6 +261,8 @@ impl YaraTier {
             .split('.')
             .any(|part| matches!(part, "multi" | "any" | "all"))
             || rule_name_lower.starts_with("multi_")
+            || split_text_tokens(&rule_name_lower)
+                .any(|token| matches!(token, "multi" | "eicar"))
         {
             return Self::CrossFormat;
         }
@@ -268,10 +284,6 @@ fn split_text_tokens(lower: &str) -> impl Iterator<Item = &str> {
     lower
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter(|token| !token.is_empty())
-}
-
-fn has_exact_token(lower: &str, needle: &str) -> bool {
-    split_text_tokens(lower).any(|token| token == needle)
 }
 
 fn looks_intentionally_broad(
@@ -312,6 +324,47 @@ fn extract_header_tags(rule_text: &str) -> Vec<String> {
         .filter(|tag| !tag.is_empty())
         .map(std::string::ToString::to_string)
         .collect()
+}
+
+fn is_explicit_raw_blob_rule(rule_name: &str, lower_source: &str) -> bool {
+    let condensed: String = lower_source.chars().filter(|c| !c.is_ascii_whitespace()).collect();
+    let excludes_known_binary_magic = condensed.contains("uint16(0)!=0x5a4d")
+        || condensed.contains("uint16be(0)!=0x4d5a")
+        || condensed.contains("uint32(0)!=0x464c457f")
+        || condensed.contains("uint32be(0)!=0x7f454c46")
+        || condensed.contains("uint32(0)!=0xfeedface")
+        || condensed.contains("uint32(0)!=0xfeedfacf")
+        || condensed.contains("uint32be(0)!=0xcafebabe");
+    if !excludes_known_binary_magic {
+        return false;
+    }
+
+    let name_lower = rule_name.to_ascii_lowercase();
+    let rawish_name = split_text_tokens(&name_lower).any(|token| {
+        matches!(
+            token,
+            "raw"
+                | "raw32"
+                | "raw64"
+                | "shellcode"
+                | "loader"
+                | "stager"
+                | "stub"
+                | "payload"
+                | "implant"
+                | "injector"
+                | "beacon"
+                | "unpacker"
+                | "dropper"
+        )
+    });
+    let rawish_text = lower_source.contains("shellcode")
+        || lower_source.contains("supporting file")
+        || lower_source.contains("blob file")
+        || lower_source.contains("raw32")
+        || lower_source.contains("raw64");
+
+    rawish_name || rawish_text
 }
 
 mod indicators {
@@ -652,6 +705,15 @@ mod indicators {
         "import socket",
         "php ",
         "python ",
+        "ironpython",
+        "autoit",
+        "au3!ea06",
+        "<scriptlet>",
+        "<registration progid=",
+        "language=\"vbscript\"",
+        "navigator.useragent",
+        "window.window===window",
+        "self.self===self",
         "ruby ",
         "perl ",
         "autoit",
@@ -880,6 +942,35 @@ fn infer_binary_filetypes_from_name_and_os(
 ) -> Vec<&'static str> {
     let lower = rule_name.to_ascii_lowercase();
     let tokens: Vec<&str> = split_text_tokens(&lower).collect();
+    if lower.contains("details/win.")
+        || lower.contains("/rules/win.")
+        || lower.contains("native iis")
+        || lower.contains("iis native module")
+    {
+        return vec!["pe", "dll"];
+    }
+
+    if lower.contains("details/elf.")
+        || lower.contains("/rules/elf.")
+        || lower.contains("details/linux.")
+        || lower.contains("/rules/linux.")
+    {
+        return vec!["elf", "so"];
+    }
+
+    if lower.contains("details/osx.")
+        || lower.contains("details/macos.")
+        || lower.contains("details/mac.")
+        || lower.contains("/rules/osx.")
+        || lower.contains("/rules/macos.")
+    {
+        return vec!["macho", "dylib"];
+    }
+
+    if lower.contains("details/android.") || lower.contains("/rules/android.") {
+        return vec!["apk", "dex"];
+    }
+
     if tokens
         .iter()
         .any(|token| matches!(*token, "pe" | "exe" | "dll" | "sys" | "driver"))
@@ -901,9 +992,10 @@ fn infer_binary_filetypes_from_name_and_os(
 
     if tokens
         .iter()
-        .any(|token| matches!(*token, "macho" | "mach" | "dylib" | "kext"))
+        .any(|token| matches!(*token, "macho" | "mach" | "dylib" | "kext" | "mac"))
         || lower.contains("mach-o")
         || lower.contains("macho")
+        || lower.contains("_mac_")
     {
         return vec!["macho", "dylib"];
     }
@@ -932,7 +1024,7 @@ fn infer_binary_filetypes_from_name_and_os(
         match part {
             "Win" | "win" | "Win32" | "Win64" | "Windows" => return vec!["pe", "dll"],
             "Linux" | "linux" => return vec!["elf", "so"],
-            "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => {
+            "Mac" | "mac" | "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => {
                 return vec!["macho", "dylib"];
             }
             _ => {}
@@ -1044,10 +1136,16 @@ pub fn infer_filetypes_from_tags(tags: &[String]) -> Vec<&'static str> {
             "ONENOTE" | "ONE" | "ONEPKG" => return vec!["one", "onepkg"],
             "ISO" | "IMG" => return vec!["iso", "img"],
             "ZIP" => return vec!["zip"],
+            "HTML" | "HTM" => return vec!["html"],
+            "SVG" => return vec!["svg"],
+            "EPS" => return vec!["eps"],
+            "EML" => return vec!["eml"],
+            "MSG" | "OUTLOOK" => return vec!["msg"],
             "PHP" => return vec!["php"],
             "JSP" => return vec!["jsp"],
             "ASPX" => return vec!["aspx"],
             "ASP" => return vec!["asp"],
+            "HTA" => return vec!["hta"],
             "POWERSHELL" | "PS1" | "PSM1" | "PSD1" => return vec!["ps1", "psm1", "psd1"],
             "PYTHON" | "PY" | "PYC" => return vec!["py", "pyc"],
             "JAVASCRIPT" | "JS" | "JSCRIPT" => return vec!["js", "mjs", "cjs"],
@@ -1189,9 +1287,13 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     }
 
     if condensed.contains("uint32(0)==0xfeedface")
+        || condensed.contains("uint32be(0)==0xfeedface")
         || condensed.contains("uint32(0)==0xcefaedfe")
+        || condensed.contains("uint32be(0)==0xcefaedfe")
         || condensed.contains("uint32(0)==0xfeedfacf")
+        || condensed.contains("uint32be(0)==0xfeedfacf")
         || condensed.contains("uint32(0)==0xcffaedfe")
+        || condensed.contains("uint32be(0)==0xcffaedfe")
         || condensed.contains("uint16(0)==0xfacf")
         || condensed.contains("uint16(0)==0xface")
         || has_module_reference(&lower, "macho.")
@@ -1200,13 +1302,16 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
     }
 
     if condensed.contains("uint32(0)==0xd0cf11e0")
+        || condensed.contains("uint32be(0)==0xd0cf11e0")
         || condensed.contains("uint16(0)==0xcfd0")
         || condensed.contains("uint16(0)==0xd0cf")
     {
         return Some("ole");
     }
 
-    if condensed.contains("uint32(0)==0x25504446") {
+    if condensed.contains("uint32(0)==0x25504446")
+        || condensed.contains("uint32be(0)==0x25504446")
+    {
         return Some("pdf");
     }
 
@@ -1214,8 +1319,15 @@ pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
         return Some("rtf");
     }
 
-    if condensed.contains("uint16(0)==0x504b") || condensed.contains("uint32(0)==0x04034b50") {
+    if condensed.contains("uint16(0)==0x504b")
+        || condensed.contains("uint32(0)==0x04034b50")
+        || condensed.contains("uint32be(0)==0x504b0304")
+    {
         return Some("zip");
+    }
+
+    if condensed.contains("uint32be(0)==0x6465780a") {
+        return Some("dex");
     }
 
     if condensed.contains("uint32(0)==0x0000004c") {
@@ -1292,15 +1404,20 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
     let lower = text.to_ascii_lowercase();
     for token in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
         match token {
-            "pdf" => return vec!["pdf"],
+            "pdf" | "pdfs" => return vec!["pdf"],
             "rtf" => return vec!["rtf", "doc"],
             "office" | "word" | "excel" | "olefile" | "ole" | "macro" | "maldoc" => {
                 return vec!["doc", "docx", "xls", "xlsx", "ole"];
             }
             "onenote" | "one" | "onepkg" => return vec!["one", "onepkg"],
-            "lnk" | "lnkr" => return vec!["lnk"],
+            "lnk" | "lnkr" | "shortcut" => return vec!["lnk"],
             "iso" | "img" => return vec!["iso", "img"],
             "zip" | "zipcrypto" => return vec!["zip"],
+            "html" | "htm" => return vec!["html"],
+            "svg" => return vec!["svg"],
+            "eps" => return vec!["eps"],
+            "eml" => return vec!["eml"],
+            "outlook" => return vec!["msg"],
             "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" => {
                 return vec!["gzip"];
             }
@@ -1310,7 +1427,10 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
             _ => {}
         }
     }
-    if lower.contains("embeddedpdf") || lower.contains("adobepdf") {
+    if lower.contains("embeddedpdf")
+        || lower.contains("embedded pdf")
+        || lower.contains("adobepdf")
+    {
         return vec!["pdf"];
     }
     vec![]
@@ -1328,14 +1448,18 @@ pub fn script_filetypes_from_text(text: &str) -> Vec<&'static str> {
             "python" | "py" | "pyc" => return vec!["py", "pyc"],
             "javascript" | "jscript" | "js" | "mjs" | "cjs" => return vec!["js", "mjs", "cjs"],
             "php" => return vec!["php"],
+            "autoit" | "au3" => return vec!["au3"],
+            "ironpython" => return vec!["py", "pyc"],
             "jsp" => return vec!["jsp"],
             "aspx" => return vec!["aspx"],
             "asp" => return vec!["asp"],
+            "hta" => return vec!["hta"],
+            "sct" | "scriptlet" => return vec!["sct", "wsf"],
             "vbs" | "vbscript" | "vba" => return vec!["vbs", "vba"],
             "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
             "shell" | "bash" | "sh" | "zsh" => return vec!["sh", "bash", "zsh"],
             "java" | "jar" | "class" => return vec!["jar", "class", "java"],
-            "apk" | "dex" => return vec!["apk", "dex"],
+            "apk" | "dex" | "android" => return vec!["apk", "dex"],
             "ruby" | "rb" => return vec!["rb"],
             "perl" | "pl" | "pm" => return vec!["pl", "pm"],
             "lua" => return vec!["lua"],
@@ -1356,6 +1480,39 @@ pub fn script_filetypes_from_text(text: &str) -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn split_rules(source: &str) -> Vec<(String, bool, &str)> {
+        let mut starts: Vec<(usize, String, bool)> = Vec::new();
+        let mut offset = 0usize;
+
+        for line in source.split_inclusive('\n') {
+            let line_no_nl = line.strip_suffix('\n').unwrap_or(line);
+            let trimmed = line_no_nl.trim_start();
+            let is_private = trimmed.starts_with("private rule ");
+            let rest = if is_private {
+                trimmed.strip_prefix("private rule ")
+            } else {
+                trimmed.strip_prefix("rule ")
+            };
+            if let Some(rest) = rest {
+                if let Some(name) = rest.split_whitespace().next() {
+                    starts.push((offset, name.trim_end_matches('{').to_string(), is_private));
+                }
+            }
+            offset += line.len();
+        }
+
+        let mut rules = Vec::new();
+        for (idx, (start, name, is_private)) in starts.iter().enumerate() {
+            let end = starts
+                .get(idx + 1)
+                .map(|next| next.0)
+                .unwrap_or(source.len());
+            rules.push((name.clone(), *is_private, &source[*start..end]));
+        }
+
+        rules
+    }
 
     #[test]
     fn test_infer_doc_and_script_override_platform_hints() {
@@ -1408,6 +1565,10 @@ mod tests {
         assert_eq!(filetype_from_magic("uint16(0) == 0x5A4D"), Some("pe"));
         assert_eq!(filetype_from_magic("uint32(0) == 0x464c457f"), Some("elf"));
         assert_eq!(filetype_from_magic("uint16(0) == 0x457f"), Some("elf"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0xcffaedfe"), Some("macho"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0x504B0304"), Some("zip"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0xD0CF11E0"), Some("ole"));
+        assert_eq!(filetype_from_magic("uint32be(0) == 0x6465780A"), Some("dex"));
         assert!(has_module_reference("pe.number_of_sections > 3", "pe."));
         assert!(!has_module_reference("recipe.format", "pe."));
     }
@@ -1541,7 +1702,7 @@ rule VOLEXITY_Susp_Php_Fileinput_Eval : FILE
         );
         assert_eq!(
             YaraTier::scan_order(None),
-            vec![YaraTier::CrossFormat, YaraTier::Unknown]
+            vec![YaraTier::CrossFormat, YaraTier::Raw, YaraTier::Unknown]
         );
     }
 
@@ -1577,6 +1738,10 @@ rule opaque_family_name {
         assert_eq!(YaraTier::from_filetypes(&["apk"]), YaraTier::Script);
         assert_eq!(YaraTier::from_filetypes(&["vhd"]), YaraTier::Doc);
         assert_eq!(YaraTier::from_filetypes(&["mach"]), YaraTier::MachO);
+        assert_eq!(YaraTier::from_filetypes(&["hta"]), YaraTier::Script);
+        assert_eq!(YaraTier::from_filetypes(&["au3"]), YaraTier::Script);
+        assert_eq!(YaraTier::from_filetypes(&["sct"]), YaraTier::Script);
+        assert_eq!(YaraTier::from_filetypes(&["svg"]), YaraTier::Doc);
 
         assert_eq!(
             infer_filetypes("kimsuky_downloader_pe", None),
@@ -1593,6 +1758,10 @@ rule opaque_family_name {
         assert_eq!(
             infer_filetypes("RUSSIANPANDA_Solarmarker_Loader_PS2EXE", None),
             vec!["pe", "dll"]
+        );
+        assert_eq!(
+            infer_filetypes("SEKOIA_Downloader_Mac_Smooth_Operator", None),
+            vec!["macho", "dylib"]
         );
     }
 
@@ -1613,6 +1782,30 @@ rule opaque_family_name {
         assert_eq!(
             infer_filetypes_from_metadata_text("Detects Embedded PDFs which can start malicious content"),
             vec!["pdf"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detects DarkGate AutoIT script"),
+            vec!["au3"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detect IronPython script used by Turla group"),
+            vec!["py", "pyc"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Cobalt Strike resources/template.sct signature"),
+            vec!["sct", "wsf"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Detect samples of the Android banking trojan BRATA"),
+            vec!["apk", "dex"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Suspicious SVG foreignObject smuggling document"),
+            vec!["svg"]
+        );
+        assert_eq!(
+            infer_filetypes_from_metadata_text("Outlook reminder exploit message"),
+            vec!["msg"]
         );
     }
 
@@ -1672,6 +1865,242 @@ rule VOLEXITY_Susp_Any_Jarischf_User_Path : FILE MEMORY
             ),
             YaraTier::CrossFormat
         );
+
+        let multi_rule = r#"
+rule BINARYALERT_Hacktool_Multi_Bloodhound_Owned : FILE
+{
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "BINARYALERT_Hacktool_Multi_Bloodhound_Owned",
+                multi_rule,
+                "3p.test.multi"
+            ),
+            YaraTier::CrossFormat
+        );
+
+        let autoit_rule = r#"
+rule RUSSIANPANDA_Darkgate_Autoit
+{
+    meta:
+        description = "Detects DarkGate AutoIT script"
+    strings:
+        $h = "AU3!EA06"
+    condition:
+        $h
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule("RUSSIANPANDA_Darkgate_Autoit", autoit_rule, "3p.test.autoit"),
+            YaraTier::Script
+        );
+
+        let scriptlet_rule = r#"
+rule GCTI_Cobaltstrike_Resources_Template_Sct_V3_3_To_V4_X
+{
+    meta:
+        description = "Cobalt Strike's resources/template.sct signature"
+    strings:
+        $a = "<scriptlet>"
+        $b = "<script language=\"vbscript\">"
+    condition:
+        all of them
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "GCTI_Cobaltstrike_Resources_Template_Sct_V3_3_To_V4_X",
+                scriptlet_rule,
+                "3p.test.sct"
+            ),
+            YaraTier::Script
+        );
+
+        let native_iis_rule = r#"
+rule ESET_IIS_Group14
+{
+    meta:
+        description = "Detects Group 14 native IIS malware family"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule("ESET_IIS_Group14", native_iis_rule, "3p.test.iis"),
+            YaraTier::Pe
+        );
+
+        let shortcut_rule = r#"
+rule suspicious_shortcut
+{
+    meta:
+        description = "Suspicious shortcut with remote URL"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule("suspicious_shortcut", shortcut_rule, "3p.test.shortcut"),
+            YaraTier::Doc
+        );
+
+        let raw32_rule = r#"
+rule FIREEYE_RT_APT_Loader_Raw32_REDFLARE_1 : FILE
+{
+    meta:
+        description = "No description has been set in the source file - FireEye-RT"
+    condition:
+        ( uint16( 0 ) != 0x5A4D ) and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "FIREEYE_RT_APT_Loader_Raw32_REDFLARE_1",
+                raw32_rule,
+                "3p.test.raw"
+            ),
+            YaraTier::Raw
+        );
+
+        let octowave_support_rule = r#"
+rule SIGNATURE_BASE_Octowave_Loader_Supporting_File_03_2025 : FILE
+{
+    meta:
+        description = "Detects supporting file used by Octowave loader containing hardcoded values"
+    condition:
+        uint16( 0 ) != 0x5a4d and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SIGNATURE_BASE_Octowave_Loader_Supporting_File_03_2025",
+                octowave_support_rule,
+                "3p.test.raw"
+            ),
+            YaraTier::Raw
+        );
+
+        let sliver_implant_rule = r#"
+rule GCTI_Sliver_Implant_32Bit
+{
+    meta:
+        description = "Sliver 32-bit implant (with and without --debug flag at compile)"
+    condition:
+        true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "GCTI_Sliver_Implant_32Bit",
+                sliver_implant_rule,
+                "3p.test.unknown"
+            ),
+            YaraTier::Unknown
+        );
+
+        let smooth_operator_rule = r#"
+rule SEKOIA_Downloader_Mac_Smooth_Operator : FILE
+{
+    meta:
+        description = "Detect the Smooth_Operator malware"
+        source_url = "https://example.invalid/yara_rules/downloader_mac_smooth_operator.yar"
+    condition:
+        uint32be( 0 ) == 0xcafebabe and true
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "SEKOIA_Downloader_Mac_Smooth_Operator",
+                smooth_operator_rule,
+                "3p.test.macos"
+            ),
+            YaraTier::MachO
+        );
+    }
+
+    #[test]
+    fn test_classify_rule_pe_magic_and_module_examples() {
+        let cert_rule = r#"
+rule REVERSINGLABS_Cert_Blocklist_0332D5C942869Bdcabf5A8266197Cd14 : INFO FILE
+{
+    meta:
+        description = "Certificate used for digitally signing malware."
+        tags = "INFO, FILE"
+    condition:
+        uint16( 0 ) == 0x5A4D and for any i in ( 0 .. pe.number_of_signatures ) : (
+            pe.signatures [ i ] . subject contains "JAWRO SP Z O O"
+        )
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "REVERSINGLABS_Cert_Blocklist_0332D5C942869Bdcabf5A8266197Cd14",
+                cert_rule,
+                "3p.test.reversinglabs"
+            ),
+            YaraTier::Pe
+        );
+
+        let indicator_rule = r#"
+rule DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E : FILE
+{
+    meta:
+        description = "Detects executables signed with stolen, revoked or invalid certificates"
+    condition:
+        uint16( 0 ) == 0x5a4d and for any i in ( 0 .. pe.number_of_signatures ) : (
+            pe.signatures [ i ] . subject contains "IQ Trade ApS"
+        )
+}
+"#;
+        assert_eq!(
+            YaraTier::classify_rule(
+                "DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E",
+                indicator_rule,
+                "3p.test.ditekshen"
+            ),
+            YaraTier::Pe
+        );
+    }
+
+    #[test]
+    fn test_exact_third_party_cert_examples_classify_as_pe() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..")
+            .join("cleave-traits")
+            .join("third-party")
+            .join("YARAForge")
+            .join("yara-rules-full.yar");
+        if !path.exists() {
+            return;
+        }
+
+        let source = std::fs::read_to_string(&path).expect("read YARAForge rules");
+        for target in [
+            "REVERSINGLABS_Cert_Blocklist_0332D5C942869Bdcabf5A8266197Cd14",
+            "DITEKSHEN_INDICATOR_KB_CERT_066276Af2F2C7E246D3B1Cab1B4Aa42E",
+        ] {
+            let (_, _, rule_text) = split_rules(&source)
+                .into_iter()
+                .find(|(name, is_private, _)| !*is_private && name == target)
+                .expect("target rule present");
+            let lower = rule_text.to_lowercase();
+            assert!(
+                filetype_from_magic(rule_text).is_some() || has_module_reference(&lower, "pe."),
+                "missing PE signal for {target}: {rule_text}"
+            );
+            assert_eq!(
+                YaraTier::classify_rule(target, rule_text, "3p.YARAForge.yara-rules-full"),
+                YaraTier::Pe,
+                "failed for {target}: filetype_from_magic={:?} has_pe_module={} source={rule_text}",
+                filetype_from_magic(rule_text),
+                has_module_reference(&lower, "pe.")
+            );
+        }
     }
 
     #[test]
@@ -1812,51 +2241,6 @@ rule VOLEXITY_Susp_Any_Jarischf_User_Path : FILE MEMORY
                     files.push(path);
                 }
             }
-        }
-
-        fn split_rules(source: &str) -> Vec<(String, bool, &str)> {
-            let mut starts: Vec<(usize, String, bool)> = Vec::new();
-            for (offset, line) in source
-                .match_indices('\n')
-                .map(|(i, _)| (i + 1, &source[i + 1..]))
-            {
-                let trimmed = line.trim_start();
-                let is_private = trimmed.starts_with("private rule ");
-                let rest = if is_private {
-                    trimmed.strip_prefix("private rule ")
-                } else {
-                    trimmed.strip_prefix("rule ")
-                };
-                if let Some(rest) = rest {
-                    if let Some(name) = rest.split_whitespace().next() {
-                        starts.push((offset, name.trim_end_matches('{').to_string(), is_private));
-                    }
-                }
-            }
-            if source.starts_with("rule ") || source.starts_with("private rule ") {
-                let trimmed = source.trim_start();
-                let is_private = trimmed.starts_with("private rule ");
-                let rest = if is_private {
-                    trimmed.strip_prefix("private rule ")
-                } else {
-                    trimmed.strip_prefix("rule ")
-                };
-                if let Some(rest) = rest {
-                    if let Some(name) = rest.split_whitespace().next() {
-                        starts.insert(0, (0, name.trim_end_matches('{').to_string(), is_private));
-                    }
-                }
-            }
-
-            let mut rules = Vec::new();
-            for (idx, (start, name, is_private)) in starts.iter().enumerate() {
-                let end = starts
-                    .get(idx + 1)
-                    .map(|next| next.0)
-                    .unwrap_or(source.len());
-                rules.push((name.clone(), *is_private, &source[*start..end]));
-            }
-            rules
         }
 
         let traits_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))

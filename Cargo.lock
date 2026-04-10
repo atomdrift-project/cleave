@@ -803,6 +803,7 @@ dependencies = [
  "unrar",
  "walkdir",
  "xz2",
+ "yara-classify",
  "yara-x",
  "zip",
  "zstd",
@@ -5606,6 +5607,10 @@ checksum = "388c44dc09d76f1536602ead6d325eb532f5c122f17782bd57fb47baeeb767e2"
 dependencies = [
  "lzma-sys",
 ]
+
+[[package]]
+name = "yara-classify"
+version = "0.1.0"
 
 [[package]]
 name = "yara-x"

@@ -6,6 +6,10 @@
 //! The namespace format used for third-party rules is `"3p.{vendor}[.{subdir}...]"`.
 
 use crate::composite_rules::{Arch, Platform};
+pub use yara_classify::{
+    filetype_from_magic, has_module_reference, infer_filetypes, infer_filetypes_from_metadata_text,
+    infer_filetypes_from_namespace, infer_filetypes_from_tags, inject_condition_filetype_hints,
+};
 
 /// Derive the trait ID for a third-party YARA match.
 ///
@@ -42,8 +46,13 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
         for token in os.to_lowercase().split(',').map(str::trim) {
             match token {
                 "linux" => {
-                    if !platforms.contains(&Platform::Linux) {
-                        platforms.push(Platform::Linux);
+                    let platform = if prefers_unix_php_platform(rule_name) {
+                        Platform::Unix
+                    } else {
+                        Platform::Linux
+                    };
+                    if !platforms.contains(&platform) {
+                        platforms.push(platform);
                     }
                 }
                 "windows" | "win32" | "win64" | "win" => {
@@ -79,7 +88,12 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
     for part in rule_name.split('_') {
         match part {
             "Win" | "win" | "Win32" | "Win64" | "Windows" => return vec![Platform::Windows],
-            "Linux" | "linux" => return vec![Platform::Linux],
+            "Linux" | "linux" => {
+                if prefers_unix_php_platform(rule_name) {
+                    return vec![Platform::Unix];
+                }
+                return vec![Platform::Linux];
+            }
             "MacOS" | "Macos" | "MACOS" | "macos" | "OSX" | "osx" => return vec![Platform::MacOS],
             "Android" | "android" => return vec![Platform::Android],
             "iOS" | "ios" => return vec![Platform::Ios],
@@ -87,6 +101,10 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
         }
     }
     vec![]
+}
+
+fn prefers_unix_php_platform(rule_name: &str) -> bool {
+    yara_classify::infer_filetypes(rule_name, None) == vec!["php"]
 }
 
 /// Map platforms to the filetype strings expected by the YARA file-type filter.
@@ -121,299 +139,6 @@ pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
         }
     }
     types
-}
-
-/// Infer filetype constraint strings for a third-party YARA rule.
-///
-/// Combines all heuristics in priority order:
-/// 1. `os` metadata field → binary platform filetypes
-/// 2. Rule name platform prefix (`Win32_`, `Linux_`, `MacOS_`) → binary filetypes
-/// 3. Rule name document-format prefix (`PDF_`, `RTF_`, `Office_`, etc.) → doc filetypes
-///
-/// Returns empty vec if no constraint can be inferred — the rule applies to all files.
-/// Returned strings are lowercase and match the values used by `scan_bytes_filtered`.
-#[must_use]
-pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static str> {
-    // 1. Platform-based binary format inference (highest priority)
-    let platforms = platforms_from_name_and_os(rule_name, os_meta);
-    if !platforms.is_empty() {
-        let types = filetypes_from_platforms(&platforms);
-        if !types.is_empty() {
-            return types;
-        }
-    }
-    // 2. Document format inference
-    let doc_types = doc_filetypes_from_rule_name(rule_name);
-    if !doc_types.is_empty() {
-        return doc_types;
-    }
-    // 3. Scripting language inference (strict: ps1 rule → only ps1 files)
-    script_filetypes_from_rule_name(rule_name)
-}
-
-/// Infer filetypes from the filename component of a third-party YARA namespace.
-///
-/// Third-party namespaces have the form `"3p.{vendor}[.{subdirs}].{filename_stem}"`.
-/// The filename stem (e.g. `"win_mal_TextShell"`) often carries platform/type signals
-/// that aren't in the rule identifier itself (e.g. `"TextShell"`).
-///
-/// Returns empty vec if no constraint can be inferred.
-#[must_use]
-pub fn infer_filetypes_from_namespace(namespace: &str, os_meta: Option<&str>) -> Vec<&'static str> {
-    // Extract the last dot-separated component (the filename stem)
-    let filename_stem = match namespace.rsplit('.').next() {
-        Some(s) if !s.is_empty() && s != "3p" => s,
-        _ => return vec![],
-    };
-    infer_filetypes(filename_stem, os_meta)
-}
-
-/// Inject `filetype` metadata into YARA rule source when file magic conditions are detected.
-///
-/// Handles the common pattern where rules check `uint16(0) == 0x5A4D` (PE/MZ magic),
-/// `uint32(0) == 0x464c457f` (ELF magic), or MachO magic values in their condition
-/// but carry no explicit `filetype` metadata key. Injects a `filetype = "pe"` (or
-/// equivalent) line into each qualifying rule's `meta:` section.
-///
-/// This runs at rule-load time so the hint is baked into the compiled rules cache.
-#[must_use]
-pub fn inject_condition_filetype_hints(source: &str) -> String {
-    // Quick reject: skip files with no recognizable magic pattern
-    if !source_has_magic_condition(source) {
-        return source.to_string();
-    }
-
-    let mut result = String::with_capacity(source.len() + 128);
-    let mut pos = 0;
-    let bytes = source.as_bytes();
-
-    while pos < source.len() {
-        // Find the next `rule ` keyword (at word boundary — not inside a string/comment)
-        match find_rule_start(source, pos) {
-            None => {
-                result.push_str(&source[pos..]);
-                break;
-            }
-            Some(rule_kw) => {
-                // Emit everything before this rule unchanged
-                result.push_str(&source[pos..rule_kw]);
-
-                // Find the opening brace of the rule body
-                let brace_start = match source[rule_kw..].find('{') {
-                    Some(off) => rule_kw + off,
-                    None => {
-                        result.push_str(&source[rule_kw..]);
-                        break;
-                    }
-                };
-
-                // Find the matching closing brace (brace-depth tracking)
-                let body_start = brace_start + 1;
-                let Some(body_end) = find_matching_brace(bytes, brace_start) else {
-                    result.push_str(&source[rule_kw..]);
-                    break;
-                };
-
-                let header = &source[rule_kw..=brace_start];
-                let body = &source[body_start..body_end];
-                let close = &source[body_end..body_end + 1];
-
-                result.push_str(header);
-                result.push_str(&maybe_inject_filetype(body));
-                result.push_str(close);
-
-                pos = body_end + 1;
-            }
-        }
-    }
-
-    result
-}
-
-/// Returns `true` if the source contains any condition pattern that implies a file type.
-///
-/// Checks for magic byte comparisons (`uint16`/`uint32`/`uint16be`/`uint32be`) and
-/// YARA module references (`pe.`, `elf.`, `macho.`). Used as a quick-reject gate
-/// before the more expensive per-rule injection pass.
-fn source_has_magic_condition(source: &str) -> bool {
-    let lower = source.to_lowercase();
-    // Quick check: any magic hex value present at all? (space-insensitive)
-    lower.contains("0x5a4d")
-        || lower.contains("0x4d5a")
-        || lower.contains("0x464c457f")
-        || lower.contains("0x7f454c46")
-        || lower.contains("0xfeedface")
-        || lower.contains("0xcefaedfe")
-        || lower.contains("0xfeedfacf")
-        || lower.contains("0xcffaedfe")
-        || lower.contains("0xfacf")
-        || lower.contains("0xface")
-        || lower.contains("0xd0cf11e0")
-        || lower.contains("0xcfd0")
-        || lower.contains("0x25504446")
-        || lower.contains("0x7b5c7274")
-        || lower.contains("0x504b")
-        || lower.contains("0x04034b50")
-        || lower.contains("0x0000004c")
-        // YARA module references
-        || has_module_reference(&lower, "pe.")
-        || has_module_reference(&lower, "elf.")
-        || has_module_reference(&lower, "macho.")
-}
-
-/// Check if `source` contains a YARA module reference like `pe.` at a word boundary.
-#[must_use]
-pub fn has_module_reference(lower_source: &str, module_prefix: &str) -> bool {
-    let mut pos = 0;
-    while let Some(idx) = lower_source[pos..].find(module_prefix) {
-        let abs = pos + idx;
-        // Must be preceded by a non-alphanumeric char (word boundary) or be at start
-        let at_boundary = abs == 0 || !lower_source.as_bytes()[abs - 1].is_ascii_alphanumeric();
-        if at_boundary {
-            return true;
-        }
-        pos = abs + 1;
-    }
-    false
-}
-
-/// Infer the filetype from magic patterns and YARA module references in a rule's body.
-#[must_use]
-pub fn filetype_from_magic(body: &str) -> Option<&'static str> {
-    let lower = body.to_lowercase();
-
-    // Strip whitespace for magic checks so "uint16( 0 ) == 0x5a4d" matches "uint16(0)==0x5a4d"
-    let condensed: String = lower.chars().filter(|c| !c.is_ascii_whitespace()).collect();
-
-    // PE: MZ magic (little-endian and big-endian) or pe.* module
-    if condensed.contains("uint16(0)==0x5a4d")
-        || condensed.contains("uint16be(0)==0x4d5a")
-        || has_module_reference(&lower, "pe.")
-    {
-        return Some("pe");
-    }
-
-    // ELF: magic bytes or elf.* module
-    if condensed.contains("uint32(0)==0x464c457f")
-        || condensed.contains("uint32be(0)==0x7f454c46")
-        || has_module_reference(&lower, "elf.")
-    {
-        return Some("elf");
-    }
-
-    // MachO: various magic values (32/64-bit, native/swapped) or macho.* module
-    if condensed.contains("uint32(0)==0xfeedface")
-        || condensed.contains("uint32(0)==0xcefaedfe")
-        || condensed.contains("uint32(0)==0xfeedfacf")
-        || condensed.contains("uint32(0)==0xcffaedfe")
-        || condensed.contains("uint16(0)==0xfacf")
-        || condensed.contains("uint16(0)==0xface")
-        || has_module_reference(&lower, "macho.")
-    {
-        return Some("macho");
-    }
-
-    // OLE/DOCFILE (Office documents) — both 32-bit and byte-swapped 16-bit forms
-    if condensed.contains("uint32(0)==0xd0cf11e0")
-        || condensed.contains("uint16(0)==0xcfd0")
-        || condensed.contains("uint16(0)==0xd0cf")
-    {
-        return Some("ole");
-    }
-
-    // PDF (%PDF magic)
-    if condensed.contains("uint32(0)==0x25504446") {
-        return Some("pdf");
-    }
-
-    // RTF ({\rt magic)
-    if condensed.contains("uint32(0)==0x7b5c7274") {
-        return Some("rtf");
-    }
-
-    // ZIP/PK archive
-    if condensed.contains("uint16(0)==0x504b") || condensed.contains("uint32(0)==0x04034b50") {
-        return Some("zip");
-    }
-
-    // LNK shortcut
-    if condensed.contains("uint32(0)==0x0000004c") {
-        return Some("lnk");
-    }
-
-    None
-}
-
-/// Inject a `filetype` metadata line into a rule body if the condition implies one
-/// and the body doesn't already declare a `filetype` key in the meta section.
-fn maybe_inject_filetype(body: &str) -> String {
-    // Check if there's already a filetype metadata declaration (key = value form).
-    // We look for `filetype` followed by `=` to distinguish metadata keys from
-    // YARA module fields like `macho.filetype` or `pe.dll_characteristics`.
-    let has_filetype_meta = body.lines().any(|line| {
-        let trimmed = line.trim();
-        trimmed.starts_with("filetype") && trimmed.contains('=')
-    });
-    if has_filetype_meta {
-        return body.to_string();
-    }
-    let Some(ft) = filetype_from_magic(body) else {
-        return body.to_string();
-    };
-
-    // Inject after "meta:" if present, otherwise before "strings:" or "condition:"
-    let inject_line = format!("\n        filetype = \"{}\"", ft);
-    for marker in &["meta:", "strings:", "condition:"] {
-        if let Some(off) = body.find(marker) {
-            let insert_pos = off + marker.len();
-            let mut out = body.to_string();
-            out.insert_str(insert_pos, &inject_line);
-            return out;
-        }
-    }
-    body.to_string()
-}
-
-/// Find the position of the next `rule ` keyword in `src` starting from `from`.
-/// Skips occurrences inside line comments (`//`).
-fn find_rule_start(src: &str, from: usize) -> Option<usize> {
-    let mut pos = from;
-    while pos < src.len() {
-        // Skip line comments
-        if src[pos..].starts_with("//") {
-            if let Some(nl) = src[pos..].find('\n') {
-                pos += nl + 1;
-                continue;
-            } else {
-                return None;
-            }
-        }
-        if src[pos..].starts_with("rule ")
-            && (pos == 0 || matches!(src.as_bytes()[pos - 1], b'\n' | b'\r' | b' ' | b'\t'))
-        {
-            return Some(pos);
-        }
-        pos += 1;
-    }
-    None
-}
-
-/// Find the position of the `}` that closes the brace opened at `open_pos` in `bytes`.
-fn find_matching_brace(bytes: &[u8], open_pos: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    for (i, &b) in bytes.iter().enumerate().skip(open_pos) {
-        match b {
-            b'{' => depth += 1,
-            b'}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Parse `arch_context` metadata from Elastic-style third-party YARA rules.
@@ -461,23 +186,14 @@ pub(crate) fn archs_from_arch_context(arch_context: &str) -> Vec<Arch> {
     archs
 }
 
-/// Infer filetype constraints from document-format rule name prefixes.
+/// Infer filetype constraints from document-format rule name signals.
 ///
-/// Handles the 23 document-format rules in the collection (PDF, RTF, Office, LNK, etc.).
-/// These rules have no platform prefix and no `filetype` metadata, but their names
-/// clearly identify what file formats they target.
+/// Handles document-format rules in the collection (PDF, RTF, Office, LNK, OneNote, etc.).
+/// The signal may appear as the leading token or later in the rule name
+/// (`APT10_ChChes_lnk`, `DELIVRTO_SUSP_Onenote_Win_Script_Encoding_Feb23`).
+#[cfg(test)]
 fn doc_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
-    match rule_name.split('_').next().unwrap_or("") {
-        "PDF" | "Pdf" => vec!["pdf"],
-        "RTF" | "Rtf" => vec!["rtf", "doc"],
-        "Office" | "Word" | "Excel" | "OLEfile" | "OLE" | "Ole" | "Macro" | "Maldoc" => {
-            vec!["doc", "docx", "xls", "xlsx", "ole"]
-        }
-        "OneNote" => vec!["one", "onepkg"],
-        "LNK" | "Lnk" | "LNKR" => vec!["lnk"],
-        "ISO" => vec!["iso", "img"],
-        _ => vec![],
-    }
+    yara_classify::doc_filetypes_from_text(rule_name)
 }
 
 /// Infer filetype constraints from scripting language signals in rule names.
@@ -487,27 +203,9 @@ fn doc_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
 /// so it should only fire on PowerShell source files.
 ///
 /// Returns empty vec if no scripting signal is found.
+#[cfg(test)]
 fn script_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
-    let lower = rule_name.to_lowercase();
-    // Check underscore-delimited tokens for exact matches first (more precise)
-    for token in lower.split('_') {
-        match token {
-            "powershell" | "ps1" | "psh" | "ps" => return vec!["ps1", "psm1", "psd1"],
-            "python" | "py" => return vec!["py", "pyc"],
-            "javascript" | "jscript" | "js" => return vec!["js", "mjs", "cjs"],
-            "php" => return vec!["php"],
-            "vbs" | "vbscript" | "vba" => return vec!["vbs", "vba"],
-            "bat" | "cmd" | "batch" => return vec!["bat", "cmd"],
-            "shell" | "bash" | "sh" => return vec!["sh", "bash", "zsh"],
-            "java" | "jar" => return vec!["jar", "class", "java"],
-            "ruby" | "rb" => return vec!["rb"],
-            "perl" | "pl" => return vec!["pl", "pm"],
-            "lua" => return vec!["lua"],
-            "webshell" => return vec!["php", "jsp", "aspx", "asp"],
-            _ => {}
-        }
-    }
-    vec![]
+    yara_classify::script_filetypes_from_text(rule_name)
 }
 
 /// Log the inferred filetype association for a YARA rule at debug level.
@@ -907,6 +605,14 @@ mod tests {
     }
 
     #[test]
+    fn test_platforms_from_linux_php_prefix_prefers_unix() {
+        assert_eq!(
+            platforms_from_name_and_os("Linux_PHP_Webshell", None),
+            vec![Platform::Unix]
+        );
+    }
+
+    #[test]
     fn test_platforms_from_macos_prefix() {
         assert_eq!(
             platforms_from_name_and_os("MacOS_Infostealer_Foo_12345678", None),
@@ -966,6 +672,14 @@ mod tests {
         assert_eq!(
             platforms_from_name_and_os("SomeRule", Some("linux")),
             vec![Platform::Linux]
+        );
+    }
+
+    #[test]
+    fn test_platforms_from_php_os_meta_prefers_unix() {
+        assert_eq!(
+            platforms_from_name_and_os("SIGNATURE_BASE_PHP_Backdoor", Some("linux")),
+            vec![Platform::Unix]
         );
     }
 
@@ -1346,13 +1060,8 @@ mod tests {
     // ------------------------------------------------------------------
 
     #[test]
-    fn test_infer_binary_platform_before_doc() {
-        // Binary platform prefix takes priority over any doc inference
+    fn test_infer_binary_platform_when_no_more_specific_signal() {
         assert_eq!(infer_filetypes("Win32_Trojan_Foo", None), vec!["pe", "dll"]);
-        assert_eq!(
-            infer_filetypes("Linux_Backdoor_Bash_e427876d", None),
-            vec!["elf", "so"]
-        );
         assert_eq!(
             infer_filetypes("MacOS_Infostealer_Foo_12345678", None),
             vec!["macho", "dylib"]
@@ -1360,15 +1069,22 @@ mod tests {
     }
 
     #[test]
-    fn test_infer_os_metadata_before_doc() {
-        // os metadata takes highest priority
+    fn test_infer_doc_and_script_override_platform_hints() {
         assert_eq!(
             infer_filetypes("PDF_Something", Some("windows")),
-            vec!["pe", "dll"]
+            vec!["pdf"]
         );
         assert_eq!(
             infer_filetypes("RTF_Bad_Doc", Some("linux")),
-            vec!["elf", "so"]
+            vec!["rtf", "doc"]
+        );
+        assert_eq!(
+            infer_filetypes("Linux_Backdoor_Bash_e427876d", None),
+            vec!["sh", "bash", "zsh"]
+        );
+        assert_eq!(
+            infer_filetypes("Win_PS1_Malware", None),
+            vec!["ps1", "psm1", "psd1"]
         );
     }
 
@@ -1388,6 +1104,11 @@ mod tests {
         assert_eq!(infer_filetypes("ISO_exec", None), vec!["iso", "img"]);
         assert_eq!(
             infer_filetypes("OneNote_BuildPath", None),
+            vec!["one", "onepkg"]
+        );
+        assert_eq!(infer_filetypes("APT10_ChChes_lnk", None), vec!["lnk"]);
+        assert_eq!(
+            infer_filetypes("DELIVRTO_SUSP_Onenote_Win_Script_Encoding_Feb23", None),
             vec!["one", "onepkg"]
         );
     }
@@ -2021,13 +1742,12 @@ rule RuleB {
     }
 
     #[test]
-    fn test_infer_platform_takes_priority_over_script() {
-        // "Win" platform token should take priority over "ps1" script token
+    fn test_infer_script_takes_priority_over_platform() {
         let types = infer_filetypes("Win_PS1_Malware", None);
         assert_eq!(
             types,
-            vec!["pe", "dll"],
-            "Platform inference should take priority over scripting inference"
+            vec!["ps1", "psm1", "psd1"],
+            "Script inference should take priority over coarse platform inference"
         );
     }
 
@@ -2053,6 +1773,40 @@ rule RuleB {
     #[test]
     fn test_infer_lua_from_rule_name() {
         assert_eq!(infer_filetypes("Malware_Lua_Backdoor", None), vec!["lua"]);
+    }
+
+    #[test]
+    fn test_infer_jsp_from_rule_name() {
+        assert_eq!(
+            infer_filetypes("SIGNATURE_BASE_Cmdjsp_Jsp", None),
+            vec!["jsp"]
+        );
+    }
+
+    #[test]
+    fn test_infer_metadata_text_onenote_description() {
+        let types = infer_filetypes_from_metadata_text(
+            "Presence of Windows Script Encoding Header in a OneNote file with embedded files",
+        );
+        assert_eq!(types, vec!["one", "onepkg"]);
+    }
+
+    #[test]
+    fn test_infer_metadata_text_webshell_source_url() {
+        let types = infer_filetypes_from_metadata_text(
+            "https://github.com/Neo23x0/signature-base/blob/main/yara/thor-webshells.yar",
+        );
+        assert_eq!(types, vec!["php", "jsp", "aspx", "asp"]);
+    }
+
+    #[test]
+    fn test_infer_tags_support_script_and_doc_types() {
+        assert_eq!(infer_filetypes_from_tags(&["PHP".to_string()]), vec!["php"]);
+        assert_eq!(infer_filetypes_from_tags(&["LNK".to_string()]), vec!["lnk"]);
+        assert_eq!(
+            infer_filetypes_from_tags(&["PowerShell".to_string()]),
+            vec!["ps1", "psm1", "psd1"]
+        );
     }
 
     // ------------------------------------------------------------------

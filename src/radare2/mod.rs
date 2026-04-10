@@ -366,6 +366,7 @@ impl Radare2Analyzer {
 
         let output = execute_rizin_with_timeout(
             &[
+                "-NN",
                 "-q",
                 "-e",
                 "scr.color=0",
@@ -483,6 +484,20 @@ impl Radare2Analyzer {
             "Running radare2 batched analysis"
         );
 
+        if matches!(mode, RizinMode::MetadataOnly) {
+            debug!(
+                path = %file_path.display(),
+                mode = mode.label(),
+                reason = "goblin already supplied metadata and strings were pre-extracted",
+                "Skipping radare2 subprocess"
+            );
+            return Ok(BatchedAnalysis {
+                strings_extracted: false,
+                timed_out: false,
+                ..Default::default()
+            });
+        }
+
         // Check cache first (skipped in debug builds or when CLEAVE_SKIP_CACHE is set)
         let skip_cache = crate::cache::skip_cache();
         if !skip_cache {
@@ -558,6 +573,7 @@ impl Radare2Analyzer {
 
         let output = execute_rizin_with_timeout(
             &[
+                "-NN",
                 "-q",
                 "-e",
                 "scr.color=0",

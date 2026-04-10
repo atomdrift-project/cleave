@@ -152,12 +152,25 @@ impl PEAnalyzer {
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256);
+            return self.analyze_structural_with_strings(
+                file_path,
+                file_path,
+                data,
+                None,
+                true,
+                precomputed_sha256,
+            );
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report =
-            self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256.clone());
+        let mut report = self.analyze_structural_with_strings(
+            file_path,
+            file_path,
+            data,
+            None,
+            true,
+            precomputed_sha256.clone(),
+        );
 
         report.findings.push(
             Finding::structural(
@@ -190,8 +203,10 @@ impl PEAnalyzer {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
                         let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
+                            temp_file.path(),
                             &unpacked_data,
                             None,
+                            true,
                             None, // Hash will change after decompression
                         );
                         // Evaluate composites against the unpacked layer so that
@@ -249,9 +264,11 @@ impl PEAnalyzer {
     /// Structural analysis with optional pre-extracted strings.
     fn analyze_structural_with_strings(
         &self,
-        file_path: &Path,
+        logical_path: &Path,
+        analysis_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        allow_rizin: bool,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
@@ -270,7 +287,7 @@ impl PEAnalyzer {
                         tracing::debug!(
                             "PE strict parse failed ({}) but permissive succeeded for {}",
                             strict_err,
-                            file_path.display()
+                            logical_path.display()
                         );
                         (Some(pe), None)
                     }
@@ -280,7 +297,8 @@ impl PEAnalyzer {
         };
 
         self.analyze_pe(
-            file_path,
+            logical_path,
+            analysis_path,
             data,
             pe_data,
             pe_parsed.as_ref(),
@@ -288,6 +306,7 @@ impl PEAnalyzer {
             tamper_findings,
             start,
             stng_strings,
+            allow_rizin,
             precomputed_sha256,
         )
     }
@@ -301,7 +320,8 @@ impl PEAnalyzer {
     #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
     fn analyze_pe(
         &self,
-        file_path: &Path,
+        logical_path: &Path,
+        analysis_path: &Path,
         original_data: &[u8],
         pe_data: &[u8],
         pe: Option<&PE<'_>>,
@@ -309,6 +329,7 @@ impl PEAnalyzer {
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
+        allow_rizin: bool,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let goblin_ok = pe.is_some();
@@ -320,7 +341,7 @@ impl PEAnalyzer {
 
         // Create target info
         let target = TargetInfo {
-            path: file_path.display().to_string(),
+            path: logical_path.display().to_string(),
             file_type: "pe".to_string(),
             size_bytes: original_data.len() as u64,
             sha256: precomputed_sha256
@@ -347,11 +368,11 @@ impl PEAnalyzer {
         let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
         let (r2_result, _) = rayon::join(
             || {
-                if self.is_cancelled() || !Radare2Analyzer::is_available() {
+                if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
                     return None;
                 }
                 Some(self.radare2.extract_batched(
-                    file_path,
+                    analysis_path,
                     has_symbols,
                     goblin_ok,
                     needs_r2_strings,
@@ -649,7 +670,7 @@ impl PEAnalyzer {
         // Embedded code in strings
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
+                &logical_path.display().to_string(),
                 &report.strings,
                 &self.capability_mapper,
                 0,
@@ -801,7 +822,7 @@ impl PEAnalyzer {
         let detected_sfx_kind = crate::analyzers::sfx_detector::detect_sfx(pe_data);
         if let Some(sfx_kind) = detected_sfx_kind {
             let sfx_result = crate::analyzers::sfx_detector::analyze_sfx(
-                file_path,
+                analysis_path,
                 sfx_kind,
                 pe_data,
                 Some(self.capability_mapper.clone()),
@@ -1553,8 +1574,10 @@ impl Analyzer for PEAnalyzer {
         // Use data and strings from input (no file read, no string extraction)
         let mut report = self.analyze_structural_with_strings(
             input.path,
+            input.backing_path(),
             input.data,
             Some(input.strings),
+            !input.skip_rizin,
             input.sha256.clone(),
         );
 

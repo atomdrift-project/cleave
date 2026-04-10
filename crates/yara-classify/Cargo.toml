@@ -1,0 +1,13 @@
+[package]
+name = "yara-classify"
+version = "0.1.0"
+edition = "2021"
+description = "Pure YARA filetype and tier classification helpers"
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[lib]
+name = "yara_classify"
+path = "src/lib.rs"

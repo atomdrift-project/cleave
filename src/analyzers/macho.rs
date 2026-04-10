@@ -87,15 +87,24 @@ impl MachOAnalyzer {
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
-        self.analyze_structural_with_strings(file_path, data, None, precomputed_sha256)
+        self.analyze_structural_with_strings(
+            file_path,
+            file_path,
+            data,
+            None,
+            true,
+            precomputed_sha256,
+        )
     }
 
     /// Structural analysis with optional pre-extracted strings.
     fn analyze_structural_with_strings(
         &self,
-        file_path: &Path,
+        logical_path: &Path,
+        analysis_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        allow_rizin: bool,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now(); // Parse with goblin
@@ -106,7 +115,7 @@ impl MachOAnalyzer {
         let Ok(Mach::Binary(macho)) = goblin::mach::Mach::parse(data) else {
             // Return a minimal report if parsing fails
             let target = TargetInfo {
-                path: file_path.display().to_string(),
+                path: logical_path.display().to_string(),
                 file_type: "macho".to_string(),
                 size_bytes: data.len() as u64,
                 sha256,
@@ -117,7 +126,7 @@ impl MachOAnalyzer {
 
         // Create target info
         let target = TargetInfo {
-            path: file_path.display().to_string(),
+            path: logical_path.display().to_string(),
             file_type: "macho".to_string(),
             size_bytes: data.len() as u64,
             sha256: sha256.clone(),
@@ -233,14 +242,14 @@ impl MachOAnalyzer {
 
         // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
         let _t_r2 = std::time::Instant::now();
-        let r2_strings = if !self.is_cancelled() && Radare2Analyzer::is_available() {
+        let r2_strings = if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
             tools_used.push("radare2".to_string());
 
             // Use batched extraction - single r2 session for functions, sections, strings, imports
             let has_symbols = macho.symbols().count() > 0;
             let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
             if let Ok(batched) = self.radare2.extract_batched(
-                file_path,
+                analysis_path,
                 has_symbols,
                 true, // goblin_success
                 needs_r2_strings,
@@ -397,7 +406,7 @@ impl MachOAnalyzer {
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
+                &logical_path.display().to_string(),
                 &report.strings,
                 &self.capability_mapper,
                 0,
@@ -1090,8 +1099,10 @@ impl Analyzer for MachOAnalyzer {
         let preferred_data = &input.data[preferred_range];
         let mut report = self.analyze_structural_with_strings(
             input.path,
+            input.backing_path(),
             preferred_data,
             Some(input.strings),
+            !input.skip_rizin,
             input.sha256.clone(),
         );
         self.apply_fat_metadata(&mut report, input.data);

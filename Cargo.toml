@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -93,6 +93,7 @@ malecule = { path = "crates/malecule" }
 sysmem = { path = "crates/sysmem" }
 
 # YARA pattern matching
+yara-classify = { path = "crates/yara-classify" }
 yara-x = { version = "1.14", features = ["rules-profiling"] }
 
 # Tree-sitter parsers
@@ -262,4 +263,3 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
-

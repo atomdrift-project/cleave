@@ -60,6 +60,73 @@ pub(crate) fn log_archive_analysis_stats() {
 }
 
 impl ArchiveAnalyzer {
+    fn should_extract_archive_payloads(file_type: &FileType) -> bool {
+        crate::analyzers::unified::UnifiedSourceAnalyzer::for_file_type(file_type).is_some()
+    }
+
+    fn archive_member_yara_skip_reason(
+        relative_path: &str,
+        file_type: &FileType,
+        size_bytes: usize,
+    ) -> Option<&'static str> {
+        let lower_path = relative_path.to_ascii_lowercase();
+        let file_name = Path::new(relative_path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or(relative_path)
+            .to_ascii_lowercase();
+
+        if lower_path.ends_with(".asar") {
+            return Some("archive-like asar container");
+        }
+
+        if size_bytes >= 512 * 1024 && lower_path.ends_with(".map") {
+            return Some("large source map");
+        }
+
+        let is_licenseish = file_name.starts_with("license")
+            || file_name.starts_with("licenses")
+            || file_name.starts_with("copying")
+            || file_name.starts_with("notice");
+        if size_bytes >= 128 * 1024
+            && is_licenseish
+            && matches!(
+                file_type,
+                FileType::Html | FileType::Markdown | FileType::Unknown
+            )
+        {
+            return Some("large license/notice document");
+        }
+
+        None
+    }
+
+    fn archive_member_yara_filetypes(file_type: &FileType) -> Vec<&'static str> {
+        file_type.yara_filetypes()
+    }
+
+    fn archive_member_rizin_skip_reason(
+        relative_path: &str,
+        file_type: &FileType,
+    ) -> Option<&'static str> {
+        if !matches!(file_type, FileType::Pe | FileType::Elf | FileType::MachO) {
+            return None;
+        }
+
+        let lower_path = relative_path.to_ascii_lowercase();
+        let is_vendored_node_native = lower_path.ends_with(".node")
+            && lower_path.contains("node_modules/")
+            && (lower_path.contains("/prebuilds/")
+                || lower_path.contains("/build/release/")
+                || lower_path.contains("app.asar.unpacked/"));
+
+        if is_vendored_node_native {
+            return Some("vendored node native module under archive dependency tree");
+        }
+
+        None
+    }
+
     fn nested_archive_analyzer(&self, relative_path: &str) -> ArchiveAnalyzer {
         let nested_prefix = match &self.archive_path_prefix {
             Some(prefix) => format!("{}!{}", prefix, relative_path),
@@ -125,8 +192,14 @@ impl ArchiveAnalyzer {
         {
             let opts = crate::analyzers::stng_analysis_opts(4);
             let stng_strings = stng::extract_strings_with_options(data, &opts);
-            let payloads =
-                crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings);
+            let extract_payloads = Self::should_extract_archive_payloads(&file_type);
+            let skip_rizin_reason =
+                Self::archive_member_rizin_skip_reason(relative_path, &file_type);
+            let payloads = if extract_payloads {
+                crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
+            } else {
+                Vec::new()
+            };
             let logical_path = Path::new(relative_path);
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
@@ -135,6 +208,8 @@ impl ArchiveAnalyzer {
                 &payloads,
                 file_type.clone(),
             )
+            .with_backing_path(file_path)
+            .with_skip_rizin_if(skip_rizin_reason.is_some())
             .with_sha256(sha256.clone())
             .at_depth((self.current_depth + 1) as u32);
             input.cancellation = self.cancelled.clone();
@@ -144,29 +219,73 @@ impl ArchiveAnalyzer {
                 file_type = %file_type.report_file_type(),
                 string_count = stng_strings.len(),
                 payload_count = payloads.len(),
+                rizin_mode = if skip_rizin_reason.is_some() { "skipped" } else { "enabled" },
+                rizin_reason = skip_rizin_reason.unwrap_or("deep binary analysis allowed"),
+                payload_mode = if extract_payloads { "enabled" } else { "skipped" },
+                payload_reason = if extract_payloads {
+                    "unified source analyzer consumes encoded payloads"
+                } else {
+                    "non-unified analyzer path does not consume encoded payloads"
+                },
                 "Analyzing archive member via unified AnalysisInput path"
             );
 
             let mut report = analyzer.analyze_input(&input)?;
             if let Some(ref yara_engine) = self.yara_engine {
-                let yara_start = std::time::Instant::now();
-                match yara_engine.scan_bytes(data) {
-                    Ok(matches) => {
-                        let elapsed_ms = yara_start.elapsed().as_millis();
-                        if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
-                            tracing::warn!(
-                                relative_path,
-                                file_type = %file_type.report_file_type(),
-                                size_kb = data.len() / 1024,
-                                elapsed_ms = elapsed_ms as u64,
-                                matches = matches.len(),
-                                "Slow archive member YARA scan"
-                            );
+                if let Some(reason) =
+                    Self::archive_member_yara_skip_reason(relative_path, &file_type, data.len())
+                {
+                    tracing::debug!(
+                        relative_path,
+                        file_type = %file_type.report_file_type(),
+                        size_kb = data.len() / 1024,
+                        reason,
+                        "Skipping archive member YARA scan"
+                    );
+                } else {
+                    let yara_filetypes = Self::archive_member_yara_filetypes(&file_type);
+                    let yara_filter = if yara_filetypes.is_empty() {
+                        None
+                    } else {
+                        Some(yara_filetypes.as_slice())
+                    };
+                    tracing::debug!(
+                        relative_path,
+                        file_type = %file_type.report_file_type(),
+                        size_kb = data.len() / 1024,
+                        yara_mode = if yara_filter.is_some() {
+                            "filtered"
+                        } else {
+                            "generic-only fallback"
+                        },
+                        yara_filters = ?yara_filetypes,
+                        "Running archive member YARA scan"
+                    );
+                    let yara_start = std::time::Instant::now();
+                    match yara_engine.scan_bytes_filtered(data, yara_filter) {
+                        Ok(matches) => {
+                            let elapsed_ms = yara_start.elapsed().as_millis();
+                            if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
+                                tracing::warn!(
+                                    relative_path,
+                                    file_type = %file_type.report_file_type(),
+                                    size_kb = data.len() / 1024,
+                                    yara_mode = if yara_filter.is_some() {
+                                        "filtered"
+                                    } else {
+                                        "generic-only fallback"
+                                    },
+                                    yara_filters = ?yara_filetypes,
+                                    elapsed_ms = elapsed_ms as u64,
+                                    matches = matches.len(),
+                                    "Slow archive member YARA scan"
+                                );
+                            }
+                            report.yara_matches = matches;
                         }
-                        report.yara_matches = matches;
-                    }
-                    Err(e) => {
-                        debug!("YARA scan failed for {}: {}", relative_path, e);
+                        Err(e) => {
+                            debug!("YARA scan failed for {}: {}", relative_path, e);
+                        }
                     }
                 }
             }
@@ -1081,5 +1200,24 @@ impl ArchiveAnalyzer {
             .unwrap_or("extracted")
             .to_string();
         self.analyze_extracted_member(file_path, &relative_path, &data, file_type, sha256)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ArchiveAnalyzer;
+    use crate::analyzers::FileType;
+
+    #[test]
+    fn archive_member_yara_filetypes_use_detected_binary_type() {
+        assert_eq!(
+            ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Elf),
+            vec!["elf", "so", "ko"]
+        );
+        assert_eq!(
+            ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Pe),
+            vec!["pe", "exe", "dll", "bat", "ps1"]
+        );
+        assert!(ArchiveAnalyzer::archive_member_yara_filetypes(&FileType::Unknown).is_empty());
     }
 }

@@ -97,9 +97,11 @@ impl ElfAnalyzer {
     /// Otherwise falls back to `self.preextracted_strings` or extracts with stng.
     fn analyze_elf_core(
         &self,
-        file_path: &Path,
+        logical_path: &Path,
+        analysis_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        allow_rizin: bool,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
@@ -109,7 +111,7 @@ impl ElfAnalyzer {
 
         // Create target info with default/empty values for fields that require parsing
         let target = TargetInfo {
-            path: file_path.display().to_string(),
+            path: logical_path.display().to_string(),
             file_type: "elf".to_string(),
             size_bytes: data.len() as u64,
             sha256,
@@ -147,11 +149,11 @@ impl ElfAnalyzer {
                 // Parallelize Radare2 deep analysis with the rest of Goblin structural analysis
                 let (r2_inner, _) = rayon::join(
                     || {
-                        if self.is_cancelled() || !Radare2Analyzer::is_available() {
+                        if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
                             return None;
                         }
                         Some(self.radare2.extract_batched(
-                            file_path,
+                            analysis_path,
                             symbols_found,
                             true, // goblin_success
                             needs_r2_strings,
@@ -474,7 +476,7 @@ impl ElfAnalyzer {
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
-                &file_path.display().to_string(),
+                &logical_path.display().to_string(),
                 &report.strings,
                 &self.capability_mapper,
                 0,
@@ -919,11 +921,25 @@ impl ElfAnalyzer {
         use crate::upx::{UPXDecompressor, UPXError};
 
         if !UPXDecompressor::is_upx_packed(data) {
-            return self.analyze_elf_core(file_path, data, None, precomputed_sha256);
+            return self.analyze_elf_core(
+                file_path,
+                file_path,
+                data,
+                None,
+                true,
+                precomputed_sha256,
+            );
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_elf_core(file_path, data, None, precomputed_sha256.clone());
+        let mut report = self.analyze_elf_core(
+            file_path,
+            file_path,
+            data,
+            None,
+            true,
+            precomputed_sha256.clone(),
+        );
 
         report.findings.push(
             Finding::structural(
@@ -954,8 +970,14 @@ impl ElfAnalyzer {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if std::fs::write(temp_file.path(), &unpacked_data).is_ok() {
-                        let unpacked_report =
-                            self.analyze_elf_core(temp_file.path(), &unpacked_data, None, None);
+                        let unpacked_report = self.analyze_elf_core(
+                            temp_file.path(),
+                            temp_file.path(),
+                            &unpacked_data,
+                            None,
+                            true,
+                            None,
+                        );
 
                         // Create separate FileAnalysis for unpacked layer
                         let unpacked_sha256 =
@@ -1006,8 +1028,10 @@ impl Analyzer for ElfAnalyzer {
         // Use data and strings from input (no file read, no string extraction)
         let mut report = self.analyze_elf_core(
             input.path,
+            input.backing_path(),
             input.data,
             Some(input.strings),
+            !input.skip_rizin,
             input.sha256.clone(),
         );
 

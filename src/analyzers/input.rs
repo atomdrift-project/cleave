@@ -26,6 +26,11 @@ pub struct AnalysisInput<'a> {
     /// Path to the file (may be virtual for archive entries)
     pub path: &'a Path,
 
+    /// Backing filesystem path for tool integrations that need to reopen the file.
+    /// For top-level files this is usually the same as `path`; for archive members it
+    /// points at the extracted temporary file while `path` remains the logical member path.
+    pub backing_path: Option<&'a Path>,
+
     /// Raw file bytes (already read from disk or extracted from archive)
     pub data: &'a [u8],
 
@@ -37,6 +42,9 @@ pub struct AnalysisInput<'a> {
 
     /// Detected file type
     pub file_type: FileType,
+
+    /// Skip deep radare2/rizin analysis for this input.
+    pub skip_rizin: bool,
 
     /// Optional SHA256 hash (memoized if computed during extraction)
     pub sha256: Option<String>,
@@ -56,10 +64,12 @@ impl<'a> AnalysisInput<'a> {
     pub fn new(path: &'a Path, data: &'a [u8], file_type: FileType) -> Self {
         Self {
             path,
+            backing_path: Some(path),
             data,
             strings: &[],
             payloads: &[],
             file_type,
+            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -76,10 +86,12 @@ impl<'a> AnalysisInput<'a> {
     ) -> Self {
         Self {
             path,
+            backing_path: Some(path),
             data,
             strings,
             payloads: &[],
             file_type,
+            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -97,10 +109,12 @@ impl<'a> AnalysisInput<'a> {
     ) -> Self {
         Self {
             path,
+            backing_path: Some(path),
             data,
             strings,
             payloads,
             file_type,
+            skip_rizin: false,
             sha256: None,
             depth: 0,
             cancellation: None,
@@ -111,6 +125,27 @@ impl<'a> AnalysisInput<'a> {
     #[must_use]
     pub fn with_sha256(mut self, sha256: String) -> Self {
         self.sha256 = Some(sha256);
+        self
+    }
+
+    /// Override the backing filesystem path used by external tools.
+    #[must_use]
+    pub fn with_backing_path(mut self, backing_path: &'a Path) -> Self {
+        self.backing_path = Some(backing_path);
+        self
+    }
+
+    /// Disable deep radare2/rizin analysis for this input.
+    #[must_use]
+    pub fn with_skip_rizin(mut self) -> Self {
+        self.skip_rizin = true;
+        self
+    }
+
+    /// Conditionally disable deep radare2/rizin analysis for this input.
+    #[must_use]
+    pub fn with_skip_rizin_if(mut self, skip_rizin: bool) -> Self {
+        self.skip_rizin = skip_rizin;
         self
     }
 
@@ -129,6 +164,12 @@ impl<'a> AnalysisInput<'a> {
     pub fn at_depth(mut self, depth: u32) -> Self {
         self.depth = depth;
         self
+    }
+
+    /// Filesystem path to use for tools that require reopening the file.
+    #[must_use]
+    pub fn backing_path(&self) -> &'a Path {
+        self.backing_path.unwrap_or(self.path)
     }
 
     /// Get file content as UTF-8 string (lossy conversion).
@@ -156,6 +197,7 @@ mod tests {
         let input = AnalysisInput::new(&path, data, FileType::Python);
 
         assert_eq!(input.path, Path::new("test.py"));
+        assert_eq!(input.backing_path(), Path::new("test.py"));
         assert_eq!(input.data, b"print('hello')");
         assert!(input.strings.is_empty());
         assert_eq!(input.file_type, FileType::Python);

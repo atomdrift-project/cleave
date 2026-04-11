@@ -1,5 +1,5 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
-use crate::analyzers::{AnalysisInput, Analyzer};
+use crate::analyzers::{goblin_safe, AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
@@ -438,92 +438,22 @@ impl PEAnalyzer {
         // Detect and handle tampered PE (junk prefix before MZ header)
         let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
 
-        // Try to parse with goblin (strict → permissive fallback). Both calls are
-        // wrapped in `catch_unwind` because goblin's PE parser is known to panic on
-        // certain malformed inputs (e.g. out-of-range slice indexing in the resource
-        // directory walker, goblin/src/pe/resource.rs). A caught panic is converted
-        // into a synthetic `Malformed` error so the existing rizin fallback path in
-        // `analyze_pe` runs just as it would for a returned `Err`.
-        let strict_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            PE::parse(pe_data)
-        }));
-        let (pe_parsed, parse_err) = match strict_result {
-            Ok(Ok(pe)) => (Some(pe), None),
-            Ok(Err(strict_err)) => {
-                let permissive_opts = goblin::pe::options::ParseOptions::default()
-                    .with_parse_mode(goblin::options::ParseMode::Permissive);
-                let permissive_result =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        PE::parse_with_opts(pe_data, &permissive_opts)
-                    }));
-                match permissive_result {
-                    Ok(Ok(pe)) => {
-                        tracing::debug!(
-                            "PE strict parse failed ({}) but permissive succeeded for {}",
-                            strict_err,
-                            logical_path.display()
-                        );
-                        (Some(pe), None)
-                    }
-                    Ok(Err(e)) => (None, Some(e)),
-                    Err(panic) => {
-                        tracing::debug!(
-                            "PE permissive parse panicked for {}: {}",
-                            logical_path.display(),
-                            panic_message(&*panic)
-                        );
-                        (
-                            None,
-                            Some(goblin::error::Error::Malformed(format!(
-                                "goblin permissive parse panicked: {}; strict error: {strict_err}",
-                                panic_message(&*panic)
-                            ))),
-                        )
-                    }
-                }
-            }
-            Err(panic) => {
-                let permissive_opts = goblin::pe::options::ParseOptions::default()
-                    .with_parse_mode(goblin::options::ParseMode::Permissive);
-                let permissive_result =
-                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        PE::parse_with_opts(pe_data, &permissive_opts)
-                    }));
-                match permissive_result {
-                    Ok(Ok(pe)) => {
-                        tracing::debug!(
-                            "PE strict parse panicked ({}) but permissive succeeded for {}",
-                            panic_message(&*panic),
-                            logical_path.display()
-                        );
-                        (Some(pe), None)
-                    }
-                    Ok(Err(e)) => {
-                        tracing::debug!(
-                            "PE strict parse panicked for {}: {}",
-                            logical_path.display(),
-                            panic_message(&*panic)
-                        );
-                        (None, Some(e))
-                    }
-                    Err(perm_panic) => {
-                        tracing::debug!(
-                            "PE strict and permissive parses both panicked for {}: strict={}, permissive={}",
-                            logical_path.display(),
-                            panic_message(&*panic),
-                            panic_message(&*perm_panic)
-                        );
-                        (
-                            None,
-                            Some(goblin::error::Error::Malformed(format!(
-                                "goblin parse panicked: {}",
-                                panic_message(&*panic)
-                            ))),
-                        )
-                    }
-                }
-            }
-        };
+        // Parse with goblin via the panic-safe wrapper. `goblin_safe::parse_pe`
+        // does the strict→permissive fallback internally and surfaces both
+        // returned errors *and* caught panics through `GoblinOutcome`, so the
+        // existing rizin-fallback path in `analyze_pe` handles them
+        // identically.
+        let parse_outcome = goblin_safe::parse_pe(pe_data);
+        let parse_failure = parse_outcome.failure_info();
+        if let Some(ref f) = parse_failure {
+            tracing::debug!(
+                panicked = f.panicked,
+                "PE parse failed for {}: {}",
+                logical_path.display(),
+                f.message
+            );
+        }
+        let pe_parsed = parse_outcome.ok();
 
         self.analyze_pe(
             logical_path,
@@ -531,7 +461,7 @@ impl PEAnalyzer {
             data,
             pe_data,
             pe_parsed.as_ref(),
-            parse_err.as_ref(),
+            parse_failure.as_ref(),
             tamper_findings,
             start,
             stng_strings,
@@ -554,7 +484,7 @@ impl PEAnalyzer {
         original_data: &[u8],
         pe_data: &[u8],
         pe: Option<&PE<'_>>,
-        parse_error: Option<&goblin::error::Error>,
+        parse_failure: Option<&goblin_safe::GoblinFailureInfo>,
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
@@ -563,8 +493,18 @@ impl PEAnalyzer {
     ) -> AnalysisReport {
         let goblin_ok = pe.is_some();
 
-        // Extract goblin-derived data when available
-        let pe_metrics = pe.map(|pe| self.compute_pe_metrics(pe, pe_data));
+        // Extract goblin-derived data when available. `compute_pe_metrics`
+        // also reports whether goblin's lazy walkers (e.g. resource
+        // directory) panicked while populating the metrics; that bit feeds
+        // into `BinaryMetrics::has_malformed_structure` further down so a
+        // post-parse panic is surfaced the same way as a parse-time failure.
+        let (pe_metrics, lazy_walker_panicked) = match pe {
+            Some(pe) => {
+                let (m, panicked) = self.compute_pe_metrics(pe, pe_data);
+                (Some(m), panicked)
+            }
+            None => (None, false),
+        };
         let file_size = original_data.len() as u64;
         let goblin_code_size = pe.map_or(0, |pe| self.compute_code_size(pe, file_size));
 
@@ -804,13 +744,13 @@ impl PEAnalyzer {
         };
 
         // --- Corrupted-header findings (goblin failed entirely) ---
-        if let Some(err) = parse_error {
-            let error_str = format!("{}", err);
-            let error_lower = error_str.to_lowercase();
+        if let Some(failure) = parse_failure {
+            let err = &failure.message;
+            let error_lower = err.to_lowercase();
             let is_resource_error = error_lower.contains("resourcestring")
                 || error_lower.contains("resourcetable")
                 || error_lower.contains("resource");
-            let is_parser_limitation = error_str.contains("type is too big");
+            let is_parser_limitation = err.contains("type is too big");
 
             // Resource directory errors and parser limitations are non-critical —
             // the PE structure itself is intact, only metadata is malformed.
@@ -828,7 +768,7 @@ impl PEAnalyzer {
             report.findings.push(Finding {
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
                 kind: FindingKind::Structural,
-                desc: format!("PE header too corrupted to parse: {}", err),
+                desc: format!("PE header too corrupted to parse: {err}"),
                 conf,
                 crit,
                 mbc: Some("B0001".to_string()),
@@ -837,7 +777,7 @@ impl PEAnalyzer {
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
                     source: "goblin".to_string(),
-                    value: format!("{}", err),
+                    value: err.clone(),
                     location: None,
                     ..Default::default()
                 }],
@@ -851,11 +791,37 @@ impl PEAnalyzer {
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
                     source: "goblin".to_string(),
-                    value: format!("{}", err),
+                    value: err.clone(),
                     location: None,
                     ..Default::default()
                 }],
             });
+
+            // The exact failure message (including whether goblin panicked
+            // vs returned Err) lives in metadata.errors for triage.
+            report.metadata.errors.push(format!(
+                "PE parse {}: {}",
+                if failure.panicked { "panicked" } else { "failed" },
+                err
+            ));
+        }
+
+        // Surface "goblin couldn't be trusted on this binary" as a single
+        // metric bit. Set whenever the parse failed *or* a lazy walker
+        // (resource directory, debug data, ...) panicked during metric
+        // extraction. The exact reason lives in `metadata.errors`.
+        if parse_failure.is_some() || lazy_walker_panicked {
+            if let Some(metrics) = report.metrics.as_mut() {
+                if let Some(bm) = metrics.binary.as_mut() {
+                    bm.has_malformed_structure = true;
+                }
+            }
+            if lazy_walker_panicked && parse_failure.is_none() {
+                report
+                    .metadata
+                    .errors
+                    .push("goblin lazy walker panicked during PE metric extraction".to_string());
+            }
         }
 
         // --- Shared post-processing (strings, embedded code, metrics, overlay, SFX) ---
@@ -1337,15 +1303,23 @@ impl PEAnalyzer {
         }
     }
 
-    /// Compute PE-specific metrics from parsed PE binary
+    /// Compute PE-specific metrics from parsed PE binary.
+    ///
+    /// Returns the populated metrics together with a `lazy_walker_panicked`
+    /// flag set when goblin's resource-directory walker (or any other lazy
+    /// accessor on the parsed `PE`) panicked during metric extraction. The
+    /// caller propagates that flag into `BinaryMetrics::has_malformed_structure`
+    /// so downstream consumers see the same signal regardless of whether
+    /// goblin failed at parse time or while walking lazy fields later.
     fn compute_pe_metrics<'a>(
         &self,
         pe: &PE<'a>,
         data: &[u8],
-    ) -> crate::types::binary_metrics::PeMetrics {
+    ) -> (crate::types::binary_metrics::PeMetrics, bool) {
         use crate::types::binary_metrics::PeMetrics;
 
         let mut metrics = PeMetrics::default();
+        let mut lazy_walker_panicked = false;
 
         let timestamp = pe.header.coff_header.time_date_stamp;
         metrics.timestamp = timestamp;
@@ -1633,22 +1607,55 @@ impl PEAnalyzer {
         }
 
         if let Some(resource_data) = &pe.resource_data {
-            metrics.resource_count = resource_data.count() as u32;
-            metrics.version_info_present = resource_data.version_info.is_some();
-            metrics.manifest_present = resource_data.manifest_data.is_some();
-            metrics.resource_timestamp = resource_data.image_resource_directory.time_date_stamp;
-            metrics.resource_timestamp_present = metrics.resource_timestamp != 0;
-            fill_timestamp_parts_u32(
-                metrics.resource_timestamp,
-                &mut metrics.resource_timestamp_year,
-                &mut metrics.resource_timestamp_month,
-                &mut metrics.resource_timestamp_day,
-            );
-            metrics.icon_count = resource_data
-                .entries()
-                .filter_map(Result::ok)
-                .filter(|entry| matches!(entry.id(), Some(RT_ICON | RT_GROUP_ICON)))
-                .count() as u32;
+            // goblin's PE resource directory walker is *lazy*: PE::parse() does
+            // not eagerly traverse the resource tree, so the panic-safety
+            // around the parse call cannot protect against panics inside
+            // count()/entries(), which slice into the file with unchecked
+            // header offsets (goblin/src/pe/resource.rs:547). Malformed PEs
+            // — notably packed Windows malware in vxug — trip this regularly
+            // with "range end index N out of range for slice of length M".
+            // We catch the panic here so resource metrics simply stay at
+            // their defaults instead of aborting the whole analysis.
+            let resource_outcome = goblin_safe::catch_infallible(|| {
+                let count = resource_data.count() as u32;
+                let version_info_present = resource_data.version_info.is_some();
+                let manifest_present = resource_data.manifest_data.is_some();
+                let resource_timestamp =
+                    resource_data.image_resource_directory.time_date_stamp;
+                let icon_count = resource_data
+                    .entries()
+                    .filter_map(Result::ok)
+                    .filter(|entry| matches!(entry.id(), Some(RT_ICON | RT_GROUP_ICON)))
+                    .count() as u32;
+                (
+                    count,
+                    version_info_present,
+                    manifest_present,
+                    resource_timestamp,
+                    icon_count,
+                )
+            });
+            if let Some((count, version_info_present, manifest_present, ts, icon_count)) =
+                resource_outcome.ok()
+            {
+                metrics.resource_count = count;
+                metrics.version_info_present = version_info_present;
+                metrics.manifest_present = manifest_present;
+                metrics.resource_timestamp = ts;
+                metrics.resource_timestamp_present = ts != 0;
+                fill_timestamp_parts_u32(
+                    ts,
+                    &mut metrics.resource_timestamp_year,
+                    &mut metrics.resource_timestamp_month,
+                    &mut metrics.resource_timestamp_day,
+                );
+                metrics.icon_count = icon_count;
+            } else {
+                tracing::debug!(
+                    "PE resource directory walker panicked, metrics left at defaults"
+                );
+                lazy_walker_panicked = true;
+            }
         }
 
         if let Some(clr_data) = &pe.clr_data {
@@ -1666,7 +1673,7 @@ impl PEAnalyzer {
             metrics.tls_callbacks = tls_data.callbacks.len() as u32;
         }
 
-        metrics
+        (metrics, lazy_walker_panicked)
     }
 
     fn compute_section_permission_counts<'a>(&self, pe: &PE<'a>) -> (u32, u32, u32) {
@@ -1977,14 +1984,9 @@ impl Analyzer for PEAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         if let Ok(data) = fs::read(file_path) {
-            // Wrap in `catch_unwind` for the same reason as `analyze_pe` above:
-            // goblin's PE parser can panic on malformed inputs (e.g. out-of-range
-            // slice indexing in the resource directory walker). A panic here
-            // should just mean "not analyzable as PE", not unwind the caller.
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                goblin::pe::PE::parse(&data).is_ok()
-            }))
-            .unwrap_or(false)
+            // Use the panic-safe wrapper: a panic here should just mean
+            // "not analyzable as PE", not unwind the caller.
+            goblin_safe::parse_pe(&data).is_ok()
         } else {
             false
         }
@@ -1993,17 +1995,6 @@ impl Analyzer for PEAnalyzer {
 
 /// Count exports whose first instruction jumps/calls to the same target as another export.
 ///
-/// Best-effort extraction of a panic payload's message string for logging.
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
-    if let Some(s) = payload.downcast_ref::<&'static str>() {
-        (*s).to_string()
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        "<non-string panic payload>".to_string()
-    }
-}
-
 /// Malware often aliases multiple export names to a single function via stub thunks.
 /// This decodes the first instruction at each export RVA and groups by jump target.
 fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> u32 {

@@ -1,6 +1,6 @@
 //! Mach-O binary analyzer for macOS executables.
 use crate::analyzers::macho_codesign;
-use crate::analyzers::{AnalysisInput, Analyzer};
+use crate::analyzers::{goblin_safe, AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
@@ -136,21 +136,36 @@ impl MachOAnalyzer {
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
-        let start = std::time::Instant::now(); // Parse with goblin
+        let start = std::time::Instant::now();
         let sha256 = precomputed_sha256
             .clone()
             .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
-        let Ok(Mach::Binary(macho)) = goblin::mach::Mach::parse(data) else {
-            // Return a minimal report if parsing fails
-            let target = TargetInfo {
-                path: logical_path.display().to_string(),
-                file_type: "macho".to_string(),
-                size_bytes: data.len() as u64,
-                sha256,
-                architectures: None,
-            };
-            return AnalysisReport::new(target);
+        // Parse with goblin via the panic-safe wrapper. If parsing fails
+        // (Err *or* panic), or returns a fat archive we can't currently
+        // analyze structurally, fall back to rizin-based metrics so the
+        // binary still gets the malformed-structure signal and the basic
+        // structural metrics rather than an empty report.
+        let parse_outcome = goblin_safe::parse_mach(data);
+        let parse_failure = parse_outcome.failure_info();
+        let macho_opt = match parse_outcome.ok() {
+            Some(Mach::Binary(macho)) => Some(macho),
+            Some(Mach::Fat(_)) | None => None,
+        };
+        let macho = match macho_opt {
+            Some(m) => m,
+            None => {
+                return self.analyze_macho_fallback(
+                    logical_path,
+                    analysis_path,
+                    data,
+                    sha256,
+                    parse_failure,
+                    allow_rizin,
+                    precomputed_sha256,
+                    start,
+                );
+            }
         };
 
         // Create target info
@@ -1127,7 +1142,7 @@ impl MachOAnalyzer {
     /// or `0..data.len()` for thin binaries.
     /// Used by test-rules/test-match for consistent single-arch evaluation.
     pub(crate) fn preferred_arch_range(&self, data: &[u8]) -> std::ops::Range<usize> {
-        if let Ok(Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
+        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
             if let Ok(arches) = fat.arches() {
                 let preferred = arches
                     .iter()
@@ -1158,7 +1173,7 @@ impl MachOAnalyzer {
         data: &[u8],
     ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
         use crate::composite_rules::Arch;
-        if let Ok(goblin::mach::Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
+        if let Some(goblin::mach::Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
             if let Ok(arches) = fat.arches() {
                 let ranges: Vec<_> = arches
                     .iter()
@@ -1183,7 +1198,7 @@ impl MachOAnalyzer {
 
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
-        if let Ok(Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
+        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
             if let Ok(arches) = fat.arches() {
                 let ranges: Vec<_> = arches
                     .iter()
@@ -1209,7 +1224,7 @@ impl MachOAnalyzer {
     /// Updates a report with fat binary metadata (architecture list, universal binary flag).
     /// No-op for thin binaries.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
-        if let Ok(Mach::Fat(fat)) = goblin::mach::Mach::parse(data) {
+        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
             if let Ok(arches) = fat.arches() {
                 let arch_names: Vec<String> = arches
                     .iter()
@@ -1226,6 +1241,104 @@ impl MachOAnalyzer {
                 }
             }
         }
+    }
+
+    /// Build a minimal Mach-O analysis report when goblin couldn't parse
+    /// the binary cleanly (returned an error, panicked, or returned a fat
+    /// archive we can't currently structurally analyze).
+    ///
+    /// Mirrors the rizin-fallback strategy used by `pe.rs` and `elf.rs`:
+    /// runs `Radare2Analyzer::extract_batched` (which has its own
+    /// sha256-keyed disk cache, so a re-analysis of the same binary is
+    /// essentially free), populates `BinaryMetrics` from the result, and
+    /// sets `has_malformed_structure` so downstream consumers know the
+    /// structural data didn't come from the primary parser.
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_macho_fallback(
+        &self,
+        logical_path: &Path,
+        analysis_path: &Path,
+        data: &[u8],
+        sha256: String,
+        parse_failure: Option<goblin_safe::GoblinFailureInfo>,
+        allow_rizin: bool,
+        precomputed_sha256: Option<String>,
+        _start: std::time::Instant,
+    ) -> AnalysisReport {
+        let target = TargetInfo {
+            path: logical_path.display().to_string(),
+            file_type: "macho".to_string(),
+            size_bytes: data.len() as u64,
+            sha256,
+            architectures: None,
+        };
+        let mut report = AnalysisReport::new(target);
+
+        if let Some(ref failure) = parse_failure {
+            report.metadata.errors.push(format!(
+                "Mach-O parse {}: {}",
+                if failure.panicked { "panicked" } else { "error" },
+                failure.message
+            ));
+            report.findings.push(Finding {
+                kind: FindingKind::Structural,
+                id: "anti-analysis/malformed/macho-header".to_string(),
+                desc: format!(
+                    "Malformed Mach-O header: {}",
+                    failure.message
+                ),
+                conf: 1.0,
+                crit: Criticality::Suspicious,
+                mbc: Some("B0001".to_string()),
+                attack: Some("T1027".to_string()),
+                evidence: vec![],
+                match_count: 0,
+                trait_refs: vec![],
+                source_file: None,
+            });
+        }
+
+        let mut binary_metrics = if allow_rizin
+            && !self.is_cancelled()
+            && Radare2Analyzer::is_available()
+        {
+            match self.radare2.extract_batched(
+                analysis_path,
+                false, // has_symbols=false: nothing came back from goblin
+                false, // goblin_success=false
+                true,  // include_strings: no stng pre-extraction in this path
+                precomputed_sha256,
+            ) {
+                Ok(batched) => {
+                    let bm = self
+                        .radare2
+                        .compute_metrics_from_batched(&batched, data.len() as u64);
+                    report.functions =
+                        batched.functions.into_iter().map(Function::from).collect();
+                    bm
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        "rizin fallback also failed for goblin-malformed Mach-O {}: {}",
+                        report.target.path,
+                        e
+                    );
+                    let mut bm = crate::types::BinaryMetrics::default();
+                    bm.file_size = data.len() as u64;
+                    bm
+                }
+            }
+        } else {
+            let mut bm = crate::types::BinaryMetrics::default();
+            bm.file_size = data.len() as u64;
+            bm
+        };
+        binary_metrics.has_malformed_structure = true;
+        report.metrics = Some(Metrics {
+            binary: Some(binary_metrics),
+            ..Default::default()
+        });
+        report
     }
 }
 
@@ -1293,7 +1406,7 @@ impl Analyzer for MachOAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         if let Ok(data) = fs::read(file_path) {
-            goblin::mach::Mach::parse(&data).is_ok()
+            goblin_safe::parse_mach(&data).is_ok()
         } else {
             false
         }

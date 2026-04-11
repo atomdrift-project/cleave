@@ -115,19 +115,20 @@ impl SectionMap {
 
     /// Create a section map by auto-detecting binary format.
     ///
-    /// Each goblin parser is wrapped in `catch_unwind` because goblin's PE /
-    /// ELF / Mach-O parsers are known to panic on certain malformed inputs
-    /// (e.g. out-of-range slice indexing in `goblin::pe::resource`). A caught
-    /// panic falls through to the next format, and ultimately to an empty
-    /// section map, matching the behavior for binaries we can't identify.
+    /// All goblin parsing goes through `crate::analyzers::goblin_safe`, which
+    /// catches panics from goblin's PE / ELF / Mach-O walkers and converts
+    /// them into normal `Err` values. A caught panic just falls through to
+    /// the next format, and ultimately to an empty section map — matching
+    /// the behaviour for binaries we can't identify at all.
     pub(crate) fn from_binary(binary_data: &[u8]) -> Self {
+        use crate::analyzers::goblin_safe;
         let file_size = binary_data.len() as u64;
 
-        if let Ok(Ok(elf)) = catch_parse(|| Elf::parse(binary_data)) {
+        if let Some(elf) = goblin_safe::parse_elf(binary_data).ok() {
             return Self::from_elf(&elf, file_size);
         }
 
-        if let Ok(Ok(macho)) = catch_parse(|| Mach::parse(binary_data)) {
+        if let Some(macho) = goblin_safe::parse_mach(binary_data).ok() {
             match macho {
                 Mach::Binary(m) => return Self::from_macho(&m, file_size),
                 Mach::Fat(_) => {
@@ -138,7 +139,7 @@ impl SectionMap {
             }
         }
 
-        if let Ok(Ok(pe)) = catch_parse(|| PE::parse(binary_data)) {
+        if let Some(pe) = goblin_safe::parse_pe(binary_data).ok() {
             return Self::from_pe(&pe, file_size);
         }
 
@@ -354,19 +355,6 @@ fn fuzzy_section_patterns(name: &str) -> &'static [&'static str] {
         ".rdata" | ".rodata" => &[".rdata", ".rodata", "__TEXT,__const", "__DATA,__const"],
         _ => &[],
     }
-}
-
-/// Run a goblin parse under `catch_unwind`, converting panics into an `Err`.
-///
-/// Goblin's PE / ELF / Mach-O parsers can panic on malformed inputs (e.g.
-/// out-of-range slice indexing while walking a corrupt PE resource
-/// directory, `goblin::pe::resource`). Callers that can tolerate "no section
-/// map" for such inputs use this helper to turn a panic into a normal parse
-/// failure instead of unwinding into the rule-evaluation tokio task.
-fn catch_parse<T>(
-    f: impl FnOnce() -> T,
-) -> Result<T, Box<dyn std::any::Any + Send + 'static>> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
 }
 
 #[cfg(test)]

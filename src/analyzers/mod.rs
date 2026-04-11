@@ -24,6 +24,7 @@
 pub(crate) mod applescript;
 pub(crate) mod archive;
 pub(crate) mod ast_walker;
+pub(crate) mod goblin_safe;
 
 // Unified analysis input type
 mod input;

@@ -10,6 +10,7 @@ use crate::strings::StringExtractor;
 use crate::types::binary_metrics::ElfMetrics;
 use crate::types::*;
 use anyhow::{Context, Result};
+use crate::analyzers::goblin_safe;
 use goblin::elf::note::NT_GNU_BUILD_ID;
 use goblin::elf::Elf;
 use std::fs;
@@ -152,7 +153,18 @@ impl ElfAnalyzer {
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec![];
 
-        // Attempt to parse with goblin
+        // Attempt to parse with goblin via the panic-safe wrapper. A
+        // returned `Failed` *or* a caught `Panicked` both fall through to
+        // the rizin fallback below; they're treated as equivalent failures
+        // for downstream metrics, with the exact message preserved in
+        // `report.metadata.errors`.
+        // Clone the sha256 hint up front so both the goblin-success rayon
+        // closure and the failure-path rizin fallback can use it for the
+        // shared cache lookup.
+        let fallback_sha256 = precomputed_sha256.clone();
+        let parse_outcome = goblin_safe::parse_elf(data);
+        let parse_failure = parse_outcome.failure_info();
+        let elf_opt = parse_outcome.ok();
         let (
             _elf_metrics_opt,
             _goblin_code_size,
@@ -160,8 +172,8 @@ impl ElfAnalyzer {
             r2_strings,
             elf_content_end,
             is_core_dump,
-        ) = match Elf::parse(data) {
-            Ok(elf) => {
+        ) = match elf_opt {
+            Some(elf) => {
                 tools_used.push("goblin".to_string());
                 let is_core_dump = elf.header.e_type == goblin::elf::header::ET_CORE;
 
@@ -354,15 +366,21 @@ impl ElfAnalyzer {
                     is_core_dump,
                 )
             }
-            Err(e) => {
-                // Parsing failed - this is a strong indicator of malformed/hostile binary
+            None => {
+                // goblin parse failed (Err or panic) — emit the structural
+                // finding, salvage the architecture from the raw header, and
+                // fall back to rizin via the shared cached path.
+                let failure = parse_failure
+                    .as_ref()
+                    .expect("elf_opt is None implies a failure was recorded");
+                let err_msg = &failure.message;
+
                 let mut crit = Criticality::Suspicious;
                 if report.target.path.contains("!!embedded") {
                     crit = Criticality::Notable;
                 } else {
-                    let err_text = e.to_string();
-                    let malformed_sections = err_text.contains("section headers")
-                        || err_text.contains("dynamic segment offset + size exceeds");
+                    let malformed_sections = err_msg.contains("section headers")
+                        || err_msg.contains("dynamic segment offset + size exceeds");
                     let has_go_cli_markers = data
                         .windows(b"-trimpath=true".len())
                         .any(|w| w == b"-trimpath=true")
@@ -384,7 +402,7 @@ impl ElfAnalyzer {
                 report.findings.push(Finding {
                     kind: FindingKind::Structural,
                     id: "anti-analysis/malformed/elf-header".to_string(),
-                    desc: format!("Malformed ELF header or section headers: {}", e),
+                    desc: format!("Malformed ELF header or section headers: {err_msg}"),
                     conf: 1.0,
                     crit,
                     mbc: Some("B0001".to_string()), // Defense Evasion: Software Packing/Obfuscation
@@ -418,13 +436,68 @@ impl ElfAnalyzer {
                     report.target.architectures = Some(vec![arch]);
                 }
 
-                report
-                    .metadata
-                    .errors
-                    .push(format!("ELF parse error: {}", e));
+                report.metadata.errors.push(format!(
+                    "ELF parse {}: {}",
+                    if failure.panicked { "panicked" } else { "error" },
+                    err_msg
+                ));
                 (None, None, false, None, 0, false)
             }
         };
+
+        // --- Rizin fallback for goblin-failed ELF binaries ---
+        //
+        // When goblin couldn't parse the file, populate `binary` metrics
+        // from rizin instead so the binary doesn't end up with empty
+        // structural data. This uses the same sha256-keyed disk cache as
+        // the goblin-success path: a re-analysis of the same file is free.
+        // Either way, we set `has_malformed_structure` so downstream
+        // consumers know the structure didn't come from the primary parser.
+        if parse_failure.is_some() {
+            let mut binary_metrics = if allow_rizin
+                && !self.is_cancelled()
+                && Radare2Analyzer::is_available()
+            {
+                let needs_r2_strings =
+                    stng_strings.is_none() && self.preextracted_strings.is_none();
+                match self.radare2.extract_batched(
+                    analysis_path,
+                    false, // has_symbols=false: nothing came back from goblin
+                    false, // goblin_success=false
+                    needs_r2_strings,
+                    fallback_sha256,
+                ) {
+                    Ok(batched) => {
+                        tools_used.push("radare2".to_string());
+                        let bm = self
+                            .radare2
+                            .compute_metrics_from_batched(&batched, data.len() as u64);
+                        report.functions =
+                            batched.functions.into_iter().map(Function::from).collect();
+                        bm
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "rizin fallback also failed for goblin-malformed ELF {}: {}",
+                            report.target.path,
+                            e
+                        );
+                        let mut bm = crate::types::BinaryMetrics::default();
+                        bm.file_size = data.len() as u64;
+                        bm
+                    }
+                }
+            } else {
+                let mut bm = crate::types::BinaryMetrics::default();
+                bm.file_size = data.len() as u64;
+                bm
+            };
+            binary_metrics.has_malformed_structure = true;
+            report.metrics = Some(Metrics {
+                binary: Some(binary_metrics),
+                ..Default::default()
+            });
+        }
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan && !is_core_dump {
@@ -1233,7 +1306,7 @@ impl Analyzer for ElfAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         if let Ok(data) = fs::read(file_path) {
-            goblin::elf::Elf::parse(&data).is_ok()
+            goblin_safe::parse_elf(&data).is_ok()
         } else {
             false
         }

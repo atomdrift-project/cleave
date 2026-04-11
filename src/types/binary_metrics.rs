@@ -88,6 +88,14 @@ pub struct BinaryMetrics {
     pub code_to_data_ratio: f32,
 
     // === Binary Properties ===
+    /// The structural parser failed to read this binary cleanly — either by
+    /// returning an error or by panicking on a malformed header. When set,
+    /// the structure-derived fields below were populated from the rizin
+    /// fallback analysis rather than the primary parser, and may be less
+    /// complete than usual. The exact failure message lives in
+    /// `report.metadata.errors`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_malformed_structure: bool,
     /// Has debug information
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_debug_info: bool,

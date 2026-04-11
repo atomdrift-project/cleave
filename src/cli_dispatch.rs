@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use cleave::cli;
 use cleave::commands::{
     analyze_command, diff_command, expand_paths, extract_metrics_command, extract_sections_command,
-    extract_strings_command, extract_symbols_command, test_match, test_rules, validate_command,
-    AnalyzeConfig,
+    extract_strings_command, extract_symbols_command, iter_files_command, test_match, test_rules,
+    validate_command, AnalyzeConfig, IterFilesConfig,
 };
 use std::fs;
 
@@ -457,6 +457,13 @@ pub(crate) fn dispatch_command(
             &ctx.analyze,
             "No valid paths found (stdin was empty or contained only comments)",
         )?,
+        Some(cli::Command::IterFiles { targets }) => {
+            iter_files_command(&IterFilesConfig {
+                targets: &targets,
+                max_file_size: ctx.analyze.max_scan_file_size,
+            })?;
+            return Ok(None);
+        }
         Some(cli::Command::Version) => {
             run_version();
             return Ok(None);

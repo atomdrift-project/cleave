@@ -264,6 +264,20 @@ pub enum Command {
         targets: Vec<String>,
     },
 
+    /// Enumerate recognized files as JSONL (for ingest pipelines).
+    ///
+    /// Walks the given targets and emits one JSON line per recognized file:
+    /// `{"path":"...","type":"elf","sz":12345}`. No hashing, no analysis —
+    /// the caller (e.g. hopper) does its own hashing via its own cache.
+    /// Files whose magic bytes do not match a recognized program type are
+    /// silently skipped. Honors `--max-file-size` for the size ceiling.
+    #[command(name = "iter-files")]
+    IterFiles {
+        /// Target files or directories to enumerate
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+
     /// Show version, traits revision, and loaded resource counts
     Version,
 

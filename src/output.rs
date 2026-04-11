@@ -438,7 +438,8 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 /// Output format:
 /// ```text
 /// # H=hostile S=suspicious N=notable B=baseline
-/// --- path/to/file.exe (elf, 1.2MB)
+/// # score: 142
+/// --- path/to/file.exe (elf, 1.2MB, score 142)
 /// H command-and-control/c2-beacon hardcoded_ip_callback
 /// S crypto/custom-encryption XOR_0x5a_loop
 /// N net/socket connect
@@ -461,6 +462,9 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
 
     let mut out = String::with_capacity(4096);
     out.push_str("# H=hostile S=suspicious N=notable B=baseline\n");
+    if let Some(summary) = &report.summary {
+        out.push_str(&format!("# score: {}\n", summary.score));
+    }
 
     for file in &report.files {
         // Collect findings at or above Notable level
@@ -477,7 +481,7 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
         // Sort by criticality descending, then by id for stability
         findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
-        // File header: --- path (type, size)
+        // File header: --- path (type, size, score N)
         let size = format_size(file.size);
         out.push_str("--- ");
         out.push_str(&file.path);
@@ -487,6 +491,7 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
             out.push_str(", ");
             out.push_str(&size);
         }
+        out.push_str(&format!(", score {}", file.score));
         out.push_str(")\n");
 
         for f in &findings {

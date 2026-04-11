@@ -6,7 +6,7 @@ mod guards;
 // mod guards_test;
 mod system_packages;
 mod tar;
-mod utils;
+pub(crate) mod utils;
 mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
@@ -25,6 +25,18 @@ use std::sync::Arc;
 use ::zip::ZipArchive;
 use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
 use utils::{calculate_sha256, detect_archive_type};
+
+/// Returns true when `path` is an archive format the `ArchiveAnalyzer` knows
+/// how to extract. This mirrors the dispatch in `extract_archive_safe` so
+/// callers (e.g. `cleave iter-files`) can decide whether to enumerate a file
+/// without having it later rejected by the analyze path with
+/// `Unsupported archive type: unknown`.
+#[must_use]
+pub(crate) fn is_supported_archive(path: &Path) -> bool {
+    let archive_type = utils::detect_archive_type_with_magic(path)
+        .unwrap_or_else(|_| detect_archive_type(path));
+    !matches!(archive_type, "unknown")
+}
 
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;

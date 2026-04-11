@@ -11,7 +11,8 @@
 //! — that work happens during full analysis and is split out by the caller
 //! (see hopper's ExplodeArchiveMembers).
 
-use crate::analyzers::detect_file_type_from_data;
+use crate::analyzers::archive::is_supported_archive;
+use crate::analyzers::{detect_file_type_from_data, FileType};
 use crate::file_io;
 use anyhow::Result;
 use serde::Serialize;
@@ -91,6 +92,14 @@ fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -
     let file_data = file_io::read_file_smart(path)?;
     let file_type = detect_file_type_from_data(path, file_data.as_slice());
     if !file_type.is_program() {
+        return Ok(());
+    }
+
+    // Skip archives the ArchiveAnalyzer can't actually extract. Without this
+    // check, hopper would submit the file to /analyze-path only to get a 415
+    // "Unsupported archive type: unknown" — iter-files is supposed to be the
+    // authoritative filter for "cleave can analyze this".
+    if matches!(file_type, FileType::Archive) && !is_supported_archive(path) {
         return Ok(());
     }
 

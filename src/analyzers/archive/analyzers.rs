@@ -207,35 +207,67 @@ impl ArchiveAnalyzer {
                 let nested = self.nested_archive_analyzer(relative_path);
                 let path = file_path.to_path_buf();
                 let nested_depth = self.current_depth + 1;
-                // Truncate relative_path in the thread name so it fits in the
-                // 15-char pthread limit on Linux — but keep enough tail for
-                // the crash message to identify the offending member.
-                let thread_name = {
-                    let tail: String = relative_path
-                        .chars()
-                        .rev()
-                        .take(40)
-                        .collect::<Vec<_>>()
-                        .into_iter()
-                        .rev()
-                        .collect();
-                    format!("nested-ar-d{nested_depth}-{tail}")
-                };
-                tracing::info!(
-                    relative_path,
-                    nested_depth,
-                    file_size_bytes = data.len(),
-                    thread_name = %thread_name,
-                    "Spawning nested archive analyzer thread"
-                );
-                std::thread::Builder::new()
-                    .name(thread_name)
-                    .stack_size(8 * 1024 * 1024)
-                    .spawn(move || nested.analyze(&path))
-                    .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
-                    .join()
-                    .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?
-                    .map(Some)
+
+                // If we're already running on a rayon worker, run the nested
+                // archive analysis directly on this thread. Rayon workers are
+                // configured with a large stack by the caller (litmus installs
+                // a 16 MB global pool), so we don't need the 8 MB std::thread
+                // for stack headroom.
+                //
+                // Critically, spawning a std::thread and join()ing it from a
+                // rayon worker causes a deadlock cycle: the rayon worker
+                // blocks in pthread_join waiting for the std::thread, while
+                // the std::thread calls par_iter inside cleave, which
+                // submits work to the rayon pool via `in_worker_cold` and
+                // blocks on a LockLatch waiting for a rayon worker to pick it
+                // up — but every rayon worker is already blocked in join.
+                //
+                // Detecting the rayon context via `current_thread_index()` and
+                // recursing in-place breaks the cycle. Off-pool callers (e.g.
+                // the tokio blocking task that first enters classify_file for
+                // a top-level archive) still spawn a dedicated std::thread so
+                // they get the 8 MB stack that the original fix was added
+                // for.
+                if rayon::current_thread_index().is_some() {
+                    tracing::debug!(
+                        relative_path,
+                        nested_depth,
+                        file_size_bytes = data.len(),
+                        "Analyzing nested archive in-place on rayon worker"
+                    );
+                    nested.analyze(&path).map(Some)
+                } else {
+                    // Truncate relative_path in the thread name so it fits in
+                    // the 15-char pthread limit on Linux — but keep enough
+                    // tail for the crash message to identify the offending
+                    // member.
+                    let thread_name = {
+                        let tail: String = relative_path
+                            .chars()
+                            .rev()
+                            .take(40)
+                            .collect::<Vec<_>>()
+                            .into_iter()
+                            .rev()
+                            .collect();
+                        format!("nested-ar-d{nested_depth}-{tail}")
+                    };
+                    tracing::info!(
+                        relative_path,
+                        nested_depth,
+                        file_size_bytes = data.len(),
+                        thread_name = %thread_name,
+                        "Spawning nested archive analyzer thread (off-pool caller)"
+                    );
+                    std::thread::Builder::new()
+                        .name(thread_name)
+                        .stack_size(8 * 1024 * 1024)
+                        .spawn(move || nested.analyze(&path))
+                        .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
+                        .join()
+                        .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?
+                        .map(Some)
+                }
             }
         } else if let Some(analyzer) =
             crate::analyzers::analyzer_for_file_type_arc(file_type, self.capability_mapper.clone())

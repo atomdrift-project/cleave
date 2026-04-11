@@ -1977,7 +1977,14 @@ impl Analyzer for PEAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         if let Ok(data) = fs::read(file_path) {
-            goblin::pe::PE::parse(&data).is_ok()
+            // Wrap in `catch_unwind` for the same reason as `analyze_pe` above:
+            // goblin's PE parser can panic on malformed inputs (e.g. out-of-range
+            // slice indexing in the resource directory walker). A panic here
+            // should just mean "not analyzable as PE", not unwind the caller.
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                goblin::pe::PE::parse(&data).is_ok()
+            }))
+            .unwrap_or(false)
         } else {
             false
         }

@@ -206,7 +206,30 @@ impl ArchiveAnalyzer {
             } else {
                 let nested = self.nested_archive_analyzer(relative_path);
                 let path = file_path.to_path_buf();
+                let nested_depth = self.current_depth + 1;
+                // Truncate relative_path in the thread name so it fits in the
+                // 15-char pthread limit on Linux — but keep enough tail for
+                // the crash message to identify the offending member.
+                let thread_name = {
+                    let tail: String = relative_path
+                        .chars()
+                        .rev()
+                        .take(40)
+                        .collect::<Vec<_>>()
+                        .into_iter()
+                        .rev()
+                        .collect();
+                    format!("nested-ar-d{nested_depth}-{tail}")
+                };
+                tracing::info!(
+                    relative_path,
+                    nested_depth,
+                    file_size_bytes = data.len(),
+                    thread_name = %thread_name,
+                    "Spawning nested archive analyzer thread"
+                );
                 std::thread::Builder::new()
+                    .name(thread_name)
                     .stack_size(8 * 1024 * 1024)
                     .spawn(move || nested.analyze(&path))
                     .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?

@@ -39,6 +39,17 @@ use tracing::{debug, trace};
 // since scanners are thread-local and a separate pool doubled the thread count.
 // The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
+/// Result of analyzing a single archive member, collected lock-free during par_iter
+/// and aggregated single-threaded afterwards.
+struct MemberAnalysisResult {
+    entry_path: String,
+    archive_location: String,
+    relative_path: String,
+    disk_path: std::path::PathBuf,
+    entry_metadata: ArchiveEntry,
+    report: Option<AnalysisReport>,
+}
+
 /// Total number of successful archive member analyses (cumulative, for logging)
 static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
@@ -549,167 +560,159 @@ impl ArchiveAnalyzer {
 
         debug!("Full analysis on {} classes", classes_to_analyze.len());
 
-        // Run full analysis on selected classes
-        let files_analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let total_capabilities = Arc::new(Mutex::new(HashSet::new()));
-        let total_traits = Arc::new(Mutex::new(HashSet::new()));
-        // Pre-allocate with conservative estimates; findings are deduplicated and only
-        // URL/IP/Base64 strings are collected, so actual counts are much smaller than file count.
+        // Run full analysis on selected classes — collect results lock-free,
+        // then aggregate single-threaded to avoid Mutex contention deadlocks.
+        let mut total_capabilities = HashSet::new();
+        let mut total_traits = HashSet::new();
         let expected_count = classes_to_analyze.len();
-        let collected_traits = Arc::new(Mutex::new(Vec::<Finding>::with_capacity(
-            expected_count.min(500),
-        )));
-        let collected_yara = Arc::new(Mutex::new(Vec::<YaraMatch>::with_capacity(50)));
-        let collected_strings = Arc::new(Mutex::new(Vec::<StringInfo>::with_capacity(
+        let mut collected_traits = Vec::<Finding>::with_capacity(expected_count.min(500));
+        let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
+        let mut collected_strings = Vec::<StringInfo>::with_capacity(
             (expected_count * 2).min(200),
-        )));
-        let collected_archive_entries = Arc::new(Mutex::new(Vec::<ArchiveEntry>::with_capacity(
-            expected_count,
-        )));
-        let collected_files = Arc::new(Mutex::new(Vec::<FileAnalysis>::with_capacity(
-            expected_count,
-        )));
+        );
+        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(expected_count);
+        let mut collected_files = Vec::<FileAnalysis>::with_capacity(expected_count);
+        let mut files_analyzed: usize = 0;
 
-        classes_to_analyze.par_iter().for_each(|entry| {
-            if self.is_cancelled() {
-                return;
-            }
-            let relative_path = entry
-                .path()
-                .strip_prefix(temp_dir)
-                .unwrap_or(entry.path())
-                .display()
-                .to_string();
-            let entry_path = self.format_entry_path(&relative_path);
-            let archive_location = self.format_evidence_location(&relative_path);
-
-            let file_data = match std::fs::read(entry.path()) {
-                Ok(data) => data,
-                Err(e) => {
-                    debug!("Failed to read archive member {}: {}", entry_path, e);
-                    return;
+        let member_results: Vec<MemberAnalysisResult> = classes_to_analyze
+            .par_iter()
+            .filter_map(|entry| {
+                if self.is_cancelled() {
+                    return None;
                 }
-            };
-            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
-            let sha256 = calculate_sha256(&file_data);
+                let relative_path = entry
+                    .path()
+                    .strip_prefix(temp_dir)
+                    .unwrap_or(entry.path())
+                    .display()
+                    .to_string();
+                let entry_path = self.format_entry_path(&relative_path);
+                let archive_location = self.format_evidence_location(&relative_path);
 
-            let entry_metadata = ArchiveEntry {
-                path: entry_path.clone(),
-                file_type: file_type.report_file_type(),
-                sha256: sha256.clone(),
-                size_bytes: file_data.len() as u64,
-            };
-            if let Ok(mut entries) = collected_archive_entries.lock() {
-                entries.push(entry_metadata);
-            }
+                let file_data = match std::fs::read(entry.path()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        debug!("Failed to read archive member {}: {}", entry_path, e);
+                        return None;
+                    }
+                };
+                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let sha256 = calculate_sha256(&file_data);
 
-            match self.analyze_extracted_member(
-                entry.path(),
-                &relative_path,
-                &file_data,
-                &file_type,
-                &sha256,
-            ) {
-                Err(e) => {
-                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
-                }
-                Ok(Some(file_report)) => {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    trace!(
-                        "Analyzed archive member {}: {} findings",
-                        entry_path,
-                        file_report.findings.len()
-                    );
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: file_type.report_file_type(),
+                    sha256: sha256.clone(),
+                    size_bytes: file_data.len() as u64,
+                };
 
-                    let (
-                        Ok(mut caps),
-                        Ok(mut traits),
-                        Ok(mut all_traits),
-                        Ok(mut all_yara),
-                        Ok(mut all_strings),
-                        Ok(mut all_archive_entries),
-                        Ok(mut all_files),
-                    ) = (
-                        total_capabilities.lock(),
-                        total_traits.lock(),
-                        collected_traits.lock(),
-                        collected_yara.lock(),
-                        collected_strings.lock(),
-                        collected_archive_entries.lock(),
-                        collected_files.lock(),
+                let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.analyze_extracted_member(
+                        entry.path(),
+                        &relative_path,
+                        &file_data,
+                        &file_type,
+                        &sha256,
                     )
-                    else {
-                        return; // Skip this file if any lock is poisoned
-                    };
+                })) {
+                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(e)) => {
+                        debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                        None
+                    }
+                    Err(_panic) => {
+                        tracing::error!(
+                            path = %entry_path,
+                            "panic during archive member analysis (caught)"
+                        );
+                        None
+                    }
+                };
 
-                    // Aggregate findings
-                    for f in &file_report.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            let mut new_finding = f.clone();
-                            for evidence in &mut new_finding.evidence {
-                                // Prefix location with archive path
-                                // - If no location: set to archive path
-                                // - If location starts with "archive:": already from nested, leave it
-                                // - Otherwise: prefix with archive path (e.g., "line:3" -> "archive:file.sh:line:3")
-                                match &evidence.location {
-                                    None => {
-                                        evidence.location = Some(archive_location.clone());
-                                    }
-                                    Some(loc) if !loc.starts_with("archive:") => {
-                                        evidence.location =
-                                            Some(format!("{}:{}", archive_location, loc));
-                                    }
-                                    _ => {} // Already has archive: prefix from nested analysis
-                                }
+                Some(MemberAnalysisResult {
+                    entry_path,
+                    archive_location,
+                    relative_path,
+                    disk_path: entry.path().to_path_buf(),
+                    entry_metadata,
+                    report,
+                })
+            })
+            .collect();
+
+        // Single-threaded aggregation — no lock contention
+        for result in member_results {
+            collected_archive_entries.push(result.entry_metadata);
+
+            let Some(file_report) = result.report else {
+                continue;
+            };
+            files_analyzed += 1;
+            trace!(
+                "Analyzed archive member {}: {} findings",
+                result.entry_path,
+                file_report.findings.len()
+            );
+
+            // Aggregate findings
+            for f in &file_report.findings {
+                total_traits.insert(f.id.clone());
+                total_capabilities.insert(f.id.clone());
+                if !collected_traits.iter().any(|existing| existing.id == f.id) {
+                    let mut new_finding = f.clone();
+                    for evidence in &mut new_finding.evidence {
+                        match &evidence.location {
+                            None => {
+                                evidence.location = Some(result.archive_location.clone());
                             }
-                            all_traits.push(new_finding);
+                            Some(loc) if !loc.starts_with("archive:") => {
+                                evidence.location =
+                                    Some(format!("{}:{}", result.archive_location, loc));
+                            }
+                            _ => {}
                         }
                     }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_report.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            all_yara.push(yara_match.clone());
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_report.strings {
-                        if matches!(
-                            string.string_type,
-                            Some(StringType::Url | StringType::IP | StringType::Base64)
-                        ) {
-                            all_strings.push(string.clone());
-                        }
-                    }
-
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1; // Direct child of archive
-                    file_entry.compute_summary();
-                    all_files.push(file_entry);
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
-                    }
-
-                    // Handle nested archives - add their files with updated paths
-                    for mut nested_file in nested_files {
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1;
-                        all_files.push(nested_file);
-                    }
+                    collected_traits.push(new_finding);
                 }
-                Ok(None) => {}
             }
-        });
+
+            // Aggregate YARA matches
+            for yara_match in &file_report.yara_matches {
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
+                    collected_yara.push(yara_match.clone());
+                }
+            }
+
+            // Aggregate interesting strings
+            for string in &file_report.strings {
+                if matches!(
+                    string.string_type,
+                    Some(StringType::Url | StringType::IP | StringType::Base64)
+                ) {
+                    collected_strings.push(string.clone());
+                }
+            }
+
+            // Convert to FileAnalysis
+            let (mut file_entry, nested_files, archive_contents) =
+                file_report.into_file_analysis(0);
+            file_entry.path = result.entry_path.clone();
+            file_entry.depth = 1;
+            file_entry.compute_summary();
+            collected_files.push(file_entry);
+
+            for nested_entry in archive_contents {
+                collected_archive_entries.push(nested_entry);
+            }
+            for mut nested_file in nested_files {
+                if !nested_file.path.contains("!!") {
+                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
+                }
+                nested_file.depth += 1;
+                collected_files.push(nested_file);
+            }
+        }
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
         let non_class_files: Vec<_> = other_files
@@ -725,201 +728,162 @@ impl ArchiveAnalyzer {
             .take(100)
             .collect();
 
-        non_class_files.par_iter().for_each(|entry| {
-            if self.is_cancelled() {
-                return;
-            }
-            let relative_path = entry
-                .path()
-                .strip_prefix(temp_dir)
-                .unwrap_or(entry.path())
-                .display()
-                .to_string();
-            let entry_path = self.format_entry_path(&relative_path);
-            let archive_location = self.format_evidence_location(&relative_path);
-
-            let file_data = match std::fs::read(entry.path()) {
-                Ok(data) => data,
-                Err(e) => {
-                    debug!("Failed to read archive member {}: {}", entry_path, e);
-                    return;
+        let non_class_results: Vec<MemberAnalysisResult> = non_class_files
+            .par_iter()
+            .filter_map(|entry| {
+                if self.is_cancelled() {
+                    return None;
                 }
-            };
-            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
-            let sha256 = calculate_sha256(&file_data);
+                let relative_path = entry
+                    .path()
+                    .strip_prefix(temp_dir)
+                    .unwrap_or(entry.path())
+                    .display()
+                    .to_string();
+                let entry_path = self.format_entry_path(&relative_path);
+                let archive_location = self.format_evidence_location(&relative_path);
 
-            let entry_metadata = ArchiveEntry {
-                path: entry_path.clone(),
-                file_type: file_type.report_file_type(),
-                sha256: sha256.clone(),
-                size_bytes: file_data.len() as u64,
-            };
-            if let Ok(mut entries) = collected_archive_entries.lock() {
-                entries.push(entry_metadata);
-            }
+                let file_data = match std::fs::read(entry.path()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        debug!("Failed to read archive member {}: {}", entry_path, e);
+                        return None;
+                    }
+                };
+                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let sha256 = calculate_sha256(&file_data);
 
-            match self.analyze_extracted_member(
-                entry.path(),
-                &relative_path,
-                &file_data,
-                &file_type,
-                &sha256,
-            ) {
-                Err(e) => {
-                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
-                }
-                Ok(Some(file_report)) => {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    trace!(
-                        "Analyzed archive member {}: {} findings",
-                        entry_path,
-                        file_report.findings.len()
-                    );
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: file_type.report_file_type(),
+                    sha256: sha256.clone(),
+                    size_bytes: file_data.len() as u64,
+                };
 
-                    let (
-                        Ok(mut caps),
-                        Ok(mut traits),
-                        Ok(mut all_traits),
-                        Ok(mut all_yara),
-                        Ok(mut all_strings),
-                        Ok(mut all_archive_entries),
-                        Ok(mut all_files),
-                    ) = (
-                        total_capabilities.lock(),
-                        total_traits.lock(),
-                        collected_traits.lock(),
-                        collected_yara.lock(),
-                        collected_strings.lock(),
-                        collected_archive_entries.lock(),
-                        collected_files.lock(),
+                let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.analyze_extracted_member(
+                        entry.path(),
+                        &relative_path,
+                        &file_data,
+                        &file_type,
+                        &sha256,
                     )
-                    else {
-                        return; // Skip this file if any lock is poisoned
-                    };
+                })) {
+                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(e)) => {
+                        debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                        None
+                    }
+                    Err(_panic) => {
+                        tracing::error!(
+                            path = %entry_path,
+                            "panic during archive member analysis (caught)"
+                        );
+                        None
+                    }
+                };
 
-                    // Aggregate findings
-                    for f in &file_report.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            // LIMIT: Cap at 10,000 findings per archive analysis phase
-                            if all_traits.len() < 10_000 {
-                                let mut new_finding = f.clone();
-                                for evidence in &mut new_finding.evidence {
-                                    // Prefix location with archive path
-                                    match &evidence.location {
-                                        None => {
-                                            evidence.location = Some(archive_location.clone());
-                                        }
-                                        Some(loc) if !loc.starts_with("archive:") => {
-                                            evidence.location =
-                                                Some(format!("{}:{}", archive_location, loc));
-                                        }
-                                        _ => {} // Already has archive: prefix from nested analysis
-                                    }
+                Some(MemberAnalysisResult {
+                    entry_path,
+                    archive_location,
+                    relative_path,
+                    disk_path: entry.path().to_path_buf(),
+                    entry_metadata,
+                    report,
+                })
+            })
+            .collect();
+
+        // Aggregate non-class results
+        for result in non_class_results {
+            collected_archive_entries.push(result.entry_metadata);
+
+            let Some(file_report) = result.report else {
+                continue;
+            };
+            files_analyzed += 1;
+            trace!(
+                "Analyzed archive member {}: {} findings",
+                result.entry_path,
+                file_report.findings.len()
+            );
+
+            for f in &file_report.findings {
+                total_traits.insert(f.id.clone());
+                total_capabilities.insert(f.id.clone());
+                if !collected_traits.iter().any(|existing| existing.id == f.id) {
+                    if collected_traits.len() < 10_000 {
+                        let mut new_finding = f.clone();
+                        for evidence in &mut new_finding.evidence {
+                            match &evidence.location {
+                                None => {
+                                    evidence.location = Some(result.archive_location.clone());
                                 }
-                                all_traits.push(new_finding);
+                                Some(loc) if !loc.starts_with("archive:") => {
+                                    evidence.location =
+                                        Some(format!("{}:{}", result.archive_location, loc));
+                                }
+                                _ => {}
                             }
                         }
-                    }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_report.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            // LIMIT: Cap YARA matches at 1,000
-                            if all_yara.len() < 1_000 {
-                                all_yara.push(yara_match.clone());
-                            }
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_report.strings {
-                        if matches!(
-                            string.string_type,
-                            Some(StringType::Url | StringType::IP | StringType::Base64)
-                        ) {
-                            // LIMIT: Cap aggregated strings at 10,000
-                            if all_strings.len() < 10_000 {
-                                all_strings.push(string.clone());
-                            }
-                        }
-                    }
-
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1;
-                    file_entry.compute_summary();
-
-                    all_files.push(file_entry);
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
-                    }
-
-                    // Handle nested archives
-                    for mut nested_file in nested_files {
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1;
-                        all_files.push(nested_file);
+                        collected_traits.push(new_finding);
                     }
                 }
-                Ok(None) => {}
             }
-        });
+
+            for yara_match in &file_report.yara_matches {
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
+                    if collected_yara.len() < 1_000 {
+                        collected_yara.push(yara_match.clone());
+                    }
+                }
+            }
+
+            for string in &file_report.strings {
+                if matches!(
+                    string.string_type,
+                    Some(StringType::Url | StringType::IP | StringType::Base64)
+                ) {
+                    if collected_strings.len() < 10_000 {
+                        collected_strings.push(string.clone());
+                    }
+                }
+            }
+
+            let (mut file_entry, nested_files, archive_contents) =
+                file_report.into_file_analysis(0);
+            file_entry.path = result.entry_path.clone();
+            file_entry.depth = 1;
+            file_entry.compute_summary();
+            collected_files.push(file_entry);
+
+            for nested_entry in archive_contents {
+                collected_archive_entries.push(nested_entry);
+            }
+            for mut nested_file in nested_files {
+                if !nested_file.path.contains("!!") {
+                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
+                }
+                nested_file.depth += 1;
+                collected_files.push(nested_file);
+            }
+        }
 
         // Merge JAR collected results into the report
-        let total_capabilities = Arc::try_unwrap(total_capabilities)
-            .map_err(|_| anyhow::anyhow!("total_capabilities Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("total_capabilities lock poisoned"))?;
-        let total_traits = Arc::try_unwrap(total_traits)
-            .map_err(|_| anyhow::anyhow!("total_traits Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("total_traits lock poisoned"))?;
-        let files_analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
-
-        for t in Arc::try_unwrap(collected_traits)
-            .map_err(|_| anyhow::anyhow!("collected_traits Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("collected_traits lock poisoned"))?
-        {
+        for t in collected_traits {
             if !report.findings.iter().any(|existing| existing.id == t.id) {
                 report.findings.push(t);
             }
         }
-        for ym in Arc::try_unwrap(collected_yara)
-            .map_err(|_| anyhow::anyhow!("collected_yara Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("collected_yara lock poisoned"))?
-        {
+        for ym in collected_yara {
             if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
                 report.yara_matches.push(ym);
             }
         }
-        report.strings.extend(
-            Arc::try_unwrap(collected_strings)
-                .map_err(|_| anyhow::anyhow!("collected_strings Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_strings lock poisoned"))?,
-        );
-        report.archive_contents.extend(
-            Arc::try_unwrap(collected_archive_entries)
-                .map_err(|_| anyhow::anyhow!("collected_archive_entries Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_archive_entries lock poisoned"))?,
-        );
-        report.files.extend(
-            Arc::try_unwrap(collected_files)
-                .map_err(|_| anyhow::anyhow!("collected_files Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?,
-        );
+        report.strings.extend(collected_strings);
+        report.archive_contents.extend(collected_archive_entries);
+        report.files.extend(collected_files);
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(
@@ -992,269 +956,206 @@ impl ArchiveAnalyzer {
         let total_files = files.len();
         debug!("Found {} files to analyze", total_files);
 
-        // Create thread-safe containers for aggregated results
-        let files_processed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let files_analyzed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let total_capabilities = Arc::new(Mutex::new(HashSet::new()));
-        let total_traits = Arc::new(Mutex::new(HashSet::new()));
-        // Pre-allocate with conservative estimates; findings are deduplicated and only
-        // URL/IP/Base64 strings are collected, so actual counts are much smaller than file count.
-        let collected_traits = Arc::new(Mutex::new(Vec::<Finding>::with_capacity(
-            total_files.min(500),
-        )));
-        let collected_yara = Arc::new(Mutex::new(Vec::<YaraMatch>::with_capacity(100)));
-        let collected_strings = Arc::new(Mutex::new(Vec::<StringInfo>::with_capacity(
+        // Collect results lock-free, aggregate single-threaded afterwards
+        let mut total_capabilities = HashSet::new();
+        let mut total_traits = HashSet::new();
+        let mut collected_traits = Vec::<Finding>::with_capacity(total_files.min(500));
+        let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
+        let mut collected_strings = Vec::<StringInfo>::with_capacity(
             (total_files * 2).min(200),
-        )));
-        let collected_archive_entries =
-            Arc::new(Mutex::new(Vec::<ArchiveEntry>::with_capacity(total_files)));
-        let collected_files = Arc::new(Mutex::new(Vec::<FileAnalysis>::with_capacity(total_files)));
-        let last_progress = Arc::new(Mutex::new(std::time::Instant::now()));
+        );
+        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
+        let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
+        let mut files_analyzed: usize = 0;
 
-        // Analyze files in parallel
-        files.par_iter().for_each(|entry| {
-            if self.is_cancelled() {
-                return;
-            }
-            // Track progress
-            let processed = files_processed.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-            if let Ok(mut last) = last_progress.try_lock() {
-                if last.elapsed() > std::time::Duration::from_secs(1) {
-                    let analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
-                    debug!(
-                        "Archive progress: {}/{} files processed, {} analyzed",
-                        processed, total_files, analyzed
-                    );
-                    *last = std::time::Instant::now();
+        // Analyze files in parallel — no shared Mutexes
+        let generic_results: Vec<MemberAnalysisResult> = files
+            .par_iter()
+            .filter_map(|entry| {
+                if self.is_cancelled() {
+                    return None;
                 }
-            }
 
-            let relative_path = entry
-                .path()
-                .strip_prefix(temp_dir)
-                .unwrap_or(entry.path())
-                .display()
-                .to_string();
-            let entry_path = self.format_entry_path(&relative_path);
-            let archive_location = self.format_evidence_location(&relative_path);
+                let relative_path = entry
+                    .path()
+                    .strip_prefix(temp_dir)
+                    .unwrap_or(entry.path())
+                    .display()
+                    .to_string();
+                let entry_path = self.format_entry_path(&relative_path);
+                let archive_location = self.format_evidence_location(&relative_path);
 
-            let file_data = match std::fs::read(entry.path()) {
-                Ok(data) => data,
-                Err(e) => {
-                    debug!("Failed to read archive member {}: {}", entry_path, e);
-                    return;
-                }
+                let file_data = match std::fs::read(entry.path()) {
+                    Ok(data) => data,
+                    Err(e) => {
+                        debug!("Failed to read archive member {}: {}", entry_path, e);
+                        return None;
+                    }
+                };
+                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let sha256 = calculate_sha256(&file_data);
+
+                let entry_metadata = ArchiveEntry {
+                    path: entry_path.clone(),
+                    file_type: file_type.report_file_type(),
+                    sha256: sha256.clone(),
+                    size_bytes: file_data.len() as u64,
+                };
+
+                let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    self.analyze_extracted_member(
+                        entry.path(),
+                        &relative_path,
+                        &file_data,
+                        &file_type,
+                        &sha256,
+                    )
+                })) {
+                    Ok(Ok(Some(r))) => Some(r),
+                    Ok(Ok(None)) => None,
+                    Ok(Err(e)) => {
+                        debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                        None
+                    }
+                    Err(_panic) => {
+                        tracing::error!(
+                            path = %entry_path,
+                            "panic during archive member analysis (caught)"
+                        );
+                        None
+                    }
+                };
+
+                Some(MemberAnalysisResult {
+                    entry_path,
+                    archive_location,
+                    relative_path,
+                    disk_path: entry.path().to_path_buf(),
+                    entry_metadata,
+                    report,
+                })
+            })
+            .collect();
+
+        // Single-threaded aggregation
+        for result in generic_results {
+            collected_archive_entries.push(result.entry_metadata);
+
+            let Some(file_report) = result.report else {
+                continue;
             };
-            let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
-            let sha256 = calculate_sha256(&file_data);
+            files_analyzed += 1;
+            trace!(
+                "Analyzed archive member {}: {} findings",
+                result.entry_path,
+                file_report.findings.len()
+            );
 
-            let entry_metadata = ArchiveEntry {
-                path: entry_path.clone(),
-                file_type: file_type.report_file_type(),
-                sha256: sha256.clone(),
-                size_bytes: file_data.len() as u64,
-            };
-            if let Ok(mut entries) = collected_archive_entries.lock() {
-                entries.push(entry_metadata);
-            }
+            let (mut file_entry, nested_files, archive_contents) =
+                file_report.into_file_analysis(0);
+            file_entry.path = result.entry_path.clone();
+            file_entry.depth = 1;
+            file_entry.compute_summary();
 
-            match self.analyze_extracted_member(
-                entry.path(),
-                &relative_path,
-                &file_data,
-                &file_type,
-                &sha256,
-            ) {
-                Err(e) => {
-                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
-                }
-                Ok(Some(file_report)) => {
-                    files_analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    trace!(
-                        "Analyzed archive member {}: {} findings",
-                        entry_path,
-                        file_report.findings.len()
-                    );
-
-                    let Ok(mut caps) = total_capabilities.lock() else {
-                        return;
-                    };
-                    let Ok(mut traits) = total_traits.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_traits) = collected_traits.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_yara) = collected_yara.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_strings) = collected_strings.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_archive_entries) = collected_archive_entries.lock() else {
-                        return;
-                    };
-                    let Ok(mut all_files) = collected_files.lock() else {
-                        return;
-                    };
-
-                    // Convert to FileAnalysis, consuming the report to avoid cloning
-                    let (mut file_entry, nested_files, archive_contents) =
-                        file_report.into_file_analysis(0);
-                    file_entry.path = entry_path.clone();
-                    file_entry.depth = 1; // Direct child of archive
-                    file_entry.compute_summary();
-
-                    // Extract file to disk if configured (mirrors streaming.rs behavior)
-                    if let Some(ref config) = self.sample_extraction {
-                        if let Ok(file_data) = std::fs::read(entry.path()) {
-                            let extract_relative_path = match &self.archive_path_prefix {
-                                Some(prefix) => {
-                                    format!("{}/{}", prefix.replace('!', "/"), relative_path)
-                                }
-                                None => relative_path.to_string(),
-                            };
-                            if let Some(extracted_path) = config.extract(
-                                &file_entry.sha256,
-                                &extract_relative_path,
-                                &file_data,
-                            ) {
-                                file_entry.extracted_path =
-                                    Some(extracted_path.display().to_string());
-                            }
+            // Extract file to disk if configured
+            if let Some(ref config) = self.sample_extraction {
+                if let Ok(file_data) = std::fs::read(&result.disk_path) {
+                    let extract_relative_path = match &self.archive_path_prefix {
+                        Some(prefix) => {
+                            format!("{}/{}", prefix.replace('!', "/"), result.relative_path)
                         }
-                    }
-
-                    // Aggregate findings from the converted FileAnalysis
-                    for f in &file_entry.findings {
-                        traits.insert(f.id.clone());
-                        caps.insert(f.id.clone());
-                        if !all_traits.iter().any(|existing| existing.id == f.id) {
-                            // LIMIT: Cap findings at 10,000
-                            if all_traits.len() < 10_000 {
-                                let mut new_finding = f.clone();
-                                for evidence in &mut new_finding.evidence {
-                                    // Prefix location with archive path
-                                    match &evidence.location {
-                                        None => {
-                                            evidence.location = Some(archive_location.clone());
-                                        }
-                                        Some(loc) if !loc.starts_with("archive:") => {
-                                            evidence.location =
-                                                Some(format!("{}:{}", archive_location, loc));
-                                        }
-                                        _ => {} // Already has archive: prefix from nested analysis
-                                    }
-                                }
-                                all_traits.push(new_finding);
-                            }
-                        }
-                    }
-
-                    // Aggregate YARA matches
-                    for yara_match in &file_entry.yara_matches {
-                        if !all_yara.iter().any(|m| m.rule == yara_match.rule) {
-                            // LIMIT: Cap YARA matches at 1,000
-                            if all_yara.len() < 1_000 {
-                                all_yara.push(yara_match.clone());
-                            }
-                        }
-                    }
-
-                    // Aggregate interesting strings
-                    for string in &file_entry.strings {
-                        if matches!(
-                            string.string_type,
-                            Some(StringType::Url | StringType::IP | StringType::Base64)
-                        ) {
-                            // LIMIT: Cap aggregated strings at 10,000
-                            if all_strings.len() < 10_000 {
-                                all_strings.push(string.clone());
-                            }
-                        }
-                    }
-
-                    all_files.push(file_entry.clone());
-
-                    // Merge archive_contents from nested archives
-                    for nested_entry in archive_contents {
-                        all_archive_entries.push(nested_entry);
-                    }
-
-                    // Handle nested archives - add their files with updated paths
-                    for mut nested_file in nested_files {
-                        // Update path to include our archive prefix
-                        if !nested_file.path.contains("!!") {
-                            nested_file.path = encode_archive_path(&entry_path, &nested_file.path);
-                        }
-                        nested_file.depth += 1; // Increment depth for nesting
-                        all_files.push(nested_file);
+                        None => result.relative_path.clone(),
+                    };
+                    if let Some(extracted_path) = config.extract(
+                        &file_entry.sha256,
+                        &extract_relative_path,
+                        &file_data,
+                    ) {
+                        file_entry.extracted_path =
+                            Some(extracted_path.display().to_string());
                     }
                 }
-                Ok(None) => {}
             }
-        });
 
-        // Sort files by highest severity first, then truncate to limit
-        {
-            let mut all_files = collected_files
-                .lock()
-                .map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?;
-            all_files.sort_by(|a, b| {
-                let max_crit =
-                    |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
-                max_crit(b).cmp(&max_crit(a))
-            });
-            all_files.truncate(100_000);
+            // Aggregate findings
+            for f in &file_entry.findings {
+                total_traits.insert(f.id.clone());
+                total_capabilities.insert(f.id.clone());
+                if !collected_traits.iter().any(|existing| existing.id == f.id) {
+                    if collected_traits.len() < 10_000 {
+                        let mut new_finding = f.clone();
+                        for evidence in &mut new_finding.evidence {
+                            match &evidence.location {
+                                None => {
+                                    evidence.location = Some(result.archive_location.clone());
+                                }
+                                Some(loc) if !loc.starts_with("archive:") => {
+                                    evidence.location =
+                                        Some(format!("{}:{}", result.archive_location, loc));
+                                }
+                                _ => {}
+                            }
+                        }
+                        collected_traits.push(new_finding);
+                    }
+                }
+            }
+
+            for yara_match in &file_entry.yara_matches {
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
+                    if collected_yara.len() < 1_000 {
+                        collected_yara.push(yara_match.clone());
+                    }
+                }
+            }
+
+            for string in &file_entry.strings {
+                if matches!(
+                    string.string_type,
+                    Some(StringType::Url | StringType::IP | StringType::Base64)
+                ) {
+                    if collected_strings.len() < 10_000 {
+                        collected_strings.push(string.clone());
+                    }
+                }
+            }
+
+            collected_files.push(file_entry.clone());
+
+            for nested_entry in archive_contents {
+                collected_archive_entries.push(nested_entry);
+            }
+            for mut nested_file in nested_files {
+                if !nested_file.path.contains("!!") {
+                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
+                }
+                nested_file.depth += 1;
+                collected_files.push(nested_file);
+            }
         }
 
-        // Merge collected results into the report
-        let total_capabilities = Arc::try_unwrap(total_capabilities)
-            .map_err(|_| anyhow::anyhow!("total_capabilities Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("total_capabilities lock poisoned"))?;
-        let total_traits = Arc::try_unwrap(total_traits)
-            .map_err(|_| anyhow::anyhow!("total_traits Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("total_traits lock poisoned"))?;
-        let files_analyzed = files_analyzed.load(std::sync::atomic::Ordering::Relaxed);
+        // Sort files by highest severity first, then truncate to limit
+        collected_files.sort_by(|a, b| {
+            let max_crit =
+                |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
+            max_crit(b).cmp(&max_crit(a))
+        });
+        collected_files.truncate(100_000);
 
-        for t in Arc::try_unwrap(collected_traits)
-            .map_err(|_| anyhow::anyhow!("collected_traits Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("collected_traits lock poisoned"))?
-        {
+        // Merge collected results into the report
+        for t in collected_traits {
             if !report.findings.iter().any(|existing| existing.id == t.id) {
                 report.findings.push(t);
             }
         }
-        for ym in Arc::try_unwrap(collected_yara)
-            .map_err(|_| anyhow::anyhow!("collected_yara Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("collected_yara lock poisoned"))?
-        {
+        for ym in collected_yara {
             if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
                 report.yara_matches.push(ym);
             }
         }
-        report.strings.extend(
-            Arc::try_unwrap(collected_strings)
-                .map_err(|_| anyhow::anyhow!("collected_strings Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_strings lock poisoned"))?,
-        );
-        report.archive_contents.extend(
-            Arc::try_unwrap(collected_archive_entries)
-                .map_err(|_| anyhow::anyhow!("collected_archive_entries Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_archive_entries lock poisoned"))?,
-        );
-        report.files.extend(
-            Arc::try_unwrap(collected_files)
-                .map_err(|_| anyhow::anyhow!("collected_files Arc unwrap failed"))?
-                .into_inner()
-                .map_err(|_| anyhow::anyhow!("collected_files lock poisoned"))?,
-        );
+        report.strings.extend(collected_strings);
+        report.archive_contents.extend(collected_archive_entries);
+        report.files.extend(collected_files);
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(

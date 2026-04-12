@@ -134,6 +134,9 @@ pub(crate) fn extract_zip_safe(
         let password_deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
 
         for (idx, password) in zip_passwords.iter().enumerate() {
+            if guard.is_cancelled() {
+                anyhow::bail!("Request cancelled during password attempts");
+            }
             if std::time::Instant::now() > password_deadline {
                 info!(
                     "Password attempt budget exhausted after {}/{} passwords",

@@ -152,20 +152,17 @@ impl MachOAnalyzer {
             Some(Mach::Binary(macho)) => Some(macho),
             Some(Mach::Fat(_)) | None => None,
         };
-        let macho = match macho_opt {
-            Some(m) => m,
-            None => {
-                return self.analyze_macho_fallback(
-                    logical_path,
-                    analysis_path,
-                    data,
-                    sha256,
-                    parse_failure,
-                    allow_rizin,
-                    precomputed_sha256,
-                    start,
-                );
-            }
+        let Some(macho) = macho_opt else {
+            return self.analyze_macho_fallback(
+                logical_path,
+                analysis_path,
+                data,
+                sha256,
+                parse_failure.as_ref(),
+                allow_rizin,
+                precomputed_sha256,
+                start,
+            );
         };
 
         // Create target info
@@ -513,6 +510,7 @@ impl MachOAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
@@ -1260,7 +1258,7 @@ impl MachOAnalyzer {
         analysis_path: &Path,
         data: &[u8],
         sha256: String,
-        parse_failure: Option<goblin_safe::GoblinFailureInfo>,
+        parse_failure: Option<&goblin_safe::GoblinFailureInfo>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
         _start: std::time::Instant,
@@ -1274,19 +1272,20 @@ impl MachOAnalyzer {
         };
         let mut report = AnalysisReport::new(target);
 
-        if let Some(ref failure) = parse_failure {
+        if let Some(failure) = parse_failure {
             report.metadata.errors.push(format!(
                 "Mach-O parse {}: {}",
-                if failure.panicked { "panicked" } else { "error" },
+                if failure.panicked {
+                    "panicked"
+                } else {
+                    "error"
+                },
                 failure.message
             ));
             report.findings.push(Finding {
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/macho-header".to_string(),
-                desc: format!(
-                    "Malformed Mach-O header: {}",
-                    failure.message
-                ),
+                desc: format!("Malformed Mach-O header: {}", failure.message),
                 conf: 1.0,
                 crit: Criticality::Suspicious,
                 mbc: Some("B0001".to_string()),
@@ -1298,41 +1297,41 @@ impl MachOAnalyzer {
             });
         }
 
-        let mut binary_metrics = if allow_rizin
-            && !self.is_cancelled()
-            && Radare2Analyzer::is_available()
-        {
-            match self.radare2.extract_batched(
-                analysis_path,
-                false, // has_symbols=false: nothing came back from goblin
-                false, // goblin_success=false
-                true,  // include_strings: no stng pre-extraction in this path
-                precomputed_sha256,
-            ) {
-                Ok(batched) => {
-                    let bm = self
-                        .radare2
-                        .compute_metrics_from_batched(&batched, data.len() as u64);
-                    report.functions =
-                        batched.functions.into_iter().map(Function::from).collect();
-                    bm
+        let mut binary_metrics =
+            if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                match self.radare2.extract_batched(
+                    analysis_path,
+                    false, // has_symbols=false: nothing came back from goblin
+                    false, // goblin_success=false
+                    true,  // include_strings: no stng pre-extraction in this path
+                    precomputed_sha256,
+                ) {
+                    Ok(batched) => {
+                        let bm = self
+                            .radare2
+                            .compute_metrics_from_batched(&batched, data.len() as u64);
+                        report.functions =
+                            batched.functions.into_iter().map(Function::from).collect();
+                        bm
+                    }
+                    Err(e) => {
+                        tracing::debug!(
+                            "rizin fallback also failed for goblin-malformed Mach-O {}: {}",
+                            report.target.path,
+                            e
+                        );
+                        crate::types::BinaryMetrics {
+                            file_size: data.len() as u64,
+                            ..Default::default()
+                        }
+                    }
                 }
-                Err(e) => {
-                    tracing::debug!(
-                        "rizin fallback also failed for goblin-malformed Mach-O {}: {}",
-                        report.target.path,
-                        e
-                    );
-                    let mut bm = crate::types::BinaryMetrics::default();
-                    bm.file_size = data.len() as u64;
-                    bm
+            } else {
+                crate::types::BinaryMetrics {
+                    file_size: data.len() as u64,
+                    ..Default::default()
                 }
-            }
-        } else {
-            let mut bm = crate::types::BinaryMetrics::default();
-            bm.file_size = data.len() as u64;
-            bm
-        };
+            };
         binary_metrics.has_malformed_structure = true;
         report.metrics = Some(Metrics {
             binary: Some(binary_metrics),

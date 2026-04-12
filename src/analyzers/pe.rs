@@ -801,7 +801,11 @@ impl PEAnalyzer {
             // vs returned Err) lives in metadata.errors for triage.
             report.metadata.errors.push(format!(
                 "PE parse {}: {}",
-                if failure.panicked { "panicked" } else { "failed" },
+                if failure.panicked {
+                    "panicked"
+                } else {
+                    "failed"
+                },
                 err
             ));
         }
@@ -869,6 +873,7 @@ impl PEAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
@@ -1043,8 +1048,10 @@ impl PEAnalyzer {
                 .unwrap_or("binary.exe")
                 .to_string();
             let cert_range = pe.and_then(|pe| pe_certificate_range(pe, pe_data));
-            let embedded =
-                crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(pe_data);
+            let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
+                pe_data,
+                self.cancellation.as_deref(),
+            );
             for binary in &embedded {
                 if self.is_cancelled() {
                     break;
@@ -1620,8 +1627,7 @@ impl PEAnalyzer {
                 let count = resource_data.count() as u32;
                 let version_info_present = resource_data.version_info.is_some();
                 let manifest_present = resource_data.manifest_data.is_some();
-                let resource_timestamp =
-                    resource_data.image_resource_directory.time_date_stamp;
+                let resource_timestamp = resource_data.image_resource_directory.time_date_stamp;
                 let icon_count = resource_data
                     .entries()
                     .filter_map(Result::ok)
@@ -1651,9 +1657,7 @@ impl PEAnalyzer {
                 );
                 metrics.icon_count = icon_count;
             } else {
-                tracing::debug!(
-                    "PE resource directory walker panicked, metrics left at defaults"
-                );
+                tracing::debug!("PE resource directory walker panicked, metrics left at defaults");
                 lazy_walker_panicked = true;
             }
         }

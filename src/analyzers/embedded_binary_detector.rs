@@ -6,6 +6,7 @@
 
 use crate::types::*;
 use memchr::memmem;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum embedded binaries to report per file (prevents noise on heavily packed files).
 const MAX_EMBEDDED: usize = 20;
@@ -60,10 +61,13 @@ pub(crate) struct EmbeddedBinary {
 /// few bytes (the host binary's own header). Returns at most [`MAX_EMBEDDED`]
 /// results sorted by offset.
 #[must_use]
-pub(crate) fn scan_for_embedded_binaries(data: &[u8]) -> Vec<EmbeddedBinary> {
+pub(crate) fn scan_for_embedded_binaries(
+    data: &[u8],
+    cancelled: Option<&AtomicBool>,
+) -> Vec<EmbeddedBinary> {
     let mut results = Vec::new();
-    scan_pe(data, &mut results);
-    scan_elf(data, &mut results);
+    scan_pe(data, &mut results, cancelled);
+    scan_elf(data, &mut results, cancelled);
     results.sort_by_key(|e| e.offset);
     results.truncate(MAX_EMBEDDED);
     results
@@ -109,12 +113,15 @@ pub(crate) fn finding_for(binary: &EmbeddedBinary, parent_path: &str) -> Finding
 
 // ── PE scanning ──────────────────────────────────────────────────────────────
 
-fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>) {
+fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&AtomicBool>) {
     // Start past byte 0 so we skip the host PE's own MZ header.
     let search_start = 2.min(data.len());
     let finder = memmem::Finder::new(b"MZ");
     for pos in finder.find_iter(&data[search_start..]) {
         if results.len() >= MAX_EMBEDDED {
+            break;
+        }
+        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
             break;
         }
         if let Some(emb) = validate_pe(data, pos + search_start) {
@@ -228,12 +235,15 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
 
 // ── ELF scanning ─────────────────────────────────────────────────────────────
 
-fn scan_elf(data: &[u8], results: &mut Vec<EmbeddedBinary>) {
+fn scan_elf(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&AtomicBool>) {
     // Start past byte 0 so we skip the host ELF's own magic.
     let search_start = 4.min(data.len());
     let finder = memmem::Finder::new(b"\x7fELF");
     for pos in finder.find_iter(&data[search_start..]) {
         if results.len() >= MAX_EMBEDDED {
+            break;
+        }
+        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
             break;
         }
         if let Some(emb) = validate_elf(data, pos + search_start) {
@@ -556,7 +566,7 @@ mod tests {
 
     #[test]
     fn test_scan_empty() {
-        assert!(scan_for_embedded_binaries(&[]).is_empty());
+        assert!(scan_for_embedded_binaries(&[], None).is_empty());
     }
 
     #[test]
@@ -568,7 +578,7 @@ mod tests {
         // Embedded PE at offset 512
         make_synthetic_pe(&mut buf, 512);
 
-        let found = scan_for_embedded_binaries(&buf);
+        let found = scan_for_embedded_binaries(&buf, None);
         assert!(!found.is_empty(), "should detect embedded PE");
         assert_eq!(found[0].offset, 512);
         assert!(matches!(found[0].kind, EmbeddedKind::Pe32));
@@ -585,7 +595,7 @@ mod tests {
         // Embedded ELF at offset 512
         make_synthetic_elf(&mut buf, 512);
 
-        let found = scan_for_embedded_binaries(&buf);
+        let found = scan_for_embedded_binaries(&buf, None);
         assert!(!found.is_empty(), "should detect embedded ELF");
         assert_eq!(found[0].offset, 512);
         assert!(matches!(found[0].kind, EmbeddedKind::Elf64Le));
@@ -753,14 +763,14 @@ mod tests {
         for i in 0..n {
             make_synthetic_elf(&mut buf, 4 + i * (elf_size + 4));
         }
-        let found = scan_for_embedded_binaries(&buf);
+        let found = scan_for_embedded_binaries(&buf, None);
         assert!(found.len() <= MAX_EMBEDDED);
     }
 
     #[test]
     fn test_no_false_positive_on_null_bytes() {
         let data = vec![0u8; 4096];
-        assert!(scan_for_embedded_binaries(&data).is_empty());
+        assert!(scan_for_embedded_binaries(&data, None).is_empty());
     }
 
     #[test]
@@ -769,7 +779,7 @@ mod tests {
                      It repeats a few times to be sure. \
                      This is just plain ASCII text with no binary content whatsoever."
             .to_vec();
-        assert!(scan_for_embedded_binaries(&data).is_empty());
+        assert!(scan_for_embedded_binaries(&data, None).is_empty());
     }
 
     #[test]

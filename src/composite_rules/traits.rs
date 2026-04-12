@@ -822,28 +822,11 @@ impl TraitDefinition {
         // Container-level evaluation may collapse archive parents to FileType::All.
         // In that case, allow only archive-family rules to match rather than treating
         // All as a universal wildcard for every script/source/binary rule.
-        let wants_archive_family = self.r#for.iter().any(|ft| {
-            matches!(
-                ft,
-                FileType::Archive
-                    | FileType::Zip
-                    | FileType::Apk
-                    | FileType::Jar
-                    | FileType::Tar
-                    | FileType::Npm
-                    | FileType::Nupkg
-                    | FileType::Gem
-                    | FileType::Whl
-                    | FileType::Deb
-                    | FileType::Rpm
-                    | FileType::Crx
-                    | FileType::VsixArchive
-                    | FileType::Xpi
-            )
-        });
+        let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
-            || (matches!(ctx.file_type, FileType::All | FileType::Archive) && wants_archive_family);
+            || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
+                && wants_archive_family);
 
         if !file_type_match {
             ctx.record_skip(SkipReason::FileTypeMismatch {
@@ -1827,28 +1810,11 @@ impl CompositeTrait {
         // Container-level evaluation may collapse archive parents to FileType::All.
         // In that case, allow only archive-family rules to match rather than treating
         // All as a universal wildcard for every script/source/binary rule.
-        let wants_archive_family = self.r#for.iter().any(|ft| {
-            matches!(
-                ft,
-                FileType::Archive
-                    | FileType::Zip
-                    | FileType::Apk
-                    | FileType::Jar
-                    | FileType::Tar
-                    | FileType::Npm
-                    | FileType::Nupkg
-                    | FileType::Gem
-                    | FileType::Whl
-                    | FileType::Deb
-                    | FileType::Rpm
-                    | FileType::Crx
-                    | FileType::VsixArchive
-                    | FileType::Xpi
-            )
-        });
+        let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
-            || (matches!(ctx.file_type, FileType::All | FileType::Archive) && wants_archive_family);
+            || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
+                && wants_archive_family);
 
         if !file_type_match {
             ctx.record_skip(SkipReason::FileTypeMismatch {

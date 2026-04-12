@@ -10,8 +10,8 @@
 //! - Standalone compression (.gz, .xz, .bz2)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
-    MAX_FILE_SIZE,
+    sanitize_entry_path, symlink_escapes, CancellableReader, CancellableWriter, ExtractionGuard,
+    HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
 };
 use super::tar::extract_tar_entries_safe;
 use super::zip::extract_zip_safe;
@@ -43,32 +43,57 @@ pub(crate) fn extract_compressed_safe(
 
     let mut output_file = File::create(&output_path).context("Failed to create output file")?;
 
-    // Use LimitedReader to prevent decompression bombs
-    let bytes_written = match compression {
-        "xz" => {
+    // Wrap the file in a CancellableReader so decompression stops promptly
+    // when the per-request cancellation flag is set. Without this a large
+    // compressed file would decompress completely even after a timeout.
+    let bytes_written = match (compression, guard.cancellation()) {
+        ("xz", Some(c)) => {
+            let decoder = xz2::read::XzDecoder::new(CancellableReader::new(file, c));
+            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
+            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress XZ file")?
+        }
+        ("xz", None) => {
             let decoder = xz2::read::XzDecoder::new(file);
             let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
             std::io::copy(&mut limited, &mut output_file).context("Failed to decompress XZ file")?
         }
-        "gzip" => {
+        ("gzip", Some(c)) => {
+            let decoder = flate2::read::GzDecoder::new(CancellableReader::new(file, c));
+            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
+            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress GZ file")?
+        }
+        ("gzip", None) => {
             let decoder = flate2::read::GzDecoder::new(file);
             let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
             std::io::copy(&mut limited, &mut output_file).context("Failed to decompress GZ file")?
         }
-        "bzip2" => {
+        ("bzip2", Some(c)) => {
+            let decoder = bzip2::read::BzDecoder::new(CancellableReader::new(file, c));
+            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
+            std::io::copy(&mut limited, &mut output_file)
+                .context("Failed to decompress BZ2 file")?
+        }
+        ("bzip2", None) => {
             let decoder = bzip2::read::BzDecoder::new(file);
             let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
             std::io::copy(&mut limited, &mut output_file)
                 .context("Failed to decompress BZ2 file")?
         }
-        "zstd" => {
+        ("zstd", Some(c)) => {
+            let decoder = zstd::stream::read::Decoder::new(CancellableReader::new(file, c))
+                .context("Failed to create zstd decoder")?;
+            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
+            std::io::copy(&mut limited, &mut output_file)
+                .context("Failed to decompress ZSTD file")?
+        }
+        ("zstd", None) => {
             let decoder =
                 zstd::stream::read::Decoder::new(file).context("Failed to create zstd decoder")?;
             let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
             std::io::copy(&mut limited, &mut output_file)
                 .context("Failed to decompress ZSTD file")?
         }
-        _ => anyhow::bail!("Unsupported compression: {}", compression),
+        (other, _) => anyhow::bail!("Unsupported compression: {}", other),
     };
 
     // Check compression ratio
@@ -207,13 +232,29 @@ fn extract_7z_entry_safe<R: Read + ?Sized>(
             .map_err(|e| sevenz_rust::Error::other(format!("mkdir failed: {}", e)))?;
     }
 
-    // Extract file with size limiting
+    // Extract file with size limiting and cancellation checks every 64 KiB.
+    // A single large entry can take minutes without these checks.
     let mut limited_reader = LimitedReader::new(reader, uncompressed);
     let mut output = File::create(&outpath)
         .map_err(|e| sevenz_rust::Error::other(format!("create file failed: {}", e)))?;
 
-    let written = std::io::copy(&mut limited_reader, &mut output)
-        .map_err(|e| sevenz_rust::Error::other(format!("copy failed: {}", e)))?;
+    let mut buf = [0u8; 65536];
+    let mut written = 0u64;
+    loop {
+        if guard.is_cancelled() {
+            return Err(sevenz_rust::Error::other("cancelled"));
+        }
+        let n = limited_reader
+            .read(&mut buf)
+            .map_err(|e| sevenz_rust::Error::other(format!("read failed: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        output
+            .write_all(&buf[..n])
+            .map_err(|e| sevenz_rust::Error::other(format!("write failed: {e}")))?;
+        written += n as u64;
+    }
 
     // Track total bytes
     if !guard.check_bytes(written, name) {
@@ -278,11 +319,17 @@ pub(crate) fn extract_pkg_safe(
             fs::create_dir_all(parent)?;
         }
 
-        // Extract file
+        // Extract file; wrap the output so cancellation interrupts the C library
+        // call on the next write boundary (typically every decompressed chunk).
         let mut output = File::create(&out_path)?;
-        let written = xar
-            .write_file_data_decoded_from_file(&file_entry, &mut output)
-            .context(format!("Failed to extract file: {}", path))? as u64;
+        let written = if let Some(cancelled) = guard.cancellation() {
+            let mut cw = CancellableWriter::new(&mut output, cancelled);
+            xar.write_file_data_decoded_from_file(&file_entry, &mut cw)
+                .context(format!("Failed to extract file: {}", path))? as u64
+        } else {
+            xar.write_file_data_decoded_from_file(&file_entry, &mut output)
+                .context(format!("Failed to extract file: {}", path))? as u64
+        };
 
         if !guard.check_bytes(written, &path) {
             anyhow::bail!("Exceeded maximum total extraction size");
@@ -553,7 +600,21 @@ fn extract_cpio<R: Read>(mut reader: R, dest_dir: &Path, guard: &ExtractionGuard
             }
             let mut file = File::create(&out_path)?;
             let mut limited = LimitedReader::new(entry_reader, MAX_FILE_SIZE);
-            let written = std::io::copy(&mut limited, &mut file)?;
+            // Check cancellation every 64 KiB so a large single entry doesn't
+            // block indefinitely after a timeout fires.
+            let mut buf = [0u8; 65536];
+            let mut written = 0u64;
+            loop {
+                if guard.is_cancelled() {
+                    anyhow::bail!("cancelled");
+                }
+                let n = limited.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                file.write_all(&buf[..n])?;
+                written += n as u64;
+            }
 
             // Track total bytes
             if !guard.check_bytes(written, clean_name) {
@@ -706,19 +767,30 @@ pub(crate) fn extract_cab(
             .read_file(name)
             .with_context(|| format!("Failed to read CAB entry: {name}"))?;
 
-        // Read into a size-limited buffer
-        let mut limited = LimitedReader::new(&mut reader, MAX_FILE_SIZE);
+        // Read into a size-limited buffer; check cancellation every 64 KiB.
         let mut buf = Vec::new();
-        limited
-            .read_to_end(&mut buf)
-            .with_context(|| format!("Failed to decompress CAB entry: {name}"))?;
-
-        if limited.is_limited() {
-            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                file: name.clone(),
-                size: MAX_FILE_SIZE,
-            });
-            continue;
+        {
+            let mut limited = LimitedReader::new(&mut reader, MAX_FILE_SIZE);
+            let mut chunk = [0u8; 65536];
+            loop {
+                if guard.is_cancelled() {
+                    anyhow::bail!("cancelled");
+                }
+                let n = limited
+                    .read(&mut chunk)
+                    .with_context(|| format!("Failed to decompress CAB entry: {name}"))?;
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+            }
+            if limited.is_limited() {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: name.clone(),
+                    size: MAX_FILE_SIZE,
+                });
+                continue;
+            }
         }
 
         if !guard.check_bytes(buf.len() as u64, name) {

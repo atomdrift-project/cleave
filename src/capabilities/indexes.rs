@@ -33,7 +33,7 @@ const ARCHIVE_FAMILY_TYPES: [RuleFileType; 14] = [
 ];
 
 fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
-    if matches!(*file_type, RuleFileType::All | RuleFileType::Archive) {
+    if file_type == &RuleFileType::All || file_type.is_archive() {
         &ARCHIVE_FAMILY_TYPES
     } else {
         &[]

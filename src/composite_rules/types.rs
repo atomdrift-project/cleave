@@ -389,6 +389,29 @@ impl FileType {
             )
     }
 
+    /// Returns true if this file type is an archive or compressed container.
+    #[must_use]
+    pub(crate) fn is_archive(&self) -> bool {
+        matches!(
+            self,
+            FileType::Archive
+                | FileType::Zip
+                | FileType::Apk
+                | FileType::Jar
+                | FileType::Tar
+                | FileType::Npm
+                | FileType::Nupkg
+                | FileType::Gem
+                | FileType::Whl
+                | FileType::Deb
+                | FileType::Rpm
+                | FileType::Crx
+                | FileType::VsixArchive
+                | FileType::Xpi
+                | FileType::Ipa
+        )
+    }
+
     /// Returns true if this file type typically has a section structure (ELF, Mach-O, PE)
     #[must_use]
     pub(crate) fn has_sections(&self) -> bool {

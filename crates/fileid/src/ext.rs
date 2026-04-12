@@ -29,14 +29,29 @@ pub(crate) fn detect_from_path(path: &Path) -> Option<FileType> {
 
     // Archive multi-part extensions (check before single extension)
     let p = path_str.as_bytes();
-    if ends_with_ci(p, b".tar.gz")
-        || ends_with_ci(p, b".tgz")
-        || ends_with_ci(p, b".tar.bz2")
-        || ends_with_ci(p, b".tar.xz")
-        || ends_with_ci(p, b".tar.zst")
-        || ends_with_ci(p, b".tar")
-    {
-        return Some(FileType::Archive);
+    if ends_with_ci(p, b".pkg.tar.zst") {
+        return Some(FileType::TarZst);
+    }
+    if ends_with_ci(p, b".pkg.tar.xz") {
+        return Some(FileType::TarXz);
+    }
+    if ends_with_ci(p, b".pkg.tar.gz") {
+        return Some(FileType::TarGz);
+    }
+    if ends_with_ci(p, b".tar.gz") || ends_with_ci(p, b".tgz") || ends_with_ci(p, b".crate") {
+        return Some(FileType::TarGz);
+    }
+    if ends_with_ci(p, b".tar.bz2") || ends_with_ci(p, b".tbz2") || ends_with_ci(p, b".tbz") {
+        return Some(FileType::TarBz2);
+    }
+    if ends_with_ci(p, b".tar.xz") || ends_with_ci(p, b".txz") {
+        return Some(FileType::TarXz);
+    }
+    if ends_with_ci(p, b".tar.zst") || ends_with_ci(p, b".tzst") || ends_with_ci(p, b".xbps") {
+        return Some(FileType::TarZst);
+    }
+    if ends_with_ci(p, b".tar") || ends_with_ci(p, b".gem") {
+        return Some(FileType::Tar);
     }
 
     // JAR/WAR/EAR by extension
@@ -197,11 +212,19 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "jpg" | "jpeg" => Some(FileType::Jpeg),
         "png" => Some(FileType::Png),
         "pkl" | "pickle" | "joblib" => Some(FileType::Pickle),
-        "zip" | "7z" | "rar" | "deb" | "rpm" | "apk" | "ipa" | "xpi" | "epub" | "nupkg"
-        | "vsix" | "aar" | "egg" | "whl" | "phar" | "crx" | "crate" | "gem" | "pkg" | "cab"
-        | "gz" | "bz2" | "xz" | "zst" | "tbz" | "tbz2" | "txz" | "tgz" | "tzst" => {
-            Some(FileType::Archive)
-        }
+        "zip" | "apk" | "ipa" | "xpi" | "epub" | "nupkg" | "vsix" | "aar" | "egg" | "whl"
+        | "phar" => Some(FileType::Zip),
+        "7z" => Some(FileType::SevenZ),
+        "rar" => Some(FileType::Rar),
+        "deb" => Some(FileType::Deb),
+        "rpm" => Some(FileType::Rpm),
+        "crx" => Some(FileType::Crx),
+        "pkg" => Some(FileType::Pkg),
+        "cab" => Some(FileType::Cab),
+        "gz" => Some(FileType::Gz),
+        "bz2" => Some(FileType::Bz2),
+        "xz" => Some(FileType::Xz),
+        "zst" => Some(FileType::Zst),
         "html" | "htm" => Some(FileType::Html),
         "md" | "markdown" => Some(FileType::Markdown),
         _ => None,
@@ -277,7 +300,37 @@ mod tests {
     fn tar_gz() {
         assert_eq!(
             detect_from_path(Path::new("data.tar.gz")),
-            Some(FileType::Archive)
+            Some(FileType::TarGz)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("data.tgz")),
+            Some(FileType::TarGz)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("data.tar.bz2")),
+            Some(FileType::TarBz2)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("data.tar.xz")),
+            Some(FileType::TarXz)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("data.tar.zst")),
+            Some(FileType::TarZst)
+        );
+        assert_eq!(detect_from_path(Path::new("data.tar")), Some(FileType::Tar));
+        assert_eq!(detect_from_path(Path::new("data.rar")), Some(FileType::Rar));
+        assert_eq!(
+            detect_from_path(Path::new("data.7z")),
+            Some(FileType::SevenZ)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("package.deb")),
+            Some(FileType::Deb)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("package.rpm")),
+            Some(FileType::Rpm)
         );
     }
 

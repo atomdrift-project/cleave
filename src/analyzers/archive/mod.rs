@@ -11,32 +11,19 @@ mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
 
-use crate::analyzers::{AnalysisInput, Analyzer};
+use crate::analyzers::{AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use std::fs::File;
 use std::fs::{self};
-// std::io imports removed
 use std::path::Path;
 use std::sync::Arc;
 
 use ::zip::ZipArchive;
 use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
-use utils::{calculate_sha256, detect_archive_type};
-
-/// Returns true when `path` is an archive format the `ArchiveAnalyzer` knows
-/// how to extract. This mirrors the dispatch in `extract_archive_safe` so
-/// callers (e.g. `cleave iter-files`) can decide whether to enumerate a file
-/// without having it later rejected by the analyze path with
-/// `Unsupported archive type: unknown`.
-#[must_use]
-pub(crate) fn is_supported_archive(path: &Path) -> bool {
-    let archive_type = utils::detect_archive_type_with_magic(path)
-        .unwrap_or_else(|_| detect_archive_type(path));
-    !matches!(archive_type, "unknown")
-}
+use utils::calculate_sha256;
 
 /// Default maximum file size to keep in memory (100 MB)
 pub(crate) const DEFAULT_MAX_MEMORY_FILE_SIZE: u64 = 100 * 1024 * 1024;
@@ -336,10 +323,8 @@ fn should_suppress_path_traversal_findings(
         return false;
     }
 
-    let archive_type = utils::detect_archive_type_with_magic(file_path)
-        .unwrap_or_else(|_| detect_archive_type(file_path));
-
-    archive_type == "zip" && is_zip_path_edge_case_corpus(file_path)
+    let file_type = crate::analyzers::detect_file_type(file_path).unwrap_or(FileType::Unknown);
+    matches!(file_type, FileType::Zip | FileType::Jar) && is_zip_path_edge_case_corpus(file_path)
 }
 
 /// Analyzes archive files (zip, tar, 7z, etc.) by extracting and analyzing each member
@@ -622,13 +607,14 @@ impl ArchiveAnalyzer {
             // Partial failure - continue with what we extracted but record the error
         }
 
-        // Create target info
-        let archive_type = utils::detect_archive_type_with_magic(file_path)
-            .unwrap_or_else(|_| detect_archive_type(file_path));
+        // Detect archive type using fileid (magic-first, extension fallback)
         let file_data = fs::read(file_path)?;
+        let file_type = crate::analyzers::detect_file_type_from_data(file_path, &file_data);
+        let archive_type_str = file_type.report_file_type();
+
         let target = TargetInfo {
             path: file_path.display().to_string(),
-            file_type: archive_type.to_string(),
+            file_type: archive_type_str.clone(),
             size_bytes: file_data.len() as u64,
             sha256: calculate_sha256(&file_data),
             architectures: None,
@@ -636,7 +622,7 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        if archive_type == "zip" {
+        if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
             if let Ok((mut seeded_entries, archive_metrics)) = zip::inspect_zip_metadata(file_path)
             {
                 report.archive_contents.append(&mut seeded_entries);
@@ -656,8 +642,8 @@ impl ArchiveAnalyzer {
 
         // Add structural feature
         report.structure.push(StructuralFeature {
-            id: format!("archive/{}", archive_type),
-            desc: format!("{} archive", archive_type),
+            id: format!("archive/{}", archive_type_str),
+            desc: format!("{} archive", archive_type_str),
             evidence: vec![Evidence {
                 method: "extension".to_string(),
                 source: "archive_analyzer".to_string(),
@@ -675,8 +661,8 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled after archive extraction");
         }
 
-        // Check if this is a JAR-like archive
-        let is_jar = matches!(archive_type, "zip" | "jar" | "war" | "ear" | "aar");
+        // JAR-like archives (ZIP-based Java/web artifacts) use the JAR analysis path
+        let is_jar = matches!(file_type, FileType::Jar | FileType::Zip | FileType::Crx);
 
         if is_jar {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start)?;
@@ -728,42 +714,44 @@ impl ArchiveAnalyzer {
         dest_dir: &Path,
         guard: &ExtractionGuard,
     ) -> Result<()> {
-        // Use magic-based detection for ambiguous extensions (apk, pkg)
-        let archive_type = utils::detect_archive_type_with_magic(archive_path)
-            .unwrap_or_else(|_| detect_archive_type(archive_path));
+        use std::io::Read;
+        let mut buf = [0u8; 512];
+        let n = File::open(archive_path)
+            .and_then(|mut f| f.read(&mut buf))
+            .unwrap_or(0);
+        let file_type = crate::analyzers::detect_file_type_from_data(archive_path, &buf[..n]);
 
-        match archive_type {
-            "crx" => zip::extract_crx_safe(archive_path, dest_dir, guard),
-            "7z" => {
+        match file_type {
+            FileType::Crx => zip::extract_crx_safe(archive_path, dest_dir, guard),
+            FileType::SevenZ => {
                 system_packages::extract_7z_safe(archive_path, dest_dir, guard, &self.zip_passwords)
             }
-            "tar" => tar::extract_tar_safe(archive_path, dest_dir, None, guard),
-            "tar.gz" | "tgz" => tar::extract_tar_safe(archive_path, dest_dir, Some("gzip"), guard),
-            "tar.bz2" | "tbz" | "tbz2" => {
-                tar::extract_tar_safe(archive_path, dest_dir, Some("bzip2"), guard)
+            FileType::Tar => tar::extract_tar_safe(archive_path, dest_dir, None, guard),
+            FileType::TarGz => tar::extract_tar_safe(archive_path, dest_dir, Some("gzip"), guard),
+            FileType::TarBz2 => tar::extract_tar_safe(archive_path, dest_dir, Some("bzip2"), guard),
+            FileType::TarXz => tar::extract_tar_safe(archive_path, dest_dir, Some("xz"), guard),
+            FileType::TarZst => tar::extract_tar_safe(archive_path, dest_dir, Some("zstd"), guard),
+            FileType::Xz => {
+                system_packages::extract_compressed_safe(archive_path, dest_dir, "xz", guard)
             }
-            "tar.xz" | "txz" => tar::extract_tar_safe(archive_path, dest_dir, Some("xz"), guard),
-            "tar.zst" | "tzst" => {
-                tar::extract_tar_safe(archive_path, dest_dir, Some("zstd"), guard)
+            FileType::Gz => {
+                system_packages::extract_compressed_safe(archive_path, dest_dir, "gzip", guard)
             }
-            "xz" => system_packages::extract_compressed_safe(archive_path, dest_dir, "xz", guard),
-            "gz" => system_packages::extract_compressed_safe(archive_path, dest_dir, "gzip", guard),
-            "zst" => {
+            FileType::Zst => {
                 system_packages::extract_compressed_safe(archive_path, dest_dir, "zstd", guard)
             }
-            "bz2" => {
+            FileType::Bz2 => {
                 system_packages::extract_compressed_safe(archive_path, dest_dir, "bzip2", guard)
             }
-            "deb" => system_packages::extract_deb_safe(archive_path, dest_dir, guard),
-            "rpm" => system_packages::extract_rpm(archive_path, dest_dir, guard),
-            "pkg" => system_packages::extract_pkg_safe(archive_path, dest_dir, guard),
-            "rar" => system_packages::extract_rar(archive_path, dest_dir, guard),
-            "cab" => system_packages::extract_cab(archive_path, dest_dir, guard),
-            // Handle zip and ambiguous "apk" that wasn't resolved by magic detection
-            "zip" | "apk" => {
+            FileType::Deb => system_packages::extract_deb_safe(archive_path, dest_dir, guard),
+            FileType::Rpm => system_packages::extract_rpm(archive_path, dest_dir, guard),
+            FileType::Pkg => system_packages::extract_pkg_safe(archive_path, dest_dir, guard),
+            FileType::Rar => system_packages::extract_rar(archive_path, dest_dir, guard),
+            FileType::Cab => system_packages::extract_cab(archive_path, dest_dir, guard),
+            FileType::Zip | FileType::Jar => {
                 zip::extract_zip_safe(archive_path, dest_dir, guard, &self.zip_passwords)
             }
-            _ => anyhow::bail!("Unsupported archive type: {}", archive_type),
+            _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
     }
 }
@@ -794,58 +782,9 @@ impl Analyzer for ArchiveAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        let path_str = file_path.to_string_lossy();
-        let path_bytes = path_str.as_bytes();
-
-        let ends_with_ci = |ext: &[u8]| -> bool {
-            if path_bytes.len() < ext.len() {
-                return false;
-            }
-            let suffix = &path_bytes[path_bytes.len() - ext.len()..];
-            suffix.eq_ignore_ascii_case(ext)
-        };
-
-        ends_with_ci(b".zip")
-            || ends_with_ci(b".jar")
-            || ends_with_ci(b".war")
-            || ends_with_ci(b".ear")
-            || ends_with_ci(b".apk") // Android APK or Alpine APK (detected by magic)
-            || ends_with_ci(b".aar")
-            || ends_with_ci(b".egg")
-            || ends_with_ci(b".whl")
-            || ends_with_ci(b".phar")
-            || ends_with_ci(b".nupkg")
-            || ends_with_ci(b".vsix")
-            || ends_with_ci(b".xpi")
-            || ends_with_ci(b".crx")
-            || ends_with_ci(b".ipa")
-            || ends_with_ci(b".epub")
-            || ends_with_ci(b".gem")
-            || ends_with_ci(b".crate")
-            || ends_with_ci(b".tar")
-            || ends_with_ci(b".tar.gz")
-            || ends_with_ci(b".tgz")
-            || ends_with_ci(b".tar.bz2")
-            || ends_with_ci(b".tbz2")
-            || ends_with_ci(b".tbz")
-            || ends_with_ci(b".tar.xz")
-            || ends_with_ci(b".txz")
-            || ends_with_ci(b".tar.zst") // Zstd-compressed tar
-            || ends_with_ci(b".tzst")
-            || ends_with_ci(b".pkg.tar.zst") // Arch Linux packages
-            || ends_with_ci(b".pkg.tar.xz")
-            || ends_with_ci(b".pkg.tar.gz")
-            || ends_with_ci(b".xbps") // Void Linux packages
-            || (ends_with_ci(b".xz") && !ends_with_ci(b".tar.xz"))
-            || (ends_with_ci(b".gz") && !ends_with_ci(b".tar.gz"))
-            || (ends_with_ci(b".zst") && !ends_with_ci(b".tar.zst"))
-            || (ends_with_ci(b".bz2") && !ends_with_ci(b".tar.bz2"))
-            || ends_with_ci(b".deb")
-            || ends_with_ci(b".rpm")
-            || ends_with_ci(b".pkg") // macOS PKG or FreeBSD pkg (detected by magic)
-            || ends_with_ci(b".rar")
-            || ends_with_ci(b".7z")
-            || ends_with_ci(b".cab")
+        crate::analyzers::detect_file_type(file_path)
+            .map(|ft| ft.is_archive())
+            .unwrap_or(false)
     }
 }
 
@@ -959,354 +898,14 @@ composite_rules:
     }
 
     #[test]
-    fn test_can_analyze_zip() {
+    fn test_can_analyze() {
         let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.zip")));
-        assert!(analyzer.can_analyze(Path::new("TEST.ZIP")));
-    }
-
-    #[test]
-    fn test_can_analyze_jar() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.jar")));
-        assert!(analyzer.can_analyze(Path::new("TEST.JAR")));
-        assert!(analyzer.can_analyze(Path::new("test.war")));
-        assert!(analyzer.can_analyze(Path::new("test.apk")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_jar() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.jar")), "zip");
-        assert_eq!(detect_archive_type(Path::new("test.war")), "zip");
-        // .apk returns "apk" for extension-based detection (needs magic for Android vs Alpine)
-        assert_eq!(detect_archive_type(Path::new("test.apk")), "apk");
-    }
-
-    #[test]
-    fn test_can_analyze_tar() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.tar")));
-        assert!(analyzer.can_analyze(Path::new("test.tar.gz")));
-        assert!(analyzer.can_analyze(Path::new("test.tgz")));
-    }
-
-    #[test]
-    fn test_can_analyze_tar_bz2() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.tar.bz2")));
-        assert!(analyzer.can_analyze(Path::new("test.tbz2")));
-    }
-
-    #[test]
-    fn test_can_analyze_tar_xz() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.tar.xz")));
-        assert!(analyzer.can_analyze(Path::new("test.txz")));
-    }
-
-    #[test]
-    fn test_cannot_analyze_other() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(!analyzer.can_analyze(Path::new("test.txt")));
-        assert!(!analyzer.can_analyze(Path::new("test.elf")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_zip() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.zip")), "zip");
-    }
-
-    #[test]
-    fn test_detect_archive_type_tar() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.tar")), "tar");
-    }
-
-    #[test]
-    fn test_detect_archive_type_tar_gz() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.tar.gz")), "tar.gz");
-        assert_eq!(detect_archive_type(Path::new("test.tgz")), "tgz");
-    }
-
-    #[test]
-    fn test_detect_archive_type_tar_bz2() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.tar.bz2")), "tar.bz2");
-        assert_eq!(detect_archive_type(Path::new("test.tbz2")), "tbz");
-        assert_eq!(detect_archive_type(Path::new("test.tbz")), "tbz");
-    }
-
-    #[test]
-    fn test_detect_archive_type_tar_xz() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.tar.xz")), "tar.xz");
-        assert_eq!(detect_archive_type(Path::new("test.txz")), "txz");
-    }
-
-    #[test]
-    fn test_detect_archive_type_deb() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.deb")), "deb");
-        assert_eq!(detect_archive_type(Path::new("package.deb")), "deb");
-    }
-
-    #[test]
-    fn test_detect_archive_type_rpm() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.rpm")), "rpm");
-        assert_eq!(detect_archive_type(Path::new("package.rpm")), "rpm");
-    }
-
-    #[test]
-    fn test_detect_archive_type_rar() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.rar")), "rar");
-        assert_eq!(detect_archive_type(Path::new("archive.rar")), "rar");
-    }
-
-    #[test]
-    fn test_can_analyze_deb() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.deb")));
-        assert!(analyzer.can_analyze(Path::new("TEST.DEB")));
-    }
-
-    #[test]
-    fn test_can_analyze_rpm() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.rpm")));
-        assert!(analyzer.can_analyze(Path::new("TEST.RPM")));
-    }
-
-    #[test]
-    fn test_can_analyze_rar() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.rar")));
-        assert!(analyzer.can_analyze(Path::new("TEST.RAR")));
-    }
-
-    #[test]
-    fn test_can_analyze_python_packages() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("package.egg")));
-        assert!(analyzer.can_analyze(Path::new("PACKAGE.EGG")));
-        assert!(analyzer.can_analyze(Path::new("package.whl")));
-        assert!(analyzer.can_analyze(Path::new("PACKAGE.WHL")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_python_packages() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("package.egg")), "zip");
-        assert_eq!(detect_archive_type(Path::new("package.whl")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_ruby_gem() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("rails.gem")));
-        assert!(analyzer.can_analyze(Path::new("RAILS.GEM")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_gem() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("rails.gem")), "tar");
-    }
-
-    #[test]
-    fn test_can_analyze_php_phar() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("composer.phar")));
-        assert!(analyzer.can_analyze(Path::new("COMPOSER.PHAR")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_phar() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("composer.phar")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_nuget() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("package.nupkg")));
-        assert!(analyzer.can_analyze(Path::new("PACKAGE.NUPKG")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_nupkg() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("package.nupkg")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_rust_crate() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("serde.crate")));
-        assert!(analyzer.can_analyze(Path::new("SERDE.CRATE")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_crate() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("serde.crate")), "tar.gz");
-    }
-
-    #[test]
-    fn test_can_analyze_vscode_extensions() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("extension.vsix")));
-        assert!(analyzer.can_analyze(Path::new("EXTENSION.VSIX")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_vsix() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("extension.vsix")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_firefox_extensions() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("addon.xpi")));
-        assert!(analyzer.can_analyze(Path::new("ADDON.XPI")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_xpi() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("addon.xpi")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_chrome_extensions() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("extension.crx")));
-        assert!(analyzer.can_analyze(Path::new("EXTENSION.CRX")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_crx() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("extension.crx")), "crx");
-    }
-
-    #[test]
-    fn test_can_analyze_ios_apps() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("app.ipa")));
-        assert!(analyzer.can_analyze(Path::new("APP.IPA")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_ipa() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("app.ipa")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_epub() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("book.epub")));
-        assert!(analyzer.can_analyze(Path::new("BOOK.EPUB")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_epub() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("book.epub")), "zip");
-    }
-
-    #[test]
-    fn test_can_analyze_7z() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("archive.7z")));
-        assert!(analyzer.can_analyze(Path::new("ARCHIVE.7Z")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_7z() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("archive.7z")), "7z");
-    }
-
-    #[test]
-    fn test_can_analyze_macos_pkg() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("installer.pkg")));
-        assert!(analyzer.can_analyze(Path::new("INSTALLER.PKG")));
-    }
-
-    #[test]
-    fn test_detect_archive_type_pkg() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("installer.pkg")), "pkg");
-    }
-
-    #[test]
-    fn test_detect_archive_type_unknown() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.txt")), "unknown");
-    }
-
-    #[test]
-    fn test_detect_archive_type_zstd_tar() {
-        let _analyzer = ArchiveAnalyzer::new();
-        assert_eq!(detect_archive_type(Path::new("test.tar.zst")), "tar.zst");
-        assert_eq!(detect_archive_type(Path::new("test.tzst")), "tar.zst");
-    }
-
-    #[test]
-    fn test_detect_archive_type_arch_packages() {
-        let _analyzer = ArchiveAnalyzer::new();
-        // Arch Linux packages
-        assert_eq!(
-            detect_archive_type(Path::new("linux-6.7-1-x86_64.pkg.tar.zst")),
-            "tar.zst"
-        );
-        assert_eq!(
-            detect_archive_type(Path::new("pacman-6.0-1-x86_64.pkg.tar.xz")),
-            "tar.xz"
-        );
-        assert_eq!(
-            detect_archive_type(Path::new("old-pkg-1.0-1.pkg.tar.gz")),
-            "tar.gz"
-        );
-    }
-
-    #[test]
-    fn test_detect_archive_type_void_packages() {
-        let _analyzer = ArchiveAnalyzer::new();
-        // Void Linux packages (xbps)
-        assert_eq!(
-            detect_archive_type(Path::new("bash-5.2-1.x86_64.xbps")),
-            "tar.zst"
-        );
-    }
-
-    #[test]
-    fn test_can_analyze_zstd_tar() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("test.tar.zst")));
-        assert!(analyzer.can_analyze(Path::new("test.tzst")));
-    }
-
-    #[test]
-    fn test_can_analyze_arch_packages() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("linux.pkg.tar.zst")));
-        assert!(analyzer.can_analyze(Path::new("linux.pkg.tar.xz")));
-        assert!(analyzer.can_analyze(Path::new("linux.pkg.tar.gz")));
-    }
-
-    #[test]
-    fn test_can_analyze_void_packages() {
-        let analyzer = ArchiveAnalyzer::new();
-        assert!(analyzer.can_analyze(Path::new("bash.xbps")));
+        let fixtures = Path::new("tests/fixtures/archives");
+        assert!(analyzer.can_analyze(&fixtures.join("test.zip")));
+        assert!(analyzer.can_analyze(&fixtures.join("test.tar.gz")));
+        assert!(!analyzer.can_analyze(&fixtures.join("testfile.txt")));
+        // Non-existent paths always return false (no magic to read)
+        assert!(!analyzer.can_analyze(Path::new("/tmp/nonexistent.zip")));
     }
 
     #[test]

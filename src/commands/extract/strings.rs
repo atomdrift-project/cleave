@@ -61,7 +61,7 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
     // Reject archives — strings on compressed data is meaningless.
     // Use `cleave strings <file> --layer <member>` or run on extracted members.
     if let Ok(file_type) = detect_file_type(path) {
-        if matches!(file_type, FileType::Archive | FileType::Jar) {
+        if file_type.is_archive() {
             anyhow::bail!(
                 "Unsupported file type for string extraction: {:?}. \
                  Run on extracted archive members instead (e.g. cleave strings <extracted_file>).",

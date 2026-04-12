@@ -14,6 +14,7 @@ use anyhow::{Context, Result};
 use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 /// Maximum nesting depth for decoded strings (prevent infinite recursion)
@@ -1038,8 +1039,16 @@ pub(crate) fn process_all_strings(
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
+    cancelled: Option<&AtomicBool>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
-    process_all_strings_with_host(parent_path, strings, capability_mapper, current_depth, None)
+    process_all_strings_with_host(
+        parent_path,
+        strings,
+        capability_mapper,
+        current_depth,
+        None,
+        cancelled,
+    )
 }
 
 pub(crate) fn process_all_strings_with_host(
@@ -1048,6 +1057,7 @@ pub(crate) fn process_all_strings_with_host(
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
     _host_file_type: Option<&FileType>,
+    cancelled: Option<&AtomicBool>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     if is_source_map_string_set(strings) {
         tracing::debug!(
@@ -1107,6 +1117,9 @@ pub(crate) fn process_all_strings_with_host(
     let max_detection_attempts = std::cmp::min(256, strings.len()); // Check the 256 longest/most likely strings in massive files
 
     for (idx, string_info) in sorted_strings {
+        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
+            break;
+        }
         if detection_attempts >= max_detection_attempts {
             break;
         }
@@ -1281,7 +1294,7 @@ mod tests {
         let mapper = Arc::new(CapabilityMapper::default());
 
         let (encoded_layers, plain_findings) =
-            process_all_strings("sample.ts", &strings, &mapper, 0);
+            process_all_strings("sample.ts", &strings, &mapper, 0, None);
 
         assert!(plain_findings.is_empty());
         assert_eq!(encoded_layers.len(), 1);

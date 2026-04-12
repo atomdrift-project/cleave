@@ -32,9 +32,11 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
             }
         }
         b'M' => {
-            // PE: MZ
+            // PE: MZ, or Cabinet: MSCF
             if data[1] == b'Z' {
                 Some((FileType::Pe, DetectionSource::Magic))
+            } else if data.len() >= 4 && data[1] == b'S' && data[2] == b'C' && data[3] == b'F' {
+                Some((FileType::Cab, DetectionSource::Magic))
             } else {
                 None
             }
@@ -139,7 +141,7 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         b'R' => {
             // RAR: Rar!
             if data.starts_with(b"Rar!") {
-                Some((FileType::Archive, DetectionSource::Magic))
+                Some((FileType::Rar, DetectionSource::Magic))
             } else {
                 None
             }
@@ -196,10 +198,51 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
                 None
             }
         }
+        b'!' => {
+            // Debian package: !<arch>
+            if data.starts_with(b"!<arch>") {
+                Some((FileType::Deb, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
+        b'x' => {
+            // XAR (macOS PKG): xar!
+            if data.starts_with(b"xar!") {
+                Some((FileType::Pkg, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
+        b'C' => {
+            // Chrome extension: Cr24
+            if data.starts_with(b"Cr24") {
+                Some((FileType::Crx, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
+        0xED => {
+            // RPM: ED AB EE DB
+            if data.len() >= 4 && data[1] == 0xAB && data[2] == 0xEE && data[3] == 0xDB {
+                Some((FileType::Rpm, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
         0x1F => {
-            // Gzip: 1F 8B
+            // Gzip: 1F 8B — could wrap a tar or be a single compressed file.
+            // Use extension to tell them apart; unknown extension → plain gz.
             if data[1] == 0x8B {
-                Some((FileType::Archive, DetectionSource::Magic))
+                let ft = if path_ends_with_ci(path, b".tar.gz")
+                    || path_ends_with_ci(path, b".tgz")
+                    || path_ends_with_ci(path, b".crate")
+                {
+                    FileType::TarGz
+                } else {
+                    FileType::Gz
+                };
+                Some((ft, DetectionSource::Magic))
             } else {
                 None
             }
@@ -207,7 +250,13 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         0xFD => {
             // XZ: FD 37 7A 58
             if data.starts_with(b"\xfd7zX") {
-                Some((FileType::Archive, DetectionSource::Magic))
+                let ft = if path_ends_with_ci(path, b".tar.xz") || path_ends_with_ci(path, b".txz")
+                {
+                    FileType::TarXz
+                } else {
+                    FileType::Xz
+                };
+                Some((ft, DetectionSource::Magic))
             } else {
                 None
             }
@@ -215,7 +264,15 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         b'B' => {
             // Bzip2: BZh
             if data.starts_with(b"BZh") {
-                Some((FileType::Archive, DetectionSource::Magic))
+                let ft = if path_ends_with_ci(path, b".tar.bz2")
+                    || path_ends_with_ci(path, b".tbz2")
+                    || path_ends_with_ci(path, b".tbz")
+                {
+                    FileType::TarBz2
+                } else {
+                    FileType::Bz2
+                };
+                Some((ft, DetectionSource::Magic))
             } else {
                 None
             }
@@ -223,7 +280,7 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         b'7' => {
             // 7z: 37 7A BC AF 27 1C
             if data.starts_with(b"7z\xBC\xAF\x27\x1C") {
-                Some((FileType::Archive, DetectionSource::Magic))
+                Some((FileType::SevenZ, DetectionSource::Magic))
             } else {
                 None
             }
@@ -231,7 +288,16 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         0x28 => {
             // Zstandard: 28 B5 2F FD
             if data.len() >= 4 && data[1] == 0xB5 && data[2] == 0x2F && data[3] == 0xFD {
-                Some((FileType::Archive, DetectionSource::Magic))
+                let ft = if path_ends_with_ci(path, b".tar.zst")
+                    || path_ends_with_ci(path, b".tzst")
+                    || path_ends_with_ci(path, b".xbps")
+                    || path_ends_with_ci(path, b".pkg.tar.zst")
+                {
+                    FileType::TarZst
+                } else {
+                    FileType::Zst
+                };
+                Some((ft, DetectionSource::Magic))
             } else {
                 None
             }
@@ -293,6 +359,16 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
     None
 }
 
+/// Case-insensitive suffix match on path bytes (no allocation).
+fn path_ends_with_ci(path: &Path, suffix: &[u8]) -> bool {
+    let s = path.to_string_lossy();
+    let bytes = s.as_bytes();
+    if bytes.len() < suffix.len() {
+        return false;
+    }
+    bytes[bytes.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+}
+
 /// Classify PK (ZIP) archives into JAR, OOXML, or generic Archive.
 ///
 /// ZIP-based formats share the same magic bytes, so disambiguation requires
@@ -322,7 +398,7 @@ fn classify_pk(path: &Path, data: &[u8]) -> (FileType, DetectionSource) {
         return (FileType::Ooxml, DetectionSource::Magic);
     }
 
-    (FileType::Archive, DetectionSource::Magic)
+    (FileType::Zip, DetectionSource::Magic)
 }
 
 /// Lowercase extension into a stack buffer. Returns None if no extension or too long.
@@ -586,21 +662,28 @@ mod tests {
     fn rar_archive() {
         let data = b"Rar!\x1a\x07\x01\x00";
         let (ft, _) = detect_from_content(Path::new("archive.rar"), data).unwrap();
-        assert_eq!(ft, FileType::Archive);
+        assert_eq!(ft, FileType::Rar);
     }
 
     #[test]
-    fn gzip_archive() {
+    fn gzip_plain() {
         let data = [0x1f, 0x8b, 0x08, 0x00];
         let (ft, _) = detect_from_content(Path::new("data.gz"), &data).unwrap();
-        assert_eq!(ft, FileType::Archive);
+        assert_eq!(ft, FileType::Gz);
+    }
+
+    #[test]
+    fn gzip_tar() {
+        let data = [0x1f, 0x8b, 0x08, 0x00];
+        let (ft, _) = detect_from_content(Path::new("data.tar.gz"), &data).unwrap();
+        assert_eq!(ft, FileType::TarGz);
     }
 
     #[test]
     fn zip_archive() {
         let data = b"PK\x03\x04some content here";
         let (ft, _) = detect_from_content(Path::new("data.zip"), data).unwrap();
-        assert_eq!(ft, FileType::Archive);
+        assert_eq!(ft, FileType::Zip);
     }
 
     #[test]
@@ -679,14 +762,14 @@ mod tests {
     fn zstd_archive() {
         let data = [0x28, 0xB5, 0x2F, 0xFD, 0x00, 0x00];
         let (ft, _) = detect_from_content(Path::new("data.zst"), &data).unwrap();
-        assert_eq!(ft, FileType::Archive);
+        assert_eq!(ft, FileType::Zst);
     }
 
     #[test]
     fn sevenz_archive() {
         let data = b"7z\xBC\xAF\x27\x1C\x00\x00";
         let (ft, _) = detect_from_content(Path::new("data.7z"), data).unwrap();
-        assert_eq!(ft, FileType::Archive);
+        assert_eq!(ft, FileType::SevenZ);
     }
 
     #[test]

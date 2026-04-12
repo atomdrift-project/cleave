@@ -2,6 +2,7 @@
 //!
 //! Analyzes ELF binaries using goblin, stng, and selective rizin deep analysis.
 
+use crate::analyzers::goblin_safe;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
@@ -10,7 +11,6 @@ use crate::strings::StringExtractor;
 use crate::types::binary_metrics::ElfMetrics;
 use crate::types::*;
 use anyhow::{Context, Result};
-use crate::analyzers::goblin_safe;
 use goblin::elf::note::NT_GNU_BUILD_ID;
 use goblin::elf::Elf;
 use std::fs;
@@ -370,10 +370,14 @@ impl ElfAnalyzer {
                 // goblin parse failed (Err or panic) — emit the structural
                 // finding, salvage the architecture from the raw header, and
                 // fall back to rizin via the shared cached path.
-                let failure = parse_failure
+                let (err_msg_owned, panicked) = parse_failure
                     .as_ref()
-                    .expect("elf_opt is None implies a failure was recorded");
-                let err_msg = &failure.message;
+                    .map(|f| (f.message.clone(), f.panicked))
+                    .unwrap_or_else(|| {
+                        tracing::error!("elf_opt is None but no parse_failure recorded");
+                        (String::new(), false)
+                    });
+                let err_msg = &err_msg_owned;
 
                 let mut crit = Criticality::Suspicious;
                 if report.target.path.contains("!!embedded") {
@@ -438,7 +442,7 @@ impl ElfAnalyzer {
 
                 report.metadata.errors.push(format!(
                     "ELF parse {}: {}",
-                    if failure.panicked { "panicked" } else { "error" },
+                    if panicked { "panicked" } else { "error" },
                     err_msg
                 ));
                 (None, None, false, None, 0, false)
@@ -454,44 +458,44 @@ impl ElfAnalyzer {
         // Either way, we set `has_malformed_structure` so downstream
         // consumers know the structure didn't come from the primary parser.
         if parse_failure.is_some() {
-            let mut binary_metrics = if allow_rizin
-                && !self.is_cancelled()
-                && Radare2Analyzer::is_available()
-            {
-                let needs_r2_strings =
-                    stng_strings.is_none() && self.preextracted_strings.is_none();
-                match self.radare2.extract_batched(
-                    analysis_path,
-                    false, // has_symbols=false: nothing came back from goblin
-                    false, // goblin_success=false
-                    needs_r2_strings,
-                    fallback_sha256,
-                ) {
-                    Ok(batched) => {
-                        tools_used.push("radare2".to_string());
-                        let bm = self
-                            .radare2
-                            .compute_metrics_from_batched(&batched, data.len() as u64);
-                        report.functions =
-                            batched.functions.into_iter().map(Function::from).collect();
-                        bm
+            let mut binary_metrics =
+                if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                    let needs_r2_strings =
+                        stng_strings.is_none() && self.preextracted_strings.is_none();
+                    match self.radare2.extract_batched(
+                        analysis_path,
+                        false, // has_symbols=false: nothing came back from goblin
+                        false, // goblin_success=false
+                        needs_r2_strings,
+                        fallback_sha256,
+                    ) {
+                        Ok(batched) => {
+                            tools_used.push("radare2".to_string());
+                            let bm = self
+                                .radare2
+                                .compute_metrics_from_batched(&batched, data.len() as u64);
+                            report.functions =
+                                batched.functions.into_iter().map(Function::from).collect();
+                            bm
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "rizin fallback also failed for goblin-malformed ELF {}: {}",
+                                report.target.path,
+                                e
+                            );
+                            crate::types::BinaryMetrics {
+                                file_size: data.len() as u64,
+                                ..Default::default()
+                            }
+                        }
                     }
-                    Err(e) => {
-                        tracing::debug!(
-                            "rizin fallback also failed for goblin-malformed ELF {}: {}",
-                            report.target.path,
-                            e
-                        );
-                        let mut bm = crate::types::BinaryMetrics::default();
-                        bm.file_size = data.len() as u64;
-                        bm
+                } else {
+                    crate::types::BinaryMetrics {
+                        file_size: data.len() as u64,
+                        ..Default::default()
                     }
-                }
-            } else {
-                let mut bm = crate::types::BinaryMetrics::default();
-                bm.file_size = data.len() as u64;
-                bm
-            };
+                };
             binary_metrics.has_malformed_structure = true;
             report.metrics = Some(Metrics {
                 binary: Some(binary_metrics),
@@ -506,8 +510,10 @@ impl ElfAnalyzer {
                 .and_then(|n| n.to_str())
                 .unwrap_or("binary.elf")
                 .to_string();
-            let embedded =
-                crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(data);
+            let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
+                data,
+                self.cancellation.as_deref(),
+            );
             for binary in &embedded {
                 if self.is_cancelled() {
                     break;
@@ -584,6 +590,7 @@ impl ElfAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);

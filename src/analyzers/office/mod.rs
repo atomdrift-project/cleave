@@ -747,6 +747,13 @@ impl OfficeAnalyzer {
         let mut endpoints = BTreeSet::new();
         if let Some(re) = &ip_re {
             for text in [word_xml, vba_surface.as_str(), raw_surface.as_ref()] {
+                if self
+                    .cancellation
+                    .as_ref()
+                    .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    break;
+                }
                 for m in re.find_iter(text) {
                     endpoints.insert(m.as_str().to_string());
                 }

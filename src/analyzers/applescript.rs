@@ -9,12 +9,14 @@ use crate::types::*;
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     string_extractor: StringExtractor,
+    cancellation: Option<Arc<AtomicBool>>,
 }
 
 impl AppleScriptAnalyzer {
@@ -23,6 +25,7 @@ impl AppleScriptAnalyzer {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::new()),
             string_extractor: StringExtractor::new(),
+            cancellation: None,
         }
     }
 
@@ -114,6 +117,9 @@ impl Analyzer for AppleScriptAnalyzer {
             report.strings = self.string_extractor.extract_smart(input.data, None);
         }
 
+        // Prefer the struct's cancellation flag; fall back to the input's flag.
+        let cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
+
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
@@ -121,6 +127,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                cancellation.map(Arc::as_ref),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
@@ -178,6 +185,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);

@@ -22,7 +22,6 @@
 extern crate self as cleave;
 
 mod analysis_cache;
-mod archive_utils;
 pub mod cache;
 pub mod decoders;
 mod entropy;
@@ -867,7 +866,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
     // Skip extraction for archive files themselves as they are expected to contain
     // binary noise and their contents will be analyzed separately.
-    let (stng_strings, stage_stng_ms) = if matches!(file_type, FileType::Archive | FileType::Jar) {
+    let (stng_strings, stage_stng_ms) = if file_type.is_archive() {
         (Vec::new(), 0)
     } else {
         let stng_start = std::time::Instant::now();
@@ -1096,7 +1095,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .with_capability_mapper_arc(mapper_arc.clone())
             .with_cancellation(options.cancellation.clone())
             .analyze_input(&input),
-        FileType::Jar | FileType::Archive => {
+        ref ft if ft.is_archive() => {
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_zip_passwords(options.zip_passwords.clone())
@@ -1405,10 +1404,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Run YARA for file types that didn't handle it internally.
     // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.
     let yara_start = std::time::Instant::now();
-    let handled_yara_internally = matches!(
-        file_type,
-        FileType::MachO | FileType::Elf | FileType::Pe | FileType::Archive | FileType::Jar
-    );
+    let handled_yara_internally =
+        matches!(file_type, FileType::MachO | FileType::Elf | FileType::Pe)
+            || file_type.is_archive();
     if !handled_yara_internally {
         if let Some(engine) = yara_engine {
             if file_type.is_program() && engine.is_loaded() {
@@ -1542,9 +1540,8 @@ pub fn analyze_directory<P: AsRef<Path>>(
             if all_files_flag {
                 return true;
             }
-            // Skip unknown file types by default
             let file_type = detect_file_type(e.path()).unwrap_or(FileType::Unknown);
-            file_type.is_program()
+            analyzers::is_analyzable(e.path(), &file_type)
         })
         .map(|e| e.path().to_path_buf())
         .collect();
@@ -1754,8 +1751,8 @@ where
                 return;
             };
             let ft = analyzers::detect_file_type_from_data(file_path, file_data.as_slice());
-            if !ft.is_program() {
-                tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-program file");
+            if !analyzers::is_analyzable(file_path, &ft) {
+                tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-analyzable file");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }

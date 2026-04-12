@@ -11,7 +11,7 @@ use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tempfile::NamedTempFile;
+use tempfile::Builder as TempBuilder;
 use tracing::{info, info_span, warn, Instrument, Span};
 
 use super::AppState;
@@ -230,25 +230,36 @@ async fn analyze_inner(
         })
         .unwrap_or_default();
 
-    let temp_file = match tokio::task::spawn_blocking(NamedTempFile::new).await {
-        Ok(Ok(f)) => f,
-        Ok(Err(e)) => {
-            warn!("Failed to create temp file: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            warn!("Task join error creating temp file: {}", e);
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
-            )
-                .into_response();
-        }
-    };
+    // Preserve the original file extension so archive type detection (which
+    // uses extension as a fallback for compound formats like tar.gz) behaves
+    // the same as when analyzing a file by path.
+    let suffix = std::path::Path::new(&filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| format!(".{e}"))
+        .unwrap_or_default();
+    let temp_file =
+        match tokio::task::spawn_blocking(move || TempBuilder::new().suffix(&suffix).tempfile())
+            .await
+        {
+            Ok(Ok(f)) => f,
+            Ok(Err(e)) => {
+                warn!("Failed to create temp file: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+                    .into_response();
+            }
+            Err(e) => {
+                warn!("Task join error creating temp file: {}", e);
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Internal error"})),
+                )
+                    .into_response();
+            }
+        };
 
     let path = temp_file.path().to_owned();
     let mut tokio_file = match tokio::fs::File::create(&path).await {

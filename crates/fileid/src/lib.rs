@@ -110,8 +110,40 @@ pub enum FileType {
     SystemdService,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
-    /// Archive file (zip, tar, gz, etc.)
-    Archive,
+    /// ZIP archive (zip, apk, ipa, nupkg, etc.)
+    Zip,
+    /// TAR archive (plain, no compression)
+    Tar,
+    /// Gzip-compressed TAR (.tar.gz, .tgz, .crate)
+    TarGz,
+    /// Bzip2-compressed TAR (.tar.bz2, .tbz2)
+    TarBz2,
+    /// XZ-compressed TAR (.tar.xz, .txz)
+    TarXz,
+    /// Zstandard-compressed TAR (.tar.zst, .xbps)
+    TarZst,
+    /// Gzip-compressed single file (.gz, not a tar)
+    Gz,
+    /// Bzip2-compressed single file (.bz2, not a tar)
+    Bz2,
+    /// XZ-compressed single file (.xz, not a tar)
+    Xz,
+    /// Zstandard-compressed single file (.zst, not a tar)
+    Zst,
+    /// 7-Zip archive (.7z)
+    SevenZ,
+    /// RAR archive (.rar)
+    Rar,
+    /// Debian package (.deb)
+    Deb,
+    /// RPM package (.rpm)
+    Rpm,
+    /// macOS installer package (.pkg, XAR format)
+    Pkg,
+    /// Cabinet archive (.cab)
+    Cab,
+    /// Chrome extension (.crx)
+    Crx,
     /// AppleScript source file (.applescript, .scpt)
     AppleScript,
     /// Apple Property List (.plist)
@@ -144,6 +176,48 @@ impl FileType {
     #[must_use]
     pub fn is_program(&self) -> bool {
         !matches!(self, Self::Html | Self::Markdown)
+    }
+
+    /// Returns true if this file type is an archive or compressed container.
+    #[must_use]
+    pub fn is_archive(&self) -> bool {
+        matches!(
+            self,
+            Self::Zip
+                | Self::Tar
+                | Self::TarGz
+                | Self::TarBz2
+                | Self::TarXz
+                | Self::TarZst
+                | Self::Gz
+                | Self::Bz2
+                | Self::Xz
+                | Self::Zst
+                | Self::SevenZ
+                | Self::Rar
+                | Self::Deb
+                | Self::Rpm
+                | Self::Pkg
+                | Self::Cab
+                | Self::Crx
+                | Self::Jar
+        )
+    }
+
+    /// Returns true if this file type is a compiled native binary.
+    #[must_use]
+    pub fn is_binary(&self) -> bool {
+        matches!(
+            self,
+            Self::Elf | Self::Pe | Self::MachO | Self::JavaClass | Self::PythonBytecode
+        )
+    }
+
+    /// Returns true if cleave supports analysis of this file type.
+    /// All currently identified types are supported; this is future-proofing.
+    #[must_use]
+    pub fn is_supported(&self) -> bool {
+        self.is_program()
     }
 
     /// Returns true if this file type represents source code with AST support.
@@ -731,57 +805,75 @@ mod tests {
 
     #[test]
     fn zip_archive() {
-        assert_detect("data.zip", b"PK\x03\x04content", FileType::Archive);
+        assert_detect("data.zip", b"PK\x03\x04content", FileType::Zip);
     }
 
     #[test]
     fn rar_archive() {
-        assert_detect("data.rar", b"Rar!\x1a\x07\x01\x00", FileType::Archive);
+        assert_detect("data.rar", b"Rar!\x1a\x07\x01\x00", FileType::Rar);
     }
 
     #[test]
     fn gzip_archive() {
-        assert_detect("data.gz", &[0x1f, 0x8b, 0x08, 0x00], FileType::Archive);
+        assert_detect("data.gz", &[0x1f, 0x8b, 0x08, 0x00], FileType::Gz);
     }
 
     #[test]
     fn xz_archive() {
-        assert_detect("data.xz", b"\xfd7zXZ\x00", FileType::Archive);
+        assert_detect("data.xz", b"\xfd7zXZ\x00", FileType::Xz);
     }
 
     #[test]
     fn bzip2_archive() {
-        assert_detect("data.bz2", b"BZh91AY&SY", FileType::Archive);
+        assert_detect("data.bz2", b"BZh91AY&SY", FileType::Bz2);
     }
 
     #[test]
     fn sevenz_archive() {
-        assert_detect("data.7z", b"7z\xBC\xAF\x27\x1C\x00", FileType::Archive);
+        assert_detect("data.7z", b"7z\xBC\xAF\x27\x1C\x00", FileType::SevenZ);
     }
 
     #[test]
     fn zstd_archive() {
-        assert_detect(
-            "data.zst",
-            &[0x28, 0xB5, 0x2F, 0xFD, 0, 0],
-            FileType::Archive,
-        );
+        assert_detect("data.zst", &[0x28, 0xB5, 0x2F, 0xFD, 0, 0], FileType::Zst);
     }
 
     #[test]
     fn tar_gz_by_ext() {
-        assert_ext("data.tar.gz", FileType::Archive);
-        assert_ext("data.tgz", FileType::Archive);
+        assert_ext("data.tar.gz", FileType::TarGz);
+        assert_ext("data.tgz", FileType::TarGz);
     }
 
     #[test]
     fn deb_by_ext() {
-        assert_ext("package.deb", FileType::Archive);
+        assert_ext("package.deb", FileType::Deb);
     }
 
     #[test]
     fn rpm_by_ext() {
-        assert_ext("package.rpm", FileType::Archive);
+        assert_ext("package.rpm", FileType::Rpm);
+    }
+
+    #[test]
+    fn is_archive_returns_true_for_archives() {
+        assert!(FileType::Zip.is_archive());
+        assert!(FileType::TarGz.is_archive());
+        assert!(FileType::Rar.is_archive());
+        assert!(FileType::SevenZ.is_archive());
+        assert!(FileType::Deb.is_archive());
+        assert!(FileType::Jar.is_archive());
+        assert!(!FileType::Elf.is_archive());
+        assert!(!FileType::Python.is_archive());
+    }
+
+    #[test]
+    fn is_binary_returns_true_for_binaries() {
+        assert!(FileType::Elf.is_binary());
+        assert!(FileType::Pe.is_binary());
+        assert!(FileType::MachO.is_binary());
+        assert!(FileType::JavaClass.is_binary());
+        assert!(!FileType::Zip.is_binary());
+        assert!(!FileType::Python.is_binary());
     }
 
     // ── Documents ────────────────────────────────────────────────────

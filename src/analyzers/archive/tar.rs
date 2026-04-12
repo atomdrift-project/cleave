@@ -13,12 +13,12 @@
 //! - Alpine Linux packages (.apk) - TAR.GZ format (detected by magic)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
-    MAX_FILE_SIZE,
+    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
+    LimitedReader, MAX_FILE_SIZE,
 };
 use anyhow::{Context, Result};
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::Path;
 
 /// Extract TAR archive with optional compression
@@ -30,15 +30,32 @@ pub(crate) fn extract_tar_safe(
 ) -> Result<()> {
     let file = File::open(archive_path)?;
 
-    let reader: Box<dyn Read> = match compression {
-        Some("gzip") => Box::new(flate2::read::GzDecoder::new(file)),
-        Some("bzip2") => Box::new(bzip2::read::BzDecoder::new(file)),
-        Some("xz") => Box::new(xz2::read::XzDecoder::new(file)),
-        Some("zstd") => Box::new(
-            zstd::stream::read::Decoder::new(file).context("Failed to create zstd decoder")?,
-        ),
-        None => Box::new(file),
-        _ => anyhow::bail!("Unsupported compression: {:?}", compression),
+    // Wrap decompressors so the cancellation flag is checked on every read
+    // rather than only at entry boundaries. Without this a large .tar.gz can
+    // decompress for hours after the timeout fires.
+    let reader: Box<dyn Read> = if let Some(cancelled) = guard.cancellation() {
+        let base: Box<dyn Read> = match compression {
+            Some("gzip") => Box::new(flate2::read::GzDecoder::new(file)),
+            Some("bzip2") => Box::new(bzip2::read::BzDecoder::new(file)),
+            Some("xz") => Box::new(xz2::read::XzDecoder::new(file)),
+            Some("zstd") => Box::new(
+                zstd::stream::read::Decoder::new(file).context("Failed to create zstd decoder")?,
+            ),
+            None => Box::new(file),
+            _ => anyhow::bail!("Unsupported compression: {:?}", compression),
+        };
+        Box::new(CancellableReader::new(base, cancelled))
+    } else {
+        match compression {
+            Some("gzip") => Box::new(flate2::read::GzDecoder::new(file)),
+            Some("bzip2") => Box::new(bzip2::read::BzDecoder::new(file)),
+            Some("xz") => Box::new(xz2::read::XzDecoder::new(file)),
+            Some("zstd") => Box::new(
+                zstd::stream::read::Decoder::new(file).context("Failed to create zstd decoder")?,
+            ),
+            None => Box::new(file),
+            _ => anyhow::bail!("Unsupported compression: {:?}", compression),
+        }
     };
 
     let mut archive = tar::Archive::new(reader);
@@ -93,11 +110,27 @@ pub(crate) fn extract_tar_safe(
                 fs::create_dir_all(parent)?;
             }
 
-            // Extract with limit
+            // Extract with limit and cancellation checks every 64 KiB.
+            // A single large entry could run for minutes without these checks.
             let mut outfile = File::create(&outpath)?;
             let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
-            let written = std::io::copy(&mut limited, &mut outfile)
-                .with_context(|| format!("Failed to extract: {}", entry_name))?;
+            let mut buf = [0u8; 65536];
+            let mut written = 0u64;
+            loop {
+                if guard.is_cancelled() {
+                    anyhow::bail!("cancelled");
+                }
+                let n = limited
+                    .read(&mut buf)
+                    .with_context(|| format!("Failed to extract: {}", entry_name))?;
+                if n == 0 {
+                    break;
+                }
+                outfile
+                    .write_all(&buf[..n])
+                    .with_context(|| format!("Failed to write: {}", entry_name))?;
+                written += n as u64;
+            }
 
             if limited.is_limited() {
                 // Content exceeded per-file limit despite the header size check;
@@ -177,8 +210,25 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
 
             let mut outfile = File::create(&outpath)?;
             let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
-            let written = std::io::copy(&mut limited, &mut outfile)
-                .with_context(|| format!("Failed to extract: {}", entry_name))?;
+            // Check cancellation every 64 KiB so a large entry doesn't block
+            // indefinitely after a timeout fires.
+            let mut buf = [0u8; 65536];
+            let mut written = 0u64;
+            loop {
+                if guard.is_cancelled() {
+                    anyhow::bail!("cancelled");
+                }
+                let n = limited
+                    .read(&mut buf)
+                    .with_context(|| format!("Failed to extract: {}", entry_name))?;
+                if n == 0 {
+                    break;
+                }
+                outfile
+                    .write_all(&buf[..n])
+                    .with_context(|| format!("Failed to write: {}", entry_name))?;
+                written += n as u64;
+            }
 
             if limited.is_limited() {
                 drop(outfile);

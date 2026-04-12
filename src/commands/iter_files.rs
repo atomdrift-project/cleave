@@ -11,8 +11,7 @@
 //! — that work happens during full analysis and is split out by the caller
 //! (see hopper's ExplodeArchiveMembers).
 
-use crate::analyzers::archive::is_supported_archive;
-use crate::analyzers::{detect_file_type_from_data, FileType};
+use crate::analyzers::{detect_file_type_from_data, is_analyzable};
 use crate::file_io;
 use anyhow::Result;
 use serde::Serialize;
@@ -55,7 +54,7 @@ pub fn run(config: &IterFilesConfig<'_>) -> Result<()> {
             anyhow::bail!("Path does not exist: {}", target);
         }
         if path.is_dir() {
-            walk_directory(path, config, &mut out)?;
+            walk_directory(path, config, &mut out);
         } else if path.is_file() {
             if let Err(e) = list_file(path, config, &mut out) {
                 tracing::debug!(path = %path.display(), error = %e, "list_file failed");
@@ -66,7 +65,7 @@ pub fn run(config: &IterFilesConfig<'_>) -> Result<()> {
     Ok(())
 }
 
-fn walk_directory<W: Write>(root: &Path, config: &IterFilesConfig<'_>, out: &mut W) -> Result<()> {
+fn walk_directory<W: Write>(root: &Path, config: &IterFilesConfig<'_>, out: &mut W) {
     for entry in WalkDir::new(root)
         .follow_links(false)
         .into_iter()
@@ -79,7 +78,6 @@ fn walk_directory<W: Write>(root: &Path, config: &IterFilesConfig<'_>, out: &mut
             tracing::debug!(path = %path.display(), error = %e, "list_file failed");
         }
     }
-    Ok(())
 }
 
 fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -> Result<()> {
@@ -91,15 +89,7 @@ fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -
 
     let file_data = file_io::read_file_smart(path)?;
     let file_type = detect_file_type_from_data(path, file_data.as_slice());
-    if !file_type.is_program() {
-        return Ok(());
-    }
-
-    // Skip archives the ArchiveAnalyzer can't actually extract. Without this
-    // check, hopper would submit the file to /analyze-path only to get a 415
-    // "Unsupported archive type: unknown" — iter-files is supposed to be the
-    // authoritative filter for "cleave can analyze this".
-    if matches!(file_type, FileType::Archive) && !is_supported_archive(path) {
+    if !is_analyzable(path, &file_type) {
         return Ok(());
     }
 
@@ -116,6 +106,7 @@ fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -140,7 +131,7 @@ mod tests {
                 max_file_size: 0,
             };
             // Run the inner walker directly so the test doesn't need stdout.
-            walk_directory(dir.path(), &config, &mut buf).unwrap();
+            walk_directory(dir.path(), &config, &mut buf);
         }
 
         let out = String::from_utf8(buf).unwrap();
@@ -176,7 +167,11 @@ mod tests {
             targets: &targets,
             max_file_size: 100, // smaller than the file
         };
-        walk_directory(dir.path(), &config, &mut buf).unwrap();
-        assert!(buf.is_empty(), "expected no output, got: {:?}", String::from_utf8_lossy(&buf));
+        walk_directory(dir.path(), &config, &mut buf);
+        assert!(
+            buf.is_empty(),
+            "expected no output, got: {:?}",
+            String::from_utf8_lossy(&buf)
+        );
     }
 }

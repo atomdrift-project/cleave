@@ -4,7 +4,7 @@
 //! including excessive file counts, decompression bombs (zip bombs), and
 //! path traversal attacks (zip slip).
 
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -95,6 +95,11 @@ impl ExtractionGuard {
         self.cancellation
             .as_ref()
             .is_some_and(|f| f.load(Ordering::Relaxed))
+    }
+
+    /// Returns a clone of the cancellation flag, if one was provided.
+    pub(crate) fn cancellation(&self) -> Option<Arc<AtomicBool>> {
+        self.cancellation.clone()
     }
 
     pub(crate) fn add_hostile_reason(&self, reason: HostileArchiveReason) {
@@ -283,5 +288,68 @@ impl<R: Read> Read for LimitedReader<R> {
         let n = self.inner.read(&mut buf[..max_read])?;
         self.remaining = self.remaining.saturating_sub(n as u64);
         Ok(n)
+    }
+}
+
+/// A `Read` adapter that checks a cancellation flag on every call.
+///
+/// Wrapping a decompressor or other streaming reader with `CancellableReader`
+/// ensures that long-running I/O (e.g. decompressing a large archive entry)
+/// is interrupted promptly when the per-request cancellation flag is set,
+/// rather than running until the underlying stream is exhausted.
+pub(crate) struct CancellableReader<R> {
+    inner: R,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl<R> CancellableReader<R> {
+    pub(crate) fn new(inner: R, cancelled: Arc<AtomicBool>) -> Self {
+        Self { inner, cancelled }
+    }
+}
+
+impl<R: Read> Read for CancellableReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
+        }
+        self.inner.read(buf)
+    }
+}
+
+/// A `Write` adapter that checks a cancellation flag on every call.
+///
+/// Wrapping an output file with `CancellableWriter` lets extraction routines
+/// that delegate all I/O to a C library (e.g. apple_xar) be interrupted
+/// cooperatively: the C library calls `write()`, which fails with
+/// `ErrorKind::Interrupted` when the flag is set, causing the library to
+/// return an error that propagates back through the extractor.
+pub(crate) struct CancellableWriter<W: Write> {
+    inner: W,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl<W: Write> CancellableWriter<W> {
+    pub(crate) fn new(inner: W, cancelled: Arc<AtomicBool>) -> Self {
+        Self { inner, cancelled }
+    }
+}
+
+impl<W: Write> Write for CancellableWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.cancelled.load(Ordering::Relaxed) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Interrupted,
+                "cancelled",
+            ));
+        }
+        self.inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
     }
 }

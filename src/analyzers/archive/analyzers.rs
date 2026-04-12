@@ -197,7 +197,7 @@ impl ArchiveAnalyzer {
             return Ok(None);
         }
 
-        let result = if matches!(file_type, FileType::Archive | FileType::Jar) {
+        let result = if file_type.is_archive() {
             if self.current_depth + 1 >= self.max_depth {
                 Err(anyhow::anyhow!(
                     "Nested archive at max depth ({})",

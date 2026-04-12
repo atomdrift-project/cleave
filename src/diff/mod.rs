@@ -260,7 +260,7 @@ impl DiffAnalyzer {
         let file_type = detect_file_type(path)?;
 
         // Handle archives specially since they need ArchiveAnalyzer with depth config
-        if file_type == crate::analyzers::FileType::Archive {
+        if file_type.is_archive() {
             let analyzer =
                 ArchiveAnalyzer::new().with_capability_mapper(self.capability_mapper.clone());
             return analyzer.analyze(path);

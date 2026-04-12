@@ -73,10 +73,10 @@ pub use shared::expand_paths;
 // Re-export command functions for main.rs
 pub use analyze::{run as analyze_command, AnalyzeConfig};
 pub use diff::run as diff_command;
-pub use iter_files::{run as iter_files_command, IterFilesConfig};
 pub use extract::{
     metrics::run as extract_metrics_command, sections::run as extract_sections_command,
     strings::run as extract_strings_command, symbols::run as extract_symbols_command,
 };
+pub use iter_files::{run as iter_files_command, IterFilesConfig};
 pub use test::{test_match, test_rules};
 pub use validate::run as validate_command;

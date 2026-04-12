@@ -161,17 +161,12 @@ pub(crate) fn parse_pe(data: &[u8]) -> GoblinOutcome<PE<'_>> {
         .with_parse_mode(goblin::options::ParseMode::Permissive);
     let permissive = catch(|| PE::parse_with_opts(data, &opts));
 
+    // If permissive panicked but strict gave a clean Err, prefer the strict error
+    // message — it's more informative than a panic payload. In all other cases,
+    // return permissive (either its Ok/Err result, or its panic if strict also panicked).
     match (&strict, &permissive) {
-        (_, GoblinOutcome::Ok(_)) => permissive,
-        // If permissive errored cleanly, prefer that error message — it's
-        // typically a more specific complaint than the strict one.
-        (_, GoblinOutcome::Failed(_)) => permissive,
-        // If permissive panicked but strict gave a clean Err, that error
-        // message is more useful than just a panic payload.
         (GoblinOutcome::Failed(_), GoblinOutcome::Panicked(_)) => strict,
-        // Both panicked, or strict panicked and permissive panicked — go
-        // with the permissive panic since it's the most recent attempt.
-        (_, GoblinOutcome::Panicked(_)) => permissive,
+        _ => permissive,
     }
 }
 
@@ -186,6 +181,7 @@ pub(crate) fn parse_mach(data: &[u8]) -> GoblinOutcome<Mach<'_>> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 

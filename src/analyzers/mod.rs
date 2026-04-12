@@ -177,19 +177,25 @@ pub fn analyzer_for_file_type(
                 .with_capability_mapper(mapper_or_empty),
         )),
 
-        // Archive needs special handling (depth limits, nested analysis)
-        FileType::Archive => None,
+        // Archives need special handling (depth limits, nested analysis)
+        ft if ft.is_archive() => None,
 
         // All source code languages - use unified analyzer
         _ => {
             if let Some(analyzer) = unified::UnifiedSourceAnalyzer::for_file_type(file_type) {
                 Some(Box::new(analyzer.with_capability_mapper(mapper_or_empty)))
             } else {
-                // Fallback to generic for types without tree-sitter (Batch, Unknown)
-                Some(Box::new(
-                    generic::GenericAnalyzer::new(file_type.clone())
-                        .with_capability_mapper(mapper_or_empty),
-                ))
+                // Fallback to generic for types without tree-sitter (e.g. Batch).
+                // Unknown file types are skipped — analysing unrecognised data
+                // produces noise and wastes resources.
+                if *file_type == FileType::Unknown {
+                    None
+                } else {
+                    Some(Box::new(
+                        generic::GenericAnalyzer::new(file_type.clone())
+                            .with_capability_mapper(mapper_or_empty),
+                    ))
+                }
             }
         }
     }
@@ -277,8 +283,8 @@ pub(crate) fn analyzer_for_file_type_arc(
                 .with_capability_mapper_arc(mapper_or_empty),
         )),
 
-        // Archive needs special handling (depth limits, nested analysis)
-        FileType::Archive => None,
+        // Archives need special handling (depth limits, nested analysis)
+        ft if ft.is_archive() => None,
 
         // All source code languages - use unified analyzer
         _ => {
@@ -287,11 +293,17 @@ pub(crate) fn analyzer_for_file_type_arc(
                     analyzer.with_capability_mapper_arc(mapper_or_empty),
                 ))
             } else {
-                // Fallback to generic for types without tree-sitter (Batch, Unknown)
-                Some(Box::new(
-                    generic::GenericAnalyzer::new(file_type.clone())
-                        .with_capability_mapper_arc(mapper_or_empty),
-                ))
+                // Fallback to generic for types without tree-sitter (e.g. Batch).
+                // Unknown file types are skipped — analysing unrecognised data
+                // produces noise and wastes resources.
+                if *file_type == FileType::Unknown {
+                    None
+                } else {
+                    Some(Box::new(
+                        generic::GenericAnalyzer::new(file_type.clone())
+                            .with_capability_mapper_arc(mapper_or_empty),
+                    ))
+                }
             }
         }
     }
@@ -357,6 +369,15 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
     let mut buf = [0u8; 1024];
     let bytes_read = file.read(&mut buf).unwrap_or(0);
     Ok(detect_file_type_from_data(file_path, &buf[..bytes_read]))
+}
+
+/// Returns true if cleave can analyze this file.
+///
+/// All archive variants recognized by fileid are supported; there is no
+/// longer a separate extension-based support check.
+#[must_use]
+pub(crate) fn is_analyzable(_path: &Path, file_type: &FileType) -> bool {
+    file_type.is_supported()
 }
 
 /// Check if file content matches its extension's expected type.
@@ -456,8 +477,40 @@ pub enum FileType {
     SystemdService,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
-    /// Archive file (zip, tar, gz, etc.)
-    Archive,
+    /// ZIP archive (zip, apk, ipa, nupkg, etc.)
+    Zip,
+    /// TAR archive (plain, no compression)
+    Tar,
+    /// Gzip-compressed TAR (.tar.gz, .tgz, .crate)
+    TarGz,
+    /// Bzip2-compressed TAR (.tar.bz2, .tbz2)
+    TarBz2,
+    /// XZ-compressed TAR (.tar.xz, .txz)
+    TarXz,
+    /// Zstandard-compressed TAR (.tar.zst, .xbps)
+    TarZst,
+    /// Gzip-compressed single file (.gz, not a tar)
+    Gz,
+    /// Bzip2-compressed single file (.bz2, not a tar)
+    Bz2,
+    /// XZ-compressed single file (.xz, not a tar)
+    Xz,
+    /// Zstandard-compressed single file (.zst, not a tar)
+    Zst,
+    /// 7-Zip archive (.7z)
+    SevenZ,
+    /// RAR archive (.rar)
+    Rar,
+    /// Debian package (.deb)
+    Deb,
+    /// RPM package (.rpm)
+    Rpm,
+    /// macOS installer package (.pkg, XAR format)
+    Pkg,
+    /// Cabinet archive (.cab)
+    Cab,
+    /// Chrome extension (.crx)
+    Crx,
     /// AppleScript source file (.applescript, .scpt)
     AppleScript,
     /// Apple Property List (.plist)
@@ -539,8 +592,25 @@ impl FileType {
             | FileType::Jpeg
             | FileType::Png
             | FileType::Pickle // Pickle can contain arbitrary code execution
-            | FileType::Archive // Archives can contain malware
-            | FileType::Pdf => true, // Included as they can carry exploits/malware
+            | FileType::Pdf // PDF can carry exploits/malware
+            // Archive formats can contain malware
+            | FileType::Zip
+            | FileType::Tar
+            | FileType::TarGz
+            | FileType::TarBz2
+            | FileType::TarXz
+            | FileType::TarZst
+            | FileType::Gz
+            | FileType::Bz2
+            | FileType::Xz
+            | FileType::Zst
+            | FileType::SevenZ
+            | FileType::Rar
+            | FileType::Deb
+            | FileType::Rpm
+            | FileType::Pkg
+            | FileType::Cab
+            | FileType::Crx => true,
             FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip unknown and non-program text files in dir scans
         }
     }
@@ -567,11 +637,64 @@ impl FileType {
         )
     }
 
+    /// Returns true if this file type is an archive or compressed container.
+    #[must_use]
+    #[allow(dead_code)] // Used by binary target
+    pub(crate) fn is_archive(&self) -> bool {
+        matches!(
+            self,
+            FileType::Zip
+                | FileType::Tar
+                | FileType::TarGz
+                | FileType::TarBz2
+                | FileType::TarXz
+                | FileType::TarZst
+                | FileType::Gz
+                | FileType::Bz2
+                | FileType::Xz
+                | FileType::Zst
+                | FileType::SevenZ
+                | FileType::Rar
+                | FileType::Deb
+                | FileType::Rpm
+                | FileType::Pkg
+                | FileType::Cab
+                | FileType::Crx
+                | FileType::Jar
+        )
+    }
+
+    /// Returns true if this file type is a compiled native binary.
+    #[must_use]
+    #[allow(dead_code)] // Used by binary target
+    pub(crate) fn is_binary(&self) -> bool {
+        matches!(
+            self,
+            FileType::Elf
+                | FileType::Pe
+                | FileType::MachO
+                | FileType::JavaClass
+                | FileType::PythonBytecode
+        )
+    }
+
+    /// Returns true if cleave supports analysis of this file type.
+    #[must_use]
+    pub(crate) fn is_supported(&self) -> bool {
+        self.is_program()
+    }
+
     /// Canonical file type string used in analysis reports.
     #[must_use]
     pub(crate) fn report_file_type(&self) -> String {
         match self {
             FileType::SystemdService => "systemd".to_string(),
+            FileType::TarGz
+            | FileType::TarBz2
+            | FileType::TarXz
+            | FileType::TarZst
+            | FileType::Tar => "tar".to_string(),
+            FileType::SevenZ => "7z".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }
     }
@@ -621,7 +744,25 @@ impl FileType {
             FileType::ComposerJson => vec!["json", "composer.json", "php"],
             FileType::GithubActions => vec!["yaml", "yml", "github-actions"],
             FileType::SystemdService => vec!["service", "systemd", "unit"],
-            FileType::Archive => vec!["zip", "tar", "gz"],
+            FileType::Zip => vec!["zip", "archive"],
+            FileType::Tar
+            | FileType::TarGz
+            | FileType::TarBz2
+            | FileType::TarXz
+            | FileType::TarZst => vec!["tar", "archive"],
+            FileType::Gz
+            | FileType::Bz2
+            | FileType::Xz
+            | FileType::Zst
+            | FileType::Pkg
+            | FileType::Cab => {
+                vec!["archive"]
+            }
+            FileType::SevenZ => vec!["7z", "archive"],
+            FileType::Rar => vec!["rar", "archive"],
+            FileType::Deb => vec!["deb", "archive"],
+            FileType::Rpm => vec!["rpm", "archive"],
+            FileType::Crx => vec!["crx", "archive"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
@@ -679,7 +820,23 @@ impl From<fileid::FileType> for FileType {
             fileid::FileType::GithubActions => Self::GithubActions,
             fileid::FileType::SystemdService => Self::SystemdService,
             fileid::FileType::PkgInfo => Self::PkgInfo,
-            fileid::FileType::Archive => Self::Archive,
+            fileid::FileType::Zip => Self::Zip,
+            fileid::FileType::Tar => Self::Tar,
+            fileid::FileType::TarGz => Self::TarGz,
+            fileid::FileType::TarBz2 => Self::TarBz2,
+            fileid::FileType::TarXz => Self::TarXz,
+            fileid::FileType::TarZst => Self::TarZst,
+            fileid::FileType::Gz => Self::Gz,
+            fileid::FileType::Bz2 => Self::Bz2,
+            fileid::FileType::Xz => Self::Xz,
+            fileid::FileType::Zst => Self::Zst,
+            fileid::FileType::SevenZ => Self::SevenZ,
+            fileid::FileType::Rar => Self::Rar,
+            fileid::FileType::Deb => Self::Deb,
+            fileid::FileType::Rpm => Self::Rpm,
+            fileid::FileType::Pkg => Self::Pkg,
+            fileid::FileType::Cab => Self::Cab,
+            fileid::FileType::Crx => Self::Crx,
             fileid::FileType::AppleScript => Self::AppleScript,
             fileid::FileType::Plist => Self::Plist,
             fileid::FileType::Rtf => Self::Rtf,

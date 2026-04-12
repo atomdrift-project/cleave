@@ -31,7 +31,6 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 use tracing::{debug, trace};
 
 // Archive analysis now runs on the global rayon pool instead of a separate pool.
@@ -458,51 +457,53 @@ impl ArchiveAnalyzer {
         let total_class_files = class_files.len();
         debug!("Found {} .class files", total_class_files);
 
-        // Phase 1: Run YARA on ALL class files in parallel (fast)
-        let yara_flagged_classes = Arc::new(Mutex::new(HashSet::new()));
-        let yara_matches = Arc::new(Mutex::new(Vec::with_capacity(50)));
-
-        if let Some(ref yara_engine) = self.yara_engine {
+        // Phase 1: Run YARA on ALL class files in parallel (fast, lock-free)
+        let (flagged_classes, collected_yara_matches) = if let Some(ref yara_engine) = self.yara_engine {
             let yara_start = std::time::Instant::now();
-            class_files.par_iter().for_each(|entry| {
-                if self.is_cancelled() {
-                    return;
-                }
-                if let Ok(matches) = yara_engine.scan_file(entry.path()) {
-                    if !matches.is_empty() {
-                        // This class triggered YARA rules - mark for full analysis
-                        if let Ok(mut flagged) = yara_flagged_classes.lock() {
-                            flagged.insert(entry.path().to_path_buf());
-                        }
-
-                        // Record the YARA matches
-                        if let Ok(mut all_matches) = yara_matches.lock() {
-                            for yara_match in matches {
-                                if !all_matches
-                                    .iter()
-                                    .any(|m: &YaraMatch| m.rule == yara_match.rule)
-                                {
-                                    all_matches.push(yara_match);
-                                }
-                            }
-                        }
+            let yara_results: Vec<_> = class_files
+                .par_iter()
+                .filter_map(|entry| {
+                    if self.is_cancelled() {
+                        return None;
                     }
-                }
-            });
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        yara_engine.scan_file(entry.path())
+                    })) {
+                        Ok(Ok(matches)) if !matches.is_empty() => {
+                            Some((entry.path().to_path_buf(), matches))
+                        }
+                        Ok(Err(e)) => {
+                            debug!("YARA scan failed for {}: {}", entry.path().display(), e);
+                            None
+                        }
+                        Err(_panic) => {
+                            tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
+                            None
+                        }
+                        _ => None,
+                    }
+                })
+                .collect();
             debug!(
                 "YARA scan completed in {:.2}s",
                 yara_start.elapsed().as_secs_f64()
             );
-        }
 
-        let flagged_classes = Arc::try_unwrap(yara_flagged_classes)
-            .map_err(|_| anyhow::anyhow!("YARA scan Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("YARA flagged classes lock poisoned"))?;
-        let collected_yara_matches = Arc::try_unwrap(yara_matches)
-            .map_err(|_| anyhow::anyhow!("YARA matches Arc unwrap failed"))?
-            .into_inner()
-            .map_err(|_| anyhow::anyhow!("YARA matches lock poisoned"))?;
+            // Single-threaded aggregation
+            let mut flagged = HashSet::new();
+            let mut matches = Vec::with_capacity(50);
+            for (path, file_matches) in yara_results {
+                flagged.insert(path);
+                for ym in file_matches {
+                    if !matches.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
+                        matches.push(ym);
+                    }
+                }
+            }
+            (flagged, matches)
+        } else {
+            (HashSet::new(), Vec::new())
+        };
 
         // Add collected YARA matches to report
         for ym in collected_yara_matches {

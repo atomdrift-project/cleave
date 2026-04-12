@@ -141,6 +141,15 @@ pub fn current_rss() -> Option<u64> {
     sysmem::current_rss()
 }
 
+/// Memory limit: `min(50% RAM, 32 GiB)`.
+///
+/// Use this as the default `limit` argument to [`start_periodic_logging`] and
+/// as the fallback when no explicit `--max-rss-gb` flag is given.
+#[must_use]
+pub fn memory_limit() -> u64 {
+    sysmem::memory_limit()
+}
+
 /// Log memory usage before processing a file
 pub fn log_before_file_processing(file_path: &str, file_size: u64) {
     let current_rss = current_rss();
@@ -222,6 +231,11 @@ impl Drop for MemoryLoggerHandle {
 /// Start a periodic memory watchdog thread.
 /// Returns a handle that can be used to stop the thread gracefully.
 ///
+/// `limit` is the RSS cap in bytes; pass `sysmem::memory_limit()` for the
+/// standard `min(50% RAM, 32 GiB)` value, or the server's configured
+/// `max_rss_bytes` so the watchdog and the per-request check enforce the
+/// same threshold.
+///
 /// The watchdog monitors RSS every `interval` and enforces the memory cap:
 /// 1. Warning threshold crossed → log warning + full memory stats
 /// 2. Critical threshold crossed → attempt cache clear, log error + full stats
@@ -232,13 +246,14 @@ impl Drop for MemoryLoggerHandle {
 /// but this thread is the backstop that ticks on wall clock regardless of
 /// request traffic or in-flight analysis blocking.
 #[must_use]
-pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
+pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHandle {
     let shutdown = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
     let handle = std::thread::spawn(move || {
         let mut iteration = 0u64;
         let mut overloaded_since: Option<Instant> = None;
+        let warning = limit.saturating_sub(512 * 1024 * 1024);
 
         while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(interval);
@@ -263,10 +278,7 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                 "Periodic memory check"
             );
 
-            let warning = sysmem::warning_threshold();
-            let critical = sysmem::memory_limit();
-
-            if rss > critical {
+            if rss > limit {
                 // Try to reclaim memory before escalating
                 crate::clear_all_thread_caches();
 
@@ -274,7 +286,7 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                 let rss_after = current_rss().unwrap_or(rss);
                 let rss_after_mb = rss_after / 1024 / 1024;
 
-                if rss_after <= critical {
+                if rss_after <= limit {
                     info!(
                         rss_before_mb = rss_mb,
                         rss_after_mb = rss_after_mb,
@@ -290,7 +302,7 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
 
                 tracing::error!(
                     rss_mb = rss_after_mb,
-                    limit_mb = critical / 1024 / 1024,
+                    limit_mb = limit / 1024 / 1024,
                     overloaded_secs = overloaded_secs,
                     "CRITICAL: Memory usage exceeds cap"
                 );
@@ -299,7 +311,7 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                 if overloaded_secs > 30 {
                     tracing::error!(
                         rss_mb = rss_after_mb,
-                        limit_mb = critical / 1024 / 1024,
+                        limit_mb = limit / 1024 / 1024,
                         overloaded_secs = overloaded_secs,
                         "Memory cap exceeded for >30s, terminating to avoid OOM kill"
                     );
@@ -310,8 +322,8 @@ pub fn start_periodic_logging(interval: Duration) -> MemoryLoggerHandle {
                 overloaded_since = None;
                 warn!(
                     rss_mb = rss_mb,
-                    limit_mb = critical / 1024 / 1024,
-                    headroom_mb = (critical - rss) / 1024 / 1024,
+                    limit_mb = limit / 1024 / 1024,
+                    headroom_mb = (limit - rss) / 1024 / 1024,
                     "WARNING: Memory approaching cap"
                 );
                 log_all_memory_stats();

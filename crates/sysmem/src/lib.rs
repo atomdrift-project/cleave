@@ -33,10 +33,16 @@ pub fn current_rss() -> Option<u64> {
     current_rss_impl()
 }
 
-/// Memory pressure limit: 25 % of system RAM (fallback 4 GiB).
+/// Memory pressure limit: min(50% of system RAM, 32 GiB).
+///
+/// On a 16 GiB machine this yields 8 GiB; on a 64 GiB+ machine it caps at
+/// 32 GiB so litmus never crowds out the rest of the system.
+/// Falls back to 8 GiB when total RAM cannot be determined.
 #[must_use]
 pub fn memory_limit() -> u64 {
-    total_memory().unwrap_or(16 * GB) / 4
+    const CAP: u64 = 32 * GB;
+    let half_ram = total_memory().unwrap_or(16 * GB) / 2;
+    half_ram.min(CAP)
 }
 
 /// Warning threshold: 512 MiB below [`memory_limit`].
@@ -386,11 +392,12 @@ mod tests {
     }
 
     #[test]
-    fn memory_limit_is_quarter_ram() {
+    fn memory_limit_is_min_half_ram_32gib() {
+        const CAP: u64 = 32 * GB;
         if let Some(total) = total_memory() {
-            assert_eq!(memory_limit(), total / 4);
+            assert_eq!(memory_limit(), (total / 2).min(CAP));
         } else {
-            assert_eq!(memory_limit(), 4 * GB);
+            assert_eq!(memory_limit(), 8 * GB);
         }
     }
 

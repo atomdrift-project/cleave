@@ -290,6 +290,7 @@ pub(crate) fn start_memory_logger(
         use cleave::memory_tracker;
         Some(memory_tracker::start_periodic_logging(
             std::time::Duration::from_secs(10),
+            sysmem::memory_limit(),
         ))
     } else {
         None

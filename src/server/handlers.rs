@@ -230,21 +230,32 @@ async fn analyze_inner(
         })
         .unwrap_or_default();
 
-    // Preserve the original file extension so archive type detection (which
-    // uses extension as a fallback for compound formats like tar.gz) behaves
-    // the same as when analyzing a file by path.
-    let suffix = std::path::Path::new(&filename)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| format!(".{e}"))
-        .unwrap_or_default();
-    let temp_file =
-        match tokio::task::spawn_blocking(move || TempBuilder::new().suffix(&suffix).tempfile())
+    // Create a temp directory containing a file with the original filename so that
+    // fileid's filename-based type detection works correctly (e.g. "package.json"
+    // is recognized as PackageJson, not Unknown).
+    let sanitized_filename = if filename.is_empty() {
+        "upload".to_string()
+    } else {
+        // Sanitize: keep alphanumeric, dots, hyphens, underscores; collapse ".."
+        filename
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '_' || c == '-' || c == '.' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+            .replace("..", "__")
+    };
+    let temp_dir =
+        match tokio::task::spawn_blocking(move || TempBuilder::new().prefix("cleave-").tempdir())
             .await
         {
-            Ok(Ok(f)) => f,
+            Ok(Ok(d)) => d,
             Ok(Err(e)) => {
-                warn!("Failed to create temp file: {}", e);
+                warn!("Failed to create temp dir: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "Internal error"})),
@@ -252,7 +263,7 @@ async fn analyze_inner(
                     .into_response();
             }
             Err(e) => {
-                warn!("Task join error creating temp file: {}", e);
+                warn!("Task join error creating temp dir: {}", e);
                 return (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(serde_json::json!({"error": "Internal error"})),
@@ -261,7 +272,7 @@ async fn analyze_inner(
             }
         };
 
-    let path = temp_file.path().to_owned();
+    let path = temp_dir.path().join(&sanitized_filename);
     let mut tokio_file = match tokio::fs::File::create(&path).await {
         Ok(f) => f,
         Err(e) => {
@@ -374,7 +385,7 @@ async fn analyze_inner(
             .active_tasks
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         state.in_flight.remove(&request_id);
-        drop(temp_file);
+        drop(temp_dir);
     } else {
         cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
         let active = state
@@ -399,7 +410,7 @@ async fn analyze_inner(
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
 
             if grace_result.is_ok() {
-                drop(temp_file);
+                drop(temp_dir);
                 tracing::info!(request_id, "Orphaned task completed during grace period");
                 return;
             }
@@ -419,7 +430,7 @@ async fn analyze_inner(
             // eventually finishes. Without this, the JoinHandle is dropped and
             // the thread is detached forever.
             let _ = handle.await;
-            drop(temp_file);
+            drop(temp_dir);
             orphan_state
                 .recycled_orphans
                 .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);

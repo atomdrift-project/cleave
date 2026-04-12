@@ -1068,4 +1068,37 @@ mod tests {
         let det = detect_path(Path::new("app.js")).unwrap();
         assert_eq!(det.file_type, FileType::JavaScript);
     }
+
+    // ── Filename-detected types inside temp directories ──────────────
+
+    /// Filename-detected types (package.json, Cargo.toml, etc.) must be
+    /// recognized when the file sits inside a temp directory, which is how
+    /// the HTTP upload handlers preserve the original name.
+    #[test]
+    fn package_json_in_temp_dir() {
+        let det = detect(Path::new("/tmp/cleave-abc123/package.json"), b"{}").unwrap();
+        assert_eq!(det.file_type, FileType::PackageJson);
+    }
+
+    #[test]
+    fn cargo_toml_in_temp_dir() {
+        let det = detect(Path::new("/tmp/cleave-abc123/Cargo.toml"), b"[package]").unwrap();
+        assert_eq!(det.file_type, FileType::CargoToml);
+    }
+
+    #[test]
+    fn composer_json_in_temp_dir() {
+        let det = detect(Path::new("/tmp/cleave-abc123/composer.json"), b"{}").unwrap();
+        assert_eq!(det.file_type, FileType::ComposerJson);
+    }
+
+    /// A temp file with a mangled name (old behavior: suffix-based) must NOT
+    /// match filename detection — this documents why the temp-directory
+    /// approach is necessary.
+    #[test]
+    fn mangled_temp_name_does_not_detect_package_json() {
+        // Old behavior: TempBuilder::new().suffix("_package.json") produces
+        // a filename like ".tmpXXXXXX_package.json" which doesn't match.
+        assert!(detect(Path::new("/tmp/.tmpABC_package.json"), b"{}").is_none());
+    }
 }

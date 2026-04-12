@@ -1547,10 +1547,20 @@ pub fn analyze_directory<P: AsRef<Path>>(
         .map(|e| e.path().to_path_buf())
         .collect();
 
-    // Analyze in parallel
+    // Analyze in parallel — catch panics so one bad file doesn't kill the batch
     let results: Vec<_> = files
         .par_iter()
-        .map(|file_path| analyze_file(file_path, options).map_err(|err| (file_path.clone(), err)))
+        .map(|file_path| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                analyze_file(file_path, options)
+            })) {
+                Ok(result) => result.map_err(|err| (file_path.clone(), err)),
+                Err(_panic) => {
+                    tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
+                    Err((file_path.clone(), anyhow::anyhow!("analysis panicked")))
+                }
+            }
+        })
         .collect();
 
     let mut reports = Vec::with_capacity(results.len());
@@ -1727,6 +1737,9 @@ where
         });
     let analyze_files = || {
         files.par_iter().for_each(|file_path| {
+        // Catch panics from any analyzer so one malformed file doesn't
+        // poison the rayon thread pool and kill the entire scan.
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
         if max_scan_size > 0 {
             if let Ok(meta) = std::fs::metadata(file_path) {
@@ -1799,6 +1812,15 @@ where
             result: Box::new(result),
         });
         composite_rules::evaluators::clear_thread_local_caches();
+        })); // end catch_unwind
+        if panic_result.is_err() {
+            tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
+            errors.fetch_add(1, Ordering::Relaxed);
+            callback(ScanEvent::File {
+                path: file_path.clone(),
+                result: Box::new(Err(anyhow::anyhow!("analysis panicked"))),
+            });
+        }
     })
     };
 

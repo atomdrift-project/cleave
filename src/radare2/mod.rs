@@ -196,20 +196,22 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
     let (stdout_tx, stdout_rx) = mpsc::channel();
     let (stderr_tx, stderr_rx) = mpsc::channel();
 
-    // Spawn thread to read stdout
+    // Spawn thread to read stdout (capped at 100MB to prevent OOM from
+    // malicious/runaway subprocesses).
+    const MAX_SUBPROCESS_OUTPUT: usize = 100 * 1024 * 1024;
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = Vec::new();
         if let Some(mut handle) = stdout_handle {
-            let _ = handle.read_to_end(&mut stdout);
+            let _ = (&mut handle).take(MAX_SUBPROCESS_OUTPUT as u64).read_to_end(&mut stdout);
         }
         let _ = stdout_tx.send(stdout);
     });
 
-    // Spawn thread to read stderr
+    // Spawn thread to read stderr (same cap)
     let stderr_thread = std::thread::spawn(move || {
         let mut stderr = Vec::new();
         if let Some(mut handle) = stderr_handle {
-            let _ = handle.read_to_end(&mut stderr);
+            let _ = (&mut handle).take(MAX_SUBPROCESS_OUTPUT as u64).read_to_end(&mut stderr);
         }
         let _ = stderr_tx.send(stderr);
     });
@@ -282,8 +284,14 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
             );
 
             #[cfg(unix)]
-            unsafe {
-                libc::kill(child_id as i32, libc::SIGKILL);
+            {
+                // SAFETY: child_id was captured from child.id() immediately
+                // before spawning the wait thread. PID reuse race is
+                // theoretically possible but the window is < 1ms.
+                let ret = unsafe { libc::kill(child_id as i32, libc::SIGKILL) };
+                if ret != 0 {
+                    warn!(pid = child_id, errno = std::io::Error::last_os_error().raw_os_error(), "SIGKILL failed (process may have already exited)");
+                }
             }
             #[cfg(not(unix))]
             let _ = child_id;

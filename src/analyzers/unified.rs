@@ -590,7 +590,7 @@ impl UnifiedSourceAnalyzer {
         };
 
         for (idx, payload) in extracted_payloads.iter().enumerate() {
-            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                 break;
             }
             // Create virtual path with encoding info using ## delimiter for decoded content
@@ -672,7 +672,7 @@ impl UnifiedSourceAnalyzer {
         if matches!(self.config.file_type, "javascript" | "typescript") {
             let aes_payloads = crate::extractors::extract_aes_payloads(content.as_bytes());
             for (idx, payload) in aes_payloads.iter().enumerate() {
-                if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
                     break;
                 }
                 // Create virtual path with encoding info

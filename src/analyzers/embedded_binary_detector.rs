@@ -121,7 +121,7 @@ fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&At
         if results.len() >= MAX_EMBEDDED {
             break;
         }
-        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
+        if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
         if let Some(emb) = validate_pe(data, pos + search_start) {
@@ -243,7 +243,7 @@ fn scan_elf(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&A
         if results.len() >= MAX_EMBEDDED {
             break;
         }
-        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
+        if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
         if let Some(emb) = validate_elf(data, pos + search_start) {

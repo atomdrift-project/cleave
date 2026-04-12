@@ -387,7 +387,7 @@ async fn analyze_inner(
         state.in_flight.remove(&request_id);
         drop(temp_dir);
     } else {
-        cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+        cancellation.store(true, std::sync::atomic::Ordering::Release);
         let active = state
             .active_tasks
             .load(std::sync::atomic::Ordering::Relaxed);
@@ -751,7 +751,7 @@ async fn analyze_path_inner(
             .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
         state.in_flight.remove(&request_id);
     } else {
-        cancellation.store(true, std::sync::atomic::Ordering::Relaxed);
+        cancellation.store(true, std::sync::atomic::Ordering::Release);
         let active = state
             .active_tasks
             .load(std::sync::atomic::Ordering::Relaxed);

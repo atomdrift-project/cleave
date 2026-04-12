@@ -126,11 +126,13 @@ fn extract_pickle_globals(data: &[u8]) -> Vec<String> {
     let mut globals = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
-    // Track recent SHORT_BINUNICODE strings for STACK_GLOBAL pairing
+    // Track recent SHORT_BINUNICODE strings for STACK_GLOBAL pairing.
+    // Bounded to prevent memory exhaustion on crafted pickle streams.
     let mut recent_strings: Vec<String> = Vec::new();
     let mut i = 0;
+    const MAX_PICKLE_STRINGS: usize = 10_000;
 
-    while i < data.len() {
+    while i < data.len() && recent_strings.len() < MAX_PICKLE_STRINGS {
         match data[i] {
             // SHORT_BINUNICODE (protocol 4+): 1-byte length
             0x8c => {

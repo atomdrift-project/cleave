@@ -1117,7 +1117,7 @@ pub(crate) fn process_all_strings_with_host(
     let max_detection_attempts = std::cmp::min(256, strings.len()); // Check the 256 longest/most likely strings in massive files
 
     for (idx, string_info) in sorted_strings {
-        if cancelled.is_some_and(|f| f.load(Ordering::Relaxed)) {
+        if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
         if detection_attempts >= max_detection_attempts {

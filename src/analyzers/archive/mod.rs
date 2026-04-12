@@ -371,7 +371,7 @@ impl ArchiveAnalyzer {
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancelled
             .as_ref()
-            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Acquire))
     }
 
     /// Set the maximum file size to keep in memory during extraction.

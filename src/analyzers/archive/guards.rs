@@ -310,7 +310,7 @@ impl<R> CancellableReader<R> {
 
 impl<R: Read> Read for CancellableReader<R> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Acquire) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "cancelled",
@@ -340,7 +340,7 @@ impl<W: Write> CancellableWriter<W> {
 
 impl<W: Write> Write for CancellableWriter<W> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        if self.cancelled.load(Ordering::Relaxed) {
+        if self.cancelled.load(Ordering::Acquire) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Interrupted,
                 "cancelled",

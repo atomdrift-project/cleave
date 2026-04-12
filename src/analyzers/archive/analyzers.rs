@@ -597,7 +597,7 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -627,6 +627,7 @@ impl ArchiveAnalyzer {
                             path = %entry_path,
                             "panic during archive member analysis (caught)"
                         );
+                        FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
                         None
                     }
                 };
@@ -661,27 +662,31 @@ impl ArchiveAnalyzer {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
                 if !collected_traits.iter().any(|existing| existing.id == f.id) {
-                    let mut new_finding = f.clone();
-                    for evidence in &mut new_finding.evidence {
-                        match &evidence.location {
-                            None => {
-                                evidence.location = Some(result.archive_location.clone());
+                    if collected_traits.len() < 10_000 {
+                        let mut new_finding = f.clone();
+                        for evidence in &mut new_finding.evidence {
+                            match &evidence.location {
+                                None => {
+                                    evidence.location = Some(result.archive_location.clone());
+                                }
+                                Some(loc) if !loc.starts_with("archive:") => {
+                                    evidence.location =
+                                        Some(format!("{}:{}", result.archive_location, loc));
+                                }
+                                _ => {}
                             }
-                            Some(loc) if !loc.starts_with("archive:") => {
-                                evidence.location =
-                                    Some(format!("{}:{}", result.archive_location, loc));
-                            }
-                            _ => {}
                         }
+                        collected_traits.push(new_finding);
                     }
-                    collected_traits.push(new_finding);
                 }
             }
 
             // Aggregate YARA matches
             for yara_match in &file_report.yara_matches {
                 if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
-                    collected_yara.push(yara_match.clone());
+                    if collected_yara.len() < 1_000 {
+                        collected_yara.push(yara_match.clone());
+                    }
                 }
             }
 
@@ -691,7 +696,9 @@ impl ArchiveAnalyzer {
                     string.string_type,
                     Some(StringType::Url | StringType::IP | StringType::Base64)
                 ) {
-                    collected_strings.push(string.clone());
+                    if collected_strings.len() < 10_000 {
+                        collected_strings.push(string.clone());
+                    }
                 }
             }
 
@@ -751,7 +758,7 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -781,6 +788,7 @@ impl ArchiveAnalyzer {
                             path = %entry_path,
                             "panic during archive member analysis (caught)"
                         );
+                        FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
                         None
                     }
                 };
@@ -993,7 +1001,7 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = detect_file_type(entry.path()).unwrap_or(FileType::Unknown);
+                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -1023,6 +1031,7 @@ impl ArchiveAnalyzer {
                             path = %entry_path,
                             "panic during archive member analysis (caught)"
                         );
+                        FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
                         None
                     }
                 };

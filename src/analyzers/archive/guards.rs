@@ -94,7 +94,7 @@ impl ExtractionGuard {
     pub(crate) fn is_cancelled(&self) -> bool {
         self.cancellation
             .as_ref()
-            .is_some_and(|f| f.load(Ordering::Relaxed))
+            .is_some_and(|f| f.load(Ordering::Acquire))
     }
 
     /// Returns a clone of the cancellation flag, if one was provided.

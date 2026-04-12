@@ -12,7 +12,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tempfile::Builder as TempBuilder;
-use tracing::{info, info_span, warn, Instrument, Span};
+use tracing::{error, info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 

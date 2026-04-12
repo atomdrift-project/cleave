@@ -18,9 +18,10 @@
 //!
 //! # Parallelism
 //!
-//! Archive member analysis runs on a dedicated rayon thread pool, separate from
-//! the global pool used by top-level analysis. This prevents archive extraction
-//! (which can contain hundreds of files) from starving non-archive requests.
+//! Archive member analysis runs on the global rayon thread pool (previously a
+//! separate pool — merged to halve YARA scanner cache memory). Multiple
+//! concurrent archives compete for the same rayon threads, so individual
+//! member analyses must be bounded to avoid stalling the entire pool.
 
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
@@ -56,6 +57,9 @@ static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 static FAILED_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
 const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 500;
+
+/// Warn when a single archive member analysis exceeds this threshold.
+const SLOW_ARCHIVE_MEMBER_ANALYSIS_MS: u128 = 30_000;
 
 /// Log archive analysis statistics.
 #[allow(dead_code)]
@@ -608,6 +612,7 @@ impl ArchiveAnalyzer {
                     size_bytes: file_data.len() as u64,
                 };
 
+                let member_start = std::time::Instant::now();
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -632,6 +637,18 @@ impl ArchiveAnalyzer {
                         None
                     }
                 };
+
+                let member_elapsed = member_start.elapsed();
+                if member_elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
+                    tracing::warn!(
+                        relative_path,
+                        file_type = %file_type.report_file_type(),
+                        size_bytes = file_data.len(),
+                        elapsed_ms = member_elapsed.as_millis() as u64,
+                        rayon_thread = ?rayon::current_thread_index(),
+                        "Slow archive member analysis (JAR)",
+                    );
+                }
 
                 Some(MemberAnalysisResult {
                     entry_path,
@@ -1010,6 +1027,7 @@ impl ArchiveAnalyzer {
                     size_bytes: file_data.len() as u64,
                 };
 
+                let member_start = std::time::Instant::now();
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -1034,6 +1052,18 @@ impl ArchiveAnalyzer {
                         None
                     }
                 };
+
+                let member_elapsed = member_start.elapsed();
+                if member_elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
+                    tracing::warn!(
+                        relative_path,
+                        file_type = %file_type.report_file_type(),
+                        size_bytes = file_data.len(),
+                        elapsed_ms = member_elapsed.as_millis() as u64,
+                        rayon_thread = ?rayon::current_thread_index(),
+                        "Slow archive member analysis (generic)",
+                    );
+                }
 
                 Some(MemberAnalysisResult {
                     entry_path,

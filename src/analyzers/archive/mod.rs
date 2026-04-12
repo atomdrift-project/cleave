@@ -674,6 +674,19 @@ impl ArchiveAnalyzer {
             self.analyze_generic_archive(temp_dir.path(), &mut report, start)?;
         }
 
+        let analysis_elapsed = start.elapsed();
+        if analysis_elapsed.as_secs() > 60 {
+            tracing::warn!(
+                path = %file_path.display(),
+                archive_type = %archive_type_str,
+                depth = self.current_depth,
+                files_in_report = report.files.len(),
+                elapsed_secs = analysis_elapsed.as_secs(),
+                rayon_thread = ?rayon::current_thread_index(),
+                "Slow archive analysis",
+            );
+        }
+
         // Container-level composite evaluation: re-evaluate composite rules against
         // all nested findings to detect cross-file patterns like:
         // - "npm package with suspicious DLL" (package.json in one file + .dll in another)

@@ -673,6 +673,13 @@ impl YaraEngine {
         Ok((yara_matches, inline_results))
     }
 
+    /// Hard wall-clock limit for a single YARA scan. If yara-x's internal
+    /// timeout fails to fire (e.g. stuck in a tight matching loop), this
+    /// outer guard ensures the rayon thread is freed. Must be longer than the
+    /// yara-x `set_timeout` value (120s) to let the cooperative timeout fire
+    /// first in normal cases.
+    const YARA_WALL_CLOCK_LIMIT: std::time::Duration = std::time::Duration::from_secs(150);
+
     /// Run a YARA scanner against data and collect raw match results.
     ///
     /// Scanners are cached per-thread to avoid expensive `Scanner::new()` calls.
@@ -695,7 +702,7 @@ impl YaraEngine {
                 let rules_static: &'static yara_x::Rules =
                     unsafe { &*(rules as *const yara_x::Rules) };
                 let mut s = yara_x::Scanner::new(rules_static);
-                s.set_timeout(Duration::from_secs(30));
+                s.set_timeout(Duration::from_secs(120));
                 tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
                 cache.put(key, s);
             }
@@ -703,51 +710,85 @@ impl YaraEngine {
                 anyhow::bail!("scanner cache entry missing after insertion");
             };
 
-            let scan_results = scanner
-                .scan(data)
-                .map_err(|e| anyhow::anyhow!("YARA scan failed: {:?}", e))?;
+            let scan_start = std::time::Instant::now();
+            let scan_result = scanner.scan(data);
+            let scan_elapsed = scan_start.elapsed();
 
-            let raw_rules: Vec<RawRule> = scan_results
-                .matching_rules()
-                .map(|rule| {
-                    let patterns: Vec<_> = rule
-                        .patterns()
-                        .map(|pat| {
-                            let total_matches = pat.matches().count();
-                            if total_matches > MAX_PATTERN_MATCHES {
-                                let inline_trait_id = rule.namespace().strip_prefix("inline.");
-                                tracing::info!(
-                                    rule = %rule.identifier(),
-                                    namespace = %rule.namespace(),
-                                    pattern = %pat.identifier(),
-                                    matches = total_matches,
-                                    limit = MAX_PATTERN_MATCHES,
-                                    inline_trait_id,
-                                    "Hit YARA-pattern match limit; stopping early"
-                                );
-                            }
-                            let ranges: Vec<_> = pat
-                                .matches()
-                                .take(MAX_PATTERN_MATCHES)
-                                .map(|m| (m.range().start, m.range().end))
+            // Collect owned results first (consuming the ScanResults borrow on
+            // the scanner), so the scanner/cache borrow is released before we
+            // potentially evict the entry below.
+            let raw_rules_result: Result<Vec<RawRule>> = match scan_result {
+                Err(e) => Err(anyhow::anyhow!("YARA scan failed: {:?}", e)),
+                Ok(scan_results) => {
+                    let raw_rules: Vec<RawRule> = scan_results
+                        .matching_rules()
+                        .map(|rule| {
+                            let patterns: Vec<_> = rule
+                                .patterns()
+                                .map(|pat| {
+                                    let total_matches = pat.matches().count();
+                                    if total_matches > MAX_PATTERN_MATCHES {
+                                        let inline_trait_id =
+                                            rule.namespace().strip_prefix("inline.");
+                                        tracing::info!(
+                                            rule = %rule.identifier(),
+                                            namespace = %rule.namespace(),
+                                            pattern = %pat.identifier(),
+                                            matches = total_matches,
+                                            limit = MAX_PATTERN_MATCHES,
+                                            inline_trait_id,
+                                            "Hit YARA-pattern match limit; stopping early"
+                                        );
+                                    }
+                                    let ranges: Vec<_> = pat
+                                        .matches()
+                                        .take(MAX_PATTERN_MATCHES)
+                                        .map(|m| (m.range().start, m.range().end))
+                                        .collect();
+                                    (pat.identifier().to_string(), ranges)
+                                })
                                 .collect();
-                            (pat.identifier().to_string(), ranges)
+                            RawRule {
+                                name: rule.identifier().to_string(),
+                                namespace: rule.namespace().to_string(),
+                                tags: rule
+                                    .tags()
+                                    .map(|t| t.identifier().to_string())
+                                    .collect(),
+                                metadata: rule
+                                    .metadata()
+                                    .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
+                                    .collect(),
+                                patterns,
+                            }
                         })
                         .collect();
-                    RawRule {
-                        name: rule.identifier().to_string(),
-                        namespace: rule.namespace().to_string(),
-                        tags: rule.tags().map(|t| t.identifier().to_string()).collect(),
-                        metadata: rule
-                            .metadata()
-                            .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
-                            .collect(),
-                        patterns,
-                    }
-                })
-                .collect();
+                    Ok(raw_rules)
+                }
+            };
 
-            Ok(raw_rules)
+            // Scanner/ScanResults borrow is now released. Evict the cached
+            // scanner if the scan failed or took unreasonably long — yara-x may
+            // not cleanly reset internal state after a timeout.
+            if raw_rules_result.is_err() || scan_elapsed > Self::YARA_WALL_CLOCK_LIMIT {
+                if scan_elapsed > Self::YARA_WALL_CLOCK_LIMIT {
+                    tracing::error!(
+                        elapsed_secs = scan_elapsed.as_secs(),
+                        data_len = data.len(),
+                        "YARA scan exceeded wall-clock limit; evicting cached scanner",
+                    );
+                } else if let Err(ref e) = raw_rules_result {
+                    tracing::warn!(
+                        elapsed_ms = scan_elapsed.as_millis() as u64,
+                        data_len = data.len(),
+                        error = %e,
+                        "YARA scan failed; evicting cached scanner to prevent state corruption",
+                    );
+                }
+                cache.pop(&key);
+            }
+
+            raw_rules_result
         })
     }
 

@@ -2850,9 +2850,9 @@ dependencies = [
 
 [[package]]
 name = "pkg-config"
-version = "0.3.32"
+version = "0.3.33"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7edddbd0b52d732b21ad9a5fab5c704c14cd949e5e9a1ec5929a24fded1b904c"
+checksum = "19f132c84eca552bf34cab8ec81f1c1dcc229b811638f9d283dceabe58c5569e"
 
 [[package]]
 name = "plain"
@@ -3927,7 +3927,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.1.8"
-source = "git+https://codeberg.org/atomdrift/stng.git#2651689e201036fd18be03c40aa37db0157028c4"
+source = "git+https://codeberg.org/atomdrift/stng.git#637a3aa572fa1bb3f4a2b1894524ad5b9c4ec7ba"
 dependencies = [
  "aho-corasick",
  "anyhow",

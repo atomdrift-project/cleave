@@ -20,12 +20,20 @@ use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::Path;
 
+
 /// Read ZIP central directory metadata without extracting contents.
 pub(crate) fn inspect_zip_metadata(
     archive_path: &Path,
 ) -> Result<(Vec<ArchiveEntry>, ArchiveMetrics)> {
     let file = File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP archive")?;
+    if archive.len() > super::guards::MAX_ZIP_ENTRIES {
+        anyhow::bail!(
+            "ZIP central directory claims {} entries (max {})",
+            archive.len(),
+            super::guards::MAX_ZIP_ENTRIES
+        );
+    }
 
     let mut entries = Vec::with_capacity(archive.len());
     let mut metrics = ArchiveMetrics {
@@ -80,6 +88,13 @@ pub(crate) fn extract_zip_safe(
 
     let file = File::open(archive_path)?;
     let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP archive")?;
+    if archive.len() > super::guards::MAX_ZIP_ENTRIES {
+        anyhow::bail!(
+            "ZIP central directory claims {} entries (max {})",
+            archive.len(),
+            super::guards::MAX_ZIP_ENTRIES
+        );
+    }
 
     debug!(
         "Opening ZIP archive: {:?} ({} entries)",
@@ -347,6 +362,13 @@ pub(crate) fn extract_crx_safe(
 
     // Create ZipArchive from the file (ZipArchive will seek as needed)
     let mut archive = zip::ZipArchive::new(file).context("Failed to read ZIP from CRX")?;
+    if archive.len() > super::guards::MAX_ZIP_ENTRIES {
+        anyhow::bail!(
+            "CRX ZIP central directory claims {} entries (max {})",
+            archive.len(),
+            super::guards::MAX_ZIP_ENTRIES
+        );
+    }
 
     // Use the same extraction logic as regular ZIP (but without password support for now)
     extract_zip_entries_safe(&mut archive, dest_dir, None, guard)

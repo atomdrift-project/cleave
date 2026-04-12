@@ -88,6 +88,13 @@ pub(crate) struct OoxmlMetadata {
 pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
     let cursor = Cursor::new(data);
     let mut archive = zip::ZipArchive::new(cursor)?;
+    if archive.len() > crate::analyzers::archive::MAX_ZIP_ENTRIES {
+        anyhow::bail!(
+            "OOXML ZIP claims {} entries (max {})",
+            archive.len(),
+            crate::analyzers::archive::MAX_ZIP_ENTRIES
+        );
+    }
 
     // Collect entry names
     let entry_names: Vec<String> = archive.file_names().map(String::from).collect();

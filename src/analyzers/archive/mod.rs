@@ -10,6 +10,7 @@ pub(crate) mod utils;
 mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
+pub(crate) use guards::MAX_ZIP_ENTRIES;
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
@@ -279,6 +280,9 @@ fn is_zip_path_edge_case_corpus(file_path: &Path) -> bool {
     let Ok(mut archive) = ZipArchive::new(file) else {
         return false;
     };
+    if archive.len() > guards::MAX_ZIP_ENTRIES {
+        return false;
+    }
 
     let mut total_entries = 0usize;
     let mut traversal_entries = 0usize;

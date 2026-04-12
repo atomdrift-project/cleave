@@ -272,6 +272,32 @@ pub(crate) fn extract_pkg_safe(
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
+    // Validate XAR header before passing to XarReader::new(), which
+    // allocates based on the toc_length_compressed field. A malformed file
+    // can claim a petabyte ToC and abort the process with OOM.
+    {
+        let mut f = File::open(archive_path)?;
+        let file_size = f.metadata()?.len();
+        let mut header = [0u8; 28]; // XAR header is 28 bytes
+        use std::io::Read;
+        if f.read_exact(&mut header).is_err() {
+            anyhow::bail!("PKG file too small for XAR header");
+        }
+        // XAR magic: "xar!" (0x78617221)
+        if &header[0..4] != b"xar!" {
+            anyhow::bail!("Not a valid XAR/PKG file (bad magic)");
+        }
+        // toc_length_compressed is a big-endian u64 at offset 8
+        let toc_compressed = u64::from_be_bytes(header[8..16].try_into().unwrap());
+        if toc_compressed > file_size {
+            anyhow::bail!(
+                "XAR header claims compressed ToC is {} bytes but file is only {} bytes",
+                toc_compressed,
+                file_size
+            );
+        }
+    }
+
     let file = File::open(archive_path)?;
     let mut xar =
         apple_xar::reader::XarReader::new(file).context("Failed to read PKG (XAR) archive")?;
@@ -747,10 +773,12 @@ pub(crate) fn extract_cab(
     let file = File::open(archive_path).context("Failed to open CAB archive")?;
     let mut cabinet = cab::Cabinet::new(file).context("Failed to parse CAB archive")?;
 
-    // Collect file names first (cab crate requires sequential access per folder)
+    // Collect file names first (cab crate requires sequential access per folder).
+    // Cap at 200k entries to prevent OOM from malformed CAB headers.
     let file_names: Vec<String> = cabinet
         .folder_entries()
         .flat_map(|folder| folder.file_entries().map(|f| f.name().to_string()))
+        .take(200_000)
         .collect();
 
     for name in &file_names {

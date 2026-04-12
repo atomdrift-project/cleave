@@ -22,6 +22,12 @@ pub(crate) const MAX_TOTAL_SIZE: u64 = 7 * 1024 * 1024 * 1024;
 /// Maximum number of files to extract
 pub(crate) const MAX_FILE_COUNT: usize = 100_000;
 
+/// Maximum ZIP central directory entries. The zip crate allocates per-entry
+/// during `ZipArchive::new()`, so a crafted ZIP claiming billions of entries
+/// can OOM-abort the process before any guard runs. This cap is checked
+/// immediately after `ZipArchive::new()` at every call site.
+pub(crate) const MAX_ZIP_ENTRIES: usize = 200_000;
+
 /// Maximum compression ratio before considering it suspicious (100:1)
 pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;
 /// Minimum expanded size before a high compression ratio is treated as a bomb.

@@ -24,7 +24,7 @@
 
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
-use crate::analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
+use crate::analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::types::*;
 use anyhow::Result;
 use rayon::prelude::*;
@@ -288,7 +288,7 @@ impl ArchiveAnalyzer {
                 data,
                 &stng_strings,
                 &payloads,
-                file_type.clone(),
+                *file_type,
             )
             .with_backing_path(file_path)
             .with_skip_rizin_if(skip_rizin_reason.is_some())

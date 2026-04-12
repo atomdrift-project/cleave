@@ -155,7 +155,7 @@ pub fn run(
         min_suspicious_precision,
     );
 
-    let prepared = prepare_test_analysis(path, file_type.clone(), &capability_mapper)?;
+    let prepared = prepare_test_analysis(path, file_type, &capability_mapper)?;
     if prepared.is_fat_macho {
         eprintln!("Note: FAT binary detected, using full file for evaluation");
     }

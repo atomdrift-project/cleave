@@ -73,7 +73,7 @@ pub fn run(
     let (builtin_count, _third_party_count) = yara_engine.load_all_rules(false);
     let yara_loaded = builtin_count > 0 && yara_engine.is_loaded();
 
-    let mut prepared = prepare_test_analysis(path, file_type.clone(), &capability_mapper)?;
+    let mut prepared = prepare_test_analysis(path, file_type, &capability_mapper)?;
     if prepared.is_fat_macho {
         eprintln!(
             "Note: FAT binary with {} architectures, evaluating full file",

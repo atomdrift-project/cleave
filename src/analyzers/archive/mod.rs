@@ -11,7 +11,7 @@ mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
 
-use crate::analyzers::{AnalysisInput, Analyzer, FileType};
+use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;

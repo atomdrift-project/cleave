@@ -74,7 +74,6 @@ pub(crate) mod overlay;
 use crate::capabilities::CapabilityMapper;
 use crate::types::AnalysisReport;
 use anyhow::Result;
-use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -173,7 +172,7 @@ pub fn analyzer_for_file_type(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown => Some(Box::new(
-            generic::GenericAnalyzer::new(file_type.clone())
+            generic::GenericAnalyzer::new(*file_type)
                 .with_capability_mapper(mapper_or_empty),
         )),
 
@@ -192,7 +191,7 @@ pub fn analyzer_for_file_type(
                     None
                 } else {
                     Some(Box::new(
-                        generic::GenericAnalyzer::new(file_type.clone())
+                        generic::GenericAnalyzer::new(*file_type)
                             .with_capability_mapper(mapper_or_empty),
                     ))
                 }
@@ -279,7 +278,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown => Some(Box::new(
-            generic::GenericAnalyzer::new(file_type.clone())
+            generic::GenericAnalyzer::new(*file_type)
                 .with_capability_mapper_arc(mapper_or_empty),
         )),
 
@@ -300,7 +299,7 @@ pub(crate) fn analyzer_for_file_type_arc(
                     None
                 } else {
                     Some(Box::new(
-                        generic::GenericAnalyzer::new(file_type.clone())
+                        generic::GenericAnalyzer::new(*file_type)
                             .with_capability_mapper_arc(mapper_or_empty),
                     ))
                 }
@@ -353,13 +352,13 @@ pub trait Analyzer {
 #[must_use]
 #[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
-    fileid::detect_path(file_path).map_or(FileType::Unknown, |d| FileType::from(d.file_type))
+    fileid::detect_path(file_path).map_or(FileType::Unknown, |d| d.file_type)
 }
 
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
-    fileid::detect(file_path, file_data).map_or(FileType::Unknown, |d| FileType::from(d.file_type))
+    fileid::detect(file_path, file_data).map_or(FileType::Unknown, |d| d.file_type)
 }
 
 /// Detect file type by reading the first 1KB from disk.
@@ -373,11 +372,11 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
 
 /// Returns true if cleave can analyze this file.
 ///
-/// All archive variants recognized by fileid are supported; there is no
-/// longer a separate extension-based support check.
+/// Delegates to `fileid::FileType::is_program()` which is the single source of
+/// truth for whether a file type is supported for analysis.
 #[must_use]
 pub(crate) fn is_analyzable(_path: &Path, file_type: &FileType) -> bool {
-    file_type.is_supported()
+    file_type.is_program()
 }
 
 /// Check if file content matches its extension's expected type.
@@ -400,293 +399,27 @@ pub fn check_extension_content_mismatch(
     Some((ext_desc, content_desc))
 }
 
-/// File type detected by magic bytes, extension, and content analysis
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum FileType {
-    /// Mach-O binary (macOS/iOS executable or library)
-    MachO,
-    /// ELF binary (Linux/Unix executable or shared library)
-    Elf,
-    /// PE binary (Windows executable)
-    Pe,
-    /// Unix shell script (bash, sh, zsh, etc.)
-    Shell,
-    /// Windows batch file (.bat, .cmd)
-    Batch,
-    /// VBScript source file (.vbs, .vbe, .wsf, .wsc)
-    Vbs,
-    /// Python source file (.py)
-    Python,
-    /// JavaScript source file (.js, .mjs, .cjs)
-    JavaScript,
-    /// TypeScript source file (.ts, .tsx)
-    TypeScript,
-    /// Go source file (.go)
-    Go,
-    /// Rust source file (.rs)
-    Rust,
-    /// Java source file (.java)
-    Java,
-    /// Compiled Java bytecode (.class)
-    JavaClass,
-    /// Python compiled bytecode (.pyc)
-    PythonBytecode,
-    /// Java archive (.jar, .war, .ear)
-    Jar,
-    /// Ruby source file (.rb)
-    Ruby,
-    /// PHP source file (.php)
-    Php,
-    /// Perl source file (.pl, .pm)
-    Perl,
-    /// Lua source file (.lua)
-    Lua,
-    /// C# source file (.cs)
-    CSharp,
-    /// PowerShell script (.ps1, .psm1)
-    PowerShell,
-    /// Swift source file (.swift)
-    Swift,
-    /// Objective-C source file (.m, .mm)
-    ObjectiveC,
-    /// Groovy source file (.groovy)
-    Groovy,
-    /// Scala source file (.scala)
-    Scala,
-    /// Zig source file (.zig)
-    Zig,
-    /// Elixir source file (.ex, .exs)
-    Elixir,
-    /// C source file (.c, .h)
-    C,
-    /// npm package.json manifest
-    PackageJson,
-    /// VSCode extension manifest (.vsixmanifest)
-    VsixManifest,
-    /// Chrome extension manifest.json
-    ChromeManifest,
-    /// Rust Cargo.toml manifest
-    CargoToml,
-    /// Python pyproject.toml manifest
-    PyProjectToml,
-    /// PHP composer.json manifest
-    ComposerJson,
-    /// GitHub Actions workflow YAML
-    GithubActions,
-    /// systemd service unit file (.service, .service.d/*.conf)
-    SystemdService,
-    /// Python package metadata (PKG-INFO, METADATA)
-    PkgInfo,
-    /// ZIP archive (zip, apk, ipa, nupkg, etc.)
-    Zip,
-    /// TAR archive (plain, no compression)
-    Tar,
-    /// Gzip-compressed TAR (.tar.gz, .tgz, .crate)
-    TarGz,
-    /// Bzip2-compressed TAR (.tar.bz2, .tbz2)
-    TarBz2,
-    /// XZ-compressed TAR (.tar.xz, .txz)
-    TarXz,
-    /// Zstandard-compressed TAR (.tar.zst, .xbps)
-    TarZst,
-    /// Gzip-compressed single file (.gz, not a tar)
-    Gz,
-    /// Bzip2-compressed single file (.bz2, not a tar)
-    Bz2,
-    /// XZ-compressed single file (.xz, not a tar)
-    Xz,
-    /// Zstandard-compressed single file (.zst, not a tar)
-    Zst,
-    /// 7-Zip archive (.7z)
-    SevenZ,
-    /// RAR archive (.rar)
-    Rar,
-    /// Debian package (.deb)
-    Deb,
-    /// RPM package (.rpm)
-    Rpm,
-    /// macOS installer package (.pkg, XAR format)
-    Pkg,
-    /// Cabinet archive (.cab)
-    Cab,
-    /// Chrome extension (.crx)
-    Crx,
-    /// AppleScript source file (.applescript, .scpt)
-    AppleScript,
-    /// Apple Property List (.plist)
-    Plist,
-    /// Rich Text Format document (.rtf)
-    Rtf,
-    /// Legacy Microsoft Office document (OLE2/CFBF: .doc, .xls, .ppt, .msg)
-    OleDoc,
-    /// Modern Microsoft Office document (OOXML: .docx, .xlsx, .pptx)
-    Ooxml,
-    /// Windows Shell Link file (.lnk)
-    Lnk,
-    /// JPEG image
-    Jpeg,
-    /// PNG image
-    Png,
-    /// Python pickle serialized data (.pkl, .pickle, .joblib)
-    Pickle,
-    /// PDF document
-    Pdf,
-    /// HTML document (.html, .htm)
-    Html,
-    /// Markdown document (.md, .markdown)
-    Markdown,
-    /// File type could not be determined
-    Unknown,
+/// Re-export the canonical file type from the fileid crate.
+///
+/// Previously cleave maintained a parallel `FileType` enum that had to be kept
+/// in sync with fileid via a tedious `From` conversion.  Now there is a single
+/// source of truth: `fileid::FileType`.
+pub type FileType = fileid::FileType;
+
+/// Cleave-specific extensions on `FileType` (report labels, YARA tags).
+///
+/// These don't belong in the fileid crate because they encode cleave's analysis
+/// policy rather than generic file identification.
+pub(crate) trait FileTypeExt {
+    /// Canonical file type string used in analysis reports.
+    fn report_file_type(&self) -> String;
+
+    /// YARA rule filetypes relevant for this file type.
+    fn yara_filetypes(&self) -> Vec<&'static str>;
 }
 
-impl FileType {
-    /// Returns true if this file type represents executable code (binaries, scripts, etc.)
-    /// as opposed to data files (images, documents, etc.)
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn is_program(&self) -> bool {
-        match self {
-            FileType::MachO
-            | FileType::Elf
-            | FileType::Pe
-            | FileType::Shell
-            | FileType::Batch
-            | FileType::Vbs
-            | FileType::Python
-            | FileType::JavaScript
-            | FileType::TypeScript
-            | FileType::Go
-            | FileType::Rust
-            | FileType::Java
-            | FileType::JavaClass
-            | FileType::PythonBytecode
-            | FileType::Jar
-            | FileType::Ruby
-            | FileType::Php
-            | FileType::Perl
-            | FileType::Lua
-            | FileType::CSharp
-            | FileType::PowerShell
-            | FileType::Swift
-            | FileType::ObjectiveC
-            | FileType::Groovy
-            | FileType::Scala
-            | FileType::Zig
-            | FileType::Elixir
-            | FileType::C
-            | FileType::PackageJson
-            | FileType::PkgInfo
-            | FileType::VsixManifest
-            | FileType::ChromeManifest
-            | FileType::CargoToml
-            | FileType::PyProjectToml
-            | FileType::ComposerJson
-            | FileType::GithubActions
-            | FileType::SystemdService
-            | FileType::AppleScript
-            | FileType::Plist
-            | FileType::Rtf
-            | FileType::OleDoc
-            | FileType::Ooxml
-            | FileType::Lnk
-            | FileType::Jpeg
-            | FileType::Png
-            | FileType::Pickle // Pickle can contain arbitrary code execution
-            | FileType::Pdf // PDF can carry exploits/malware
-            // Archive formats can contain malware
-            | FileType::Zip
-            | FileType::Tar
-            | FileType::TarGz
-            | FileType::TarBz2
-            | FileType::TarXz
-            | FileType::TarZst
-            | FileType::Gz
-            | FileType::Bz2
-            | FileType::Xz
-            | FileType::Zst
-            | FileType::SevenZ
-            | FileType::Rar
-            | FileType::Deb
-            | FileType::Rpm
-            | FileType::Pkg
-            | FileType::Cab
-            | FileType::Crx => true,
-            FileType::Unknown | FileType::Html | FileType::Markdown => false, // Skip unknown and non-program text files in dir scans
-        }
-    }
-
-    /// Returns true if this file type represents source code with AST support.
-    /// These file types extract strings via AST parsing for accuracy.
-    #[allow(dead_code)] // Used by binary target
-    #[must_use]
-    pub(crate) fn is_source_code(&self) -> bool {
-        matches!(
-            self,
-            FileType::Python
-                | FileType::Ruby
-                | FileType::JavaScript
-                | FileType::TypeScript
-                | FileType::Php
-                | FileType::Perl
-                | FileType::Lua
-                | FileType::CSharp
-                | FileType::C
-                | FileType::Rust
-                | FileType::Shell
-                | FileType::PowerShell
-        )
-    }
-
-    /// Returns true if this file type is an archive or compressed container.
-    #[must_use]
-    #[allow(dead_code)] // Used by binary target
-    pub(crate) fn is_archive(&self) -> bool {
-        matches!(
-            self,
-            FileType::Zip
-                | FileType::Tar
-                | FileType::TarGz
-                | FileType::TarBz2
-                | FileType::TarXz
-                | FileType::TarZst
-                | FileType::Gz
-                | FileType::Bz2
-                | FileType::Xz
-                | FileType::Zst
-                | FileType::SevenZ
-                | FileType::Rar
-                | FileType::Deb
-                | FileType::Rpm
-                | FileType::Pkg
-                | FileType::Cab
-                | FileType::Crx
-                | FileType::Jar
-        )
-    }
-
-    /// Returns true if this file type is a compiled native binary.
-    #[must_use]
-    #[allow(dead_code)] // Used by binary target
-    pub(crate) fn is_binary(&self) -> bool {
-        matches!(
-            self,
-            FileType::Elf
-                | FileType::Pe
-                | FileType::MachO
-                | FileType::JavaClass
-                | FileType::PythonBytecode
-        )
-    }
-
-    /// Returns true if cleave supports analysis of this file type.
-    #[must_use]
-    pub(crate) fn is_supported(&self) -> bool {
-        self.is_program()
-    }
-
-    /// Canonical file type string used in analysis reports.
-    #[must_use]
-    pub(crate) fn report_file_type(&self) -> String {
+impl FileTypeExt for FileType {
+    fn report_file_type(&self) -> String {
         match self {
             FileType::SystemdService => "systemd".to_string(),
             FileType::Tar => "tar".to_string(),
@@ -699,11 +432,7 @@ impl FileType {
         }
     }
 
-    /// Get YARA rule filetypes that are relevant for this file type
-    /// Returns a list of filetype identifiers to match against YARA metadata
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn yara_filetypes(&self) -> Vec<&'static str> {
+    fn yara_filetypes(&self) -> Vec<&'static str> {
         match self {
             FileType::MachO => vec!["macho", "dylib", "kext"],
             FileType::Elf => vec!["elf", "so", "ko"],
@@ -775,81 +504,7 @@ impl FileType {
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],
-            FileType::Unknown => vec![], // No filtering for unknown types
-        }
-    }
-}
-
-impl From<fileid::FileType> for FileType {
-    fn from(ft: fileid::FileType) -> Self {
-        match ft {
-            fileid::FileType::MachO => Self::MachO,
-            fileid::FileType::Elf => Self::Elf,
-            fileid::FileType::Pe => Self::Pe,
-            fileid::FileType::Shell => Self::Shell,
-            fileid::FileType::Batch => Self::Batch,
-            fileid::FileType::Vbs => Self::Vbs,
-            fileid::FileType::Python => Self::Python,
-            fileid::FileType::JavaScript => Self::JavaScript,
-            fileid::FileType::TypeScript => Self::TypeScript,
-            fileid::FileType::Go => Self::Go,
-            fileid::FileType::Rust => Self::Rust,
-            fileid::FileType::Java => Self::Java,
-            fileid::FileType::JavaClass => Self::JavaClass,
-            fileid::FileType::PythonBytecode => Self::PythonBytecode,
-            fileid::FileType::Jar => Self::Jar,
-            fileid::FileType::Ruby => Self::Ruby,
-            fileid::FileType::Php => Self::Php,
-            fileid::FileType::Perl => Self::Perl,
-            fileid::FileType::Lua => Self::Lua,
-            fileid::FileType::CSharp => Self::CSharp,
-            fileid::FileType::PowerShell => Self::PowerShell,
-            fileid::FileType::Swift => Self::Swift,
-            fileid::FileType::ObjectiveC => Self::ObjectiveC,
-            fileid::FileType::Groovy => Self::Groovy,
-            fileid::FileType::Scala => Self::Scala,
-            fileid::FileType::Zig => Self::Zig,
-            fileid::FileType::Elixir => Self::Elixir,
-            fileid::FileType::C => Self::C,
-            fileid::FileType::PackageJson => Self::PackageJson,
-            fileid::FileType::VsixManifest => Self::VsixManifest,
-            fileid::FileType::ChromeManifest => Self::ChromeManifest,
-            fileid::FileType::CargoToml => Self::CargoToml,
-            fileid::FileType::PyProjectToml => Self::PyProjectToml,
-            fileid::FileType::ComposerJson => Self::ComposerJson,
-            fileid::FileType::GithubActions => Self::GithubActions,
-            fileid::FileType::SystemdService => Self::SystemdService,
-            fileid::FileType::PkgInfo => Self::PkgInfo,
-            fileid::FileType::Zip => Self::Zip,
-            fileid::FileType::Tar => Self::Tar,
-            fileid::FileType::TarGz => Self::TarGz,
-            fileid::FileType::TarBz2 => Self::TarBz2,
-            fileid::FileType::TarXz => Self::TarXz,
-            fileid::FileType::TarZst => Self::TarZst,
-            fileid::FileType::Gz => Self::Gz,
-            fileid::FileType::Bz2 => Self::Bz2,
-            fileid::FileType::Xz => Self::Xz,
-            fileid::FileType::Zst => Self::Zst,
-            fileid::FileType::SevenZ => Self::SevenZ,
-            fileid::FileType::Rar => Self::Rar,
-            fileid::FileType::Deb => Self::Deb,
-            fileid::FileType::Rpm => Self::Rpm,
-            fileid::FileType::Pkg => Self::Pkg,
-            fileid::FileType::Cab => Self::Cab,
-            fileid::FileType::Crx => Self::Crx,
-            fileid::FileType::AppleScript => Self::AppleScript,
-            fileid::FileType::Plist => Self::Plist,
-            fileid::FileType::Rtf => Self::Rtf,
-            fileid::FileType::OleDoc => Self::OleDoc,
-            fileid::FileType::Ooxml => Self::Ooxml,
-            fileid::FileType::Lnk => Self::Lnk,
-            fileid::FileType::Jpeg => Self::Jpeg,
-            fileid::FileType::Png => Self::Png,
-            fileid::FileType::Pickle => Self::Pickle,
-            fileid::FileType::Pdf => Self::Pdf,
-            fileid::FileType::Html => Self::Html,
-            fileid::FileType::Markdown => Self::Markdown,
-            _ => Self::Unknown,
+            _ => vec![],
         }
     }
 }

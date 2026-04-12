@@ -16,7 +16,7 @@ use crate::analyzers::function_metrics::{self, FunctionInfo};
 use crate::analyzers::symbol_extraction;
 use crate::analyzers::{
     identifier_metrics, import_metrics, string_metrics, text_metrics, AnalysisInput, Analyzer,
-    FileType,
+    FileType, FileTypeExt,
 };
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
@@ -352,7 +352,7 @@ impl UnifiedSourceAnalyzer {
     /// Create an analyzer for the given file type.
     #[must_use]
     pub(crate) fn for_file_type(file_type: &crate::analyzers::FileType) -> Option<Self> {
-        config_for_file_type(file_type).and_then(|config| Self::new(config, file_type.clone()).ok())
+        config_for_file_type(file_type).and_then(|config| Self::new(config, *file_type).ok())
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)

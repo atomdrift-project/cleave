@@ -168,6 +168,10 @@ pub enum FileType {
     Html,
     /// Markdown document (.md, .markdown)
     Markdown,
+    /// OpenDocument Format (.odt, .ods, .odp, .odg) — ZIP-based office documents
+    Odf,
+    /// File type could not be determined
+    Unknown,
 }
 
 impl FileType {
@@ -175,7 +179,7 @@ impl FileType {
     /// manifests, archives, or document formats that can carry exploits).
     #[must_use]
     pub fn is_program(&self) -> bool {
-        !matches!(self, Self::Html | Self::Markdown)
+        !matches!(self, Self::Unknown | Self::Html | Self::Markdown | Self::Odf)
     }
 
     /// Returns true if this file type is an archive or compressed container.

@@ -11,7 +11,7 @@
 //! — that work happens during full analysis and is split out by the caller
 //! (see hopper's ExplodeArchiveMembers).
 
-use crate::analyzers::{detect_file_type_from_data, is_analyzable};
+use crate::analyzers::{detect_file_type_from_data, is_analyzable, FileTypeExt};
 use crate::file_io;
 use anyhow::Result;
 use serde::Serialize;

@@ -64,6 +64,7 @@ pub mod server;
 
 // Re-export commonly used types at crate root
 pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
+use analyzers::FileTypeExt;
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
 pub use diff::DiffAnalyzer;
@@ -889,7 +890,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         file_data,
         &stng_strings,
         &encoded_payloads,
-        file_type.clone(),
+        file_type,
     )
     .with_sha256(sha256_hex.clone());
     input.cancellation = options.cancellation.clone();

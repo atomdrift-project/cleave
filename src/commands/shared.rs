@@ -10,7 +10,7 @@
 //! - **Analysis Helpers**: YARA processing and report creation
 //! - **Utility Functions**: Type conversions, string extraction, and metric flattening
 
-use crate::analyzers::{self, FileType};
+use crate::analyzers::{self, FileType, FileTypeExt};
 use crate::types;
 use crate::yara_engine::YaraEngine;
 use anyhow::Result;

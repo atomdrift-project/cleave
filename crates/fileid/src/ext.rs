@@ -207,6 +207,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "docx" | "xlsx" | "pptx" | "docm" | "xlsm" | "pptm" | "dotx" | "dotm" | "xltx" | "xltm" => {
             Some(FileType::Ooxml)
         }
+        "odt" | "ods" | "odp" | "odg" | "odf" | "ott" | "ots" | "otp" => Some(FileType::Odf),
         "lnk" => Some(FileType::Lnk),
         "pdf" => Some(FileType::Pdf),
         "jpg" | "jpeg" => Some(FileType::Jpeg),

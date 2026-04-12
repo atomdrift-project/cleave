@@ -391,6 +391,11 @@ fn classify_pk(path: &Path, data: &[u8]) -> (FileType, DetectionSource) {
         return (FileType::Ooxml, DetectionSource::Magic);
     }
 
+    // OpenDocument Format by extension
+    if matches!(ext, "odt" | "ods" | "odp" | "odg" | "odf" | "ott" | "ots" | "otp") {
+        return (FileType::Odf, DetectionSource::Magic);
+    }
+
     // OOXML by content (scan for [Content_Types].xml) — but not for archive containers
     let is_archive_opc = matches!(
         ext,
@@ -398,6 +403,12 @@ fn classify_pk(path: &Path, data: &[u8]) -> (FileType, DetectionSource) {
     );
     if !is_archive_opc && memchr::memmem::find(data, b"[Content_Types].xml").is_some() {
         return (FileType::Ooxml, DetectionSource::Magic);
+    }
+
+    // ODF by content — first ZIP entry is an uncompressed "mimetype" file
+    // containing "application/vnd.oasis.opendocument."
+    if memchr::memmem::find(data, b"application/vnd.oasis.opendocument.").is_some() {
+        return (FileType::Odf, DetectionSource::Magic);
     }
 
     (FileType::Zip, DetectionSource::Magic)

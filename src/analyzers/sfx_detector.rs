@@ -6,7 +6,7 @@
 //!
 //! # Extraction
 //!
-//! Extraction is attempted via system tools (`7z`, `innoextract`) when available.
+//! Extraction is attempted via system tools (`7zz`/`7z`, `innoextract`) when available.
 //! A detection finding is always emitted even if extraction fails or tooling is absent.
 
 use crate::analyzers::archive::ArchiveAnalyzer;
@@ -16,6 +16,7 @@ use crate::types::*;
 use crate::yara_engine::YaraEngine;
 use memchr::memmem;
 use std::path::Path;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 /// NSIS installer marker (little-endian 0xDEADBEEF).
@@ -184,8 +185,33 @@ fn tool_available(name: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn sevenzip_cmd() -> &'static str {
+    // 0 = unresolved, 1 = 7zz, 2 = 7z
+    static CHOICE: AtomicU8 = AtomicU8::new(0);
+    match CHOICE.load(Ordering::Relaxed) {
+        1 => "7zz",
+        2 => "7z",
+        _ => {
+            let cmd = if std::process::Command::new("7zz")
+                .arg("i")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .status()
+                .is_ok()
+            {
+                CHOICE.store(1, Ordering::Relaxed);
+                "7zz"
+            } else {
+                CHOICE.store(2, Ordering::Relaxed);
+                "7z"
+            };
+            cmd
+        }
+    }
+}
+
 fn run_7z(src: &Path, out: &Path) -> bool {
-    std::process::Command::new("7z")
+    std::process::Command::new(sevenzip_cmd())
         .args(["x", "-y", &format!("-o{}", out.display()), "--"])
         .arg(src)
         .stdout(std::process::Stdio::null())

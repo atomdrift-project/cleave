@@ -18,6 +18,19 @@ pub(crate) struct PackageJsonAnalyzer {
 
 /// Deserialize a JSON value as `HashMap<String, String>`, returning an empty map
 /// if the value is not an object (e.g. old npm packages use `"dependencies": []`).
+/// Deserialize a boolean that might be encoded as a string (e.g. `"true"` instead of `true`).
+fn deserialize_bool_tolerant<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(b) => Ok(b),
+        serde_json::Value::String(s) => Ok(s.eq_ignore_ascii_case("true")),
+        _ => Ok(false),
+    }
+}
+
 fn deserialize_map_tolerant<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -45,7 +58,7 @@ struct PackageJson {
     name: Option<String>,
     version: Option<String>,
     publisher: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_tolerant")]
     r#private: bool,
     #[allow(dead_code)] // Deserialized from JSON
     desc: Option<String>,

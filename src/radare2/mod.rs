@@ -202,7 +202,9 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = Vec::new();
         if let Some(mut handle) = stdout_handle {
-            let _ = (&mut handle).take(MAX_SUBPROCESS_OUTPUT as u64).read_to_end(&mut stdout);
+            let _ = (&mut handle)
+                .take(MAX_SUBPROCESS_OUTPUT as u64)
+                .read_to_end(&mut stdout);
         }
         let _ = stdout_tx.send(stdout);
     });
@@ -211,7 +213,9 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
     let stderr_thread = std::thread::spawn(move || {
         let mut stderr = Vec::new();
         if let Some(mut handle) = stderr_handle {
-            let _ = (&mut handle).take(MAX_SUBPROCESS_OUTPUT as u64).read_to_end(&mut stderr);
+            let _ = (&mut handle)
+                .take(MAX_SUBPROCESS_OUTPUT as u64)
+                .read_to_end(&mut stderr);
         }
         let _ = stderr_tx.send(stderr);
     });
@@ -290,7 +294,11 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
                 // theoretically possible but the window is < 1ms.
                 let ret = unsafe { libc::kill(child_id as i32, libc::SIGKILL) };
                 if ret != 0 {
-                    warn!(pid = child_id, errno = std::io::Error::last_os_error().raw_os_error(), "SIGKILL failed (process may have already exited)");
+                    warn!(
+                        pid = child_id,
+                        errno = std::io::Error::last_os_error().raw_os_error(),
+                        "SIGKILL failed (process may have already exited)"
+                    );
                 }
             }
             #[cfg(not(unix))]

@@ -63,8 +63,8 @@ pub mod yara_engine;
 pub mod server;
 
 // Re-export commonly used types at crate root
-pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 use analyzers::FileTypeExt;
+pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
 pub use diff::DiffAnalyzer;

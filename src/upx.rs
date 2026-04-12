@@ -2,6 +2,7 @@
 //!
 //! This module detects and unpacks UPX-compressed binaries for analysis.
 
+use std::io::Read;
 use std::path::Path;
 use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -102,43 +103,28 @@ impl UPXDecompressor {
         // Use fs::copy instead of read + write to avoid buffering original in memory
         std::fs::copy(file_path, temp_path)?;
 
-        // Run upx -d on the temporary copy with a timeout
+        // Run upx -d on the temporary copy with a timeout.
+        // stdout → null: -q mode produces nothing useful; null avoids a drain thread.
+        // stderr → piped: captured for error messages on failure.
         let mut child = Command::new("upx")
             .arg("-d")
             .arg("-q") // Quiet mode
             .arg(temp_path)
-            .stdout(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::piped())
             .spawn()?;
 
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| std::io::Error::other("UPX process stdout pipe was not captured"))?;
-        let _stdout_rx = {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let mut stdout = stdout;
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut stdout, &mut buf);
-                let _ = tx.send(buf);
-            });
-            rx
-        };
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| std::io::Error::other("UPX process stderr pipe was not captured"))?;
-        let stderr_rx = {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let mut stderr = stderr;
-                let mut buf = Vec::new();
-                let _ = std::io::Read::read_to_end(&mut stderr, &mut buf);
-                let _ = tx.send(buf);
-            });
-            rx
-        };
+        let (stderr_tx, stderr_rx) = std::sync::mpsc::channel();
+        let stderr_thread = std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let mut stderr = stderr;
+            let _ = stderr.read_to_end(&mut buf);
+            let _ = stderr_tx.send(buf);
+        });
 
         let timeout = std::time::Duration::from_secs(60);
         let start = std::time::Instant::now();
@@ -153,6 +139,7 @@ impl UPXDecompressor {
                 if let Err(e) = child.wait() {
                     tracing::debug!("UPX wait after kill failed: {}", e);
                 }
+                let _ = stderr_thread.join();
                 return Err(UPXError::DecompressionFailed(
                     "UPX decompression timed out".to_string(),
                 ));
@@ -160,6 +147,7 @@ impl UPXDecompressor {
             std::thread::sleep(std::time::Duration::from_millis(50));
         };
 
+        let _ = stderr_thread.join();
         let stderr = stderr_rx.recv().unwrap_or_default();
 
         if !status.success() {

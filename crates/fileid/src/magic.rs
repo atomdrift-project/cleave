@@ -392,7 +392,10 @@ fn classify_pk(path: &Path, data: &[u8]) -> (FileType, DetectionSource) {
     }
 
     // OpenDocument Format by extension
-    if matches!(ext, "odt" | "ods" | "odp" | "odg" | "odf" | "ott" | "ots" | "otp") {
+    if matches!(
+        ext,
+        "odt" | "ods" | "odp" | "odg" | "odf" | "ott" | "ots" | "otp"
+    ) {
         return (FileType::Odf, DetectionSource::Magic);
     }
 

@@ -287,8 +287,10 @@ pub(crate) fn extract_pkg_safe(
         if &header[0..4] != b"xar!" {
             anyhow::bail!("Not a valid XAR/PKG file (bad magic)");
         }
-        // toc_length_compressed is a big-endian u64 at offset 8
-        let toc_compressed = u64::from_be_bytes(header[8..16].try_into().unwrap());
+        // toc_length_compressed is a big-endian u64 at offset 8; header is [u8;28] so [8..16] is always 8 bytes
+        let mut toc_bytes = [0u8; 8];
+        toc_bytes.copy_from_slice(&header[8..16]);
+        let toc_compressed = u64::from_be_bytes(toc_bytes);
         if toc_compressed > file_size {
             anyhow::bail!(
                 "XAR header claims compressed ToC is {} bytes but file is only {} bytes",

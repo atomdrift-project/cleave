@@ -20,7 +20,6 @@ use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::Path;
 
-
 /// Read ZIP central directory metadata without extracting contents.
 pub(crate) fn inspect_zip_metadata(
     archive_path: &Path,

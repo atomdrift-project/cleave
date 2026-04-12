@@ -179,7 +179,10 @@ impl FileType {
     /// manifests, archives, or document formats that can carry exploits).
     #[must_use]
     pub fn is_program(&self) -> bool {
-        !matches!(self, Self::Unknown | Self::Html | Self::Markdown | Self::Odf)
+        !matches!(
+            self,
+            Self::Unknown | Self::Html | Self::Markdown | Self::Odf
+        )
     }
 
     /// Returns true if this file type is an archive or compressed container.

@@ -480,7 +480,11 @@ async fn analyze_inner(
             analysis_error_response(&e)
         }
         Some(Err(e)) => {
-            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
+            if e.is_panic() {
+                error!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis panicked (possible stng panic on malformed input)");
+            } else {
+                warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
+            }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),
@@ -854,7 +858,11 @@ async fn analyze_path_inner(
             analysis_error_response(&e)
         }
         Some(Err(e)) => {
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
+            if e.is_panic() {
+                error!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis panicked (possible stng panic on malformed input)");
+            } else {
+                warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
+            }
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": "Internal error"})),

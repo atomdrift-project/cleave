@@ -172,8 +172,7 @@ pub fn analyzer_for_file_type(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown => Some(Box::new(
-            generic::GenericAnalyzer::new(*file_type)
-                .with_capability_mapper(mapper_or_empty),
+            generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
 
         // Archives need special handling (depth limits, nested analysis)
@@ -278,8 +277,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown => Some(Box::new(
-            generic::GenericAnalyzer::new(*file_type)
-                .with_capability_mapper_arc(mapper_or_empty),
+            generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Archives need special handling (depth limits, nested analysis)

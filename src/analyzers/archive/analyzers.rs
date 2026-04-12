@@ -458,7 +458,9 @@ impl ArchiveAnalyzer {
         debug!("Found {} .class files", total_class_files);
 
         // Phase 1: Run YARA on ALL class files in parallel (fast, lock-free)
-        let (flagged_classes, collected_yara_matches) = if let Some(ref yara_engine) = self.yara_engine {
+        let (flagged_classes, collected_yara_matches) = if let Some(ref yara_engine) =
+            self.yara_engine
+        {
             let yara_start = std::time::Instant::now();
             let yara_results: Vec<_> = class_files
                 .par_iter()
@@ -568,9 +570,7 @@ impl ArchiveAnalyzer {
         let expected_count = classes_to_analyze.len();
         let mut collected_traits = Vec::<Finding>::with_capacity(expected_count.min(500));
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
-        let mut collected_strings = Vec::<StringInfo>::with_capacity(
-            (expected_count * 2).min(200),
-        );
+        let mut collected_strings = Vec::<StringInfo>::with_capacity((expected_count * 2).min(200));
         let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(expected_count);
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(expected_count);
         let mut files_analyzed: usize = 0;
@@ -597,7 +597,8 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -664,22 +665,22 @@ impl ArchiveAnalyzer {
                 if !collected_traits.iter().any(|existing| existing.id == f.id)
                     && collected_traits.len() < 10_000
                 {
-                        let mut new_finding = f.clone();
-                        for evidence in &mut new_finding.evidence {
-                            match &evidence.location {
-                                None => {
-                                    evidence.location = Some(result.archive_location.clone());
-                                }
-                                Some(loc) if !loc.starts_with("archive:") => {
-                                    evidence.location =
-                                        Some(format!("{}:{}", result.archive_location, loc));
-                                }
-                                _ => {}
+                    let mut new_finding = f.clone();
+                    for evidence in &mut new_finding.evidence {
+                        match &evidence.location {
+                            None => {
+                                evidence.location = Some(result.archive_location.clone());
                             }
+                            Some(loc) if !loc.starts_with("archive:") => {
+                                evidence.location =
+                                    Some(format!("{}:{}", result.archive_location, loc));
+                            }
+                            _ => {}
                         }
-                        collected_traits.push(new_finding);
                     }
+                    collected_traits.push(new_finding);
                 }
+            }
 
             // Aggregate YARA matches
             for yara_match in &file_report.yara_matches {
@@ -757,7 +758,8 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -968,9 +970,7 @@ impl ArchiveAnalyzer {
         let mut total_traits = HashSet::new();
         let mut collected_traits = Vec::<Finding>::with_capacity(total_files.min(500));
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
-        let mut collected_strings = Vec::<StringInfo>::with_capacity(
-            (total_files * 2).min(200),
-        );
+        let mut collected_strings = Vec::<StringInfo>::with_capacity((total_files * 2).min(200));
         let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
         let mut files_analyzed: usize = 0;
@@ -999,7 +999,8 @@ impl ArchiveAnalyzer {
                         return None;
                     }
                 };
-                let file_type = crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
+                let file_type =
+                    crate::analyzers::detect_file_type_from_data(entry.path(), &file_data);
                 let sha256 = calculate_sha256(&file_data);
 
                 let entry_metadata = ArchiveEntry {
@@ -1074,13 +1075,10 @@ impl ArchiveAnalyzer {
                         }
                         None => result.relative_path.clone(),
                     };
-                    if let Some(extracted_path) = config.extract(
-                        &file_entry.sha256,
-                        &extract_relative_path,
-                        &file_data,
-                    ) {
-                        file_entry.extracted_path =
-                            Some(extracted_path.display().to_string());
+                    if let Some(extracted_path) =
+                        config.extract(&file_entry.sha256, &extract_relative_path, &file_data)
+                    {
+                        file_entry.extracted_path = Some(extracted_path.display().to_string());
                     }
                 }
             }

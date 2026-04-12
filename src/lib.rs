@@ -1963,7 +1963,10 @@ mod tests {
         let code = b"import base64\ndata = 'ZWNobyBoZWxsbw=='\nresult = base64.b64decode(data)\n";
 
         #[allow(clippy::expect_used)]
-        let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+        let tmp = tempfile::Builder::new()
+            .suffix(".py")
+            .tempfile()
+            .expect("create temp file");
         #[allow(clippy::expect_used)]
         tmp.as_file().write_all(code).expect("write test content");
         let path = tmp.path();
@@ -2021,7 +2024,10 @@ mod tests {
 
         let code = b"print('hello world')\n";
         #[allow(clippy::expect_used)]
-        let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+        let tmp = tempfile::Builder::new()
+            .suffix(".py")
+            .tempfile()
+            .expect("create temp file");
         #[allow(clippy::expect_used)]
         tmp.as_file().write_all(code).expect("write test content");
 

@@ -562,7 +562,7 @@ impl FileType {
             "zip" => FileType::Zip,
             "apk" => FileType::Apk,
             "jar" | "war" | "ear" => FileType::Jar,
-            "tar" | "tgz" => FileType::Tar,
+            "tar" | "tgz" | "tar.gz" | "tar.bz2" | "tar.xz" | "tar.zst" => FileType::Tar,
             "npm" => FileType::Npm,
             "nupkg" => FileType::Nupkg,
             "gem" => FileType::Gem,

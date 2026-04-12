@@ -689,11 +689,11 @@ impl FileType {
     pub(crate) fn report_file_type(&self) -> String {
         match self {
             FileType::SystemdService => "systemd".to_string(),
-            FileType::TarGz
-            | FileType::TarBz2
-            | FileType::TarXz
-            | FileType::TarZst
-            | FileType::Tar => "tar".to_string(),
+            FileType::Tar => "tar".to_string(),
+            FileType::TarGz => "tar.gz".to_string(),
+            FileType::TarBz2 => "tar.bz2".to_string(),
+            FileType::TarXz => "tar.xz".to_string(),
+            FileType::TarZst => "tar.zst".to_string(),
             FileType::SevenZ => "7z".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }

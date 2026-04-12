@@ -234,9 +234,11 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
             // Gzip: 1F 8B — could wrap a tar or be a single compressed file.
             // Use extension to tell them apart; unknown extension → plain gz.
             if data[1] == 0x8B {
+                // .apk with gzip magic is Alpine Linux APK (tar.gz), not Android APK (zip)
                 let ft = if path_ends_with_ci(path, b".tar.gz")
                     || path_ends_with_ci(path, b".tgz")
                     || path_ends_with_ci(path, b".crate")
+                    || path_ends_with_ci(path, b".apk")
                 {
                     FileType::TarGz
                 } else {

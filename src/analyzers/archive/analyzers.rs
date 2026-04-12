@@ -372,6 +372,21 @@ impl ArchiveAnalyzer {
                 }
             }
             Ok(Some(report))
+        } else if self
+            .analysis_options
+            .as_ref()
+            .is_some_and(|opts| opts.all_files)
+        {
+            // all_files=true: still track the file even without a dedicated analyzer.
+            // This ensures extraction and path recording work for data/text types.
+            let target = TargetInfo {
+                path: relative_path.to_string(),
+                file_type: file_type.report_file_type(),
+                size_bytes: data.len() as u64,
+                sha256: sha256.to_string(),
+                architectures: None,
+            };
+            Ok(Some(AnalysisReport::new(target)))
         } else {
             Err(anyhow::anyhow!("Unsupported file type: {:?}", file_type))
         };

@@ -147,8 +147,12 @@ impl UPXDecompressor {
                 break status;
             }
             if start.elapsed() > timeout {
-                let _ = child.kill();
-                let _ = child.wait();
+                if let Err(e) = child.kill() {
+                    tracing::debug!("UPX kill failed (may have already exited): {}", e);
+                }
+                if let Err(e) = child.wait() {
+                    tracing::debug!("UPX wait after kill failed: {}", e);
+                }
                 return Err(UPXError::DecompressionFailed(
                     "UPX decompression timed out".to_string(),
                 ));

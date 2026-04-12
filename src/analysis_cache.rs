@@ -122,9 +122,15 @@ fn with_conn<T>(f: impl FnOnce(&Connection) -> T) -> Option<T> {
                 .or_else(|e| {
                     // Database may be corrupt — delete and recreate.
                     tracing::debug!("Cache open failed, recreating: {}", e);
-                    let _ = std::fs::remove_file(path);
-                    let _ = std::fs::remove_file(path.with_extension("db-wal"));
-                    let _ = std::fs::remove_file(path.with_extension("db-shm"));
+                    if let Err(e) = std::fs::remove_file(path) {
+                        tracing::debug!("Failed to remove corrupt cache db: {}", e);
+                    }
+                    if let Err(e) = std::fs::remove_file(path.with_extension("db-wal")) {
+                        tracing::debug!("Failed to remove corrupt cache WAL: {}", e);
+                    }
+                    if let Err(e) = std::fs::remove_file(path.with_extension("db-shm")) {
+                        tracing::debug!("Failed to remove corrupt cache SHM: {}", e);
+                    }
                     open_connection(path)
                 })
                 .map_err(|e| tracing::warn!("Analysis cache unavailable: {}", e))

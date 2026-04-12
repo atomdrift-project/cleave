@@ -661,8 +661,9 @@ impl ArchiveAnalyzer {
             for f in &file_report.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id) {
-                    if collected_traits.len() < 10_000 {
+                if !collected_traits.iter().any(|existing| existing.id == f.id)
+                    && collected_traits.len() < 10_000
+                {
                         let mut new_finding = f.clone();
                         for evidence in &mut new_finding.evidence {
                             match &evidence.location {
@@ -679,14 +680,13 @@ impl ArchiveAnalyzer {
                         collected_traits.push(new_finding);
                     }
                 }
-            }
 
             // Aggregate YARA matches
             for yara_match in &file_report.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
-                    if collected_yara.len() < 1_000 {
-                        collected_yara.push(yara_match.clone());
-                    }
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
+                    && collected_yara.len() < 1_000
+                {
+                    collected_yara.push(yara_match.clone());
                 }
             }
 
@@ -695,10 +695,9 @@ impl ArchiveAnalyzer {
                 if matches!(
                     string.string_type,
                     Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) {
-                    if collected_strings.len() < 10_000 {
-                        collected_strings.push(string.clone());
-                    }
+                ) && collected_strings.len() < 10_000
+                {
+                    collected_strings.push(string.clone());
                 }
             }
 
@@ -821,31 +820,31 @@ impl ArchiveAnalyzer {
             for f in &file_report.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id) {
-                    if collected_traits.len() < 10_000 {
-                        let mut new_finding = f.clone();
-                        for evidence in &mut new_finding.evidence {
-                            match &evidence.location {
-                                None => {
-                                    evidence.location = Some(result.archive_location.clone());
-                                }
-                                Some(loc) if !loc.starts_with("archive:") => {
-                                    evidence.location =
-                                        Some(format!("{}:{}", result.archive_location, loc));
-                                }
-                                _ => {}
+                if !collected_traits.iter().any(|existing| existing.id == f.id)
+                    && collected_traits.len() < 10_000
+                {
+                    let mut new_finding = f.clone();
+                    for evidence in &mut new_finding.evidence {
+                        match &evidence.location {
+                            None => {
+                                evidence.location = Some(result.archive_location.clone());
                             }
+                            Some(loc) if !loc.starts_with("archive:") => {
+                                evidence.location =
+                                    Some(format!("{}:{}", result.archive_location, loc));
+                            }
+                            _ => {}
                         }
-                        collected_traits.push(new_finding);
                     }
+                    collected_traits.push(new_finding);
                 }
             }
 
             for yara_match in &file_report.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
-                    if collected_yara.len() < 1_000 {
-                        collected_yara.push(yara_match.clone());
-                    }
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
+                    && collected_yara.len() < 1_000
+                {
+                    collected_yara.push(yara_match.clone());
                 }
             }
 
@@ -853,10 +852,9 @@ impl ArchiveAnalyzer {
                 if matches!(
                     string.string_type,
                     Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) {
-                    if collected_strings.len() < 10_000 {
-                        collected_strings.push(string.clone());
-                    }
+                ) && collected_strings.len() < 10_000
+                {
+                    collected_strings.push(string.clone());
                 }
             }
 
@@ -1091,31 +1089,31 @@ impl ArchiveAnalyzer {
             for f in &file_entry.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id) {
-                    if collected_traits.len() < 10_000 {
-                        let mut new_finding = f.clone();
-                        for evidence in &mut new_finding.evidence {
-                            match &evidence.location {
-                                None => {
-                                    evidence.location = Some(result.archive_location.clone());
-                                }
-                                Some(loc) if !loc.starts_with("archive:") => {
-                                    evidence.location =
-                                        Some(format!("{}:{}", result.archive_location, loc));
-                                }
-                                _ => {}
+                if !collected_traits.iter().any(|existing| existing.id == f.id)
+                    && collected_traits.len() < 10_000
+                {
+                    let mut new_finding = f.clone();
+                    for evidence in &mut new_finding.evidence {
+                        match &evidence.location {
+                            None => {
+                                evidence.location = Some(result.archive_location.clone());
                             }
+                            Some(loc) if !loc.starts_with("archive:") => {
+                                evidence.location =
+                                    Some(format!("{}:{}", result.archive_location, loc));
+                            }
+                            _ => {}
                         }
-                        collected_traits.push(new_finding);
                     }
+                    collected_traits.push(new_finding);
                 }
             }
 
             for yara_match in &file_entry.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule) {
-                    if collected_yara.len() < 1_000 {
-                        collected_yara.push(yara_match.clone());
-                    }
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
+                    && collected_yara.len() < 1_000
+                {
+                    collected_yara.push(yara_match.clone());
                 }
             }
 
@@ -1123,10 +1121,9 @@ impl ArchiveAnalyzer {
                 if matches!(
                     string.string_type,
                     Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) {
-                    if collected_strings.len() < 10_000 {
-                        collected_strings.push(string.clone());
-                    }
+                ) && collected_strings.len() < 10_000
+                {
+                    collected_strings.push(string.clone());
                 }
             }
 

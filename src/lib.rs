@@ -570,6 +570,41 @@ pub struct AnalysisOptions {
     /// archive analysis will stop processing new members early.
     /// Not included in the analysis cache key.
     pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
+    /// Optional phase tracker for observability. When set, cleave updates this
+    /// string at key analysis stages so callers (e.g. litmus `/_/requests`) can
+    /// report what a stuck request is actually doing.
+    pub phase: Option<PhaseTracker>,
+}
+
+/// Lightweight handle for reporting the current analysis phase.
+///
+/// Callers (e.g. litmus) create one per request and pass it via
+/// [`AnalysisOptions::phase`]. Cleave updates it at each major stage
+/// (archive extraction, YARA, structural analysis, …) so the caller
+/// can expose the current phase in diagnostic endpoints like `/_/requests`.
+///
+/// Cloning is cheap (`Arc`). Updating is a short `RwLock` write.
+#[derive(Clone, Debug)]
+pub struct PhaseTracker(Arc<std::sync::RwLock<String>>);
+
+impl PhaseTracker {
+    /// Create a new tracker with an empty phase.
+    pub fn new() -> Self {
+        Self(Arc::new(std::sync::RwLock::new(String::new())))
+    }
+
+    /// Update the current phase description.
+    pub fn set(&self, phase: &str) {
+        if let Ok(mut p) = self.0.write() {
+            p.clear();
+            p.push_str(phase);
+        }
+    }
+
+    /// Read the current phase.
+    pub fn get(&self) -> String {
+        self.0.read().map(|p| p.clone()).unwrap_or_default()
+    }
 }
 
 impl Default for AnalysisOptions {
@@ -595,6 +630,7 @@ impl Default for AnalysisOptions {
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
             scan_threads: 0,                       // 0 = auto (min(8, num_cpus) for CLI)
             cancellation: None,
+            phase: None,
         }
     }
 }
@@ -914,9 +950,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Route to appropriate analyzer.
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
     // All other analyzers use analyze_input() for unified data flow.
+    let phase = options.phase.clone();
+    let set_phase = |p: &str| {
+        if let Some(ref tracker) = phase {
+            tracker.set(p);
+        }
+    };
     let structural_start = std::time::Instant::now();
     let mut report = match file_type {
         FileType::MachO => {
+            set_phase("macho:struct+yara");
             // Run YARA scan in parallel with structural analysis for inline evidence
             let analyzer = analyzers::macho::MachOAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
@@ -987,6 +1030,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             Ok(report)
         }
         FileType::Elf => {
+            set_phase("elf:struct+yara");
             let analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
@@ -1036,6 +1080,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             Ok(report)
         }
         FileType::Pe => {
+            set_phase("pe:struct+yara");
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
@@ -1097,6 +1142,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .with_cancellation(options.cancellation.clone())
             .analyze_input(&input),
         ref ft if ft.is_archive() => {
+            set_phase(&format!("archive:{}", ft.report_file_type()));
             let mut analyzer = analyzers::archive::ArchiveAnalyzer::new()
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_zip_passwords(options.zip_passwords.clone())
@@ -1121,6 +1167,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .analyze_input(&input),
         // All source code languages use the unified analyzer (or generic fallback)
         _ => {
+            set_phase(&format!("analyze:{}", file_type.report_file_type()));
             if let Some(analyzer) =
                 analyzers::analyzer_for_file_type_arc(&file_type, Some(mapper_arc.clone()))
             {
@@ -1404,6 +1451,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Run YARA for file types that didn't handle it internally.
     // Binary types (MachO, Elf, Pe) and archives already ran YARA with parallel scanning above.
+    set_phase("yara");
     let yara_start = std::time::Instant::now();
     let handled_yara_internally =
         matches!(file_type, FileType::MachO | FileType::Elf | FileType::Pe)
@@ -1435,6 +1483,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
     }
     let stage_yara_ms = yara_start.elapsed().as_millis() as u64;
+    set_phase("done");
 
     if file_type == FileType::Elf {
         report.findings.retain(|finding| {

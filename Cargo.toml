@@ -94,7 +94,7 @@ sysmem = { path = "crates/sysmem" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
-yara-x = { version = "1.14", features = ["rules-profiling"] }
+yara-x = { version = "1.15", features = ["rules-profiling"] }
 
 # Tree-sitter parsers
 tree-sitter = "0.26"

@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, Ordering};
 use walkdir::WalkDir;
 use yara_classify::YaraTier;
 
@@ -35,6 +36,12 @@ const MAX_PATTERN_MATCHES: usize = 100_000;
 /// Maximum scanners to cache per thread in the engine tier cache.
 /// Typically 1-3 tiers are scanned per file (cross-format + file-type family), so 4 is generous.
 const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
+
+// YARA panics indicate a broken scanner/rule state, not a recoverable per-file
+// condition. Once we catch one, continuing to scan every subsequent file just
+// repeats the same expensive unwind path and floods logs. Flip this breaker and
+// let the rest of the analysis proceed without YARA until rules are reloaded.
+static YARA_SCANS_DISABLED_AFTER_PANIC: AtomicBool = AtomicBool::new(false);
 
 // Thread-local LRU cache for YARA scanners keyed by `Rules` pointer address.
 // Avoids expensive `Scanner::new()` on every file (wasmtime VM instantiation).
@@ -230,6 +237,7 @@ impl YaraEngine {
         self.tiers.clear();
         self.rule_contexts.clear();
         self.compiled_inline_namespaces.clear();
+        YARA_SCANS_DISABLED_AFTER_PANIC.store(false, Ordering::Relaxed);
 
         tracing::info!("Loading YARA rules");
 
@@ -573,6 +581,9 @@ impl YaraEngine {
         file_type_filter: Option<&[&str]>,
     ) -> Result<(Vec<YaraMatch>, HashMap<String, Vec<Evidence>>)> {
         let scan_start = std::time::Instant::now();
+        if YARA_SCANS_DISABLED_AFTER_PANIC.load(Ordering::Relaxed) {
+            anyhow::bail!("YARA disabled after a prior panic; reload rules or restart to re-enable");
+        }
         if self.tiers.is_empty() {
             anyhow::bail!("No YARA rules loaded");
         }
@@ -783,6 +794,7 @@ impl YaraEngine {
                         } else {
                             "unknown panic".to_string()
                         };
+                        YARA_SCANS_DISABLED_AFTER_PANIC.store(true, Ordering::Relaxed);
                         tracing::error!(error = %msg, "YARA scan panicked");
                         Err(anyhow::anyhow!("YARA scan panicked: {}", msg))
                     }

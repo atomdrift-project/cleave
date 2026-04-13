@@ -44,9 +44,8 @@ use tracing::{debug, trace};
 struct MemberAnalysisResult {
     entry_path: String,
     archive_location: String,
-    relative_path: String,
-    disk_path: std::path::PathBuf,
     entry_metadata: ArchiveEntry,
+    extracted_path: Option<String>,
     report: Option<AnalysisReport>,
 }
 
@@ -653,9 +652,8 @@ impl ArchiveAnalyzer {
                 Some(MemberAnalysisResult {
                     entry_path,
                     archive_location,
-                    relative_path,
-                    disk_path: entry.path().to_path_buf(),
                     entry_metadata,
+                    extracted_path: None,
                     report,
                 })
             })
@@ -814,9 +812,8 @@ impl ArchiveAnalyzer {
                 Some(MemberAnalysisResult {
                     entry_path,
                     archive_location,
-                    relative_path,
-                    disk_path: entry.path().to_path_buf(),
                     entry_metadata,
+                    extracted_path: None,
                     report,
                 })
             })
@@ -1065,12 +1062,23 @@ impl ArchiveAnalyzer {
                     );
                 }
 
+                let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
+                    let extract_relative_path = match &self.archive_path_prefix {
+                        Some(prefix) => {
+                            format!("{}/{}", prefix.replace('!', "/"), relative_path)
+                        }
+                        None => relative_path.clone(),
+                    };
+                    config
+                        .extract(&sha256, &extract_relative_path, &file_data)
+                        .map(|path| path.display().to_string())
+                });
+
                 Some(MemberAnalysisResult {
                     entry_path,
                     archive_location,
-                    relative_path,
-                    disk_path: entry.path().to_path_buf(),
                     entry_metadata,
+                    extracted_path,
                     report,
                 })
             })
@@ -1095,23 +1103,7 @@ impl ArchiveAnalyzer {
             file_entry.path = result.entry_path.clone();
             file_entry.depth = 1;
             file_entry.compute_summary();
-
-            // Extract file to disk if configured
-            if let Some(ref config) = self.sample_extraction {
-                if let Ok(file_data) = std::fs::read(&result.disk_path) {
-                    let extract_relative_path = match &self.archive_path_prefix {
-                        Some(prefix) => {
-                            format!("{}/{}", prefix.replace('!', "/"), result.relative_path)
-                        }
-                        None => result.relative_path.clone(),
-                    };
-                    if let Some(extracted_path) =
-                        config.extract(&file_entry.sha256, &extract_relative_path, &file_data)
-                    {
-                        file_entry.extracted_path = Some(extracted_path.display().to_string());
-                    }
-                }
-            }
+            file_entry.extracted_path = result.extracted_path.clone();
 
             // Aggregate findings
             for f in &file_entry.findings {

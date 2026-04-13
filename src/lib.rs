@@ -726,6 +726,51 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), preloaded)
 }
 
+/// Analyze in-memory file data without requiring a file on disk.
+///
+/// `filename` is used for extension-based type detection and report labeling —
+/// it does not need to exist on the filesystem. This avoids disk I/O for remote
+/// workers that download samples over HTTP.
+///
+/// # Example
+///
+/// ```no_run
+/// use cleave::{analyze_bytes, AnalysisOptions};
+///
+/// # fn demo() -> Result<(), Box<dyn std::error::Error>> {
+/// let data = std::fs::read("sample.exe")?;
+/// let report = analyze_bytes(&data, "sample.exe", &AnalysisOptions::default())?;
+/// println!("{} findings", report.findings.len());
+/// # Ok(())
+/// # }
+/// ```
+pub fn analyze_bytes(data: &[u8], filename: &str, options: &AnalysisOptions) -> Result<AnalysisReport> {
+    // Use a synthetic path for extension-based type detection and reporting.
+    let path = Path::new(filename);
+
+    let preloaded = file_io::FileData::Owned(data.to_vec());
+    let sha256 = analyzers::utils::calculate_sha256(data);
+    if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
+        report.target.path = filename.to_string();
+        report.analysis_timestamp = Some(chrono::Utc::now());
+        tracing::info!("Cache hit (fast path)");
+        return Ok(report);
+    }
+
+    let (mapper_result, yara_engine) = rayon::join(
+        || shared_resources::capability_mapper_with_options(options),
+        || {
+            if options.disable_yara {
+                None
+            } else {
+                Some(shared_resources::yara_engine(options.enable_third_party_yara))
+            }
+        },
+    );
+    let mapper = mapper_result?;
+    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), Some(preloaded))
+}
+
 /// Analyze a single file using a pre-loaded CapabilityMapper.
 ///
 /// Use this for batch processing to avoid reloading capabilities for each file.
@@ -830,21 +875,23 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Log BEFORE processing to ensure we capture what file causes OOM crashes
     tracing::debug!("Starting analysis");
 
-    if !path.exists() {
-        anyhow::bail!("Path does not exist: {}", path.display());
-    }
-
-    if path.is_dir() {
-        anyhow::bail!(
-            "Path is a directory, use analyze_directory instead: {}",
-            path.display()
-        );
-    }
-
-    // Read file once — reuse pre-loaded data from the fast-path cache check if available.
+    // Read file once — reuse pre-loaded data if available (e.g. from analyze_bytes
+    // or the fast-path cache check). When data is preloaded the path may be synthetic
+    // and not exist on disk, so skip the filesystem checks.
     let file_data_wrapper = match preloaded {
         Some(data) => data,
-        None => file_io::read_file_smart(path)?,
+        None => {
+            if !path.exists() {
+                anyhow::bail!("Path does not exist: {}", path.display());
+            }
+            if path.is_dir() {
+                anyhow::bail!(
+                    "Path is a directory, use analyze_directory instead: {}",
+                    path.display()
+                );
+            }
+            file_io::read_file_smart(path)?
+        }
     };
     let file_data = file_data_wrapper.as_slice();
 

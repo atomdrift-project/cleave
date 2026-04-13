@@ -74,12 +74,12 @@ pub(crate) fn is_behavioral_import(name: &str) -> bool {
 }
 
 pub(crate) fn is_nonstandard_section_name(file_type: &str, section_name: &str) -> bool {
-    let short = section_name
-        .rsplit('.')
-        .next()
-        .unwrap_or(section_name)
-        .trim_start_matches("__");
-    let lower = short.to_ascii_lowercase();
+    let normalized = match file_type {
+        "macho" => section_name.trim_start_matches("__"),
+        "pe" | "elf" => section_name.trim_start_matches('.'),
+        _ => section_name,
+    };
+    let lower = normalized.to_ascii_lowercase();
 
     match file_type {
         "macho" => !matches!(
@@ -135,14 +135,26 @@ pub(crate) fn is_nonstandard_section_name(file_type: &str, section_name: &str) -
         "elf" => !matches!(
             lower.as_str(),
             "text"
+                | "interp"
+                | "note"
+                | "note.abi-tag"
+                | "note.gnu.property"
+                | "note.gnu.build-id"
+                | "gnu.hash"
+                | "gnu.version"
+                | "gnu.version_r"
+                | "hash"
                 | "rodata"
                 | "data"
                 | "bss"
                 | "plt"
+                | "plt.got"
+                | "plt.sec"
                 | "got"
                 | "got.plt"
                 | "dynsym"
                 | "dynstr"
+                | "dynamic"
                 | "rela.text"
                 | "rela.plt"
                 | "rela.dyn"
@@ -150,14 +162,18 @@ pub(crate) fn is_nonstandard_section_name(file_type: &str, section_name: &str) -
                 | "rel.plt"
                 | "eh_frame"
                 | "eh_frame_hdr"
+                | "gcc_except_table"
                 | "init"
                 | "fini"
                 | "init_array"
                 | "fini_array"
+                | "ctors"
+                | "dtors"
+                | "jcr"
                 | "comment"
-                | "note.gnu.build-id"
-                | "gnu.hash"
-                | "hash"
+                | "symtab"
+                | "strtab"
+                | "shstrtab"
         ),
         _ => false,
     }
@@ -521,5 +537,12 @@ mod tests {
         assert!(is_nonstandard_section_name("macho", "__weird"));
         assert!(!is_nonstandard_section_name("pe", ".text"));
         assert!(is_nonstandard_section_name("pe", ".asdf"));
+        assert!(!is_nonstandard_section_name("elf", ".interp"));
+        assert!(!is_nonstandard_section_name("elf", ".note.gnu.property"));
+        assert!(!is_nonstandard_section_name("elf", ".plt.sec"));
+        assert!(!is_nonstandard_section_name("elf", ".got.plt"));
+        assert!(!is_nonstandard_section_name("elf", ".gcc_except_table"));
+        assert!(!is_nonstandard_section_name("elf", ".symtab"));
+        assert!(is_nonstandard_section_name("elf", ".weirdsect"));
     }
 }

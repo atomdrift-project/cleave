@@ -783,6 +783,7 @@ impl Radare2Analyzer {
         &self,
         batched: &BatchedAnalysis,
         file_size: u64,
+        file_type: &str,
     ) -> BinaryMetrics {
         use parsing::calculate_char_entropy;
 
@@ -809,8 +810,10 @@ impl Radare2Analyzer {
                 largest_size = section_size;
             }
 
-            if crate::analyzers::metrics_utils::is_nonstandard_section_name("macho", &section.name)
-            {
+            if crate::analyzers::metrics_utils::is_nonstandard_section_name(
+                file_type,
+                &section.name,
+            ) {
                 metrics.nonstandard_section_name_count += 1;
             }
 
@@ -1089,7 +1092,7 @@ mod tests {
         };
 
         let file_size = 1800u64;
-        let metrics = analyzer.compute_metrics_from_batched(&batched, file_size);
+        let metrics = analyzer.compute_metrics_from_batched(&batched, file_size, "macho");
 
         // file_size should match what was passed in
         assert_eq!(

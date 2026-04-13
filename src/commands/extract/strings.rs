@@ -121,7 +121,7 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                 // Use radare2 directly for fast symbol/function extraction in ONE batch
                 if Radare2Analyzer::is_available() {
                     let r2 = Radare2Analyzer::new();
-                    if let Ok((r2_imports, _, r2_symbols)) = r2.extract_all_symbols(path) {
+                    if let Ok((r2_imports, _, r2_symbols)) = r2.extract_all_symbols(path, None) {
                         for imp in r2_imports {
                             let name = imp.name.trim_start_matches('_');
                             imports.insert(name.to_string());

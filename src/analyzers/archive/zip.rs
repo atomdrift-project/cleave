@@ -11,8 +11,8 @@
 //! - Firefox extensions (.xpi)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
-    MAX_FILE_SIZE,
+    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
+    LimitedReader, MAX_FILE_SIZE,
 };
 use crate::types::{container_metrics::ArchiveMetrics, ArchiveEntry};
 use anyhow::{Context, Result};
@@ -293,21 +293,40 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
                 fs::create_dir_all(parent)?;
             }
 
-            // Extract with size limit
+            // Extract with size limit and cancellation support
             let mut outfile = File::create(&outpath)?;
-            let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
-            let written = std::io::copy(&mut limited, &mut outfile)
-                .with_context(|| format!("Failed to extract: {}", entry_name))?;
+            let written = if let Some(c) = guard.cancellation() {
+                let mut cancellable = CancellableReader::new(&mut entry, c);
+                let mut limited = LimitedReader::new(&mut cancellable, MAX_FILE_SIZE);
+                let w = std::io::copy(&mut limited, &mut outfile)
+                    .with_context(|| format!("Failed to extract: {}", entry_name))?;
 
-            if limited.is_limited() {
-                drop(outfile);
-                let _ = std::fs::remove_file(&outpath);
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: entry_name.clone(),
-                    size: MAX_FILE_SIZE,
-                });
-                continue;
-            }
+                if limited.is_limited() {
+                    drop(outfile);
+                    let _ = std::fs::remove_file(&outpath);
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry_name.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                w
+            } else {
+                let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
+                let w = std::io::copy(&mut limited, &mut outfile)
+                    .with_context(|| format!("Failed to extract: {}", entry_name))?;
+
+                if limited.is_limited() {
+                    drop(outfile);
+                    let _ = std::fs::remove_file(&outpath);
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: entry_name.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                w
+            };
 
             // Track total bytes
             if !guard.check_bytes(written, &entry_name) {

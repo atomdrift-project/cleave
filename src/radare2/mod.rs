@@ -38,10 +38,14 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
+
+#[cfg(unix)]
+use std::os::unix::process::CommandExt;
 
 /// Default timeout for rizin subprocess execution (120 seconds).
 /// This prevents hung processes from accumulating during archive analysis.
@@ -142,11 +146,16 @@ pub(crate) fn log_rizin_stats() {
 /// # Arguments
 /// * `args` - Command line arguments for rizin
 /// * `timeout` - Maximum time to wait for the process
+/// * `cancellation` - Optional flag to abort execution
 ///
 /// # Returns
 /// * `Ok(Output)` - The process output
 /// * `Err` - If the process times out or fails to execute
-fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::process::Output> {
+fn execute_rizin_with_timeout(
+    args: &[&str],
+    timeout: Duration,
+    cancellation: Option<&Arc<AtomicBool>>,
+) -> Result<std::process::Output> {
     use std::io::Read;
     use std::sync::mpsc;
 
@@ -162,13 +171,24 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
     {
         let mut count = lock.lock();
         while *count == 0 {
-            cvar.wait(&mut count);
+            // Periodically check for cancellation while waiting for the permit
+            if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
+                return Err(anyhow::anyhow!("Rizin execution cancelled while waiting for permit"));
+            }
+            if cvar.wait_for(&mut count, Duration::from_millis(250)).timed_out() {
+                continue;
+            }
         }
         *count -= 1;
     }
 
     // Ensure permit is released even on error/panic
     let _permit_guard = RizinPermitGuard;
+
+    // Final check before spawning
+    if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
+        return Err(anyhow::anyhow!("Rizin execution cancelled before spawn"));
+    }
 
     RIZIN_TOTAL_CALLS.fetch_add(1, Ordering::Relaxed);
 
@@ -181,12 +201,13 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
         "Executing rizin with timeout"
     );
 
-    let mut child = Command::new("rizin")
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .context("Failed to spawn rizin process")?;
+    let mut cmd = Command::new("rizin");
+    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    let mut child = cmd.spawn().context("Failed to spawn rizin process")?;
 
     // Read stdout/stderr in background threads to prevent pipe buffer deadlock
     // This is critical - if stdout fills up, rizin blocks and we timeout
@@ -230,7 +251,27 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
         let _ = wait_tx.send(status);
     });
 
-    match wait_rx.recv_timeout(timeout) {
+    // Use a loop to check for cancellation while waiting for the process to exit
+    let deadline = start + timeout;
+    let result = loop {
+        let now = std::time::Instant::now();
+        if now >= deadline {
+            break Err(mpsc::RecvTimeoutError::Timeout);
+        }
+        
+        if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
+            break Err(mpsc::RecvTimeoutError::Disconnected); // Re-use Disconnected to signal cancellation
+        }
+
+        let wait_time = (deadline - now).min(Duration::from_millis(500));
+        match wait_rx.recv_timeout(wait_time) {
+            Ok(res) => break Ok(res),
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break Err(mpsc::RecvTimeoutError::Disconnected),
+        }
+    };
+
+    match result {
         Ok(Ok(status)) => {
             let elapsed = start.elapsed();
             let _ = wait_thread.join();
@@ -272,14 +313,36 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
             let _ = stderr_thread.join();
             Err(anyhow::anyhow!("Failed to wait for rizin process: {}", e))
         }
-        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            // Either cancelled or wait_thread crashed
             RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
+            
+            let is_cancelled = cancellation.is_some_and(|c| c.load(Ordering::Acquire));
+            if is_cancelled {
+                warn!(command = %format!("rizin {}", args_str), "Rizin process cancelled - killing");
+            } else {
+                warn!(command = %format!("rizin {}", args_str), "Rizin wait thread disconnected unexpectedly");
+            }
+
+            #[cfg(unix)]
+            {
+                // Kill the whole process group
+                let _ = unsafe { libc::kill(-(child_id as i32), libc::SIGKILL) };
+            }
+            #[cfg(not(unix))]
+            let _ = child_id;
+
             let _ = wait_thread.join();
             let _ = stdout_thread.join();
             let _ = stderr_thread.join();
-            anyhow::bail!("Rizin wait thread disconnected unexpectedly")
+
+            if is_cancelled {
+                anyhow::bail!("Rizin execution cancelled")
+            } else {
+                anyhow::bail!("Rizin wait thread disconnected unexpectedly")
+            }
         }
-        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+        Err(mpsc::RecvTimeoutError::Timeout) => {
             RIZIN_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
             warn!(
                 timeout_secs = timeout.as_secs(),
@@ -289,17 +352,8 @@ fn execute_rizin_with_timeout(args: &[&str], timeout: Duration) -> Result<std::p
 
             #[cfg(unix)]
             {
-                // SAFETY: child_id was captured from child.id() immediately
-                // before spawning the wait thread. PID reuse race is
-                // theoretically possible but the window is < 1ms.
-                let ret = unsafe { libc::kill(child_id as i32, libc::SIGKILL) };
-                if ret != 0 {
-                    warn!(
-                        pid = child_id,
-                        errno = std::io::Error::last_os_error().raw_os_error(),
-                        "SIGKILL failed (process may have already exited)"
-                    );
-                }
+                // Kill the whole process group
+                let _ = unsafe { libc::kill(-(child_id as i32), libc::SIGKILL) };
             }
             #[cfg(not(unix))]
             let _ = child_id;
@@ -376,6 +430,7 @@ impl Radare2Analyzer {
     pub(crate) fn extract_all_symbols(
         &self,
         file_path: &Path,
+        cancellation: Option<&Arc<AtomicBool>>,
     ) -> Result<(Vec<R2Import>, Vec<R2Export>, Vec<R2Symbol>)> {
         let file_path_str = file_path.to_string_lossy();
         let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
@@ -393,6 +448,7 @@ impl Radare2Analyzer {
                 &file_path_str,
             ],
             timeout,
+            cancellation,
         )?;
 
         if !output.status.success() {
@@ -451,6 +507,7 @@ impl Radare2Analyzer {
         goblin_success: bool,
         include_strings: bool,
         precomputed_sha256: Option<String>,
+        cancellation: Option<&Arc<AtomicBool>>,
     ) -> Result<BatchedAnalysis> {
         let t_start = std::time::Instant::now();
 
@@ -600,6 +657,7 @@ impl Radare2Analyzer {
                 &file_path_str,
             ],
             timeout,
+            cancellation,
         );
 
         // Handle timeout as a tool limitation; callers may choose how to surface it.

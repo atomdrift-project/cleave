@@ -1,7 +1,7 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
 use crate::analyzers::{goblin_safe, AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::entropy::{calculate_entropy, EntropyLevel};
+use crate::entropy::calculate_entropy;
 use crate::radare2::Radare2Analyzer;
 use crate::strings::StringExtractor;
 use crate::types::*;
@@ -225,6 +225,145 @@ fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>>
 }
 
 impl PEAnalyzer {
+    fn get_structure<'a>(&self, pe: &PE<'a>) -> Vec<StructuralFeature> {
+        let mut features = Vec::new();
+        features.push(StructuralFeature {
+            id: "pe/header".to_string(),
+            desc: format!(
+                "PE file (machine: {}, subsystem: {:?})",
+                self.arch_name(pe),
+                pe.header
+                    .optional_header
+                    .as_ref()
+                    .map(|h| h.windows_fields.subsystem)
+            ),
+            evidence: vec![Evidence {
+                method: "header".to_string(),
+                source: "goblin".to_string(),
+                value: "PE".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+        });
+
+        // Check if DLL
+        if pe.is_lib {
+            features.push(StructuralFeature {
+                id: "pe/dll".to_string(),
+                desc: "Dynamic Link Library (DLL)".to_string(),
+                evidence: vec![Evidence {
+                    method: "header".to_string(),
+                    source: "goblin".to_string(),
+                    value: "DLL".to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+        }
+
+        // Check for .NET
+        if pe.header.optional_header.is_some() {
+            features.push(StructuralFeature {
+                id: "pe/optional_header".to_string(),
+                desc: "Has optional header (standard Windows executable)".to_string(),
+                evidence: vec![Evidence {
+                    method: "header".to_string(),
+                    source: "goblin".to_string(),
+                    value: "OptionalHeader".to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+        }
+        features
+    }
+
+    fn get_imports<'a>(&self, pe: &PE<'a>) -> (Vec<Import>, Vec<Finding>) {
+        let mut imports = Vec::new();
+        let mut findings = Vec::new();
+
+        for import in &pe.imports {
+            imports.push(Import::new(
+                import.name.as_ref(),
+                Some(import.dll.to_string()),
+                "goblin",
+            ));
+
+            let normalized = crate::types::binary::normalize_symbol(import.name.as_ref());
+            if let Some(capability) = self.capability_mapper.lookup(&normalized, "goblin") {
+                findings.push(capability);
+            }
+        }
+        (imports, findings)
+    }
+
+    fn get_exports<'a>(&self, pe: &PE<'a>, data: &[u8]) -> (Vec<Export>, Option<u32>) {
+        let mut exports = Vec::new();
+        for export in &pe.exports {
+            if let Some(name) = export.name {
+                exports.push(Export::new(
+                    name,
+                    Some(format!("{:#x}", export.rva)),
+                    "goblin",
+                ));
+            }
+        }
+
+        // Detect export aliasing: multiple exports whose code jumps to the same target
+        let aliased = if exports.len() >= 2 {
+            let bitness = match pe.header.coff_header.machine {
+                0x8664 | 0xaa64 => 64,
+                _ => 32,
+            };
+            let count = count_aliased_exports(pe, data, bitness);
+            (count > 0).then_some(count)
+        } else {
+            None
+        };
+
+        (exports, aliased)
+    }
+
+    fn get_sections<'a>(&self, pe: &PE<'a>, data: &[u8]) -> Vec<Section> {
+        let mut sections = Vec::new();
+        for section in &pe.sections {
+            let name = String::from_utf8_lossy(&section.name)
+                .trim_matches(char::from(0))
+                .to_string();
+            let size = section.size_of_raw_data as u64;
+            let offset = section.pointer_to_raw_data as u64;
+
+            let characteristics = section.characteristics;
+            let is_executable = (characteristics & 0x20000000) != 0;
+            let is_writable = (characteristics & 0x80000000) != 0;
+            let is_readable = (characteristics & 0x40000000) != 0;
+
+            let permissions = format!(
+                "{}{}{}",
+                if is_readable { "r" } else { "-" },
+                if is_writable { "w" } else { "-" },
+                if is_executable { "x" } else { "-" }
+            );
+
+            let entropy = if offset < data.len() as u64 {
+                let end = ((offset + size) as usize).min(data.len());
+                let section_data = &data[offset as usize..end];
+                calculate_entropy(section_data)
+            } else {
+                0.0
+            };
+
+            sections.push(Section {
+                name: name.clone(),
+                address: Some(section.virtual_address as u64),
+                offset: Some(section.pointer_to_raw_data as u64),
+                size,
+                entropy,
+                permissions: Some(permissions.clone()),
+            });
+        }
+        sections
+    }
     /// Creates a new PE analyzer with default configuration
     #[must_use]
     pub fn new() -> Self {
@@ -535,28 +674,81 @@ impl PEAnalyzer {
             !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
         });
         let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
-        let (r2_result, _) = rayon::join(
-            || {
-                if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
-                    return None;
-                }
-                Some(self.radare2.extract_batched(
-                    analysis_path,
-                    has_symbols,
-                    goblin_ok,
-                    needs_r2_strings,
-                    precomputed_sha256,
-                ))
-            },
-            || {
-                if let Some(pe) = pe {
-                    self.analyze_structure(pe, &mut report);
-                    self.analyze_imports(pe, &mut report);
-                    self.analyze_exports(pe, pe_data, &mut report);
-                    self.analyze_sections(pe, pe_data, &mut report);
-                }
-            },
+
+        let mut r2_result = None;
+        let mut goblin_report_parts: (
+            Vec<StructuralFeature>,
+            (Vec<Import>, Vec<Finding>),
+            (Vec<Export>, Option<u32>),
+            Vec<Section>,
+        ) = (
+            Vec::new(),
+            (Vec::new(), Vec::new()),
+            (Vec::new(), None),
+            Vec::new(),
         );
+
+        rayon::scope(|s| {
+            // Task 1: Radare2 (Slowest)
+            s.spawn(|_| {
+                if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                    r2_result = Some(self.radare2.extract_batched(
+                        analysis_path,
+                        has_symbols,
+                        goblin_ok,
+                        needs_r2_strings,
+                        precomputed_sha256,
+                        self.cancellation.as_ref(),
+                    ));
+                }
+            });
+
+            // Task 2: Goblin structural components (Parallelized internally)
+            if let Some(pe) = pe {
+                s.spawn(|_| {
+                    rayon::join(
+                        || {
+                            goblin_report_parts.0 = self.get_structure(pe);
+                        },
+                        || {
+                            rayon::join(
+                                || {
+                                    goblin_report_parts.1 = self.get_imports(pe);
+                                },
+                                || {
+                                    rayon::join(
+                                        || {
+                                            goblin_report_parts.2 = self.get_exports(pe, pe_data);
+                                        },
+                                        || {
+                                            goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                                        },
+                                    );
+                                },
+                            );
+                        },
+                    );
+                });
+            }
+        });
+
+        // Merge goblin results
+        report.structure.extend(goblin_report_parts.0);
+        report.imports.extend(goblin_report_parts.1 .0);
+        for finding in goblin_report_parts.1 .1 {
+            if !report.findings.iter().any(|f| f.id == finding.id) {
+                report.findings.push(finding);
+            }
+        }
+        report.exports.extend(goblin_report_parts.2 .0);
+        if let Some(aliased) = goblin_report_parts.2 .1 {
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::Metrics::default);
+            let binary_metrics = metrics.binary.get_or_insert_with(Default::default);
+            binary_metrics.aliased_exports = aliased;
+        }
+        report.sections.extend(goblin_report_parts.3);
 
         // Detect inflated section headers (declared size extends beyond EOF)
         if let Some(pe) = pe {
@@ -1149,157 +1341,6 @@ impl PEAnalyzer {
 
         report
     }
-
-    fn analyze_structure<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
-        report.structure.push(StructuralFeature {
-            id: "pe/header".to_string(),
-            desc: format!(
-                "PE file (machine: {}, subsystem: {:?})",
-                self.arch_name(pe),
-                pe.header
-                    .optional_header
-                    .as_ref()
-                    .map(|h| h.windows_fields.subsystem)
-            ),
-            evidence: vec![Evidence {
-                method: "header".to_string(),
-                source: "goblin".to_string(),
-                value: "PE".to_string(),
-                location: None,
-                ..Default::default()
-            }],
-        });
-
-        // Check if DLL
-        if pe.is_lib {
-            report.structure.push(StructuralFeature {
-                id: "pe/dll".to_string(),
-                desc: "Dynamic Link Library (DLL)".to_string(),
-                evidence: vec![Evidence {
-                    method: "header".to_string(),
-                    source: "goblin".to_string(),
-                    value: "DLL".to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-            });
-        }
-
-        // Check for .NET
-        if pe.header.optional_header.is_some() {
-            report.structure.push(StructuralFeature {
-                id: "pe/optional_header".to_string(),
-                desc: "Has optional header (standard Windows executable)".to_string(),
-                evidence: vec![Evidence {
-                    method: "header".to_string(),
-                    source: "goblin".to_string(),
-                    value: "OptionalHeader".to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-            });
-        }
-    }
-
-    fn analyze_imports<'a>(&self, pe: &PE<'a>, report: &mut AnalysisReport) {
-        for import in &pe.imports {
-            report.imports.push(Import::new(
-                import.name.as_ref(),
-                Some(import.dll.to_string()),
-                "goblin",
-            ));
-
-            let normalized = crate::types::binary::normalize_symbol(import.name.as_ref());
-            if let Some(capability) = self.capability_mapper.lookup(&normalized, "goblin") {
-                if !report.findings.iter().any(|c| c.id == capability.id) {
-                    report.findings.push(capability);
-                }
-            }
-        }
-    }
-
-    fn analyze_exports<'a>(&self, pe: &PE<'a>, data: &[u8], report: &mut AnalysisReport) {
-        for export in &pe.exports {
-            if let Some(name) = export.name {
-                report.exports.push(Export::new(
-                    name,
-                    Some(format!("{:#x}", export.rva)),
-                    "goblin",
-                ));
-            }
-        }
-
-        // Detect export aliasing: multiple exports whose code jumps to the same target
-        if report.exports.len() >= 2 {
-            let bitness = match pe.header.coff_header.machine {
-                0x8664 | 0xaa64 => 64,
-                _ => 32,
-            };
-            let aliased = count_aliased_exports(pe, data, bitness);
-            if aliased > 0 {
-                let metrics = report
-                    .metrics
-                    .get_or_insert_with(crate::types::Metrics::default);
-                let binary_metrics = metrics.binary.get_or_insert_with(Default::default);
-                binary_metrics.aliased_exports = aliased;
-            }
-        }
-    }
-
-    fn analyze_sections<'a>(&self, pe: &PE<'a>, data: &[u8], report: &mut AnalysisReport) {
-        for section in &pe.sections {
-            let name = String::from_utf8_lossy(&section.name)
-                .trim_matches(char::from(0))
-                .to_string();
-            let size = section.size_of_raw_data as u64;
-            let offset = section.pointer_to_raw_data as u64;
-
-            let characteristics = section.characteristics;
-            let is_executable = (characteristics & 0x20000000) != 0;
-            let is_writable = (characteristics & 0x80000000) != 0;
-            let is_readable = (characteristics & 0x40000000) != 0;
-
-            let permissions = format!(
-                "{}{}{}",
-                if is_readable { "r" } else { "-" },
-                if is_writable { "w" } else { "-" },
-                if is_executable { "x" } else { "-" }
-            );
-
-            let entropy = if offset < data.len() as u64 {
-                let end = ((offset + size) as usize).min(data.len());
-                let section_data = &data[offset as usize..end];
-                calculate_entropy(section_data)
-            } else {
-                0.0
-            };
-
-            let _entropy_level = if entropy > 7.2 {
-                EntropyLevel::High
-            } else if entropy > 6.0 {
-                EntropyLevel::Elevated
-            } else if entropy > 4.0 {
-                EntropyLevel::Normal
-            } else {
-                EntropyLevel::VeryLow
-            };
-
-            report.sections.push(Section {
-                name: name.clone(),
-                address: Some(section.virtual_address as u64),
-                offset: Some(section.pointer_to_raw_data as u64),
-                size,
-                entropy,
-                permissions: Some(permissions.clone()),
-            });
-
-            // NOTE: High entropy executable detection moved to YAML:
-            // - traits/objectives/anti-analysis/packing/high-entropy-executable.yaml
-            // NOTE: W^X section detection moved to YAML:
-            // - traits/objectives/anti-static/hardening/memory/wx-sections.yaml
-        }
-    }
-
     fn arch_name<'a>(&self, pe: &PE<'a>) -> String {
         match pe.header.coff_header.machine {
             0x014c => "x86".to_string(),

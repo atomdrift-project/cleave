@@ -201,6 +201,7 @@ impl ElfAnalyzer {
                             true, // goblin_success
                             needs_r2_strings,
                             precomputed_sha256,
+                            self.cancellation.as_ref(),
                         ))
                     },
                     || {
@@ -468,6 +469,7 @@ impl ElfAnalyzer {
                         false, // goblin_success=false
                         needs_r2_strings,
                         fallback_sha256,
+                        self.cancellation.as_ref(),
                     ) {
                         Ok(batched) => {
                             tools_used.push("radare2".to_string());

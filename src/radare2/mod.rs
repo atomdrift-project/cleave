@@ -809,6 +809,11 @@ impl Radare2Analyzer {
                 largest_size = section_size;
             }
 
+            if crate::analyzers::metrics_utils::is_nonstandard_section_name("macho", &section.name)
+            {
+                metrics.nonstandard_section_name_count += 1;
+            }
+
             if let Some(ref perm) = section.perm {
                 // Workaround for radare2 bug: __const sections are marked as r-x but should not be counted as code
                 // Extract just the section name (after the last dot)
@@ -885,10 +890,13 @@ impl Radare2Analyzer {
             let mut total_length: u64 = 0;
             let mut max_length: u32 = 0;
             let mut wide_count: u32 = 0;
+            let mut sentence_like_count: u32 = 0;
+            let mut lengths: Vec<f32> = Vec::with_capacity(batched.strings.len());
 
             for s in &batched.strings {
                 let len = s.string.len() as u32;
                 total_length += len as u64;
+                lengths.push(len as f32);
                 if len > max_length {
                     max_length = len;
                 }
@@ -898,11 +906,35 @@ impl Radare2Analyzer {
                 {
                     wide_count += 1;
                 }
+                if crate::analyzers::metrics_utils::is_sentence_like_string(&s.string) {
+                    sentence_like_count += 1;
+                }
             }
 
             metrics.avg_string_length = total_length as f32 / batched.strings.len() as f32;
             metrics.max_string_length = max_length;
             metrics.wide_string_count = wide_count;
+            metrics.sentence_string_count = sentence_like_count;
+            if lengths.len() > 1 {
+                let mean = metrics.avg_string_length;
+                let variance =
+                    lengths.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / lengths.len() as f32;
+                metrics.string_length_stddev = variance.sqrt();
+            }
+        }
+
+        if metrics.string_count > 0 {
+            metrics.sentence_string_ratio =
+                metrics.sentence_string_count as f32 / metrics.string_count as f32;
+        }
+
+        if metrics.import_count > 0 {
+            let behavioral_imports = batched
+                .imports
+                .iter()
+                .filter(|i| crate::analyzers::metrics_utils::is_behavioral_import(&i.name))
+                .count() as f32;
+            metrics.behavioral_import_ratio = behavioral_imports / metrics.import_count as f32;
         }
 
         // Function metrics

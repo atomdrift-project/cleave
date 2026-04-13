@@ -17,6 +17,11 @@ mod tests {
         assert!(fields.contains(&"overall_entropy"));
         assert!(fields.contains(&"code_to_data_ratio"));
         assert!(fields.contains(&"string_count"));
+        assert!(fields.contains(&"sentence_string_count"));
+        assert!(fields.contains(&"sentence_string_ratio"));
+        assert!(fields.contains(&"string_length_stddev"));
+        assert!(fields.contains(&"behavioral_import_ratio"));
+        assert!(fields.contains(&"nonstandard_section_name_count"));
         assert!(fields.contains(&"import_count"));
         assert!(fields.contains(&"function_count"));
 

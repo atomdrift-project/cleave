@@ -2182,7 +2182,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 12;
+const CACHE_VERSION: u32 = 13; // bumped for yara-x 1.15.0 TypeValue enum change
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {

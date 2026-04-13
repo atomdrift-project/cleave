@@ -47,9 +47,9 @@ use tracing::{debug, trace, warn};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-/// Default timeout for rizin subprocess execution (120 seconds).
+/// Default timeout for rizin subprocess execution (480 seconds / 8 minutes).
 /// This prevents hung processes from accumulating during archive analysis.
-const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 120;
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 480;
 
 /// Global disable counter for radare2 analysis.
 ///
@@ -515,11 +515,16 @@ impl Radare2Analyzer {
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
 
         // Check file size - skip expensive function analysis for large binaries
-        // Binaries >5MB take minutes to analyze with 'aa'
-        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 5 * 1024 * 1024; // 5MB
+        // Binaries >20MB take minutes to analyze with 'aa'
+        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 20 * 1024 * 1024; // 20MB
+        const MAX_SIZE_FOR_DEEP_ANALYSIS: u64 = 5 * 1024 * 1024; // 5MB
 
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
+        
+        // Use a lighter analysis for medium-sized files
+        let use_light_analysis = file_size > MAX_SIZE_FOR_DEEP_ANALYSIS;
+
         let mode = match (!skip_function_analysis, include_strings) {
             (false, false) => RizinMode::MetadataOnly,
             (false, true) => RizinMode::StringsOnly,
@@ -535,8 +540,14 @@ impl Radare2Analyzer {
         } else if !has_symbols {
             "function analysis disabled: no symbols/imports/sections discovered pre-rizin"
                 .to_string()
+        } else if use_light_analysis {
+            format!(
+                "light function analysis enabled (aas; aap): file {} MB exceeds {} MB deep analysis threshold",
+                file_size / 1024 / 1024,
+                MAX_SIZE_FOR_DEEP_ANALYSIS / 1024 / 1024
+            )
         } else {
-            "function analysis enabled: symbol/structure hints suggest aflj is worthwhile"
+            "full function analysis enabled (aa): symbol/structure hints suggest aflj is worthwhile"
                 .to_string()
         };
         let string_reason = if include_strings {
@@ -618,14 +629,19 @@ impl Radare2Analyzer {
 
         // SINGLE r2 spawn with ALL data extraction
         // Commands separated by "echo SEP" for parsing:
-        // - aa: full analysis (only for unstripped binaries under 20MB)
+        // - aa: full analysis (only for unstripped binaries under 5MB)
+        // - aas; aap: light analysis (for binaries 5MB-20MB)
         // - aflj: functions as JSON
         // - iSj: sections as JSON (skipped if goblin_success)
         // - izj: strings as JSON
         // - iij: imports as JSON (skipped if goblin_success)
         let mut commands = Vec::new();
         if !skip_function_analysis {
-            commands.push("aa; aflj");
+            if use_light_analysis {
+                commands.push("aas; aap; aflj");
+            } else {
+                commands.push("aa; aflj");
+            }
         }
         if !goblin_success {
             commands.push("iSj");
@@ -642,7 +658,7 @@ impl Radare2Analyzer {
         trace!(command = command, "Executing rizin batched analysis");
 
         // Use a bounded timeout so one slow file does not stall the whole scan.
-        let timeout = Duration::from_secs(120);
+        let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
 
         let output = execute_rizin_with_timeout(
             &[

@@ -10,7 +10,6 @@
 //! A detection finding is always emitted even if extraction fails or tooling is absent.
 
 use crate::analyzers::archive::ArchiveAnalyzer;
-use crate::analyzers::Analyzer;
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use crate::yara_engine::YaraEngine;
@@ -172,7 +171,7 @@ fn try_extract(
         return None;
     }
 
-    analyze_dir(tmp.path(), capability_mapper, yara_engine)
+    analyze_dir(tmp.path(), file_path, capability_mapper, yara_engine)
 }
 
 fn tool_available(name: &str) -> bool {
@@ -233,20 +232,13 @@ fn run_innoextract(src: &Path, out: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Pack the extracted directory into a temporary tar and analyze it with ArchiveAnalyzer.
+/// Analyze the extracted directory directly with ArchiveAnalyzer.
 fn analyze_dir(
     dir: &Path,
+    original_path: &Path,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
 ) -> Option<AnalysisReport> {
-    let tmp = tempfile::Builder::new().suffix(".tar").tempfile().ok()?;
-
-    let file = std::fs::File::create(tmp.path()).ok()?;
-    let mut builder = tar::Builder::new(file);
-    builder.append_dir_all(".", dir).ok()?;
-    builder.finish().ok()?;
-    drop(builder);
-
     let mut analyzer = ArchiveAnalyzer::new();
     if let Some(mapper) = capability_mapper {
         analyzer = analyzer.with_capability_mapper_arc(mapper);
@@ -255,7 +247,7 @@ fn analyze_dir(
         analyzer = analyzer.with_yara_arc(engine);
     }
 
-    analyzer.analyze(tmp.path()).ok()
+    analyzer.analyze_extracted_directory(dir, original_path).ok()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

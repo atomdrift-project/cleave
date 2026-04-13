@@ -566,6 +566,50 @@ impl ArchiveAnalyzer {
         Ok(report)
     }
 
+    /// Analyze an extracted directory as if it were an archive.
+    ///
+    /// This bypasses the extraction step and proceeds directly to analyzing the
+    /// contents of the directory.
+    pub(crate) fn analyze_extracted_directory(
+        &self,
+        dir_path: &Path,
+        original_file_path: &Path,
+    ) -> Result<AnalysisReport> {
+        let start = std::time::Instant::now();
+
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled before directory analysis");
+        }
+
+        let target = TargetInfo {
+            path: original_file_path.display().to_string(),
+            file_type: "directory".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        };
+
+        let mut report = AnalysisReport::new(target);
+
+        // Add structural feature for the directory analysis
+        report.structure.push(StructuralFeature {
+            id: "archive/directory".to_string(),
+            desc: "Extracted directory analysis".to_string(),
+            evidence: vec![Evidence {
+                method: "sfx_optimization".to_string(),
+                source: "archive_analyzer".to_string(),
+                value: "bypassed_tar_step".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+        });
+
+        // Proceed to analyze the directory contents (SFX installers are analyzed as generic archives)
+        self.analyze_generic_archive(dir_path, &mut report, start)?;
+
+        Ok(report)
+    }
+
     fn analyze_archive(&self, file_path: &Path) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 

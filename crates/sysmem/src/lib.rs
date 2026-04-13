@@ -33,16 +33,20 @@ pub fn current_rss() -> Option<u64> {
     current_rss_impl()
 }
 
-/// Memory pressure limit: min(50% of system RAM, 32 GiB).
-///
-/// On a 16 GiB machine this yields 8 GiB; on a 64 GiB+ machine it caps at
-/// 32 GiB so litmus never crowds out the rest of the system.
-/// Falls back to 8 GiB when total RAM cannot be determined.
+/// Memory pressure limit based on system RAM:
+/// - ≤ 8 GiB: total − 1 GiB
+/// - ≤ 16 GiB: total − 1.5 GiB
+/// - > 16 GiB: total / 2
 #[must_use]
 pub fn memory_limit() -> u64 {
-    const CAP: u64 = 32 * GB;
-    let half_ram = total_memory().unwrap_or(16 * GB) / 2;
-    half_ram.min(CAP)
+    let total = total_memory().unwrap_or(16 * GB);
+    if total <= 8 * GB {
+        total.saturating_sub(GB)
+    } else if total <= 16 * GB {
+        total.saturating_sub(GB + GB / 2)
+    } else {
+        total / 2
+    }
 }
 
 /// Warning threshold: 512 MiB below [`memory_limit`].
@@ -392,12 +396,19 @@ mod tests {
     }
 
     #[test]
-    fn memory_limit_is_min_half_ram_32gib() {
-        const CAP: u64 = 32 * GB;
+    fn memory_limit_matches_policy() {
         if let Some(total) = total_memory() {
-            assert_eq!(memory_limit(), (total / 2).min(CAP));
+            let expected = if total <= 8 * GB {
+                total.saturating_sub(GB)
+            } else if total <= 16 * GB {
+                total.saturating_sub(GB + GB / 2)
+            } else {
+                total / 2
+            };
+            assert_eq!(memory_limit(), expected);
         } else {
-            assert_eq!(memory_limit(), 8 * GB);
+            // fallback total is 16 GB → 16 − 1.5 = 14.5 GB
+            assert_eq!(memory_limit(), 14 * GB + GB / 2);
         }
     }
 

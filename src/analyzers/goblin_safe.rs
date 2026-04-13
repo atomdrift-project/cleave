@@ -31,6 +31,8 @@ use goblin::elf::Elf;
 use goblin::error::Error as GoblinError;
 use goblin::mach::Mach;
 use goblin::pe::PE;
+use std::panic::{self, PanicHookInfo};
+use std::sync::{Mutex, OnceLock};
 
 /// Result of a goblin operation that distinguishes between a normal `Err`
 /// return and a caught panic.
@@ -112,6 +114,25 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
+fn goblin_panic_hook_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn run_with_suppressed_panic_hook<T, F>(f: F) -> std::thread::Result<T>
+where
+    F: FnOnce() -> T,
+{
+    let _guard = goblin_panic_hook_lock()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let previous_hook = panic::take_hook();
+    panic::set_hook(Box::new(|_info: &PanicHookInfo<'_>| {}));
+    let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
+    panic::set_hook(previous_hook);
+    result
+}
+
 /// Run a goblin call that returns `Result<T, GoblinError>`, returning a
 /// typed `GoblinOutcome` that distinguishes a normal `Err` from a caught
 /// panic.
@@ -119,7 +140,7 @@ pub(crate) fn catch<T, F>(f: F) -> GoblinOutcome<T>
 where
     F: FnOnce() -> Result<T, GoblinError>,
 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    match run_with_suppressed_panic_hook(f) {
         Ok(Ok(value)) => GoblinOutcome::Ok(value),
         Ok(Err(e)) => GoblinOutcome::Failed(e),
         Err(payload) => GoblinOutcome::Panicked(panic_message(&*payload)),
@@ -138,7 +159,7 @@ pub(crate) fn catch_infallible<T, F>(f: F) -> GoblinOutcome<T>
 where
     F: FnOnce() -> T,
 {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+    match run_with_suppressed_panic_hook(f) {
         Ok(value) => GoblinOutcome::Ok(value),
         Err(payload) => GoblinOutcome::Panicked(panic_message(&*payload)),
     }

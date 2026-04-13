@@ -141,6 +141,15 @@ pub fn current_rss() -> Option<u64> {
     sysmem::current_rss()
 }
 
+/// Total physical memory in bytes, or `None` on unsupported platforms.
+///
+/// Delegates to the `sysmem` crate for cross-platform support
+/// (Linux, macOS, FreeBSD, OpenBSD, NetBSD, Windows).
+#[must_use]
+pub fn total_memory() -> Option<u64> {
+    sysmem::total_memory()
+}
+
 /// Memory limit: `min(50% RAM, 32 GiB)`.
 ///
 /// Use this as the default `limit` argument to [`start_periodic_logging`] and

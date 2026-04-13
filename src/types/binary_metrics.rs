@@ -161,6 +161,9 @@ pub struct BinaryMetrics {
     /// Segment count (Mach-O) or program headers (ELF)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub segment_count: u32,
+    /// Count of nonstandard section names for the file format
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub nonstandard_section_name_count: u32,
     /// Average section size
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_section_size: f32,
@@ -195,12 +198,21 @@ pub struct BinaryMetrics {
     /// Wide/UTF-16 string count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub wide_string_count: u32,
+    /// Sentence-like string count (multi-word printable strings)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub sentence_string_count: u32,
+    /// Ratio of sentence-like strings to all strings
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub sentence_string_ratio: f32,
     /// Average string length
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_string_length: f32,
     /// Maximum string length
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_string_length: u32,
+    /// Standard deviation of string lengths
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub string_length_stddev: f32,
 
     // === Functions ===
     /// Function count
@@ -303,6 +315,9 @@ pub struct BinaryMetrics {
     /// Export to import ratio (DLLs=high, EXEs=low)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub export_to_import_ratio: f32,
+    /// Ratio of curated operational imports to all imports
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub behavioral_import_ratio: f32,
     /// Relocation density: relocations per KB
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub relocation_density: f32,

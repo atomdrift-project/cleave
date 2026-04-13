@@ -7,6 +7,162 @@
 use crate::entropy::calculate_entropy;
 use crate::types::{AnalysisReport, Metrics};
 
+pub(crate) fn is_sentence_like_string(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.len() < 12 || trimmed.matches(' ').count() < 2 {
+        return false;
+    }
+
+    let mut token_count = 0u32;
+    let mut alpha_like_tokens = 0u32;
+
+    for token in trimmed.split_whitespace() {
+        let cleaned = token.trim_matches(|c: char| c.is_ascii_punctuation());
+        if cleaned.is_empty() {
+            continue;
+        }
+        token_count += 1;
+        if cleaned.chars().any(|c| c.is_ascii_alphabetic()) {
+            alpha_like_tokens += 1;
+        }
+    }
+
+    token_count >= 3 && alpha_like_tokens >= 2
+}
+
+pub(crate) fn is_behavioral_import(name: &str) -> bool {
+    let normalized = name.trim_start_matches('_').to_ascii_lowercase();
+    matches!(
+        normalized.as_str(),
+        "system"
+            | "popen"
+            | "execl"
+            | "execle"
+            | "execlp"
+            | "execv"
+            | "execve"
+            | "execvp"
+            | "posix_spawn"
+            | "posix_spawnp"
+            | "dlopen"
+            | "dlsym"
+            | "connect"
+            | "socket"
+            | "send"
+            | "recv"
+            | "fopen"
+            | "fread"
+            | "fwrite"
+            | "fscanf"
+            | "unlink"
+            | "unlinkat"
+            | "remove"
+            | "rename"
+            | "copyfile"
+            | "ptrace"
+            | "sysctl"
+    ) || normalized.starts_with("createprocess")
+        || normalized.starts_with("shellexecute")
+        || normalized.starts_with("loadlibrary")
+        || normalized.starts_with("getprocaddress")
+        || normalized.starts_with("virtualalloc")
+        || normalized.starts_with("virtualprotect")
+        || normalized.starts_with("writeprocessmemory")
+        || normalized.starts_with("createremotethread")
+        || normalized.starts_with("internetopen")
+        || normalized.starts_with("winhttp")
+}
+
+pub(crate) fn is_nonstandard_section_name(file_type: &str, section_name: &str) -> bool {
+    let short = section_name
+        .rsplit('.')
+        .next()
+        .unwrap_or(section_name)
+        .trim_start_matches("__");
+    let lower = short.to_ascii_lowercase();
+
+    match file_type {
+        "macho" => !matches!(
+            lower.as_str(),
+            "pagezero"
+                | "text"
+                | "stubs"
+                | "stub_helper"
+                | "const"
+                | "cstring"
+                | "unwind_info"
+                | "eh_frame"
+                | "data"
+                | "bss"
+                | "common"
+                | "got"
+                | "la_symbol_ptr"
+                | "nl_symbol_ptr"
+                | "mod_init_func"
+                | "mod_term_func"
+                | "objc_classname"
+                | "objc_methname"
+                | "objc_methtype"
+                | "objc_classlist"
+                | "objc_catlist"
+                | "objc_const"
+                | "objc_data"
+                | "objc_selrefs"
+                | "objc_superrefs"
+                | "objc_ivar"
+                | "swift5_types"
+                | "swift5_proto"
+                | "swift5_fieldmd"
+                | "swift5_reflstr"
+                | "swift5_assocty"
+                | "swift5_builtin"
+                | "linkedit"
+        ),
+        "pe" => !matches!(
+            lower.as_str(),
+            "text"
+                | "rdata"
+                | "data"
+                | "pdata"
+                | "rsrc"
+                | "reloc"
+                | "idata"
+                | "edata"
+                | "tls"
+                | "bss"
+                | "crt"
+        ),
+        "elf" => !matches!(
+            lower.as_str(),
+            "text"
+                | "rodata"
+                | "data"
+                | "bss"
+                | "plt"
+                | "got"
+                | "got.plt"
+                | "dynsym"
+                | "dynstr"
+                | "rela.text"
+                | "rela.plt"
+                | "rela.dyn"
+                | "rel.text"
+                | "rel.plt"
+                | "eh_frame"
+                | "eh_frame_hdr"
+                | "init"
+                | "fini"
+                | "init_array"
+                | "fini_array"
+                | "comment"
+                | "note.gnu.build-id"
+                | "gnu.hash"
+                | "hash"
+        ),
+        _ => false,
+    }
+}
+
 /// Populate and refine binary metrics for a report.
 ///
 /// This function calculates metrics that may not be fully populated by
@@ -54,6 +210,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         let mut total_length: u64 = 0;
         let mut max_length: u32 = 0;
         let mut wide_count: u32 = 0;
+        let mut sentence_like_count: u32 = 0;
+        let mut lengths: Vec<f32> = Vec::with_capacity(report.strings.len());
 
         for s in &report.strings {
             let e = calculate_entropy(s.value.as_bytes());
@@ -64,12 +222,16 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
 
             let len = s.value.len() as u32;
             total_length += len as u64;
+            lengths.push(len as f32);
             if len > max_length {
                 max_length = len;
             }
             // Check encoding chain for wide strings
             if s.encoding_chain.iter().any(|e| e == "wide") {
                 wide_count += 1;
+            }
+            if is_sentence_like_string(&s.value) {
+                sentence_like_count += 1;
             }
         }
 
@@ -78,6 +240,13 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         binary.avg_string_length = total_length as f32 / report.strings.len() as f32;
         binary.max_string_length = max_length;
         binary.wide_string_count = wide_count;
+        binary.sentence_string_count = sentence_like_count;
+        if lengths.len() > 1 {
+            let mean = binary.avg_string_length;
+            let variance =
+                lengths.iter().map(|l| (l - mean).powi(2)).sum::<f32>() / lengths.len() as f32;
+            binary.string_length_stddev = variance.sqrt();
+        }
     }
 
     // Calculate binary entropy from sections
@@ -181,6 +350,10 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                 max_section_size = section.size;
             }
 
+            if is_nonstandard_section_name(&file_type, &section.name) {
+                binary.nonstandard_section_name_count += 1;
+            }
+
             // Reuse logic from entropy section
             let section_name = section.name.rsplit('.').next().unwrap_or(&section.name);
             let section_name_clean = section_name.trim_start_matches("__");
@@ -259,6 +432,20 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         binary.function_density = binary.function_count as f32 / code_kb;
     }
 
+    if binary.string_count > 0 {
+        binary.sentence_string_ratio =
+            binary.sentence_string_count as f32 / binary.string_count as f32;
+    }
+
+    if binary.import_count > 0 {
+        let behavioral_imports = report
+            .imports
+            .iter()
+            .filter(|i| is_behavioral_import(&i.symbol))
+            .count() as f32;
+        binary.behavioral_import_ratio = behavioral_imports / binary.import_count as f32;
+    }
+
     // Format-specific refinements
     if file_type == "macho" {
         if let Some(ref mut macho) = metrics.macho {
@@ -308,5 +495,31 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             binary.has_signature = pe.has_signature;
             binary.signature_valid = pe.signature_valid;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_nonstandard_section_name, is_sentence_like_string};
+
+    #[test]
+    fn sentence_like_requires_multiple_words() {
+        assert!(is_sentence_like_string(
+            "This looks like a normal error message"
+        ));
+        assert!(!is_sentence_like_string("two words"));
+        assert!(is_sentence_like_string("https://example.com/path with space here"));
+        assert!(is_sentence_like_string("/tmp/some path here"));
+        assert!(!is_sentence_like_string("SingleTokenOnly"));
+        assert!(!is_sentence_like_string("%s %d %x"));
+    }
+
+    #[test]
+    fn nonstandard_section_names_are_format_aware() {
+        assert!(!is_nonstandard_section_name("macho", "__text"));
+        assert!(!is_nonstandard_section_name("macho", "__cstring"));
+        assert!(is_nonstandard_section_name("macho", "__weird"));
+        assert!(!is_nonstandard_section_name("pe", ".text"));
+        assert!(is_nonstandard_section_name("pe", ".asdf"));
     }
 }

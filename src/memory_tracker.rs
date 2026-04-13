@@ -432,7 +432,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
     #[cfg(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly"))
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
     ))]
     {
         use tikv_jemalloc_ctl::{epoch, stats};
@@ -452,7 +452,7 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
     #[cfg(not(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly"))
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
     )))]
     None
 }
@@ -469,7 +469,7 @@ pub fn configure_jemalloc_low_memory() {
     #[cfg(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly"))
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
     ))]
     {
         // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
@@ -504,7 +504,7 @@ pub fn log_startup_diagnostics() {
     let allocator = if cfg!(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly"))
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
     )) {
         "jemalloc"
     } else {

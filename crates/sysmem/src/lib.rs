@@ -34,19 +34,19 @@ pub fn current_rss() -> Option<u64> {
 }
 
 /// Memory pressure limit based on system RAM:
-/// - ≤ 8 GiB: total − 1 GiB
-/// - ≤ 16 GiB: total − 1.5 GiB
-/// - > 16 GiB: total / 2
+/// - ≤ 8 GiB: total − 512 MiB
+/// - > 8 GiB: total − 1.5 GiB
+/// - capped at 32 GiB
 #[must_use]
 pub fn memory_limit() -> u64 {
+    const MAX: u64 = 32 * GB;
     let total = total_memory().unwrap_or(16 * GB);
-    if total <= 8 * GB {
-        total.saturating_sub(GB)
-    } else if total <= 16 * GB {
-        total.saturating_sub(GB + GB / 2)
+    let limit = if total <= 8 * GB {
+        total.saturating_sub(GB / 2)
     } else {
-        total / 2
-    }
+        total.saturating_sub(GB + GB / 2)
+    };
+    limit.min(MAX)
 }
 
 /// Warning threshold: 512 MiB below [`memory_limit`].
@@ -397,14 +397,14 @@ mod tests {
 
     #[test]
     fn memory_limit_matches_policy() {
+        const MAX: u64 = 32 * GB;
         if let Some(total) = total_memory() {
             let expected = if total <= 8 * GB {
-                total.saturating_sub(GB)
-            } else if total <= 16 * GB {
-                total.saturating_sub(GB + GB / 2)
+                total.saturating_sub(GB / 2)
             } else {
-                total / 2
-            };
+                total.saturating_sub(GB + GB / 2)
+            }
+            .min(MAX);
             assert_eq!(memory_limit(), expected);
         } else {
             // fallback total is 16 GB → 16 − 1.5 = 14.5 GB

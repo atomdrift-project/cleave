@@ -384,9 +384,16 @@ pub fn process_yara_result_with<F>(
 where
     F: FnMut(&types::YaraMatch) -> Vec<types::Evidence>,
 {
-    let Some(Ok((matches, inline))) = yara_result else {
-        return HashMap::new();
+    let yara_result = match yara_result {
+        Some(Ok(ok)) => ok,
+        Some(Err(e)) => {
+            tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
+            report.metadata.errors.push(format!("yara: {e:#}"));
+            return HashMap::new();
+        }
+        None => return HashMap::new(),
     };
+    let (matches, inline) = yara_result;
 
     // Resolve file architectures once for YARA arch filtering
     let file_archs: Vec<composite_rules::Arch> = report
@@ -1466,17 +1473,23 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     Some(file_types.as_slice())
                 };
 
-                if let Ok((matches, findings)) = engine.scan_bytes_to_findings(file_data, filter) {
-                    report.yara_matches = matches;
-                    let existing: std::collections::HashSet<String> =
-                        report.findings.iter().map(|f| f.id.clone()).collect();
-                    for finding in findings {
-                        if !existing.contains(finding.id.as_str()) {
-                            report.findings.push(finding);
+                match engine.scan_bytes_to_findings(file_data, filter) {
+                    Ok((matches, findings)) => {
+                        report.yara_matches = matches;
+                        let existing: std::collections::HashSet<String> =
+                            report.findings.iter().map(|f| f.id.clone()).collect();
+                        for finding in findings {
+                            if !existing.contains(finding.id.as_str()) {
+                                report.findings.push(finding);
+                            }
+                        }
+                        if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
+                            report.metadata.tools_used.push("yara-x".to_string());
                         }
                     }
-                    if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
-                        report.metadata.tools_used.push("yara-x".to_string());
+                    Err(e) => {
+                        tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
+                        report.metadata.errors.push(format!("yara: {e:#}"));
                     }
                 }
             }

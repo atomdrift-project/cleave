@@ -622,7 +622,13 @@ impl YaraEngine {
 
         for (tier, elapsed_ms, result) in all_raw {
             tracing::debug!(tier = tier.label(), elapsed_ms, "YARA tier scan finished");
-            let raw_rules = result?;
+            let raw_rules = match result {
+                Ok(rules) => rules,
+                Err(e) => {
+                    tracing::error!(tier = tier.label(), error = %e, "YARA tier scan failed, skipping tier");
+                    continue;
+                }
+            };
             for raw in raw_rules {
                 if inline_ns_set.contains(raw.namespace.as_str()) {
                     Self::collect_inline_evidence(&raw, data, &mut inline_results);
@@ -711,61 +717,77 @@ impl YaraEngine {
             };
 
             let scan_start = std::time::Instant::now();
-            let scan_result = scanner.scan(data);
-            let scan_elapsed = scan_start.elapsed();
 
-            // Collect owned results first (consuming the ScanResults borrow on
-            // the scanner), so the scanner/cache borrow is released before we
-            // potentially evict the entry below.
-            let raw_rules_result: Result<Vec<RawRule>> = match scan_result {
-                Err(e) => Err(anyhow::anyhow!("YARA scan failed: {:?}", e)),
-                Ok(scan_results) => {
-                    let raw_rules: Vec<RawRule> = scan_results
-                        .matching_rules()
-                        .map(|rule| {
-                            let patterns: Vec<_> = rule
-                                .patterns()
-                                .map(|pat| {
-                                    let total_matches = pat.matches().count();
-                                    if total_matches > MAX_PATTERN_MATCHES {
-                                        let inline_trait_id =
-                                            rule.namespace().strip_prefix("inline.");
-                                        tracing::info!(
-                                            rule = %rule.identifier(),
-                                            namespace = %rule.namespace(),
-                                            pattern = %pat.identifier(),
-                                            matches = total_matches,
-                                            limit = MAX_PATTERN_MATCHES,
-                                            inline_trait_id,
-                                            "Hit YARA-pattern match limit; stopping early"
-                                        );
-                                    }
-                                    let ranges: Vec<_> = pat
-                                        .matches()
-                                        .take(MAX_PATTERN_MATCHES)
-                                        .map(|m| (m.range().start, m.range().end))
+            // Wrap the scan + result collection in catch_unwind so a panic
+            // inside yara-x (e.g. deserialization bugs) becomes an Err
+            // instead of poisoning the rayon thread pool.
+            let raw_rules_result: Result<Vec<RawRule>> =
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let scan_result = scanner.scan(data);
+                    match scan_result {
+                        Err(e) => Err(anyhow::anyhow!("YARA scan failed: {:?}", e)),
+                        Ok(scan_results) => {
+                            let raw_rules: Vec<RawRule> = scan_results
+                                .matching_rules()
+                                .map(|rule| {
+                                    let patterns: Vec<_> = rule
+                                        .patterns()
+                                        .map(|pat| {
+                                            let total_matches = pat.matches().count();
+                                            if total_matches > MAX_PATTERN_MATCHES {
+                                                let inline_trait_id =
+                                                    rule.namespace().strip_prefix("inline.");
+                                                tracing::info!(
+                                                    rule = %rule.identifier(),
+                                                    namespace = %rule.namespace(),
+                                                    pattern = %pat.identifier(),
+                                                    matches = total_matches,
+                                                    limit = MAX_PATTERN_MATCHES,
+                                                    inline_trait_id,
+                                                    "Hit YARA-pattern match limit; stopping early"
+                                                );
+                                            }
+                                            let ranges: Vec<_> = pat
+                                                .matches()
+                                                .take(MAX_PATTERN_MATCHES)
+                                                .map(|m| (m.range().start, m.range().end))
+                                                .collect();
+                                            (pat.identifier().to_string(), ranges)
+                                        })
                                         .collect();
-                                    (pat.identifier().to_string(), ranges)
+                                    RawRule {
+                                        name: rule.identifier().to_string(),
+                                        namespace: rule.namespace().to_string(),
+                                        tags: rule
+                                            .tags()
+                                            .map(|t| t.identifier().to_string())
+                                            .collect(),
+                                        metadata: rule
+                                            .metadata()
+                                            .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
+                                            .collect(),
+                                        patterns,
+                                    }
                                 })
                                 .collect();
-                            RawRule {
-                                name: rule.identifier().to_string(),
-                                namespace: rule.namespace().to_string(),
-                                tags: rule
-                                    .tags()
-                                    .map(|t| t.identifier().to_string())
-                                    .collect(),
-                                metadata: rule
-                                    .metadata()
-                                    .map(|(k, v)| (k.to_string(), format!("{:?}", v)))
-                                    .collect(),
-                                patterns,
-                            }
-                        })
-                        .collect();
-                    Ok(raw_rules)
-                }
-            };
+                            Ok(raw_rules)
+                        }
+                    }
+                })) {
+                    Ok(result) => result,
+                    Err(panic_payload) => {
+                        let msg = if let Some(s) = panic_payload.downcast_ref::<String>() {
+                            s.clone()
+                        } else if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                            (*s).to_string()
+                        } else {
+                            "unknown panic".to_string()
+                        };
+                        tracing::error!(error = %msg, "YARA scan panicked");
+                        Err(anyhow::anyhow!("YARA scan panicked: {}", msg))
+                    }
+                };
+            let scan_elapsed = scan_start.elapsed();
 
             // Scanner/ScanResults borrow is now released. Evict the cached
             // scanner if the scan failed or took unreasonably long — yara-x may

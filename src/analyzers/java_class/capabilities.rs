@@ -5,6 +5,8 @@ use crate::types::*;
 
 impl super::JavaClassAnalyzer {
     pub(super) fn detect_capabilities(&self, class_info: &ClassInfo, report: &mut AnalysisReport) {
+        let is_sig_stub = report.target.path.ends_with(".sig");
+
         // Detect suspicious class references
         let suspicious_classes = [
             (
@@ -70,6 +72,9 @@ impl super::JavaClassAnalyzer {
 
         for class_ref in &class_info.class_refs {
             for (pattern, cap_id, description) in &suspicious_classes {
+                if is_sig_stub && (*cap_id == "net/jndi" || *cap_id == "net/rmi") {
+                    continue;
+                }
                 // Use exact match or proper prefix match (pattern must match up to a / or end of string)
                 // to avoid e.g. "java/lang/Runtime" matching "java/lang/RuntimeException"
                 if class_ref == *pattern
@@ -206,8 +211,7 @@ impl super::JavaClassAnalyzer {
                     s,
                     Criticality::Hostile,
                 );
-            } else if s_lower.contains("credential")
-                || s_lower.contains("steal") && s_lower.contains("pass")
+            } else if s_lower.contains("steal") && s_lower.contains("pass")
                 || s_lower.contains("dump") && s_lower.contains("pass")
                 || s_lower.contains("grab") && s_lower.contains("pass")
                 || s_lower.contains("harvest") && s_lower.contains("pass")

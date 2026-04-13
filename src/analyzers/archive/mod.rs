@@ -1557,12 +1557,12 @@ composite_rules:
             buf
         };
 
-        // Write CRX file with header
+        // Write CRX file with header (CRX2 format)
         let mut crx_file = File::create(&crx_path).unwrap();
 
-        // CRX3 header: "Cr24" + version (4 bytes) + pubkey_len (4 bytes) + sig_len (4 bytes)
+        // CRX2 header: "Cr24" + version=2 (4) + pubkey_len (4) + sig_len (4)
         std::io::Write::write_all(&mut crx_file, b"Cr24").unwrap(); // Magic
-        std::io::Write::write_all(&mut crx_file, &3u32.to_le_bytes()).unwrap(); // Version
+        std::io::Write::write_all(&mut crx_file, &2u32.to_le_bytes()).unwrap(); // Version
         std::io::Write::write_all(&mut crx_file, &32u32.to_le_bytes()).unwrap(); // Pubkey len
         std::io::Write::write_all(&mut crx_file, &64u32.to_le_bytes()).unwrap(); // Sig len
 

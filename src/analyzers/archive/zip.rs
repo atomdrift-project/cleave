@@ -338,7 +338,9 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
 }
 
 /// Extract Chrome extension (.crx) files
-/// CRX format: "Cr24" magic (4) + version (4) + pubkey_len (4) + sig_len (4) + pubkey + sig + ZIP
+///
+/// CRX2: "Cr24" (4) + version=2 (4) + pubkey_len (4) + sig_len (4) + pubkey + sig + ZIP
+/// CRX3: "Cr24" (4) + version=3 (4) + header_size (4) + signed_header (header_size) + ZIP
 pub(crate) fn extract_crx_safe(
     archive_path: &Path,
     dest_dir: &Path,
@@ -346,9 +348,9 @@ pub(crate) fn extract_crx_safe(
 ) -> Result<()> {
     let mut file = File::open(archive_path)?;
     let file_len = file.metadata()?.len() as usize;
-    let mut header = [0u8; 16];
+    let mut header = [0u8; 12];
 
-    // Read CRX header
+    // Read CRX header (first 12 bytes are common to CRX2 and CRX3)
     file.read_exact(&mut header)
         .context("Failed to read CRX header")?;
 
@@ -357,15 +359,32 @@ pub(crate) fn extract_crx_safe(
         anyhow::bail!("Invalid CRX magic number");
     }
 
-    // Parse header fields (little-endian)
-    let pubkey_len = u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
-    let sig_len = u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
+    let version = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
 
-    // Check for potential overflow and bounds
-    let zip_offset = 16usize
-        .checked_add(pubkey_len)
-        .and_then(|sum| sum.checked_add(sig_len))
-        .context("CRX header specifies invalid offsets (overflow)")?;
+    let zip_offset = match version {
+        3 => {
+            // CRX3: bytes 8..12 = header_size (protobuf signed header length)
+            let header_size =
+                u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
+            12usize
+                .checked_add(header_size)
+                .context("CRX3 header specifies invalid offset (overflow)")?
+        }
+        2 => {
+            // CRX2: bytes 8..12 = pubkey_len, bytes 12..16 = sig_len
+            let pubkey_len =
+                u32::from_le_bytes([header[8], header[9], header[10], header[11]]) as usize;
+            let mut extra = [0u8; 4];
+            file.read_exact(&mut extra)
+                .context("Failed to read CRX2 sig_len")?;
+            let sig_len = u32::from_le_bytes(extra) as usize;
+            16usize
+                .checked_add(pubkey_len)
+                .and_then(|sum| sum.checked_add(sig_len))
+                .context("CRX2 header specifies invalid offsets (overflow)")?
+        }
+        _ => anyhow::bail!("Unsupported CRX version: {version}"),
+    };
 
     if zip_offset >= file_len {
         anyhow::bail!(
@@ -400,15 +419,14 @@ mod tests {
 
     #[test]
     #[allow(clippy::expect_used)]
-    fn test_extract_crx_invalid_offsets() {
+    fn test_extract_crx2_invalid_offsets() {
         let dir = tempdir().expect("Failed to create temp dir");
         let guard = ExtractionGuard::new();
 
-        // Create a malformed CRX: "Cr24" (4) + version (4) + pubkey_len (4) + sig_len (4)
-        // Set pubkey_len to a very large value that exceeds file size
+        // Create a malformed CRX2 with pubkey_len that exceeds file size
         let mut crx_data = Vec::new();
         crx_data.extend_from_slice(b"Cr24");
-        crx_data.extend_from_slice(&2u32.to_le_bytes()); // version
+        crx_data.extend_from_slice(&2u32.to_le_bytes()); // version 2
         crx_data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // massive pubkey_len
         crx_data.extend_from_slice(&0u32.to_le_bytes()); // sig_len
 
@@ -422,5 +440,94 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.expect_err("Expected error").to_string();
         assert!(err_msg.contains("truncated") || err_msg.contains("invalid"));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_extract_crx3_invalid_offsets() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let guard = ExtractionGuard::new();
+
+        // Create a malformed CRX3 with header_size that exceeds file size
+        let mut crx_data = Vec::new();
+        crx_data.extend_from_slice(b"Cr24");
+        crx_data.extend_from_slice(&3u32.to_le_bytes()); // version 3
+        crx_data.extend_from_slice(&0xFFFFFFFFu32.to_le_bytes()); // massive header_size
+
+        let crx_path = dir.path().join("invalid_v3.crx");
+        std::fs::write(&crx_path, &crx_data).expect("Failed to write crx data");
+
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
+
+        let result = extract_crx_safe(&crx_path, &dest, &guard);
+        assert!(result.is_err());
+        let err_msg = result.expect_err("Expected error").to_string();
+        assert!(err_msg.contains("truncated") || err_msg.contains("invalid"));
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_extract_crx3_valid() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let guard = ExtractionGuard::new();
+
+        // Build a ZIP payload
+        let zip_data = {
+            let mut buf = Vec::new();
+            let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+            let options = zip::write::FileOptions::<()>::default();
+            zip.start_file("manifest.json", options).expect("start_file");
+            std::io::Write::write_all(&mut zip, b"{\"manifest_version\": 3}")
+                .expect("write manifest");
+            zip.finish().expect("finish zip");
+            buf
+        };
+
+        // CRX3: magic(4) + version=3(4) + header_size(4) + header(header_size) + ZIP
+        let header_size: u32 = 48; // fake protobuf header
+        let mut crx_data = Vec::new();
+        crx_data.extend_from_slice(b"Cr24");
+        crx_data.extend_from_slice(&3u32.to_le_bytes());
+        crx_data.extend_from_slice(&header_size.to_le_bytes());
+        crx_data.extend_from_slice(&vec![0u8; header_size as usize]); // fake signed header
+        crx_data.extend_from_slice(&zip_data);
+
+        let crx_path = dir.path().join("extension_v3.crx");
+        std::fs::write(&crx_path, &crx_data).expect("Failed to write crx data");
+
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
+
+        let result = extract_crx_safe(&crx_path, &dest, &guard);
+        assert!(result.is_ok(), "CRX3 extraction failed: {result:?}");
+        assert!(dest.join("manifest.json").exists());
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_extract_crx_unsupported_version() {
+        let dir = tempdir().expect("Failed to create temp dir");
+        let guard = ExtractionGuard::new();
+
+        let mut crx_data = Vec::new();
+        crx_data.extend_from_slice(b"Cr24");
+        crx_data.extend_from_slice(&99u32.to_le_bytes()); // unsupported version
+        crx_data.extend_from_slice(&[0u8; 8]); // padding
+
+        let crx_path = dir.path().join("unsupported.crx");
+        std::fs::write(&crx_path, &crx_data).expect("Failed to write crx data");
+
+        let dest = dir.path().join("out");
+        std::fs::create_dir_all(&dest).expect("Failed to create dest dir");
+
+        let result = extract_crx_safe(&crx_path, &dest, &guard);
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("Expected error")
+                .to_string()
+                .contains("Unsupported CRX version")
+        );
     }
 }

@@ -5,7 +5,10 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::analyzers::{java_class::JavaClassAnalyzer, Analyzer};
+    use crate::types::{AnalysisReport, TargetInfo};
     use std::path::Path;
+
+    use super::super::parsing::ClassInfo;
 
     // =============================================================================
     // Basic analyzer tests
@@ -349,6 +352,70 @@ mod tests {
         let analyzer = JavaClassAnalyzer::new();
         let result = analyzer.analyze(Path::new("/nonexistent/path/Test.class"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_sig_stub_skips_capability_heuristics() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_info = ClassInfo {
+            strings: [
+                "DEFECTIVE_CREDENTIAL".to_string(),
+                "shutdown.exe /s /t 0".to_string(),
+            ]
+            .into_iter()
+            .collect(),
+            class_refs: [
+                "java/rmi/server/RMIClassLoader".to_string(),
+                "javax/naming/ldap/StartTlsResponse".to_string(),
+            ]
+            .into_iter()
+            .collect(),
+            methods: vec![],
+        };
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/fake/ct.sym/java.rmi/java/rmi/server/RMIClassLoader.sig".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities(&class_info, &mut report);
+
+        assert!(
+            report.findings.is_empty(),
+            "signature stubs should not emit capabilities: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_demo_artifact_skips_system_control_strings() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_info = ClassInfo {
+            strings: ["shutDown".to_string()].into_iter().collect(),
+            class_refs: ["java/lang/System".to_string()].into_iter().collect(),
+            methods: vec![],
+        };
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/demo/jfc/J2Ddemo/java2d/J2Ddemo.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities(&class_info, &mut report);
+
+        assert!(
+            report.findings.iter().all(|f| f.id != "impact/control"),
+            "demo artifacts should not emit impact/control: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        assert!(
+            report.findings.iter().any(|f| f.id == "intel/system"),
+            "expected benign class reference detections to remain"
+        );
     }
 
     // =============================================================================

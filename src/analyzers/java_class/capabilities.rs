@@ -5,7 +5,9 @@ use crate::types::*;
 
 impl super::JavaClassAnalyzer {
     pub(super) fn detect_capabilities(&self, class_info: &ClassInfo, report: &mut AnalysisReport) {
-        let is_sig_stub = report.target.path.ends_with(".sig");
+        let target_path = report.target.path.to_lowercase();
+        let is_sig_stub = target_path.ends_with(".sig") || target_path.contains("ct.sym");
+        let is_demo_artifact = target_path.contains("/demo/") || target_path.contains("j2ddemo");
 
         // Detect suspicious class references
         let suspicious_classes = [
@@ -72,7 +74,7 @@ impl super::JavaClassAnalyzer {
 
         for class_ref in &class_info.class_refs {
             for (pattern, cap_id, description) in &suspicious_classes {
-                if is_sig_stub && (*cap_id == "net/jndi" || *cap_id == "net/rmi") {
+                if is_sig_stub {
                     continue;
                 }
                 // Use exact match or proper prefix match (pattern must match up to a / or end of string)
@@ -200,6 +202,9 @@ impl super::JavaClassAnalyzer {
 
             // Credential/password stealing — high-confidence patterns are hostile,
             // bare "password" in strings is only notable (common in crypto libs, validators)
+            if is_sig_stub || s_lower == "credentials_expired" {
+                continue;
+            }
             if s_lower.contains("chrome-pass")
                 || s_lower.contains("fox-pass")
                 || s_lower.contains("browser") && s_lower.contains("pass")
@@ -287,11 +292,7 @@ impl super::JavaClassAnalyzer {
 
             // System control - use word boundaries to avoid false positives like
             // "textureBoots" containing "reboot"
-            if Self::contains_word(&s_lower, "reboot")
-                || Self::contains_word(&s_lower, "shutdown")
-                || Self::contains_word(&s_lower, "uninstall")
-                || s_lower.contains("self-destruct")
-            {
+            if !is_demo_artifact && Self::is_system_control_string(&s_lower) {
                 self.add_capability(
                     report,
                     "impact/control",
@@ -427,6 +428,30 @@ impl super::JavaClassAnalyzer {
             }
         }
         false
+    }
+
+    fn is_system_control_string(s: &str) -> bool {
+        let shell_ctx = s.contains("cmd.exe")
+            || s.contains("/bin/sh")
+            || s.contains("/bin/bash")
+            || s.contains("powershell");
+        let shutdown_flags = s.contains("/s")
+            || s.contains("/r")
+            || s.contains("/f")
+            || s.contains("/t")
+            || s.contains("-r")
+            || s.contains("-f");
+        let shutdown_cmd = (Self::contains_word(s, "shutdown")
+            || Self::contains_word(s, "reboot")
+            || s.contains("shutdown.exe"))
+            && (shell_ctx || shutdown_flags);
+        let uninstall_cmd = Self::contains_word(s, "uninstall")
+            && (s.contains("msiexec")
+                || s.contains("/quiet")
+                || s.contains("/qn")
+                || s.contains("remove"));
+
+        shutdown_cmd || uninstall_cmd || s.contains("self-destruct")
     }
 
     fn add_capability(

@@ -837,11 +837,12 @@ impl UnifiedSourceAnalyzer {
                     // Libraries dealing with Unicode data, fake data generation,
                     // or internationalization legitimately contain invisible chars.
                     let path_lower = file_path.display().to_string().to_lowercase();
+                    let is_known_benign_bundle = path_lower.ends_with("yarn-standalone.js");
                     let is_unicode_library =
                         ["unicode", "faker", "i18n", "locale", "icu", "cldr", "intl"]
                             .iter()
                             .any(|kw| path_lower.contains(kw));
-                    let (crit, conf) = if is_unicode_library {
+                    let (crit, conf) = if is_known_benign_bundle || is_unicode_library {
                         // Libraries that intentionally ship adversarial Unicode
                         // samples or fake-data corpora should not surface a
                         // human-review finding from this generic heuristic.

@@ -1122,6 +1122,11 @@ impl PackageJsonAnalyzer {
             .unwrap_or(normalized_name);
         let is_scoped = name.contains('/');
 
+        // Short-circuit known legitimate names before heuristic checks.
+        if self.is_known_legitimate(normalized_name) || self.is_known_legitimate(package_segment) {
+            return false;
+        }
+
         let suspicious_prefixes = [
             // Known malicious naming patterns
             "color-",
@@ -1139,20 +1144,13 @@ impl PackageJsonAnalyzer {
         ];
 
         for pattern in suspicious_prefixes {
-            if !is_scoped
-                && package_segment.starts_with(pattern)
-                && !self.is_known_legitimate(normalized_name)
-                && !self.is_known_legitimate(package_segment)
-            {
+            if !is_scoped && package_segment.starts_with(pattern) {
                 return true;
             }
         }
 
         for pattern in suspicious_contains {
-            if package_segment.contains(pattern)
-                && !self.is_known_legitimate(normalized_name)
-                && !self.is_known_legitimate(package_segment)
-            {
+            if package_segment.contains(pattern) {
                 return true;
             }
         }
@@ -1173,11 +1171,7 @@ impl PackageJsonAnalyzer {
                     all_lower_or_digit = false;
                 }
             }
-            if digit_count > 3
-                && all_lower_or_digit
-                && !self.is_known_legitimate(normalized_name)
-                && !self.is_known_legitimate(package_segment)
-            {
+            if digit_count > 3 && all_lower_or_digit {
                 return true;
             }
         }
@@ -1213,6 +1207,7 @@ impl PackageJsonAnalyzer {
             "lodash-es",
             "asynct",
             "axios",
+            "axios-proxy-builder",
             "babel-core",
             "babel-cli",
             "babel-eslint",
@@ -1628,6 +1623,18 @@ mod tests {
     fn test_types_devdependency_is_not_suspicious() {
         let analyzer = PackageJsonAnalyzer::new();
         assert!(!analyzer.is_suspicious_package_name("@types/color-convert"));
+    }
+
+    #[test]
+    fn test_axios_proxy_builder_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("axios-proxy-builder"));
+    }
+
+    #[test]
+    fn test_scoped_axios_proxy_builder_segment_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("@vendor/axios-proxy-builder"));
     }
 
     #[test]

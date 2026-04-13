@@ -49,7 +49,7 @@ use std::os::unix::process::CommandExt;
 
 /// Default timeout for rizin subprocess execution (900 seconds / 15 minutes).
 /// This prevents hung processes from accumulating during archive analysis.
-const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 900;
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 1200;
 
 /// Global disable counter for radare2 analysis.
 ///

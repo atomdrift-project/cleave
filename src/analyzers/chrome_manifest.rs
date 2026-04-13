@@ -10,7 +10,7 @@ use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::*;
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
@@ -22,15 +22,74 @@ pub(crate) struct ChromeManifestAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
 }
 
+/// Deserialize a boolean that might be encoded as a string (e.g. `"true"` instead of `true`).
+fn deserialize_bool_tolerant<'de, D>(deserializer: D) -> Result<bool, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(b) => Ok(b),
+        serde_json::Value::String(s) => Ok(s.eq_ignore_ascii_case("true")),
+        _ => Ok(false),
+    }
+}
+
+/// Deserialize an optional boolean that might be a string, preserving None for absent values.
+fn deserialize_option_bool_tolerant<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Bool(b) => Ok(Some(b)),
+        serde_json::Value::String(s) => Ok(Some(s.eq_ignore_ascii_case("true"))),
+        serde_json::Value::Null => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+/// Deserialize a u8 that might be encoded as a string (e.g. `"3"` instead of `3`).
+fn deserialize_u8_tolerant<'de, D>(deserializer: D) -> Result<Option<u8>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(n) => Ok(n.as_u64().and_then(|n| u8::try_from(n).ok())),
+        serde_json::Value::String(s) => Ok(s.trim().parse::<u8>().ok()),
+        serde_json::Value::Null => Ok(None),
+        _ => Ok(None),
+    }
+}
+
+/// Deserialize a JSON value as `Option<String>`, coercing numbers/bools to strings.
+fn deserialize_string_tolerant<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(Some(s)),
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(n) => Ok(Some(n.to_string())),
+        serde_json::Value::Bool(b) => Ok(Some(b.to_string())),
+        _ => Ok(None),
+    }
+}
+
 /// Chrome extension manifest structure
 /// Note: Some fields are only used for deserialization tolerance
 #[derive(Deserialize, Default, Debug)]
 struct ChromeManifest {
+    #[serde(default, deserialize_with = "deserialize_u8_tolerant")]
     manifest_version: Option<u8>,
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     version: Option<String>,
     #[allow(dead_code)] // Deserialized from JSON
-    description: Option<String>,
+    description: Option<serde_json::Value>,
     #[serde(default)]
     permissions: Vec<serde_json::Value>,
     #[serde(default)]
@@ -54,18 +113,20 @@ struct ContentScript {
     #[serde(default)]
     #[allow(dead_code)] // Deserialized from JSON
     js: Vec<String>,
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     run_at: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_bool_tolerant")]
     all_frames: bool,
 }
 
 #[derive(Deserialize, Default, Debug)]
 struct Background {
     #[allow(dead_code)] // Deserialized from JSON
-    service_worker: Option<String>,
+    service_worker: Option<serde_json::Value>,
     #[serde(default)]
     #[allow(dead_code)] // Deserialized from JSON
-    scripts: Vec<String>,
+    scripts: Vec<serde_json::Value>,
+    #[serde(default, deserialize_with = "deserialize_option_bool_tolerant")]
     persistent: Option<bool>,
 }
 

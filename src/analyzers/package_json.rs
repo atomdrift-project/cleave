@@ -31,6 +31,22 @@ where
     }
 }
 
+/// Deserialize a JSON value as `Option<String>`, coercing numbers/bools to their
+/// string representation. Real-world manifests occasionally have e.g. `"version": 1.0`.
+fn deserialize_string_tolerant<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => Ok(Some(s)),
+        serde_json::Value::Null => Ok(None),
+        serde_json::Value::Number(n) => Ok(Some(n.to_string())),
+        serde_json::Value::Bool(b) => Ok(Some(b.to_string())),
+        _ => Ok(None), // objects/arrays → treat as absent
+    }
+}
+
 fn deserialize_map_tolerant<'de, D>(deserializer: D) -> Result<HashMap<String, String>, D::Error>
 where
     D: Deserializer<'de>,
@@ -55,15 +71,18 @@ where
 
 #[derive(Deserialize, Default)]
 struct PackageJson {
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     name: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     version: Option<String>,
+    #[serde(default, deserialize_with = "deserialize_string_tolerant")]
     publisher: Option<String>,
     #[serde(default, deserialize_with = "deserialize_bool_tolerant")]
     r#private: bool,
     #[allow(dead_code)] // Deserialized from JSON
-    desc: Option<String>,
+    desc: Option<serde_json::Value>,
     #[allow(dead_code)] // Deserialized from JSON
-    main: Option<String>,
+    main: Option<serde_json::Value>,
     #[serde(default, deserialize_with = "deserialize_map_tolerant")]
     scripts: HashMap<String, String>,
     #[serde(default, deserialize_with = "deserialize_map_tolerant")]
@@ -90,7 +109,7 @@ struct PackageJson {
     repository: Option<serde_json::Value>,
     author: Option<serde_json::Value>,
     #[allow(dead_code)] // Deserialized from JSON
-    license: Option<String>,
+    license: Option<serde_json::Value>,
     #[serde(default)]
     #[allow(dead_code)] // Deserialized from JSON
     bin: serde_json::Value,

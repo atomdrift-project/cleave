@@ -16,6 +16,17 @@ use tracing::{error, info, info_span, warn, Instrument, Span};
 
 use super::AppState;
 
+/// Extract a human-readable message from a panic payload.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
 fn analysis_error_response(error: &anyhow::Error) -> Response {
     let (status, message) = classify_analysis_error(error.root_cause().to_string().as_str());
     let detail = format!("{error:#}");
@@ -52,6 +63,8 @@ fn classify_analysis_error(message: &str) -> (StatusCode, String) {
         || normalized.contains("file count limit exceeded")
     {
         StatusCode::UNPROCESSABLE_ENTITY
+    } else if normalized.contains("panicked") {
+        StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };
@@ -366,11 +379,18 @@ async fn analyze_inner(
             cancellation: Some(cancellation_for_task),
             ..AnalysisOptions::default()
         };
-        let result = analyze_file(&path, &opts);
+        let result =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| analyze_file(&path, &opts)));
         if should_clear_caches {
             crate::clear_all_thread_caches();
         }
-        result
+        match result {
+            Ok(r) => r,
+            Err(payload) => Err(anyhow::anyhow!(
+                "analysis panicked: {}",
+                panic_payload_message(&payload)
+            )),
+        }
     });
 
     let result = tokio::select! {
@@ -480,14 +500,19 @@ async fn analyze_inner(
             analysis_error_response(&e)
         }
         Some(Err(e)) => {
-            if e.is_panic() {
-                error!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis panicked (possible stng panic on malformed input)");
+            let detail = if e.is_panic() {
+                let msg = e.into_panic();
+                let msg = panic_payload_message(&msg);
+                error!(filename = %filename, elapsed_ms = elapsed_ms, panic = %msg, "Analysis panicked");
+                format!("analysis panicked: {msg}")
             } else {
-                warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
-            }
+                let msg = format!("{e:?}");
+                warn!(filename = %filename, elapsed_ms = elapsed_ms, "Task join error: {msg}");
+                format!("task join error: {msg}")
+            };
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
+                Json(serde_json::json!({"error": detail})),
             )
                 .into_response()
         }
@@ -732,14 +757,22 @@ async fn analyze_path_inner(
             opts.sample_extraction = Some(crate::SampleExtractionConfig::new(dir));
         }
         opts.cancellation = Some(cancellation_for_task);
-        let result = analyze_file(&path_owned, &opts);
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            analyze_file(&path_owned, &opts)
+        }));
         // Periodically clear thread-local caches to prevent unbounded memory growth.
         // Done every 50 requests rather than every request to avoid rayon::broadcast
         // contention under concurrent load.
         if should_clear_caches {
             crate::clear_all_thread_caches();
         }
-        result
+        match result {
+            Ok(r) => r,
+            Err(payload) => Err(anyhow::anyhow!(
+                "analysis panicked: {}",
+                panic_payload_message(&payload)
+            )),
+        }
     });
 
     let result = tokio::select! {
@@ -858,14 +891,19 @@ async fn analyze_path_inner(
             analysis_error_response(&e)
         }
         Some(Err(e)) => {
-            if e.is_panic() {
-                error!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis panicked (possible stng panic on malformed input)");
+            let detail = if e.is_panic() {
+                let msg = e.into_panic();
+                let msg = panic_payload_message(&msg);
+                error!(path = %path_str, elapsed_ms = elapsed_ms, panic = %msg, "Analysis panicked");
+                format!("analysis panicked: {msg}")
             } else {
-                warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {:?}", e);
-            }
+                let msg = format!("{e:?}");
+                warn!(path = %path_str, elapsed_ms = elapsed_ms, "Task join error: {msg}");
+                format!("task join error: {msg}")
+            };
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Internal error"})),
+                Json(serde_json::json!({"error": detail})),
             )
                 .into_response()
         }

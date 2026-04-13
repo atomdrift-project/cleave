@@ -47,9 +47,9 @@ use tracing::{debug, trace, warn};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-/// Default timeout for rizin subprocess execution (480 seconds / 8 minutes).
+/// Default timeout for rizin subprocess execution (900 seconds / 15 minutes).
 /// This prevents hung processes from accumulating during archive analysis.
-const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 480;
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 900;
 
 /// Global disable counter for radare2 analysis.
 ///
@@ -685,7 +685,8 @@ impl Radare2Analyzer {
                     warn!(
                         path = %file_path.display(),
                         mode = mode.label(),
-                        "Rizin analysis timed out after 60s; continuing without batched rizin data"
+                        timeout_secs = timeout.as_secs(),
+                        "Rizin analysis timed out; continuing without batched rizin data"
                     );
                     // Return result with timed_out flag set - consumers can add finding
                     return Ok(BatchedAnalysis {

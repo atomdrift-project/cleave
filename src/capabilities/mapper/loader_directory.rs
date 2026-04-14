@@ -36,7 +36,8 @@ use crate::capabilities::validation::{
     find_string_literal_should_use_text, find_string_pattern_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms,
+    find_broad_filetype_traits, find_broad_platform_traits,
+    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
     validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
@@ -1910,57 +1911,71 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate all atomic traits have specific file type filters (not just `all`)
-            tracing::trace!("Checking all tiers for over-broad file type filters");
-            let wk_unscoped_ft =
-                find_wellknown_unscoped_filetypes(&trait_definitions, &rule_source_files);
-            if !wk_unscoped_ft.is_empty() {
+            // Validate: traits with 4+ effective platforms must be in an allowlisted directory
+            tracing::trace!("Checking for over-broad platform scope (4+ effective platforms)");
+            let broad_plat =
+                find_broad_platform_traits(&trait_definitions, &rule_source_files);
+            if !broad_plat.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} traits use over-broad file type filter (for: all)",
-                    wk_unscoped_ft.len()
+                    "\n❌ ERROR: {} traits target {} or more platforms",
+                    broad_plat.len(),
+                    4
                 );
-                eprintln!("   All traits must target specific file types (e.g., pe, elf, python):\n");
-                for (trait_id, source_file) in &wk_unscoped_ft {
-                    let line_hint = find_line_number(source_file, "for:");
+                eprintln!("   Narrow the platform scope or move to an allowlisted directory:");
+                for prefix in BROAD_PLATFORM_ALLOWLIST {
+                    eprintln!("     {prefix}");
+                }
+                eprintln!();
+                for (trait_id, source_file, count) in &broad_plat {
+                    let line_hint = find_line_number(source_file, "platforms:");
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: Trait '{}'", source_file, line, trait_id);
+                        eprintln!("   {}:{}: '{}' ({} platforms)", source_file, line, trait_id, count);
                     } else {
-                        eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                        eprintln!("   {}: '{}' ({} platforms)", source_file, trait_id, count);
                     }
                 }
-                eprintln!(
-                    "\n   Add a specific 'for:' field, e.g., 'for: [pe]' or 'for: [elf, macho]'."
-                );
+                eprintln!();
                 warnings.push(format!(
-                    "{} traits use over-broad file type filter (add specific 'for:' field)",
-                    wk_unscoped_ft.len()
+                    "{} traits target 4+ platforms (narrow scope or move to allowlisted directory)",
+                    broad_plat.len()
                 ));
                 has_fatal_errors = true;
             }
 
-            // Validate well-known/ atomic traits have specific platform filters (not just `all`)
-            tracing::trace!("Checking well-known/ for over-broad platform filters");
-            let wk_unscoped_plat =
-                find_wellknown_unscoped_platforms(&trait_definitions, &rule_source_files);
-            if !wk_unscoped_plat.is_empty() {
+            // Validate: traits with 6+ effective file types must be in an allowlisted directory
+            tracing::trace!("Checking for over-broad file type scope (6+ effective types)");
+            let broad_ft =
+                find_broad_filetype_traits(&trait_definitions, &rule_source_files);
+            if !broad_ft.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} well-known/ traits use over-broad platform filter (platforms: all)",
-                    wk_unscoped_plat.len()
+                    "\n❌ ERROR: {} traits target {} or more file types",
+                    broad_ft.len(),
+                    10
                 );
-                eprintln!("   well-known/ traits must target specific platforms (e.g., windows, linux, macos):\n");
-                for (trait_id, source_file) in &wk_unscoped_plat {
-                    let line_hint = find_line_number(source_file, "platforms:");
-                    if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: Trait '{}'", source_file, line, trait_id);
+                eprintln!("   Narrow the file type scope or move to an allowlisted directory:");
+                for prefix in BROAD_FILETYPE_ALLOWLIST {
+                    eprintln!("     {prefix}");
+                }
+                eprintln!();
+                for (trait_id, source_file, count) in &broad_ft {
+                    let line_hint = find_line_number(source_file, "for:");
+                    let count_str = if *count == usize::MAX {
+                        "all".to_string()
                     } else {
-                        eprintln!("   {}: Trait '{}'", source_file, trait_id);
+                        count.to_string()
+                    };
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}' ({} types)", source_file, line, trait_id, count_str);
+                    } else {
+                        eprintln!("   {}: '{}' ({} types)", source_file, trait_id, count_str);
                     }
                 }
-                eprintln!("\n   Add a specific 'platforms:' field, e.g., 'platforms: [windows]' or 'platforms: [linux, macos]'.");
+                eprintln!();
                 warnings.push(format!(
-                    "{} well-known/ traits use over-broad platform filter (add specific 'platforms:' field)",
-                    wk_unscoped_plat.len()
+                    "{} traits target 6+ file types (narrow scope or move to allowlisted directory)",
+                    broad_ft.len()
                 ));
+                has_fatal_errors = true;
             }
 
             // Validate well-known/ atomic traits have file size bounds

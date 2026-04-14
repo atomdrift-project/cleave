@@ -126,7 +126,8 @@ pub(crate) use taxonomy::{
     find_parent_duplicate_segments, find_platform_named_directories,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_wellknown_unscoped_filetypes, find_wellknown_unscoped_platforms, MAX_TRAITS_PER_DIRECTORY,
+    find_broad_filetype_traits, find_broad_platform_traits,
+    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
 };
 
 // Logic constraint validation

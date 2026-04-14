@@ -589,9 +589,15 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     let has_unix = platforms
         .iter()
         .any(|p| matches!(p, Platform::Linux | Platform::Unix | Platform::Android));
+    let has_linux_unix = platforms
+        .iter()
+        .any(|p| matches!(p, Platform::Linux | Platform::Unix));
+    let has_macos = platforms.contains(&Platform::MacOS);
     let has_apple = platforms
         .iter()
         .any(|p| matches!(p, Platform::MacOS | Platform::Ios));
+    // True when the platform set includes at least one desktop/server OS
+    let has_desktop = has_windows || has_linux_unix || has_macos;
 
     if from_groups {
         // Silently filter incompatible types from group expansions
@@ -601,7 +607,30 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf => has_unix,
                 RuleFileType::Macho => has_apple,
                 RuleFileType::Shell => has_unix || has_apple,
-                _ => true, // Platform-agnostic types (Python, JavaScript, etc.) always kept
+                RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
+                    has_apple
+                }
+                RuleFileType::PowerShell => has_windows,
+                RuleFileType::Perl => has_linux_unix,
+                // Server/desktop-only languages — not meaningful on mobile-only targets
+                RuleFileType::Python
+                | RuleFileType::Pyc
+                | RuleFileType::Ruby
+                | RuleFileType::Php
+                | RuleFileType::Groovy
+                | RuleFileType::Elixir
+                | RuleFileType::Scala => has_desktop,
+                // Windows-specific formats
+                RuleFileType::Lnk | RuleFileType::Nupkg => has_windows,
+                // Apple-specific formats
+                RuleFileType::Plist | RuleFileType::Ipa => has_apple,
+                // Linux/Unix-specific formats (systemd, deb, rpm)
+                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
+                    has_linux_unix
+                }
+                // Android or Linux (apk is both Android packages and Alpine/Wolfi packages)
+                RuleFileType::Apk => has_unix,
+                _ => true,
             }
         });
     } else {
@@ -616,6 +645,24 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Shell => {
                     (has_unix || has_apple, "linux, unix, macos, android, or ios")
                 }
+                RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
+                    (has_apple, "macos or ios")
+                }
+                RuleFileType::PowerShell => (has_windows, "windows"),
+                RuleFileType::Perl => (has_linux_unix, "linux or unix"),
+                RuleFileType::Python
+                | RuleFileType::Pyc
+                | RuleFileType::Ruby
+                | RuleFileType::Php
+                | RuleFileType::Groovy
+                | RuleFileType::Elixir
+                | RuleFileType::Scala => (has_desktop, "linux, unix, macos, or windows"),
+                RuleFileType::Lnk | RuleFileType::Nupkg => (has_windows, "windows"),
+                RuleFileType::Plist | RuleFileType::Ipa => (has_apple, "macos or ios"),
+                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
+                    (has_linux_unix, "linux or unix")
+                }
+                RuleFileType::Apk => (has_unix, "linux, unix, or android"),
                 _ => continue,
             };
             if !supported {

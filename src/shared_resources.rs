@@ -17,15 +17,6 @@ fn skip_traits_requested() -> bool {
 static CAPABILITY_MAPPER: parking_lot::RwLock<Option<Arc<CapabilityMapper>>> =
     parking_lot::RwLock::new(None);
 
-/// Serializes first-time initialization of CAPABILITY_MAPPER.
-///
-/// The build itself (loading thousands of YAML files via rayon) must happen with NO locks held,
-/// because rayon work-steals other analysis tasks that call capability_mapper() and attempt a
-/// read lock — deadlocking against any write lock held during the build.
-/// This Mutex ensures only one thread does the expensive build at a time, while the RwLock
-/// write is held only for the brief swap-in.
-static CAPABILITY_MAPPER_INIT: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-
 /// Global lazy-loaded YARA engine (with third-party rules enabled)
 static YARA_ENGINE_WITH_THIRD_PARTY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 
@@ -80,7 +71,7 @@ pub(crate) fn capability_mapper_stats() -> Option<(usize, usize)> {
 
 /// Get or initialize the global CapabilityMapper
 pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
-    // Fast path: read lock only.
+    // Fast path: already initialized.
     {
         let guard = CAPABILITY_MAPPER.read();
         if let Some(ref mapper) = *guard {
@@ -88,32 +79,28 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
         }
     }
 
-    // Slow path: serialize initialization via a dedicated Mutex so that only one thread
-    // runs the expensive build at a time. The RwLock write is held only for the brief swap-in.
+    // Slow path: build the mapper with NO locks held.
     //
-    // IMPORTANT: we must NOT hold the RwLock write lock during CapabilityMapper::try_new(),
-    // because that builder uses rayon parallel iteration. Rayon work-steals other analysis
-    // tasks that call capability_mapper() and attempt a read lock — deadlocking against any
-    // write lock held during the build.
+    // CapabilityMapper::try_new() uses rayon parallel iteration internally. Rayon
+    // work-steals freely across the thread pool, so a rayon worker executing our
+    // parallel YAML load may also steal an unrelated analysis task that calls
+    // capability_mapper() — re-entering this function on the same thread. Any lock
+    // held across try_new() would therefore deadlock against itself.
+    //
+    // The solution: build with no locks at all. Multiple threads may build concurrently
+    // on first startup (wasteful but correct). The write lock is held only for the
+    // brief check-and-swap; the first writer wins and all others discard their copy.
     tracing::debug!(
         on_rayon_thread = rayon::current_thread_index().is_some(),
-        "CapabilityMapper not yet initialized; acquiring init lock"
+        "CapabilityMapper not yet initialized; building (no lock held)"
     );
-    let _init_guard = CAPABILITY_MAPPER_INIT.lock();
-
-    // Double-check: another thread may have finished while we waited for the init lock.
-    {
-        let guard = CAPABILITY_MAPPER.read();
-        if let Some(ref mapper) = *guard {
-            return Ok(mapper.clone());
-        }
-    }
-
-    tracing::debug!("Initializing global CapabilityMapper");
     let mapper = Arc::new(CapabilityMapper::try_new()?);
 
-    // Write lock only for the swap — held for microseconds, no rayon work inside.
     let mut guard = CAPABILITY_MAPPER.write();
+    if let Some(ref existing) = *guard {
+        // Another thread finished first; use their mapper.
+        return Ok(existing.clone());
+    }
     *guard = Some(mapper.clone());
     Ok(mapper)
 }

@@ -60,28 +60,11 @@ static RADARE2_DISABLED: AtomicUsize = AtomicUsize::new(0);
 /// Cached result of radare2 availability check (avoids subprocess per file)
 static RADARE2_AVAILABLE: OnceLock<bool> = OnceLock::new();
 
-/// Sync semaphore to limit concurrent rizin subprocesses (avoids kernel fork/exec thrashing)
-static RIZIN_CONCURRENCY_LIMIT: OnceLock<(parking_lot::Mutex<usize>, parking_lot::Condvar)> =
-    OnceLock::new();
-
 /// Statistics for rizin subprocess execution
 static RIZIN_TOTAL_CALLS: AtomicU64 = AtomicU64::new(0);
 static RIZIN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static RIZIN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static RIZIN_SUCCESSES: AtomicU64 = AtomicU64::new(0);
-
-/// Semaphore permit guard to ensure release on drop
-struct RizinPermitGuard;
-
-impl Drop for RizinPermitGuard {
-    fn drop(&mut self) {
-        if let Some((lock, cvar)) = RIZIN_CONCURRENCY_LIMIT.get() {
-            let mut count = lock.lock();
-            *count += 1;
-            cvar.notify_one();
-        }
-    }
-}
 
 /// Disable radare2 analysis globally
 #[allow(dead_code)] // Used by the CLI binary target for process-wide disables
@@ -158,51 +141,6 @@ fn execute_rizin_with_timeout(
 ) -> Result<std::process::Output> {
     use std::io::Read;
     use std::sync::mpsc;
-
-    // Acquire concurrency permit (blocks rayon thread if limit reached)
-    let (lock, cvar) = RIZIN_CONCURRENCY_LIMIT.get_or_init(|| {
-        let max = std::env::var("CLEAVE_RIZIN_CONCURRENCY")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(8);
-        (parking_lot::Mutex::new(max), parking_lot::Condvar::new())
-    });
-
-    {
-        let mut count = lock.lock();
-        // If all permits are taken, every waiting rayon thread is blocked here. With the
-        // default limit of 8 rizin permits and a typical rayon pool of N threads, all N
-        // threads can pile up here while a slow rizin run holds the last permit. This is
-        // not a deadlock (rayon can steal work from blocked threads via work-stealing) but
-        // it is a starvation point: new par_iter tasks submitted from the blocked threads
-        // cannot start until a permit is released, causing the 2+ min stalls seen on large ELF/PE.
-        if *count == 0 {
-            let on_rayon = rayon::current_thread_index().is_some();
-            tracing::warn!(
-                on_rayon_thread = on_rayon,
-                "Rizin semaphore exhausted — thread blocking until a permit is released; \
-                 if all rayon workers are blocked here a CLEAVE_RIZIN_CONCURRENCY increase may help"
-            );
-        }
-        while *count == 0 {
-            // Periodically check for cancellation while waiting for the permit
-            if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
-                return Err(anyhow::anyhow!(
-                    "Rizin execution cancelled while waiting for permit"
-                ));
-            }
-            if cvar
-                .wait_for(&mut count, Duration::from_millis(250))
-                .timed_out()
-            {
-                continue;
-            }
-        }
-        *count -= 1;
-    }
-
-    // Ensure permit is released even on error/panic
-    let _permit_guard = RizinPermitGuard;
 
     // Final check before spawning
     if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {

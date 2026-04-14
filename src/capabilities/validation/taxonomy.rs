@@ -1137,40 +1137,70 @@ fn extract_trait_tier(id: &str) -> &str {
     base.find('/').map_or(base, |i| &base[..i])
 }
 
-/// Trait path prefixes exempt from the universal `for:` restriction.
-///
-/// These directories do intentional cross-file-type plain-text matching where
-/// restricting to a specific file type would cause missed detections.
-const UNSCOPED_FILETYPE_ALLOWLIST: &[&str] = &[
+/// Number of concrete platform variants (excludes Platform::All).
+const CONCRETE_PLATFORM_COUNT: usize = 6; // Linux, MacOS, Windows, Unix, Android, Ios
+
+/// Effective filetype count used when `for: [all]` is set — larger than any threshold.
+const ALL_FILETYPES_COUNT: usize = usize::MAX;
+
+/// Threshold for flagging a trait as having too many effective platforms.
+const BROAD_PLATFORM_THRESHOLD: usize = 4;
+
+/// Threshold for flagging a trait as having too many effective file types.
+const BROAD_FILETYPE_THRESHOLD: usize = 10;
+
+/// Trait path prefixes where 4+ effective platforms are permitted.
+pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
+    "objectives/supply-chain/",
     "micro-behaviors/data/text/",
 ];
 
-/// Find atomic traits across all tiers that use `for: [all]` (over-broad file type filter).
+/// Trait path prefixes where 6+ effective file types are permitted.
+pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    "micro-behaviors/data/text/",
+];
+
+/// Returns the effective platform count for a trait.
+/// `Platform::All` expands to all 6 concrete platforms.
+fn effective_platform_count(platforms: &[Platform]) -> usize {
+    if platforms.contains(&Platform::All) {
+        CONCRETE_PLATFORM_COUNT
+    } else {
+        platforms.len()
+    }
+}
+
+/// Returns the effective file type count for a trait.
+/// `FileType::All` is treated as the maximum possible count.
+/// Named groups are already expanded in `t.r#for`, so `len()` gives the real count.
+fn effective_filetype_count(t: &TraitDefinition) -> usize {
+    if t.r#for.contains(&FileType::All) {
+        ALL_FILETYPES_COUNT
+    } else {
+        t.r#for.len()
+    }
+}
+
+/// Find atomic traits with 4+ effective platforms outside the broad-platform allowlist.
 ///
-/// Every atomic trait must target a specific file type (e.g. `pe`, `elf`, `python`).
-/// Using the default `all` causes the trait to run against every analyzed file,
-/// wasting CPU and increasing false-positive risk.
+/// `Platform::All` counts as all 6 concrete platforms. Traits must be in an allowlisted
+/// directory to use 4+ platforms; otherwise they should target a narrower platform set.
 ///
-/// Paths in `UNSCOPED_FILETYPE_ALLOWLIST` are exempt — they perform intentional
-/// cross-file-type plain-text matching.
-///
-/// Returns `Vec<(trait_id, source_file)>` for violations.
+/// Returns `Vec<(trait_id, source_file, platform_count)>` for violations.
 #[must_use]
-pub(crate) fn find_wellknown_unscoped_filetypes(
+pub(crate) fn find_broad_platform_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, usize)> {
     trait_definitions
         .iter()
         .filter(|t| {
-            if !t.r#for.contains(&FileType::All) {
+            let count = effective_platform_count(&t.platforms);
+            if count < BROAD_PLATFORM_THRESHOLD {
                 return false;
             }
-            let source = rule_source_files
-                .get(&t.id)
-                .map(String::as_str)
-                .unwrap_or("");
-            !UNSCOPED_FILETYPE_ALLOWLIST
+            let source = rule_source_files.get(&t.id).map(String::as_str).unwrap_or("");
+            !BROAD_PLATFORM_ALLOWLIST
                 .iter()
                 .any(|prefix| source.contains(prefix))
         })
@@ -1179,33 +1209,41 @@ pub(crate) fn find_wellknown_unscoped_filetypes(
                 .get(&t.id)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            (t.id.clone(), source)
+            (t.id.clone(), source, effective_platform_count(&t.platforms))
         })
         .collect()
 }
 
-/// Find well-known/ atomic traits that use `platforms: [all]` (over-broad platform filter).
+/// Find atomic traits with 6+ effective file types outside the broad-filetype allowlist.
 ///
-/// well-known/ traits for specific malware families should be scoped to the platforms
-/// that malware targets rather than defaulting to all platforms.
+/// `FileType::All` always exceeds the threshold. Named groups are already expanded in
+/// `t.r#for`, so their member count is used directly. Traits must be in an allowlisted
+/// directory to use 6+ file types; otherwise they should target a narrower set.
 ///
-/// Returns `Vec<(trait_id, source_file)>` for violations.
+/// Returns `Vec<(trait_id, source_file, type_count)>` for violations.
 #[must_use]
-pub(crate) fn find_wellknown_unscoped_platforms(
+pub(crate) fn find_broad_filetype_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String)> {
+) -> Vec<(String, String, usize)> {
     trait_definitions
         .iter()
         .filter(|t| {
-            extract_trait_tier(&t.id) == "well-known" && t.platforms.contains(&Platform::All)
+            let count = effective_filetype_count(t);
+            if count < BROAD_FILETYPE_THRESHOLD {
+                return false;
+            }
+            let source = rule_source_files.get(&t.id).map(String::as_str).unwrap_or("");
+            !BROAD_FILETYPE_ALLOWLIST
+                .iter()
+                .any(|prefix| source.contains(prefix))
         })
         .map(|t| {
             let source = rule_source_files
                 .get(&t.id)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            (t.id.clone(), source)
+            (t.id.clone(), source, effective_filetype_count(t))
         })
         .collect()
 }
@@ -1298,3 +1336,4 @@ pub(crate) fn find_meta_missing_section_filter(
         })
         .collect()
 }
+

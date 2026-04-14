@@ -20,6 +20,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
@@ -235,10 +236,15 @@ pub(crate) fn binary_mtime() -> Result<SystemTime> {
 /// Falls back to binary mtime only when no rule files exist at all
 /// (true production builds with embedded rules).
 pub(crate) fn cache_timestamp() -> Result<SystemTime> {
-    match most_recent_yara_mtime() {
-        Ok(mtime) => Ok(mtime),
-        Err(_) => binary_mtime(),
+    static CACHED: OnceLock<SystemTime> = OnceLock::new();
+    if let Some(&ts) = CACHED.get() {
+        return Ok(ts);
     }
+    let ts = match most_recent_yara_mtime() {
+        Ok(mtime) => mtime,
+        Err(_) => binary_mtime()?,
+    };
+    Ok(*CACHED.get_or_init(|| ts))
 }
 
 /// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.

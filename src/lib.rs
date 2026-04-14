@@ -1073,6 +1073,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
             let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
+            set_phase("macho:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_data,
@@ -1085,6 +1086,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Elf => {
             set_phase("elf:struct+yara");
+            // rayon::join here spawns struct analysis (which calls rayon::join for r2 + goblin)
+            // and YARA scan (which calls par_iter over tiers) concurrently on the global pool.
+            // When this runs inside a rayon worker (e.g., archive par_iter member analysis),
+            // both sub-tasks must steal threads from the already-saturated pool.
+            // If the pool is full, tasks queue until a worker finishes its current job.
+            // This is the mechanism behind the 2+ min ELF stalls: r2 holds a rayon thread for
+            // its entire 15-min timeout budget while YARA tasks wait for workers to free up.
+            tracing::debug!(
+                on_rayon_thread = rayon::current_thread_index().is_some(),
+                data_bytes = file_data.len(),
+                "ELF: entering rayon::join for concurrent struct+YARA analysis"
+            );
             let analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
@@ -1121,6 +1134,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+            set_phase("elf:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
@@ -1135,6 +1149,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Pe => {
             set_phase("pe:struct+yara");
+            // Same nested-rayon concern as ELF. Additionally, .bat/.ps1 files are routed here
+            // (file_types includes "bat", "ps1") and are scanned by ALL PE-tier YARA rules.
+            // A 1.4 MB .bat with no PE structure triggers the full PE rule set; the slow_rule_ms
+            // threshold only covers composite trait evaluation, not the YARA scan itself.
+            // The 321 s .bat stall was a YARA-tier scan with no per-rule timeout logging firing
+            // because slow_rule_ms does not plumb into scan_bytes_with_inline — see SLOW_YARA_TIER_WARN_MS.
+            tracing::debug!(
+                on_rayon_thread = rayon::current_thread_index().is_some(),
+                data_bytes = file_data.len(),
+                "PE: entering rayon::join for concurrent struct+YARA analysis"
+            );
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
@@ -1175,6 +1200,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+            set_phase("pe:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
@@ -1261,6 +1287,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Process encoded payloads and analyze them
     let payloads_start = std::time::Instant::now();
+    if !encoded_payloads.is_empty() {
+        set_phase("payloads");
+    }
     for payload in encoded_payloads {
         if options
             .cancellation

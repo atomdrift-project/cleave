@@ -989,7 +989,18 @@ impl ArchiveAnalyzer {
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
         let mut files_analyzed: usize = 0;
 
-        // Analyze files in parallel — no shared Mutexes
+        // Analyze files in parallel — no shared Mutexes.
+        // NOTE: This par_iter runs on the global rayon pool. Each closure calls
+        // analyze_extracted_member → analyze_bytes_internal → rayon::join (struct+YARA) and
+        // scan_bytes_with_inline → par_iter (YARA tiers). Nested rayon is safe via work-stealing
+        // but saturates the pool: if the pool has N threads and there are N archive members, all
+        // N are consumed here and the inner rayon::join calls must wait for a stolen slot.
+        // This is the primary cause of >2 min stalls on large archives with many ELF/PE members.
+        tracing::debug!(
+            file_count = total_files,
+            on_rayon_thread = rayon::current_thread_index().is_some(),
+            "Starting parallel archive member analysis (nested rayon — pool saturation possible)"
+        );
         let generic_results: Vec<MemberAnalysisResult> = files
             .par_iter()
             .filter_map(|entry| {

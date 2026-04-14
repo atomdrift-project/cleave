@@ -631,8 +631,23 @@ impl YaraEngine {
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();
 
+        // Warn threshold: a single YARA tier taking >30 s is beyond "large file, expected slow"
+        // and enters "likely stuck in a pathological regex" territory. The 321 s .bat case fires
+        // here per offending tier, making it possible to attribute time without per-rule tracing.
+        const SLOW_YARA_TIER_WARN_MS: u64 = 30_000;
+
         for (tier, elapsed_ms, result) in all_raw {
-            tracing::debug!(tier = tier.label(), elapsed_ms, "YARA tier scan finished");
+            if elapsed_ms >= SLOW_YARA_TIER_WARN_MS {
+                tracing::warn!(
+                    tier = tier.label(),
+                    elapsed_ms,
+                    data_bytes = data.len(),
+                    "YARA tier scan exceeded slow threshold; \
+                     set CLEAVE_BUILTIN_YARA_ONLY=1 to isolate third-party rules"
+                );
+            } else {
+                tracing::debug!(tier = tier.label(), elapsed_ms, "YARA tier scan finished");
+            }
             let raw_rules = match result {
                 Ok(rules) => rules,
                 Err(e) => {
@@ -800,6 +815,32 @@ impl YaraEngine {
                     }
                 };
             let scan_elapsed = scan_start.elapsed();
+
+            // Log any rule that exceeded 1s using yara-x built-in profiling
+            // (rules-profiling feature is always enabled in Cargo.toml).
+            if raw_rules_result.is_ok() {
+                for pd in scanner.slowest_rules(20) {
+                    let condition_ms = pd.condition_exec_time.as_millis() as u64;
+                    let pattern_ms = pd.pattern_matching_time.as_millis() as u64;
+                    if condition_ms + pattern_ms >= 1_000 {
+                        let trait_id =
+                            crate::third_party_yara::derive_trait_id(pd.namespace, pd.rule, None);
+                        let disable_snippet = format!(
+                            "- id: {trait_id}\n  disable: true\n  reason: \"Slow rule ({}ms)\"",
+                            condition_ms + pattern_ms
+                        );
+                        tracing::warn!(
+                            rule = pd.rule,
+                            namespace = pd.namespace,
+                            condition_ms,
+                            pattern_ms,
+                            disable_snippet,
+                            "Slow YARA rule",
+                        );
+                    }
+                }
+                scanner.clear_profiling_data();
+            }
 
             // Scanner/ScanResults borrow is now released. Evict the cached
             // scanner if the scan failed or took unreasonably long — yara-x may
@@ -3017,6 +3058,7 @@ rule DisableMe {
                     "js" | "ts" | "script-js" => YaraTier::ScriptJs,
                     "script" => YaraTier::Script,
                     "doc" => YaraTier::Doc,
+                    "archive" => YaraTier::Archive,
                     "generic" => YaraTier::CrossFormat,
                     other => {
                         failures.push(format!(
@@ -3314,7 +3356,7 @@ rule demo_inline_archive_rule {
                 "inline.demo-inline",
                 &["jar".to_string(), "zip".to_string()]
             ),
-            vec![YaraTier::Script, YaraTier::Doc]
+            vec![YaraTier::Archive]
         );
         assert_eq!(
             YaraEngine::classify_inline_trait_yara_tiers(

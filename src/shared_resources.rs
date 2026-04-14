@@ -78,7 +78,17 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
             return Ok(mapper.clone());
         }
     }
-    // Slow path: write lock + init
+    // Slow path: write lock + init.
+    // parking_lot::RwLock write() blocks all readers and all other writers. When multiple
+    // rayon threads simultaneously call analyze_bytes for the very first file after startup,
+    // every thread that loses the read-check above will queue here. The first one initializes
+    // (potentially loading thousands of trait YAML files), and the rest wait. This is correct
+    // double-checked locking, but the wait can be several seconds if traits are uncached.
+    // If you see a cluster of threads all blocked here at startup, that is expected — not a deadlock.
+    tracing::debug!(
+        on_rayon_thread = rayon::current_thread_index().is_some(),
+        "CapabilityMapper not yet initialized; acquiring write lock to initialize"
+    );
     let mut guard = CAPABILITY_MAPPER.write();
     if let Some(ref mapper) = *guard {
         return Ok(mapper.clone());
@@ -162,6 +172,21 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
     } else {
         &YARA_ENGINE_BUILTIN_ONLY
     };
+
+    // OnceLock::get_or_init blocks all concurrent callers on a single internal Mutex until
+    // the first initializer completes. When multiple rayon threads reach analyze_bytes for the
+    // first time simultaneously, they all converge here. The winner compiles YARA rules (30-60s
+    // on first run without cache); every other thread is parked inside the stdlib OnceLock.
+    // This is *not* a deadlock — rayon's work-stealing still services other tasks — but all
+    // analysis threads are stalled until compilation finishes.
+    if lock.get().is_none() {
+        tracing::warn!(
+            enable_third_party,
+            on_rayon_thread = rayon::current_thread_index().is_some(),
+            "YARA engine not yet initialized; this thread will block until compilation completes \
+             (30-60s on first run without cache). Other threads contending on OnceLock are parked."
+        );
+    }
 
     lock.get_or_init(|| {
         tracing::debug!(

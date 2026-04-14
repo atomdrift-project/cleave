@@ -28,6 +28,8 @@ pub enum YaraTier {
     Script,
     /// Document and container format rules.
     Doc,
+    /// Archive and package format rules (zip, jar, apk, iso, tar, rar, etc.).
+    Archive,
     /// Residual unclassified third-party rules that still need audit.
     Unknown,
 }
@@ -43,6 +45,7 @@ impl YaraTier {
         Self::ScriptJs,
         Self::Script,
         Self::Doc,
+        Self::Archive,
         Self::Unknown,
     ];
 
@@ -58,16 +61,18 @@ impl YaraTier {
                     return Self::ScriptJs;
                 }
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "php" | "rb" | "pl" | "pm" | "lua"
-                | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba" | "java" | "jar"
-                | "class" | "jsp" | "aspx" | "asp" | "apk" | "dex" | "hta" | "au3" | "sct"
+                | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba"
+                | "jsp" | "aspx" | "asp" | "hta" | "au3" | "sct"
                 | "wsf" | "awk" | "tcl" => {
                     return Self::Script;
                 }
+                "jar" | "class" | "java" | "apk" | "dex" | "zip" | "iso" | "img" | "cab"
+                | "msi" | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar"
+                | "vhd" | "vmdk" => return Self::Archive,
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                | "msg" | "lnk" | "rdp" | "zip" | "iso" | "img" | "one" | "onepkg" | "msi"
-                | "cab" | "txt" | "text" | "log" | "xml" | "json" | "ini" | "cfg" | "conf"
-                | "ovpn" | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar"
-                | "vhd" | "vmdk" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
+                | "msg" | "lnk" | "rdp" | "one" | "onepkg"
+                | "txt" | "text" | "log" | "xml" | "json" | "ini" | "cfg" | "conf"
+                | "ovpn" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
                 _ => {}
             }
         }
@@ -123,6 +128,7 @@ impl YaraTier {
             Self::ScriptJs => "script-js",
             Self::Script => "script",
             Self::Doc => "doc",
+            Self::Archive => "archive",
             Self::Unknown => "unknown",
         }
     }
@@ -226,7 +232,16 @@ impl YaraTier {
             return Self::MachO;
         }
 
-        // 3. Magic byte patterns
+        // 3. Infer from rule name — checked before magic so that an explicit name
+        //    like "Java_ClassFile_Dropper" resolves to Archive rather than being
+        //    overridden by the ambiguous 0xcafebabe magic (shared by Java class
+        //    files and Mach-O fat binaries).
+        let inferred = infer_filetypes(rule_name, os_meta.as_deref());
+        if let Some(tier) = classify_rule_filetypes(&inferred) {
+            return tier;
+        }
+
+        // 4. Magic byte patterns — fallback when the rule name gives no signal.
         if let Some(ft) = filetype_from_magic(&lower) {
             let tier = Self::from_filetypes(&[ft]);
             if tier != Self::Unknown {
@@ -239,19 +254,13 @@ impl YaraTier {
             return Self::Script;
         }
 
-        // 3a. Explicit raw/blob rules should not be forced into PE/ELF/Mach-O.
+        // 4a. Explicit raw/blob rules should not be forced into PE/ELF/Mach-O.
         if is_explicit_raw_blob_rule(rule_name, &lower) {
             return Self::Raw;
         }
 
-        // 4. Content-based scoring
+        // 5. Content-based scoring
         if let Some(tier) = classify_by_content(rule_name, &lower) {
-            return tier;
-        }
-
-        // 5. Infer from rule name
-        let inferred = infer_filetypes(rule_name, os_meta.as_deref());
-        if let Some(tier) = classify_rule_filetypes(&inferred) {
             return tier;
         }
 
@@ -856,7 +865,6 @@ mod indicators {
         "_docm",
         "_docx_",
         "_xlsm",
-        "_msi_",
         "onenote",
         "htmlsmuggling",
         "phishing_page",
@@ -874,17 +882,30 @@ mod indicators {
         "_output",
         "_outputs",
         "_msg_",
+    ];
+
+    pub(super) const ARCHIVE_NAME: &[&str] = &[
+        "_zip_",
+        "_zpaq",
         "_cab_",
         "_iso_",
         "_img_",
-        "_zip_",
-        "_zpaq",
+        "_msi_",
+        "_jar_",
+        "_apk_",
+        "_dex_",
+        "_rar_",
+        "_7z_",
+        "_tar_",
+        "_gzip_",
+        "_vhd_",
+        "_vmdk_",
     ];
 }
 
 fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
     let name_lower = rule_name.to_ascii_lowercase();
-    let mut s = [0u32; 6];
+    let mut s = [0u32; 7];
 
     let description = body_lower
         .lines()
@@ -1013,6 +1034,11 @@ fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
             s[5] += 1;
         }
     }
+    for &ind in indicators::ARCHIVE_NAME {
+        if name_lower.contains(ind) {
+            s[6] += 1;
+        }
+    }
 
     let tiers = [
         YaraTier::Pe,
@@ -1021,6 +1047,7 @@ fn classify_by_content(rule_name: &str, body_lower: &str) -> Option<YaraTier> {
         YaraTier::ScriptJs,
         YaraTier::Script,
         YaraTier::Doc,
+        YaraTier::Archive,
     ];
 
     let (max_idx, &max_score) = s.iter().enumerate().max_by_key(|(_, v)| *v)?;
@@ -1204,7 +1231,7 @@ pub fn infer_filetypes(rule_name: &str, os_meta: Option<&str>) -> Vec<&'static s
         return specific_types;
     }
 
-    let specific_types = script_filetypes_from_rule_name(rule_name);
+    let specific_types = platform_filetypes_from_rule_name(rule_name);
     if !specific_types.is_empty() {
         return specific_types;
     }
@@ -1224,14 +1251,14 @@ pub fn infer_filetypes_from_metadata_text(text: &str) -> Vec<&'static str> {
     if !doc_types.is_empty() {
         return doc_types;
     }
-    let script_types = script_filetypes_from_text(text);
+    let script_types = platform_filetypes_from_text(text);
     if !script_types.is_empty() {
         return script_types;
     }
     infer_binary_filetypes_from_name_and_os(text, None)
 }
 
-fn script_filetypes_from_text_inner(
+fn platform_filetypes_from_text_inner(
     text: &str,
     shell_tokens_imply_script: bool,
 ) -> Vec<&'static str> {
@@ -1690,19 +1717,20 @@ pub fn doc_filetypes_from_text(text: &str) -> Vec<&'static str> {
     vec![]
 }
 
-/// Infer filetype constraints from scripting language signals in free-form text.
+/// Infer filetype constraints from scripting language and JVM/Android platform
+/// signals in free-form text.
 #[must_use]
-pub fn script_filetypes_from_text(text: &str) -> Vec<&'static str> {
-    script_filetypes_from_text_inner(text, false)
+pub fn platform_filetypes_from_text(text: &str) -> Vec<&'static str> {
+    platform_filetypes_from_text_inner(text, false)
 }
 
-/// Infer script filetypes from rule names.
+/// Infer platform filetypes from rule names.
 ///
 /// Rule names intentionally use stronger shorthand than metadata prose, so
 /// tokens like `Bash` or `Shell` are treated as script-specific here.
 #[must_use]
-pub fn script_filetypes_from_rule_name(text: &str) -> Vec<&'static str> {
-    script_filetypes_from_text_inner(text, true)
+pub fn platform_filetypes_from_rule_name(text: &str) -> Vec<&'static str> {
+    platform_filetypes_from_text_inner(text, true)
 }
 
 #[cfg(test)]
@@ -2272,7 +2300,7 @@ rule VOLEXITY_Susp_Php_Fileinput_Eval : FILE
         );
         assert_eq!(
             YaraTier::scan_order(Some(&["jar", "zip"])),
-            vec![YaraTier::Script, YaraTier::Doc, YaraTier::CrossFormat]
+            vec![YaraTier::Archive, YaraTier::CrossFormat]
         );
         assert_eq!(
             YaraTier::scan_order(None),
@@ -2309,8 +2337,8 @@ rule opaque_family_name {
 
     #[test]
     fn test_additional_filetype_aliases_and_name_heuristics() {
-        assert_eq!(YaraTier::from_filetypes(&["apk"]), YaraTier::Script);
-        assert_eq!(YaraTier::from_filetypes(&["vhd"]), YaraTier::Doc);
+        assert_eq!(YaraTier::from_filetypes(&["apk"]), YaraTier::Archive);
+        assert_eq!(YaraTier::from_filetypes(&["vhd"]), YaraTier::Archive);
         assert_eq!(YaraTier::from_filetypes(&["mach"]), YaraTier::MachO);
         assert_eq!(YaraTier::from_filetypes(&["hta"]), YaraTier::Script);
         assert_eq!(YaraTier::from_filetypes(&["au3"]), YaraTier::Script);
@@ -2412,7 +2440,7 @@ rule SEKOIA_Apt_Yemen_Apk_Guardzoo : FILE
 "#;
         assert_eq!(
             YaraTier::classify_rule("SEKOIA_Apt_Yemen_Apk_Guardzoo", apk_rule, "3p.test.android"),
-            YaraTier::Script
+            YaraTier::Archive
         );
 
         let vhd_rule = r#"
@@ -2430,7 +2458,7 @@ rule ARKBIRD_SOLG_APT_APT28_VHD_Nov_2020_1 : FILE
                 vhd_rule,
                 "3p.test.container"
             ),
-            YaraTier::Doc
+            YaraTier::Archive
         );
 
         let broad_rule = r#"

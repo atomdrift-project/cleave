@@ -170,6 +170,20 @@ fn execute_rizin_with_timeout(
 
     {
         let mut count = lock.lock();
+        // If all permits are taken, every waiting rayon thread is blocked here. With the
+        // default limit of 8 rizin permits and a typical rayon pool of N threads, all N
+        // threads can pile up here while a slow rizin run holds the last permit. This is
+        // not a deadlock (rayon can steal work from blocked threads via work-stealing) but
+        // it is a starvation point: new par_iter tasks submitted from the blocked threads
+        // cannot start until a permit is released, causing the 2+ min stalls seen on large ELF/PE.
+        if *count == 0 {
+            let on_rayon = rayon::current_thread_index().is_some();
+            tracing::warn!(
+                on_rayon_thread = on_rayon,
+                "Rizin semaphore exhausted — thread blocking until a permit is released; \
+                 if all rayon workers are blocked here a CLEAVE_RIZIN_CONCURRENCY increase may help"
+            );
+        }
         while *count == 0 {
             // Periodically check for cancellation while waiting for the permit
             if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {

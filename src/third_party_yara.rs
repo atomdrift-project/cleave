@@ -206,8 +206,8 @@ fn doc_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
 ///
 /// Returns empty vec if no scripting signal is found.
 #[cfg(test)]
-fn script_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
-    yara_classify::script_filetypes_from_rule_name(rule_name)
+fn platform_filetypes_from_rule_name(rule_name: &str) -> Vec<&'static str> {
+    yara_classify::platform_filetypes_from_rule_name(rule_name)
 }
 
 /// Log the inferred filetype association for a YARA rule at debug level.
@@ -1647,7 +1647,7 @@ rule RuleB {
     #[test]
     fn test_script_powershell_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("Win_Powershell_Obfuscation"),
+            platform_filetypes_from_rule_name("Win_Powershell_Obfuscation"),
             vec!["ps1", "psm1", "psd1"]
         );
     }
@@ -1655,7 +1655,7 @@ rule RuleB {
     #[test]
     fn test_script_python_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("CAPE_Python_Stealer"),
+            platform_filetypes_from_rule_name("CAPE_Python_Stealer"),
             vec!["py", "pyc"]
         );
     }
@@ -1663,7 +1663,7 @@ rule RuleB {
     #[test]
     fn test_script_php_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("SIGNATURE_BASE_PHP_Backdoor"),
+            platform_filetypes_from_rule_name("SIGNATURE_BASE_PHP_Backdoor"),
             vec!["php"]
         );
     }
@@ -1671,7 +1671,7 @@ rule RuleB {
     #[test]
     fn test_script_javascript_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("GCTI_Cobalt_JavaScript_Dropper"),
+            platform_filetypes_from_rule_name("GCTI_Cobalt_JavaScript_Dropper"),
             vec!["js", "mjs", "cjs"]
         );
     }
@@ -1679,7 +1679,7 @@ rule RuleB {
     #[test]
     fn test_script_vbs_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("Emotet_VBS_Dropper"),
+            platform_filetypes_from_rule_name("Emotet_VBS_Dropper"),
             vec!["vbs", "vba"]
         );
     }
@@ -1687,7 +1687,7 @@ rule RuleB {
     #[test]
     fn test_script_batch_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("Some_BAT_malware"),
+            platform_filetypes_from_rule_name("Some_BAT_malware"),
             vec!["bat", "cmd"]
         );
     }
@@ -1695,7 +1695,7 @@ rule RuleB {
     #[test]
     fn test_script_shell_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("Linux_BASH_Reverse_Shell"),
+            platform_filetypes_from_rule_name("Linux_BASH_Reverse_Shell"),
             vec!["sh", "bash", "zsh"]
         );
     }
@@ -1703,7 +1703,7 @@ rule RuleB {
     #[test]
     fn test_script_webshell_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("GCTI_Webshell_Generic"),
+            platform_filetypes_from_rule_name("GCTI_Webshell_Generic"),
             vec!["php", "jsp", "aspx", "asp"]
         );
     }
@@ -1711,15 +1711,15 @@ rule RuleB {
     #[test]
     fn test_script_java_from_rule_name() {
         assert_eq!(
-            script_filetypes_from_rule_name("Exploit_JAR_payload"),
+            platform_filetypes_from_rule_name("Exploit_JAR_payload"),
             vec!["jar", "class", "java"]
         );
     }
 
     #[test]
     fn test_script_no_match_generic() {
-        assert!(script_filetypes_from_rule_name("DarkCloud_Stealer").is_empty());
-        assert!(script_filetypes_from_rule_name("CAPE_Lummaremap").is_empty());
+        assert!(platform_filetypes_from_rule_name("DarkCloud_Stealer").is_empty());
+        assert!(platform_filetypes_from_rule_name("CAPE_Lummaremap").is_empty());
     }
 
     // ------------------------------------------------------------------

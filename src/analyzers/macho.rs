@@ -358,9 +358,9 @@ impl MachOAnalyzer {
                 self.cancellation.as_ref(),
             ) {
                 // Compute metrics from batched data (radare2-specific metrics)
-                let r2_binary_metrics = self
-                    .radare2
-                    .compute_metrics_from_batched(&batched, data.len() as u64, "macho");
+                let r2_binary_metrics =
+                    self.radare2
+                        .compute_metrics_from_batched(&batched, data.len() as u64, "macho");
 
                 // Enhance existing binary metrics with radare2 data
                 if let Some(ref mut metrics) = report.metrics {
@@ -1309,9 +1309,11 @@ impl MachOAnalyzer {
                     self.cancellation.as_ref(),
                 ) {
                     Ok(batched) => {
-                        let bm = self
-                            .radare2
-                            .compute_metrics_from_batched(&batched, data.len() as u64, "macho");
+                        let bm = self.radare2.compute_metrics_from_batched(
+                            &batched,
+                            data.len() as u64,
+                            "macho",
+                        );
                         report.functions =
                             batched.functions.into_iter().map(Function::from).collect();
                         bm

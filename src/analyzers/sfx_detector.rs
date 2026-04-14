@@ -247,7 +247,9 @@ fn analyze_dir(
         analyzer = analyzer.with_yara_arc(engine);
     }
 
-    analyzer.analyze_extracted_directory(dir, original_path).ok()
+    analyzer
+        .analyze_extracted_directory(dir, original_path)
+        .ok()
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

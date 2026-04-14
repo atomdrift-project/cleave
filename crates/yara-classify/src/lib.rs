@@ -61,18 +61,17 @@ impl YaraTier {
                     return Self::ScriptJs;
                 }
                 "sh" | "bash" | "zsh" | "py" | "pyc" | "php" | "rb" | "pl" | "pm" | "lua"
-                | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba"
-                | "jsp" | "aspx" | "asp" | "hta" | "au3" | "sct"
-                | "wsf" | "awk" | "tcl" => {
+                | "ps1" | "psm1" | "psd1" | "bat" | "cmd" | "vbs" | "vba" | "jsp" | "aspx"
+                | "asp" | "hta" | "au3" | "sct" | "wsf" | "awk" | "tcl" => {
                     return Self::Script;
                 }
                 "jar" | "class" | "java" | "apk" | "dex" | "zip" | "iso" | "img" | "cab"
-                | "msi" | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar"
-                | "vhd" | "vmdk" => return Self::Archive,
+                | "msi" | "gzip" | "gz" | "bzip2" | "bz2" | "xz" | "rar" | "7z" | "tar" | "vhd"
+                | "vmdk" => return Self::Archive,
                 "pdf" | "rtf" | "ole" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx"
-                | "msg" | "lnk" | "rdp" | "one" | "onepkg"
-                | "txt" | "text" | "log" | "xml" | "json" | "ini" | "cfg" | "conf"
-                | "ovpn" | "html" | "htm" | "svg" | "eps" | "eml" => return Self::Doc,
+                | "msg" | "lnk" | "rdp" | "one" | "onepkg" | "txt" | "text" | "log" | "xml"
+                | "json" | "ini" | "cfg" | "conf" | "ovpn" | "html" | "htm" | "svg" | "eps"
+                | "eml" => return Self::Doc,
                 _ => {}
             }
         }
@@ -885,21 +884,8 @@ mod indicators {
     ];
 
     pub(super) const ARCHIVE_NAME: &[&str] = &[
-        "_zip_",
-        "_zpaq",
-        "_cab_",
-        "_iso_",
-        "_img_",
-        "_msi_",
-        "_jar_",
-        "_apk_",
-        "_dex_",
-        "_rar_",
-        "_7z_",
-        "_tar_",
-        "_gzip_",
-        "_vhd_",
-        "_vmdk_",
+        "_zip_", "_zpaq", "_cab_", "_iso_", "_img_", "_msi_", "_jar_", "_apk_", "_dex_", "_rar_",
+        "_7z_", "_tar_", "_gzip_", "_vhd_", "_vmdk_",
     ];
 }
 

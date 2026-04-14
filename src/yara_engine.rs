@@ -17,8 +17,8 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 use walkdir::WalkDir;
 use yara_classify::YaraTier;
 
@@ -582,7 +582,9 @@ impl YaraEngine {
     ) -> Result<(Vec<YaraMatch>, HashMap<String, Vec<Evidence>>)> {
         let scan_start = std::time::Instant::now();
         if YARA_SCANS_DISABLED_AFTER_PANIC.load(Ordering::Relaxed) {
-            anyhow::bail!("YARA disabled after a prior panic; reload rules or restart to re-enable");
+            anyhow::bail!(
+                "YARA disabled after a prior panic; reload rules or restart to re-enable"
+            );
         }
         if self.tiers.is_empty() {
             anyhow::bail!("No YARA rules loaded");

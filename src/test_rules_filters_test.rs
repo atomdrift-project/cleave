@@ -35,6 +35,7 @@ fn test_trait_filter_size_min() {
         section_offset: None,
         section_offset_range: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = TraitDefinition {
@@ -120,6 +121,7 @@ fn test_trait_filter_size_max() {
         section_offset: None,
         section_offset_range: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = TraitDefinition {

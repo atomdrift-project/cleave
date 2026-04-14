@@ -1162,6 +1162,7 @@ impl TraitDefinition {
                 platforms,
                 is_check,
                 compiled_regex,
+                compiled_finder,
             } => timed_eval!(
                 "symbol",
                 eval_symbol(
@@ -1171,6 +1172,7 @@ impl TraitDefinition {
                     platforms.as_ref(),
                     *is_check,
                     compiled_regex.as_ref(),
+                    compiled_finder.as_ref(),
                     self.not.as_ref(),
                     ctx,
                 )
@@ -1190,6 +1192,7 @@ impl TraitDefinition {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -1199,6 +1202,7 @@ impl TraitDefinition {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -1223,6 +1227,7 @@ impl TraitDefinition {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -1232,6 +1237,7 @@ impl TraitDefinition {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -1259,6 +1265,7 @@ impl TraitDefinition {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -1268,6 +1275,7 @@ impl TraitDefinition {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -1415,6 +1423,7 @@ impl TraitDefinition {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder: _,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -2296,6 +2305,7 @@ impl CompositeTrait {
                 platforms,
                 is_check,
                 compiled_regex,
+                compiled_finder,
             } => self.eval_symbol(
                 exact.as_ref(),
                 substr.as_ref(),
@@ -2303,6 +2313,7 @@ impl CompositeTrait {
                 platforms.as_ref(),
                 *is_check,
                 compiled_regex.as_ref(),
+                compiled_finder.as_ref(),
                 self.not.as_ref(),
                 ctx,
             ),
@@ -2321,6 +2332,7 @@ impl CompositeTrait {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -2330,6 +2342,7 @@ impl CompositeTrait {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -2354,6 +2367,7 @@ impl CompositeTrait {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -2363,6 +2377,7 @@ impl CompositeTrait {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -2387,6 +2402,7 @@ impl CompositeTrait {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -2396,6 +2412,7 @@ impl CompositeTrait {
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
                     compiled_regex: compiled_regex.as_ref(),
+                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -2538,6 +2555,7 @@ impl CompositeTrait {
                 section_offset,
                 section_offset_range,
                 compiled_regex,
+                compiled_finder: _,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -2680,6 +2698,7 @@ impl CompositeTrait {
         platforms: Option<&Vec<Platform>>,
         is_check: Option<StringValidator>,
         compiled_regex: Option<&regex::Regex>,
+        compiled_finder: Option<&memchr::memmem::Finder<'static>>,
         not: Option<&Vec<NotException>>,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
@@ -2702,6 +2721,7 @@ impl CompositeTrait {
             None,
             is_check,
             compiled_regex,
+            compiled_finder,
             not,
             ctx,
         )

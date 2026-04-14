@@ -139,7 +139,7 @@ impl ArchiveAnalyzer {
         file_type: &FileType,
     ) -> Option<&'static str> {
         if !matches!(file_type, FileType::Pe | FileType::Elf | FileType::MachO) {
-            return None;
+            return Some("not a native binary file type");
         }
 
         let lower_path = relative_path.to_ascii_lowercase();

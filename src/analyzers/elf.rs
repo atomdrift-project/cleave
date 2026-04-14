@@ -221,9 +221,11 @@ impl ElfAnalyzer {
                     tools_used.push("radare2".to_string());
 
                     // Compute metrics from batched data
-                    let mut binary_metrics = self
-                        .radare2
-                        .compute_metrics_from_batched(&batched, data.len() as u64, "elf");
+                    let mut binary_metrics = self.radare2.compute_metrics_from_batched(
+                        &batched,
+                        data.len() as u64,
+                        "elf",
+                    );
 
                     // Override code_size with goblin-based calculation (more accurate)
                     // In ELF, only sections with SHF_EXECINSTR flag contain executable code
@@ -473,9 +475,11 @@ impl ElfAnalyzer {
                     ) {
                         Ok(batched) => {
                             tools_used.push("radare2".to_string());
-                            let bm = self
-                                .radare2
-                                .compute_metrics_from_batched(&batched, data.len() as u64, "elf");
+                            let bm = self.radare2.compute_metrics_from_batched(
+                                &batched,
+                                data.len() as u64,
+                                "elf",
+                            );
                             report.functions =
                                 batched.functions.into_iter().map(Function::from).collect();
                             bm

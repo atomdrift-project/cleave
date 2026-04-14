@@ -614,6 +614,12 @@ impl PhaseTracker {
     }
 }
 
+impl Default for PhaseTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Default for AnalysisOptions {
     fn default() -> Self {
         Self {
@@ -744,7 +750,11 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
 /// # Ok(())
 /// # }
 /// ```
-pub fn analyze_bytes(data: &[u8], filename: &str, options: &AnalysisOptions) -> Result<AnalysisReport> {
+pub fn analyze_bytes(
+    data: &[u8],
+    filename: &str,
+    options: &AnalysisOptions,
+) -> Result<AnalysisReport> {
     // Use a synthetic path for extension-based type detection and reporting.
     let path = Path::new(filename);
 
@@ -763,12 +773,20 @@ pub fn analyze_bytes(data: &[u8], filename: &str, options: &AnalysisOptions) -> 
             if options.disable_yara {
                 None
             } else {
-                Some(shared_resources::yara_engine(options.enable_third_party_yara))
+                Some(shared_resources::yara_engine(
+                    options.enable_third_party_yara,
+                ))
             }
         },
     );
     let mapper = mapper_result?;
-    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), Some(preloaded))
+    analyze_file_with_resources(
+        path,
+        options,
+        &mapper,
+        yara_engine.as_ref(),
+        Some(preloaded),
+    )
 }
 
 /// Analyze a single file using a pre-loaded CapabilityMapper.
@@ -1456,6 +1474,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             match_count: 0,
             source_file: None,
         });
+
+        // Unknown-type payloads have no analyzer and would immediately bail — skip
+        // the expensive temp-file write + full pipeline call.  The encoded-payload
+        // finding was already pushed above so the discovery is still recorded.
+        if payload.detected_type == FileType::Unknown {
+            tracing::debug!(
+                encoding = %payload.encoding_chain.join("+"),
+                preview = %payload.preview,
+                "Skipping recursive analysis for unrecognized payload type"
+            );
+            continue;
+        }
 
         // Analyze the decoded payload (with depth limit to prevent stack overflow)
         if analysis_depth >= MAX_ANALYSIS_DEPTH {

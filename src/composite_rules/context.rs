@@ -414,6 +414,9 @@ pub(crate) struct StringParams<'a> {
     pub word: Option<&'a String>,
     pub case_insensitive: bool,
     pub compiled_regex: Option<&'a regex::Regex>,
+    /// Pre-compiled substring finder for the hot `substr` search path.
+    /// For CI conditions this finder was built from the lowercased pattern.
+    pub compiled_finder: Option<&'a memchr::memmem::Finder<'static>>,
     pub is_check: Option<StringValidator>,
     pub section: Option<&'a String>,
     pub offset: Option<i64>,

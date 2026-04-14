@@ -513,7 +513,11 @@ pub fn log_startup_diagnostics() {
     let allocator = if cfg!(all(
         unix,
         feature = "jemalloc",
-        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+        not(any(
+            target_os = "freebsd",
+            target_os = "dragonfly",
+            target_os = "openbsd"
+        ))
     )) {
         "jemalloc"
     } else {

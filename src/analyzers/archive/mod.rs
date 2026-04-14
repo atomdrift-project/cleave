@@ -353,6 +353,28 @@ pub(crate) struct ArchiveAnalyzer {
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
 }
 
+/// Decompress a single-file stream into `dest_dir`, applying size and ratio guards.
+///
+/// The output filename is derived from `archive_path`'s stem (e.g. `foo.gz` → `foo`).
+fn decompress_to_file<R: std::io::Read>(
+    mut decoder: R,
+    archive_path: &Path,
+    dest_dir: &Path,
+    compressed_size: u64,
+    guard: &guards::ExtractionGuard,
+) -> Result<()> {
+    let stem = archive_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("extracted");
+    let mut out = File::create(dest_dir.join(stem))?;
+    let mut limited = guards::LimitedReader::new(&mut decoder, guards::MAX_FILE_SIZE);
+    let written = std::io::copy(&mut limited, &mut out)?;
+    guard.check_compression_ratio(compressed_size, written);
+    guard.check_bytes(written, stem);
+    Ok(())
+}
+
 impl ArchiveAnalyzer {
     /// Create a new archive analyzer with default settings
     #[must_use]
@@ -611,9 +633,21 @@ impl ArchiveAnalyzer {
     }
 
     fn analyze_archive(&self, file_path: &Path) -> Result<AnalysisReport> {
+        let data = fs::read(file_path)?;
+        self.analyze_archive_with_data(&data, file_path)
+    }
+
+    /// Core archive analysis logic operating on already-loaded data.
+    ///
+    /// `archive_path` carries the original filename for type detection and
+    /// reporting; the actual bytes come from `data`.
+    fn analyze_archive_with_data(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+    ) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
 
-        // Prevent infinite recursion
         if self.current_depth >= self.max_depth {
             anyhow::bail!("Maximum archive depth ({}) exceeded", self.max_depth);
         }
@@ -622,56 +656,40 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled before archive extraction");
         }
 
-        // Create temporary directory for extraction
         let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
-
-        // Create extraction guard to track limits and detect hostile patterns.
-        // Pass the cancellation flag so extraction stops at the next entry boundary.
         let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
 
-        // Extract archive with protection
-        // For complete failures (wrong password, corrupt archive), propagate the error
-        // For partial failures (some hostile files skipped), emit findings but continue
-        let extraction_result = self.extract_archive_safe(file_path, temp_dir.path(), &guard);
+        let extraction_result = self.extract_from_data(data, archive_path, temp_dir.path(), &guard);
 
-        // Check if any files were extracted - if zero files and error, propagate error
         let hostile_reasons = guard.take_reasons();
-        let _has_hostile_patterns = !hostile_reasons.is_empty();
 
-        // If extraction completely failed (no files extracted), return the error
-        // This handles cases like wrong password, corrupt archive, etc.
         if let Err(e) = extraction_result {
-            // Check if we at least extracted some files (partial success)
             let extracted_count = walkdir::WalkDir::new(temp_dir.path())
                 .min_depth(1)
                 .into_iter()
                 .filter_map(std::result::Result::ok)
                 .count();
-
             if extracted_count == 0 {
-                // Complete failure - return the error
                 return Err(e);
             }
-            // Partial failure - continue with what we extracted but record the error
         }
 
-        // Detect archive type using fileid (magic-first, extension fallback)
-        let file_data = fs::read(file_path)?;
-        let file_type = crate::analyzers::detect_file_type_from_data(file_path, &file_data);
+        let file_type = crate::analyzers::detect_file_type_from_data(archive_path, data);
         let archive_type_str = file_type.report_file_type();
 
         let target = TargetInfo {
-            path: file_path.display().to_string(),
+            path: archive_path.display().to_string(),
             file_type: archive_type_str.clone(),
-            size_bytes: file_data.len() as u64,
-            sha256: calculate_sha256(&file_data),
+            size_bytes: data.len() as u64,
+            sha256: calculate_sha256(data),
             architectures: None,
         };
 
         let mut report = AnalysisReport::new(target);
 
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
-            if let Ok((mut seeded_entries, archive_metrics)) = zip::inspect_zip_metadata(file_path)
+            if let Ok((mut seeded_entries, archive_metrics)) =
+                zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
             {
                 report.archive_contents.append(&mut seeded_entries);
                 let metrics = report.metrics.get_or_insert_with(Metrics::default);
@@ -680,7 +698,7 @@ impl ArchiveAnalyzer {
         }
 
         let suppress_path_traversal =
-            should_suppress_path_traversal_findings(file_path, &hostile_reasons);
+            should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
         push_archive_hostile_findings(
             &mut report,
             hostile_reasons,
@@ -688,14 +706,13 @@ impl ArchiveAnalyzer {
             suppress_path_traversal,
         );
 
-        // Add structural feature
         report.structure.push(StructuralFeature {
             id: format!("archive/{}", archive_type_str),
             desc: format!("{} archive", archive_type_str),
             evidence: vec![Evidence {
                 method: "extension".to_string(),
                 source: "archive_analyzer".to_string(),
-                value: file_path
+                value: archive_path
                     .extension()
                     .and_then(|e| e.to_str())
                     .unwrap_or("unknown")
@@ -709,9 +726,7 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled after archive extraction");
         }
 
-        // JAR-like archives (ZIP-based Java/web artifacts) use the JAR analysis path
         let is_jar = matches!(file_type, FileType::Jar | FileType::Zip | FileType::Crx);
-
         if is_jar {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start)?;
         } else {
@@ -721,7 +736,7 @@ impl ArchiveAnalyzer {
         let analysis_elapsed = start.elapsed();
         if analysis_elapsed.as_secs() > 60 {
             tracing::warn!(
-                path = %file_path.display(),
+                path = %archive_path.display(),
                 archive_type = %archive_type_str,
                 depth = self.current_depth,
                 files_in_report = report.files.len(),
@@ -731,13 +746,7 @@ impl ArchiveAnalyzer {
             );
         }
 
-        // Container-level composite evaluation: re-evaluate composite rules against
-        // all nested findings to detect cross-file patterns like:
-        // - "npm package with suspicious DLL" (package.json in one file + .dll in another)
-        // - "Python package with compiled binary" (setup.py + .so/.pyd files)
         if let Some(mapper) = &self.capability_mapper {
-            // Collect all findings from nested files
-            // LIMIT: Cap at 50k to prevent OOM on massive archives
             let mut nested_findings: Vec<Finding> = report
                 .files
                 .iter()
@@ -745,8 +754,6 @@ impl ArchiveAnalyzer {
                 .take(50_000)
                 .collect();
 
-            // Evaluate basename traits against archive entry names (see comment
-            // in the streaming path above for rationale).
             let entry_names: Vec<String> = report
                 .archive_contents
                 .iter()
@@ -763,54 +770,109 @@ impl ArchiveAnalyzer {
                 &report.target.file_type,
             );
 
-            // Add container-level findings to the report
             report.findings.extend(container_findings);
         }
 
         Ok(report)
     }
-    fn extract_archive_safe(
+
+    /// Extract an archive from in-memory data into `dest_dir`.
+    ///
+    /// Uses `Cursor<&[u8]>` for all pure-Rust formats so no temporary file is
+    /// needed.  RAR (which delegates to the native unrar library) still writes
+    /// a temporary file, preserving the `.rar` extension so the library can
+    /// identify the format.
+    fn extract_from_data(
         &self,
+        data: &[u8],
         archive_path: &Path,
         dest_dir: &Path,
         guard: &ExtractionGuard,
     ) -> Result<()> {
-        use std::io::Read;
-        let mut buf = [0u8; 512];
-        let n = File::open(archive_path)
-            .and_then(|mut f| f.read(&mut buf))
-            .unwrap_or(0);
-        let file_type = crate::analyzers::detect_file_type_from_data(archive_path, &buf[..n]);
+        use std::io::Cursor;
+
+        let file_type = crate::analyzers::detect_file_type_from_data(archive_path, data);
+
+        // RAR requires a real file path (native unrar library limitation).
+        if matches!(file_type, FileType::Rar) {
+            let temp = tempfile::Builder::new().suffix(".rar").tempfile()?;
+            std::fs::write(temp.path(), data)?;
+            return system_packages::extract_rar(temp.path(), dest_dir, guard);
+        }
 
         match file_type {
-            FileType::Crx => zip::extract_crx_safe(archive_path, dest_dir, guard),
-            FileType::SevenZ => {
-                system_packages::extract_7z_safe(archive_path, dest_dir, guard, &self.zip_passwords)
-            }
-            FileType::Tar => tar::extract_tar_safe(archive_path, dest_dir, None, guard),
-            FileType::TarGz => tar::extract_tar_safe(archive_path, dest_dir, Some("gzip"), guard),
-            FileType::TarBz2 => tar::extract_tar_safe(archive_path, dest_dir, Some("bzip2"), guard),
-            FileType::TarXz => tar::extract_tar_safe(archive_path, dest_dir, Some("xz"), guard),
-            FileType::TarZst => tar::extract_tar_safe(archive_path, dest_dir, Some("zstd"), guard),
-            FileType::Xz => {
-                system_packages::extract_compressed_safe(archive_path, dest_dir, "xz", guard)
-            }
-            FileType::Gz => {
-                system_packages::extract_compressed_safe(archive_path, dest_dir, "gzip", guard)
-            }
-            FileType::Zst => {
-                system_packages::extract_compressed_safe(archive_path, dest_dir, "zstd", guard)
-            }
-            FileType::Bz2 => {
-                system_packages::extract_compressed_safe(archive_path, dest_dir, "bzip2", guard)
-            }
-            FileType::Deb => system_packages::extract_deb_safe(archive_path, dest_dir, guard),
-            FileType::Rpm => system_packages::extract_rpm(archive_path, dest_dir, guard),
-            FileType::Pkg => system_packages::extract_pkg_safe(archive_path, dest_dir, guard),
-            FileType::Rar => system_packages::extract_rar(archive_path, dest_dir, guard),
-            FileType::Cab => system_packages::extract_cab(archive_path, dest_dir, guard),
+            FileType::Tar => tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard),
+            FileType::TarGz => tar::extract_tar_entries_safe(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            ),
+            FileType::TarBz2 => tar::extract_tar_entries_safe(
+                bzip2::read::BzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            ),
+            FileType::TarXz => tar::extract_tar_entries_safe(
+                xz2::read::XzDecoder::new(Cursor::new(data)),
+                dest_dir,
+                guard,
+            ),
+            FileType::TarZst => tar::extract_tar_entries_safe(
+                zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .context("Failed to create zstd decoder")?,
+                dest_dir,
+                guard,
+            ),
+            FileType::Gz => decompress_to_file(
+                flate2::read::GzDecoder::new(Cursor::new(data)),
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
+            FileType::Bz2 => decompress_to_file(
+                bzip2::read::BzDecoder::new(Cursor::new(data)),
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
+            FileType::Xz => decompress_to_file(
+                xz2::read::XzDecoder::new(Cursor::new(data)),
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
+            FileType::Zst => decompress_to_file(
+                zstd::stream::read::Decoder::new(Cursor::new(data))
+                    .context("Failed to create zstd decoder")?,
+                archive_path,
+                dest_dir,
+                data.len() as u64,
+                guard,
+            ),
             FileType::Zip | FileType::Jar => {
-                zip::extract_zip_safe(archive_path, dest_dir, guard, &self.zip_passwords)
+                zip::extract_zip_from_data(data, dest_dir, guard, &self.zip_passwords)
+            }
+            FileType::Crx => zip::extract_crx_from_data(data, dest_dir, guard),
+            FileType::Deb => {
+                system_packages::extract_deb_from_reader(Cursor::new(data), dest_dir, guard)
+            }
+            FileType::Rpm => {
+                system_packages::extract_rpm_from_reader(Cursor::new(data), dest_dir, guard)
+            }
+            FileType::SevenZ => {
+                system_packages::extract_7z_from_data(data, dest_dir, guard, &self.zip_passwords)
+            }
+            FileType::Pkg => system_packages::extract_pkg_from_reader(
+                Cursor::new(data),
+                data.len() as u64,
+                dest_dir,
+                guard,
+            ),
+            FileType::Cab => {
+                system_packages::extract_cab_from_reader(Cursor::new(data), dest_dir, guard)
             }
             _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
@@ -824,17 +886,13 @@ impl Default for ArchiveAnalyzer {
 }
 impl Analyzer for ArchiveAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Archives require file on disk for extraction libraries
-        // Write input data to temp file if needed
         if input.path.exists() {
-            // File exists on disk, use directly
-            self.analyze_archive(input.path)
+            // File is already on disk — read it once and analyse in-memory.
+            let data = fs::read(input.path)?;
+            self.analyze_archive_with_data(&data, input.path)
         } else {
-            // Data came from another source (e.g., embedded archive)
-            // Write to temp file for extraction
-            let temp_file = tempfile::NamedTempFile::new()?;
-            std::fs::write(temp_file.path(), input.data)?;
-            self.analyze_archive(temp_file.path())
+            // Data arrived in-memory (e.g. via analyze_bytes or a nested archive).
+            self.analyze_archive_with_data(input.data, input.path)
         }
     }
 

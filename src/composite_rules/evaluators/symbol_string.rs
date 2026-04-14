@@ -51,6 +51,7 @@ pub(crate) fn eval_symbol<'a>(
     platforms: Option<&Vec<Platform>>,
     is_check: Option<StringValidator>,
     compiled_regex: Option<&regex::Regex>,
+    compiled_finder: Option<&memchr::memmem::Finder<'static>>,
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
@@ -95,6 +96,20 @@ pub(crate) fn eval_symbol<'a>(
     let norm_substr = substr.map(|s| normalize_symbol(s));
     let norm_substr_ref = norm_substr.as_ref();
 
+    // Use the pre-compiled Finder from the Condition when available (built from the
+    // normalized pattern at trait load time).  Fall back to building a local one from
+    // norm_substr so we still avoid per-symbol StrSearcher::new when the Condition
+    // wasn't precompiled (e.g. in tests).
+    let local_finder;
+    let effective_finder: Option<&memchr::memmem::Finder<'static>> = if compiled_finder.is_some() {
+        compiled_finder
+    } else if let Some(s) = norm_substr_ref {
+        local_finder = memchr::memmem::Finder::new(s.as_bytes()).into_owned();
+        Some(&local_finder)
+    } else {
+        None
+    };
+
     // Search in imports
     for import in &ctx.report.imports {
         if symbol_matches_condition(
@@ -103,6 +118,7 @@ pub(crate) fn eval_symbol<'a>(
             norm_substr_ref,
             pattern,
             compiled_regex,
+            effective_finder,
         ) {
             // Check if this symbol should be excluded by not: or is: filters
             let excluded_by_not = not
@@ -133,6 +149,7 @@ pub(crate) fn eval_symbol<'a>(
             norm_substr_ref,
             pattern,
             compiled_regex,
+            effective_finder,
         ) {
             // Check if this symbol should be excluded by not: or is: filters
             let excluded_by_not = not
@@ -163,6 +180,7 @@ pub(crate) fn eval_symbol<'a>(
             norm_substr_ref,
             pattern,
             compiled_regex,
+            effective_finder,
         ) {
             // Check if this symbol should be excluded by not: filters
             let excluded_by_not = not
@@ -215,15 +233,20 @@ fn symbol_matches_condition(
     substr: Option<&String>,
     pattern: Option<&String>,
     compiled_regex: Option<&regex::Regex>,
+    compiled_finder: Option<&memchr::memmem::Finder<'static>>,
 ) -> bool {
     // If exact is specified, do strict equality match
     if let Some(exact_val) = exact {
         return symbol == exact_val;
     }
 
-    // If substr is specified, do substring match
+    // If substr is specified, do substring match using the pre-compiled finder when available
     if let Some(substr_val) = substr {
-        return symbol.contains(substr_val.as_str());
+        return if let Some(finder) = compiled_finder {
+            finder.find(symbol.as_bytes()).is_some()
+        } else {
+            memchr::memmem::find(symbol.as_bytes(), substr_val.as_bytes()).is_some()
+        };
     }
 
     // If pattern is specified, use precompiled regex if available
@@ -316,13 +339,20 @@ fn match_value_against_params(
 
     if let Some(contains_str) = params.substr {
         let matched = if params.case_insensitive {
-            if let Some(pattern_lower) = substr_lower {
-                value.to_lowercase().contains(pattern_lower.as_str())
+            // For CI: lowercase the value and search with the pre-lowercased finder/pattern.
+            // Use to_ascii_lowercase (faster, correct for ASCII patterns used in traits).
+            let value_lower = value.to_ascii_lowercase();
+            if let Some(finder) = params.compiled_finder {
+                finder.find(value_lower.as_bytes()).is_some()
+            } else if let Some(pattern_lower) = substr_lower {
+                value_lower.contains(pattern_lower.as_str())
             } else {
-                value.to_lowercase().contains(&contains_str.to_lowercase())
+                value_lower.contains(contains_str.to_ascii_lowercase().as_str())
             }
+        } else if let Some(finder) = params.compiled_finder {
+            finder.find(value.as_bytes()).is_some()
         } else {
-            value.contains(contains_str)
+            memchr::memmem::find(value.as_bytes(), contains_str.as_bytes()).is_some()
         };
         return matched.then(|| value.to_string());
     }

@@ -212,18 +212,18 @@ const ALLOWED_PERSISTENCE: &[&str] = &[
 /// These represent capability categories (what code can do).
 /// Must not use objective names (no c2, persist, evasion, etc.).
 const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
-    "communications", // Network protocols and transport
-    "crypto",         // Cryptographic operations
-    "data",           // Data transformation, encoding, serialization
-    "dylib",          // Dynamic library operations
-    "fs",             // Filesystem access
-    "hardware",       // Hardware interaction
-    "mem",            // Memory operations
-    "os",             // OS integration
-    "process",        // Process control
+    "communications",   // Network protocols and transport
+    "crypto",           // Cryptographic operations
+    "data",             // Data transformation, encoding, serialization
+    "dylib",            // Dynamic library operations
+    "fs",               // Filesystem access
+    "hardware",         // Hardware interaction
+    "mem",              // Memory operations
+    "os",               // OS integration
+    "process",          // Process control
     "revision-control", // Revision control interactions
-    "time",           // Timing operations
-    "ui",             // User interface operations
+    "time",             // Timing operations
+    "ui",               // User interface operations
 ];
 
 /// Allowed subdirectories in micro-behaviors/communications/
@@ -403,9 +403,7 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
 ];
 
 /// Allowed subdirectories in micro-behaviors/revision-control/
-const ALLOWED_MB_REVISION_CONTROL: &[&str] = &[
-    "git",
-];
+const ALLOWED_MB_REVISION_CONTROL: &[&str] = &["git"];
 
 /// Allowed subdirectories in micro-behaviors/time/
 const ALLOWED_MB_TIME: &[&str] = &["query", "schedule", "sleep", "timing"];

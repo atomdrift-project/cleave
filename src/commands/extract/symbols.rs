@@ -108,7 +108,9 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                 // Fall back to rizin when goblin found no exports (e.g. stripped or obfuscated).
                 if report.exports.is_empty() && Radare2Analyzer::is_available() {
                     let r2 = Radare2Analyzer::new();
-                    if let Ok((r2_imports, r2_exports, r2_symbols)) = r2.extract_all_symbols(path, None) {
+                    if let Ok((r2_imports, r2_exports, r2_symbols)) =
+                        r2.extract_all_symbols(path, None)
+                    {
                         // Replace goblin imports with rizin's (likely more complete)
                         symbols.retain(|s| s.symbol_type != "import");
                         for imp in r2_imports {

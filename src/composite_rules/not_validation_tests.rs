@@ -57,6 +57,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
@@ -88,6 +89,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -118,6 +120,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -152,6 +155,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Structured(NotExceptionStructured {
@@ -186,6 +190,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Structured(NotExceptionStructured {
@@ -222,6 +227,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Structured(NotExceptionStructured {
@@ -256,6 +262,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Structured(NotExceptionStructured {
@@ -291,6 +298,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("TESTING".to_string())];
@@ -319,6 +327,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("curl".to_string())];
@@ -347,6 +356,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -378,6 +388,7 @@ mod validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -407,6 +418,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -435,6 +447,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
@@ -463,6 +476,7 @@ mod validation_tests {
             section_offset_range: None,
             not: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -482,6 +496,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("test".to_string())];
@@ -503,6 +518,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("testing".to_string())];
@@ -522,6 +538,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -544,6 +561,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("curl".to_string())];
@@ -563,6 +581,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let not = vec![NotException::Shorthand("hurl".to_string())];
@@ -599,6 +618,7 @@ mod criticality_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -662,6 +682,7 @@ mod criticality_tests {
                 not: None,
                 platforms: None,
                 compiled_regex: None,
+                compiled_finder: None,
             };
 
             let trait_def = TraitDefinition {
@@ -719,6 +740,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -770,6 +792,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -821,6 +844,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -873,6 +897,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -925,6 +950,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -977,6 +1003,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_match_exclusivity();
@@ -1003,6 +1030,7 @@ mod constraint_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         assert!(cond.check_count_constraints().is_none());
@@ -1063,6 +1091,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_empty_patterns();
@@ -1087,6 +1116,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_empty_patterns();
@@ -1111,6 +1141,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_short_patterns();
@@ -1135,6 +1166,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_short_patterns();
@@ -1159,6 +1191,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_literal_regex();
@@ -1186,6 +1219,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_literal_regex();
@@ -1209,6 +1243,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_case_insensitive_on_non_alpha();
@@ -1233,6 +1268,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_case_insensitive_on_non_alpha();
@@ -1256,6 +1292,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1310,6 +1347,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_count_min_value();
@@ -1333,6 +1371,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1386,6 +1425,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1439,6 +1479,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1490,6 +1531,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1540,6 +1582,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1591,6 +1634,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let trait_def = TraitDefinition {
@@ -1634,6 +1678,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1653,6 +1698,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1670,6 +1716,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1686,6 +1733,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1702,6 +1750,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();
@@ -1726,6 +1775,7 @@ mod llm_validation_tests {
             not: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
 
         let warning = cond.check_symbol_regex_whitespace();

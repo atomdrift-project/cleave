@@ -524,7 +524,9 @@ mod tests {
             "This looks like a normal error message"
         ));
         assert!(!is_sentence_like_string("two words"));
-        assert!(is_sentence_like_string("https://example.com/path with space here"));
+        assert!(is_sentence_like_string(
+            "https://example.com/path with space here"
+        ));
         assert!(is_sentence_like_string("/tmp/some path here"));
         assert!(!is_sentence_like_string("SingleTokenOnly"));
         assert!(!is_sentence_like_string("%s %d %x"));

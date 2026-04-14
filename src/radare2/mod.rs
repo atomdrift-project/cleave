@@ -38,8 +38,8 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::Duration;
 use tracing::{debug, trace, warn};
@@ -187,9 +187,14 @@ fn execute_rizin_with_timeout(
         while *count == 0 {
             // Periodically check for cancellation while waiting for the permit
             if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
-                return Err(anyhow::anyhow!("Rizin execution cancelled while waiting for permit"));
+                return Err(anyhow::anyhow!(
+                    "Rizin execution cancelled while waiting for permit"
+                ));
             }
-            if cvar.wait_for(&mut count, Duration::from_millis(250)).timed_out() {
+            if cvar
+                .wait_for(&mut count, Duration::from_millis(250))
+                .timed_out()
+            {
                 continue;
             }
         }
@@ -272,7 +277,7 @@ fn execute_rizin_with_timeout(
         if now >= deadline {
             break Err(mpsc::RecvTimeoutError::Timeout);
         }
-        
+
         if cancellation.is_some_and(|c| c.load(Ordering::Acquire)) {
             break Err(mpsc::RecvTimeoutError::Disconnected); // Re-use Disconnected to signal cancellation
         }
@@ -281,7 +286,9 @@ fn execute_rizin_with_timeout(
         match wait_rx.recv_timeout(wait_time) {
             Ok(res) => break Ok(res),
             Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => break Err(mpsc::RecvTimeoutError::Disconnected),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                break Err(mpsc::RecvTimeoutError::Disconnected)
+            }
         }
     };
 
@@ -330,7 +337,7 @@ fn execute_rizin_with_timeout(
         Err(mpsc::RecvTimeoutError::Disconnected) => {
             // Either cancelled or wait_thread crashed
             RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
-            
+
             let is_cancelled = cancellation.is_some_and(|c| c.load(Ordering::Acquire));
             if is_cancelled {
                 warn!(command = %format!("rizin {}", args_str), "Rizin process cancelled - killing");
@@ -535,7 +542,7 @@ impl Radare2Analyzer {
 
         let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
         let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
-        
+
         // Use a lighter analysis for medium-sized files
         let use_light_analysis = file_size > MAX_SIZE_FOR_DEEP_ANALYSIS;
 

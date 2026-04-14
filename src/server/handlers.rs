@@ -63,8 +63,6 @@ fn classify_analysis_error(message: &str) -> (StatusCode, String) {
         || normalized.contains("file count limit exceeded")
     {
         StatusCode::UNPROCESSABLE_ENTITY
-    } else if normalized.contains("panicked") {
-        StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::INTERNAL_SERVER_ERROR
     };

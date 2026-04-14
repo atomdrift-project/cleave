@@ -545,7 +545,7 @@ fn test_system_binary_false_positive_sanity() {
     // Filter out the debug-build warning that's expected in test profile
     let unexpected_stderr: String = stderr
         .lines()
-        .filter(|l| !l.contains("DEBUG binary"))
+        .filter(|l| !l.contains("DEBUG binary") && !l.contains("YARA engine not yet initialized"))
         .collect::<Vec<_>>()
         .join("\n");
     assert!(

@@ -701,6 +701,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     compiled_regex: None,
+                    compiled_finder: None,
                 },
                 ConditionTagged::StringValue {
                     exact,
@@ -731,6 +732,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                     compiled_regex: None,
+                    compiled_finder: None,
                 },
                 ConditionTagged::Text {
                     exact,
@@ -761,6 +763,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                     compiled_regex: None,
+                    compiled_finder: None,
                 },
                 ConditionTagged::StringLiteral {
                     exact,
@@ -791,6 +794,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                     compiled_regex: None,
+                    compiled_finder: None,
                 },
                 ConditionTagged::Structure {
                     feature,
@@ -919,6 +923,7 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                     compiled_regex: None,
+                    compiled_finder: None,
                 },
                 ConditionTagged::Section {
                     exact,
@@ -1027,6 +1032,7 @@ impl From<Condition> for ConditionTagged {
                 platforms,
                 is_check,
                 compiled_regex: _,
+                compiled_finder: _,
             } => ConditionTagged::Symbol {
                 exact,
                 substr,
@@ -1049,6 +1055,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
                 compiled_regex: _,
+                compiled_finder: _,
             } => ConditionTagged::StringValue {
                 exact,
                 substr,
@@ -1079,6 +1086,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
                 compiled_regex: _,
+                compiled_finder: _,
             } => ConditionTagged::Text {
                 exact,
                 substr,
@@ -1109,6 +1117,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
                 compiled_regex: _,
+                compiled_finder: _,
             } => ConditionTagged::StringLiteral {
                 exact,
                 substr,
@@ -1238,6 +1247,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
                 compiled_regex: _,
+                compiled_finder: _,
             } => ConditionTagged::Raw {
                 exact,
                 substr,
@@ -1376,6 +1386,9 @@ pub(crate) enum Condition {
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
+        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match a string value found in the file (extracted strings, imports, decoded strings)
@@ -1428,6 +1441,9 @@ pub(crate) enum Condition {
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
+        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match human-readable text.
@@ -1483,6 +1499,9 @@ pub(crate) enum Condition {
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
+        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match only AST-backed source-language string literals.
@@ -1538,6 +1557,9 @@ pub(crate) enum Condition {
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
+        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match a structural feature
@@ -1806,6 +1828,9 @@ pub(crate) enum Condition {
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
+        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        #[serde(skip)]
+        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match section names in binary files (PE, ELF, Mach-O)
@@ -3170,6 +3195,56 @@ impl Condition {
             }
             _ => {}
         }
+
+        // Compile substring finders for all conditions that have `substr`.
+        // This is a one-time cost at trait load time that eliminates Boyer-Moore
+        // preprocessing (StrSearcher::new) from the hot per-string evaluation path.
+        match self {
+            Condition::Symbol {
+                substr: Some(s),
+                compiled_finder,
+                ..
+            } => {
+                // Normalize the same way symbols are at load time (strip leading underscores)
+                let normalized = s.trim_start_matches('_');
+                *compiled_finder =
+                    Some(memchr::memmem::Finder::new(normalized.as_bytes()).into_owned());
+            }
+            Condition::StringValue {
+                substr: Some(s),
+                case_insensitive,
+                compiled_finder,
+                ..
+            }
+            | Condition::Text {
+                substr: Some(s),
+                case_insensitive,
+                compiled_finder,
+                ..
+            }
+            | Condition::StringLiteral {
+                substr: Some(s),
+                case_insensitive,
+                compiled_finder,
+                ..
+            }
+            | Condition::Raw {
+                substr: Some(s),
+                case_insensitive,
+                compiled_finder,
+                ..
+            } => {
+                let needle = if *case_insensitive {
+                    s.to_ascii_lowercase()
+                } else {
+                    s.clone()
+                };
+                *compiled_finder =
+                    Some(memchr::memmem::Finder::new(needle.as_bytes()).into_owned());
+            }
+            _ => {}
+        }
+
         Ok(())
     }
 }
@@ -3557,6 +3632,7 @@ mod location_constraint_tests {
             section_offset_range: None,
             platforms: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
         assert!(condition.validate(true).is_err());
     }
@@ -3578,6 +3654,7 @@ mod location_constraint_tests {
             section_offset: None,
             section_offset_range: None,
             compiled_regex: None,
+            compiled_finder: None,
         };
         assert!(condition.validate(true).is_ok());
     }

@@ -78,6 +78,7 @@ fn test_size_min_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/size::min_pass", condition);
@@ -105,6 +106,7 @@ fn test_size_min_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/size::min_fail", condition);
@@ -132,6 +134,7 @@ fn test_size_max_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/size::max_pass", condition);
@@ -159,6 +162,7 @@ fn test_size_max_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/size::max_fail", condition);
@@ -186,6 +190,7 @@ fn test_size_range_constraint() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/size::range", condition);
@@ -216,6 +221,7 @@ fn test_count_min_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/count::min_pass", condition);
@@ -253,6 +259,7 @@ fn test_count_min_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/count::min_fail", condition);
@@ -285,6 +292,7 @@ fn test_count_max_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/count::max_pass", condition);
@@ -317,6 +325,7 @@ fn test_count_max_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/count::max_fail", condition);
@@ -356,6 +365,7 @@ fn test_per_kb_min_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::min_pass", condition);
@@ -394,6 +404,7 @@ fn test_per_kb_min_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::min_fail", condition);
@@ -430,6 +441,7 @@ fn test_per_kb_max_constraint_pass() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::max_pass", condition);
@@ -460,6 +472,7 @@ fn test_per_kb_max_constraint_fail() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::max_fail", condition);
@@ -494,6 +507,7 @@ fn test_per_kb_max_zero_byte_file_with_matches_fails() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::max_zero_byte_fail", condition);
@@ -525,6 +539,7 @@ fn test_per_kb_max_zero_byte_file_no_matches_passes() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/density::max_zero_byte_pass", condition);
@@ -558,6 +573,7 @@ fn test_platform_filter_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/platform::match", condition);
@@ -587,6 +603,7 @@ fn test_platform_filter_no_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/platform::no_match", condition);
@@ -619,6 +636,7 @@ fn test_platform_all_matches_everything() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/platform::all", condition);
@@ -650,6 +668,7 @@ fn test_arch_filter_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/arch::match", condition);
@@ -679,6 +698,7 @@ fn test_arch_filter_no_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/arch::no_match", condition);
@@ -710,6 +730,7 @@ fn test_arch_all_matches_any_file_arch() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let trait_def = create_test_trait("test/arch::all_trait", condition);
@@ -742,6 +763,7 @@ fn test_arch_file_all_matches_any_trait_arch() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/arch::file_all", condition);
@@ -812,6 +834,7 @@ fn test_arch_multi_arch_file() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/arch::multi_arch", condition);
@@ -870,6 +893,7 @@ fn test_file_type_filter_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/filetype::match", condition);
@@ -899,6 +923,7 @@ fn test_file_type_filter_no_match() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/filetype::no_match", condition);
@@ -933,6 +958,7 @@ fn test_all_constraints_combined() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/constraints::combined", condition);
@@ -981,6 +1007,7 @@ fn test_finding_contains_evidence() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let trait_def = create_test_trait("test/finding::evidence", condition);
@@ -1013,6 +1040,7 @@ fn test_finding_has_correct_criticality() {
         platforms: None,
         is_check: None,
         compiled_regex: None,
+        compiled_finder: None,
     };
 
     let mut trait_def = create_test_trait("test/finding::crit", condition);

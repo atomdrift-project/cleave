@@ -9,179 +9,17 @@
 //! - Windows cabinet (.cab)
 //! - Standalone compression (.gz, .xz, .bz2)
 
+use std::io::Seek;
+
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, CancellableReader, CancellableWriter, ExtractionGuard,
-    HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
+    sanitize_entry_path, symlink_escapes, CancellableWriter, ExtractionGuard, HostileArchiveReason,
+    LimitedReader, MAX_FILE_SIZE,
 };
 use super::tar::extract_tar_entries_safe;
-use super::zip::extract_zip_safe;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{BufReader, Read, Write};
 use std::path::Path;
-
-/// Extract standalone compressed file (gzip, xz, bzip2)
-pub(crate) fn extract_compressed_safe(
-    archive_path: &Path,
-    dest_dir: &Path,
-    compression: &str,
-    guard: &ExtractionGuard,
-) -> Result<()> {
-    let file = File::open(archive_path)?;
-    let compressed_size = file.metadata()?.len();
-
-    // Determine output filename by stripping the compression extension
-    let stem = archive_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("extracted");
-    let output_path = dest_dir.join(stem);
-
-    if !guard.check_file_count() {
-        anyhow::bail!("File count limit exceeded");
-    }
-
-    let mut output_file = File::create(&output_path).context("Failed to create output file")?;
-
-    // Wrap the file in a CancellableReader so decompression stops promptly
-    // when the per-request cancellation flag is set. Without this a large
-    // compressed file would decompress completely even after a timeout.
-    let bytes_written = match (compression, guard.cancellation()) {
-        ("xz", Some(c)) => {
-            let decoder = xz2::read::XzDecoder::new(CancellableReader::new(file, c));
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress XZ file")?
-        }
-        ("xz", None) => {
-            let decoder = xz2::read::XzDecoder::new(file);
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress XZ file")?
-        }
-        ("gzip", Some(c)) => {
-            let decoder = flate2::read::GzDecoder::new(CancellableReader::new(file, c));
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress GZ file")?
-        }
-        ("gzip", None) => {
-            let decoder = flate2::read::GzDecoder::new(file);
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file).context("Failed to decompress GZ file")?
-        }
-        ("bzip2", Some(c)) => {
-            let decoder = bzip2::read::BzDecoder::new(CancellableReader::new(file, c));
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file)
-                .context("Failed to decompress BZ2 file")?
-        }
-        ("bzip2", None) => {
-            let decoder = bzip2::read::BzDecoder::new(file);
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file)
-                .context("Failed to decompress BZ2 file")?
-        }
-        ("zstd", Some(c)) => {
-            let decoder = zstd::stream::read::Decoder::new(CancellableReader::new(file, c))
-                .context("Failed to create zstd decoder")?;
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file)
-                .context("Failed to decompress ZSTD file")?
-        }
-        ("zstd", None) => {
-            let decoder =
-                zstd::stream::read::Decoder::new(file).context("Failed to create zstd decoder")?;
-            let mut limited = LimitedReader::new(decoder, MAX_FILE_SIZE);
-            std::io::copy(&mut limited, &mut output_file)
-                .context("Failed to decompress ZSTD file")?
-        }
-        (other, _) => anyhow::bail!("Unsupported compression: {}", other),
-    };
-
-    // Check compression ratio
-    guard.check_compression_ratio(compressed_size, bytes_written);
-    guard.check_bytes(bytes_written, stem);
-
-    Ok(())
-}
-
-/// Extract 7z archive files
-pub(crate) fn extract_7z_safe(
-    archive_path: &Path,
-    dest_dir: &Path,
-    guard: &ExtractionGuard,
-    zip_passwords: &[String],
-) -> Result<()> {
-    use sevenz_rust::{Password, SevenZReader};
-    use std::io::Read;
-    use tracing::{debug, info};
-
-    // Check magic bytes - file might be mislabeled (e.g., ZIP with .7z extension)
-    let mut file = File::open(archive_path)?;
-    let mut magic = [0u8; 4];
-    if file.read_exact(&mut magic).is_ok() && magic == [0x50, 0x4B, 0x03, 0x04] {
-        // This is actually a ZIP file (PK\x03\x04), redirect to ZIP handler
-        return extract_zip_safe(archive_path, dest_dir, guard, zip_passwords);
-    }
-
-    // Try with empty password first
-    let result = (|| -> Result<()> {
-        let file = File::open(archive_path)?;
-        let file_len = file.metadata()?.len();
-        let mut sz = SevenZReader::new(file, file_len, Password::empty())
-            .context("Failed to create 7z reader (unencrypted/empty password)")?;
-
-        sz.for_each_entries(|entry, reader| extract_7z_entry_safe(entry, reader, dest_dir, guard))
-            .map_err(|e| anyhow::anyhow!(e))
-            .context("Failed to extract 7z archive (unencrypted/empty password)")
-    })();
-
-    let err = match result {
-        Ok(()) => return Ok(()),
-        Err(e) => e,
-    };
-    let err_msg = err.to_string();
-
-    // If it failed due to encryption/password, try the configured passwords
-    if err_msg.contains("Password")
-        || err_msg.contains("encrypted")
-        || err_msg.contains("decryption")
-        || err_msg.contains("Invalid password")
-    {
-        info!(
-            "7z archive appears encrypted, trying {} passwords",
-            zip_passwords.len()
-        );
-
-        for password in zip_passwords {
-            debug!("Trying 7z password ({}B)", password.len());
-            let password_obj = Password::from(password.as_str());
-
-            let file = File::open(archive_path)?;
-            let file_len = file.metadata()?.len();
-
-            let reader_result = SevenZReader::new(file, file_len, password_obj.clone());
-
-            if let Ok(mut sz) = reader_result {
-                let extract_result = sz.for_each_entries(|entry, reader| {
-                    extract_7z_entry_safe(entry, reader, dest_dir, guard)
-                });
-
-                if extract_result.is_ok() {
-                    info!("✓ Decrypted 7z with password: {}", password);
-                    return Ok(());
-                }
-            }
-        }
-
-        anyhow::bail!(
-            "Failed to decrypt 7z archive (tried {} passwords). Original error: {}",
-            zip_passwords.len(),
-            err
-        );
-    }
-
-    // If it was some other error, return it
-    Err(err).context("7z extraction failed")
-}
 
 fn extract_7z_entry_safe<R: Read + ?Sized>(
     entry: &sevenz_rust::SevenZArchiveEntry,
@@ -266,43 +104,111 @@ fn extract_7z_entry_safe<R: Read + ?Sized>(
     Ok(true) // Continue
 }
 
-/// Extract macOS PKG files (XAR archives)
-pub(crate) fn extract_pkg_safe(
-    archive_path: &Path,
+/// Extract a 7z archive from in-memory data.
+///
+/// Password retry re-creates the cursor over the same slice — no disk I/O.
+pub(crate) fn extract_7z_from_data(
+    data: &[u8],
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+    zip_passwords: &[String],
+) -> Result<()> {
+    use sevenz_rust::{Password, SevenZReader};
+    use std::io::Cursor;
+    use tracing::{debug, info};
+
+    let size = data.len() as u64;
+
+    let result = (|| -> Result<()> {
+        let mut sz = SevenZReader::new(Cursor::new(data), size, Password::empty())
+            .context("Failed to create 7z reader")?;
+        sz.for_each_entries(|entry, reader| extract_7z_entry_safe(entry, reader, dest_dir, guard))
+            .map_err(|e| anyhow::anyhow!(e))
+            .context("Failed to extract 7z archive")
+    })();
+
+    let err = match result {
+        Ok(()) => return Ok(()),
+        Err(e) => e,
+    };
+
+    // Check the full error chain (not just the outermost message) so we catch
+    // PasswordRequired even when it's wrapped by a context like "Failed to create 7z reader".
+    let is_password_error = err.chain().any(|e| {
+        let s = e.to_string();
+        s.contains("Password")
+            || s.contains("encrypted")
+            || s.contains("decryption")
+            || s.contains("Invalid password")
+    });
+
+    if is_password_error {
+        info!(
+            "7z archive appears encrypted, trying {} passwords",
+            zip_passwords.len()
+        );
+        for password in zip_passwords {
+            debug!("Trying 7z password ({}B)", password.len());
+            let password_obj = Password::from(password.as_str());
+            if let Ok(mut sz) = SevenZReader::new(Cursor::new(data), size, password_obj) {
+                if sz
+                    .for_each_entries(|entry, reader| {
+                        extract_7z_entry_safe(entry, reader, dest_dir, guard)
+                    })
+                    .is_ok()
+                {
+                    info!("✓ Decrypted 7z with password");
+                    return Ok(());
+                }
+            }
+        }
+        anyhow::bail!(
+            "Failed to decrypt 7z archive (tried {} passwords). Original error: {}",
+            zip_passwords.len(),
+            err
+        );
+    }
+
+    Err(err).context("7z extraction failed")
+}
+
+/// Extract a macOS PKG (XAR) archive from an in-memory reader.
+///
+/// `data_len` is the byte length of the underlying data (used for ToC-size
+/// validation to prevent allocation bombs from malformed headers).
+pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
+    mut reader: R,
+    data_len: u64,
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
-    // Validate XAR header before passing to XarReader::new(), which
-    // allocates based on the toc_length_compressed field. A malformed file
-    // can claim a petabyte ToC and abort the process with OOM.
+    // Validate XAR header before calling XarReader::new(), which allocates
+    // based on the toc_length_compressed field.
     {
-        let mut f = File::open(archive_path)?;
-        let file_size = f.metadata()?.len();
-        let mut header = [0u8; 28]; // XAR header is 28 bytes
-        use std::io::Read;
-        if f.read_exact(&mut header).is_err() {
+        let mut header = [0u8; 28];
+        if reader.read_exact(&mut header).is_err() {
             anyhow::bail!("PKG file too small for XAR header");
         }
-        // XAR magic: "xar!" (0x78617221)
         if &header[0..4] != b"xar!" {
             anyhow::bail!("Not a valid XAR/PKG file (bad magic)");
         }
-        // toc_length_compressed is a big-endian u64 at offset 8; header is [u8;28] so [8..16] is always 8 bytes
-        let mut toc_bytes = [0u8; 8];
-        toc_bytes.copy_from_slice(&header[8..16]);
-        let toc_compressed = u64::from_be_bytes(toc_bytes);
-        if toc_compressed > file_size {
+        let toc_compressed = u64::from_be_bytes(
+            header[8..16]
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("XAR header too short"))?,
+        );
+        if toc_compressed > data_len {
             anyhow::bail!(
-                "XAR header claims compressed ToC is {} bytes but file is only {} bytes",
+                "XAR header claims compressed ToC is {} bytes but data is only {} bytes",
                 toc_compressed,
-                file_size
+                data_len
             );
         }
+        reader.seek(std::io::SeekFrom::Start(0))?;
     }
 
-    let file = File::open(archive_path)?;
     let mut xar =
-        apple_xar::reader::XarReader::new(file).context("Failed to read PKG (XAR) archive")?;
+        apple_xar::reader::XarReader::new(reader).context("Failed to read PKG (XAR) archive")?;
 
     // Get all files in the archive
     let files = xar.files().context("Failed to list XAR files")?;
@@ -367,14 +273,13 @@ pub(crate) fn extract_pkg_safe(
     Ok(())
 }
 
-/// Extract a Debian package (.deb) with bomb protection
-pub(crate) fn extract_deb_safe(
-    archive_path: &Path,
+/// Extract a Debian package from an in-memory reader.
+pub(crate) fn extract_deb_from_reader<R: Read>(
+    reader: R,
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
-    let file = File::open(archive_path)?;
-    let mut archive = ar::Archive::new(file);
+    let mut archive = ar::Archive::new(reader);
 
     while let Some(entry_result) = archive.next_entry() {
         let mut entry = entry_result.context("Failed to read AR entry")?;
@@ -425,15 +330,13 @@ pub(crate) fn extract_deb_safe(
     Ok(())
 }
 
-/// Extract an RPM package (.rpm) with bomb protection
-/// RPM packages contain a lead, signature, header, and CPIO archive
-pub(crate) fn extract_rpm(
-    archive_path: &Path,
+/// Extract an RPM package from an in-memory reader.
+pub(crate) fn extract_rpm_from_reader<R: Read>(
+    reader: R,
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
-    let file = File::open(archive_path)?;
-    let mut reader = BufReader::new(file);
+    let mut reader = BufReader::new(reader);
 
     // RPM magic: 0xedabeedb
     let mut magic = [0u8; 4];
@@ -766,14 +669,13 @@ pub(crate) fn extract_rar(
     Ok(())
 }
 
-/// Extract Windows cabinet (.cab) archive files.
-pub(crate) fn extract_cab(
-    archive_path: &Path,
+/// Extract a Windows CAB archive from an in-memory reader.
+pub(crate) fn extract_cab_from_reader<R: Read + Seek>(
+    reader: R,
     dest_dir: &Path,
     guard: &ExtractionGuard,
 ) -> Result<()> {
-    let file = File::open(archive_path).context("Failed to open CAB archive")?;
-    let mut cabinet = cab::Cabinet::new(file).context("Failed to parse CAB archive")?;
+    let mut cabinet = cab::Cabinet::new(reader).context("Failed to parse CAB archive")?;
 
     // Collect file names first (cab crate requires sequential access per folder).
     // Cap at 200k entries to prevent OOM from malformed CAB headers.

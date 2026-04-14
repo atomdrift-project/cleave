@@ -771,9 +771,11 @@ impl PEAnalyzer {
         let r2_strings = if let Some(Ok(batched)) = r2_result {
             tools_used.push("radare2".to_string());
 
-            let mut binary_metrics = self
-                .radare2
-                .compute_metrics_from_batched(&batched, original_data.len() as u64, "pe");
+            let mut binary_metrics = self.radare2.compute_metrics_from_batched(
+                &batched,
+                original_data.len() as u64,
+                "pe",
+            );
 
             // When goblin succeeded, override r2 metrics with more accurate goblin values
             if let Some(pe) = pe {

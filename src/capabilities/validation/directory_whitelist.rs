@@ -221,6 +221,7 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "mem",            // Memory operations
     "os",             // OS integration
     "process",        // Process control
+    "revision-control", // Revision control interactions
     "time",           // Timing operations
     "ui",             // User interface operations
 ];
@@ -399,6 +400,11 @@ const ALLOWED_MB_PROCESS: &[&str] = &[
     "tls",
     "tty",
     "user",
+];
+
+/// Allowed subdirectories in micro-behaviors/revision-control/
+const ALLOWED_MB_REVISION_CONTROL: &[&str] = &[
+    "git",
 ];
 
 /// Allowed subdirectories in micro-behaviors/time/
@@ -1079,6 +1085,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         ("mem", ALLOWED_MB_MEM),
         ("os", ALLOWED_MB_OS),
         ("process", ALLOWED_MB_PROCESS),
+        ("revision-control", ALLOWED_MB_REVISION_CONTROL),
         ("time", ALLOWED_MB_TIME),
         ("ui", ALLOWED_MB_UI),
     ];

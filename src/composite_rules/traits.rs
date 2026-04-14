@@ -47,7 +47,7 @@ const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
 
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.
-const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(500);
+const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);
 
 /// Macro to time condition evaluation
 macro_rules! timed_eval {

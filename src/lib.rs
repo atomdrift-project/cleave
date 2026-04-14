@@ -1271,7 +1271,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             {
                 analyzer.analyze_input(&input)
             } else {
-                anyhow::bail!("Unsupported file type: {:?}", file_type);
+                // No dedicated analyzer — return a minimal report with basic metadata.
+                // This allows callers (analyze_file, analyze_directory with all_files=true)
+                // to handle files of any type without erroring.
+                let target = types::TargetInfo {
+                    path: path.display().to_string(),
+                    file_type: file_type.report_file_type(),
+                    size_bytes: file_data.len() as u64,
+                    sha256: sha256_hex.clone(),
+                    architectures: None,
+                };
+                Ok(types::AnalysisReport::new(target))
             }
         }
     }?;

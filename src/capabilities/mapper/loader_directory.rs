@@ -1910,16 +1910,16 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate well-known/ atomic traits have specific file type filters (not just `all`)
-            tracing::trace!("Checking well-known/ for over-broad file type filters");
+            // Validate all atomic traits have specific file type filters (not just `all`)
+            tracing::trace!("Checking all tiers for over-broad file type filters");
             let wk_unscoped_ft =
                 find_wellknown_unscoped_filetypes(&trait_definitions, &rule_source_files);
             if !wk_unscoped_ft.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} well-known/ traits use over-broad file type filter (for: all)",
+                    "\n❌ ERROR: {} traits use over-broad file type filter (for: all)",
                     wk_unscoped_ft.len()
                 );
-                eprintln!("   well-known/ traits must target specific file types (e.g., pe, elf, python):\n");
+                eprintln!("   All traits must target specific file types (e.g., pe, elf, python):\n");
                 for (trait_id, source_file) in &wk_unscoped_ft {
                     let line_hint = find_line_number(source_file, "for:");
                     if let Some(line) = line_hint {
@@ -1932,9 +1932,10 @@ impl super::CapabilityMapper {
                     "\n   Add a specific 'for:' field, e.g., 'for: [pe]' or 'for: [elf, macho]'."
                 );
                 warnings.push(format!(
-                    "{} well-known/ traits use over-broad file type filter (add specific 'for:' field)",
+                    "{} traits use over-broad file type filter (add specific 'for:' field)",
                     wk_unscoped_ft.len()
                 ));
+                has_fatal_errors = true;
             }
 
             // Validate well-known/ atomic traits have specific platform filters (not just `all`)

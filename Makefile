@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark
+.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate
 
 # Default target
 all: build
@@ -32,6 +32,7 @@ help: ## Show this help
 	@echo "  ci                    - Run all CI checks (test + lint)"
 	@echo "  regenerate-testdata   - Regenerate integration test snapshots from ~/data/cleave"
 	@echo "  loadtest              - Run load test against cleave server"
+	@echo "  validate              - Validate trait definitions (for: restrictions, taxonomy, etc.)"
 	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/ (DATASET=200MB)"
 	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
 	@echo "  clean                 - Clean all build artifacts"
@@ -172,6 +173,12 @@ coverage: ## Generate code coverage report
 
 ci: test lint ## Run all CI checks (test + lint)
 	@echo "✓ All CI checks passed"
+
+validate: ## Validate trait definitions (for: restrictions, taxonomy, precision, etc.)
+	@echo "Validating trait definitions..."
+	cargo build --quiet
+	./target/debug/$(BINARY) validate
+	@echo "✓ Validation passed"
 
 clean: ## Clean all build artifacts
 	@echo "Cleaning build artifacts..."

@@ -283,6 +283,8 @@ pub(crate) enum FileType {
     Jar,
     /// Tar archive (.tar, .tar.gz, .tgz, etc.)
     Tar,
+    /// Zstandard-compressed single file (.zst, not a tar)
+    Zst,
     /// npm package (.tgz)
     Npm,
     /// NuGet package (.nupkg)
@@ -487,6 +489,7 @@ impl FileType {
             FileType::Apk,
             FileType::Jar,
             FileType::Tar,
+            FileType::Zst,
             FileType::Npm,
             FileType::Nupkg,
             FileType::Gem,
@@ -562,7 +565,8 @@ impl FileType {
             "zip" => FileType::Zip,
             "apk" => FileType::Apk,
             "jar" | "war" | "ear" => FileType::Jar,
-            "tar" | "tgz" | "tar.gz" | "tar.bz2" | "tar.xz" | "tar.zst" => FileType::Tar,
+            "tar" | "tgz" | "tar.gz" | "tar.bz2" | "tar.xz" => FileType::Tar,
+            "zst" => FileType::Zst,
             "npm" => FileType::Npm,
             "nupkg" => FileType::Nupkg,
             "gem" => FileType::Gem,

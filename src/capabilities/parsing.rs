@@ -496,6 +496,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "crx" => vec![RuleFileType::Crx],
                 "vsix-archive" => vec![RuleFileType::VsixArchive],
                 "xpi" => vec![RuleFileType::Xpi],
+                "zst" => vec![RuleFileType::Zst],
                 _ => {
                     warnings.push(format!("Unknown file type: '{}'", name));
                     vec![]

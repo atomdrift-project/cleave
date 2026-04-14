@@ -1137,10 +1137,22 @@ fn extract_trait_tier(id: &str) -> &str {
     base.find('/').map_or(base, |i| &base[..i])
 }
 
-/// Find well-known/ atomic traits that use `for: [all]` (over-broad file type filter).
+/// Trait path prefixes exempt from the universal `for:` restriction.
 ///
-/// well-known/ traits identify specific malware families and must be scoped to concrete
-/// file types (e.g., `pe`, `elf`, `python`) rather than the default `all`.
+/// These directories do intentional cross-file-type plain-text matching where
+/// restricting to a specific file type would cause missed detections.
+const UNSCOPED_FILETYPE_ALLOWLIST: &[&str] = &[
+    "micro-behaviors/data/text/",
+];
+
+/// Find atomic traits across all tiers that use `for: [all]` (over-broad file type filter).
+///
+/// Every atomic trait must target a specific file type (e.g. `pe`, `elf`, `python`).
+/// Using the default `all` causes the trait to run against every analyzed file,
+/// wasting CPU and increasing false-positive risk.
+///
+/// Paths in `UNSCOPED_FILETYPE_ALLOWLIST` are exempt — they perform intentional
+/// cross-file-type plain-text matching.
 ///
 /// Returns `Vec<(trait_id, source_file)>` for violations.
 #[must_use]
@@ -1151,9 +1163,16 @@ pub(crate) fn find_wellknown_unscoped_filetypes(
     trait_definitions
         .iter()
         .filter(|t| {
-            extract_trait_tier(&t.id) == "well-known"
-                && t.r#for.contains(&FileType::All)
-                && !(t.size_min.is_some() || t.size_max.is_some())
+            if !t.r#for.contains(&FileType::All) {
+                return false;
+            }
+            let source = rule_source_files
+                .get(&t.id)
+                .map(String::as_str)
+                .unwrap_or("");
+            !UNSCOPED_FILETYPE_ALLOWLIST
+                .iter()
+                .any(|prefix| source.contains(prefix))
         })
         .map(|t| {
             let source = rule_source_files

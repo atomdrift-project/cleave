@@ -1147,7 +1147,17 @@ const ALL_FILETYPES_COUNT: usize = usize::MAX;
 const BROAD_PLATFORM_THRESHOLD: usize = 4;
 
 /// Threshold for flagging a trait as having too many effective file types.
-const BROAD_FILETYPE_THRESHOLD: usize = 10;
+///
+/// The threshold is set to 23 to allow the two most common two-group combinations:
+/// - `for: [scripts, binaries]` = 15 types (executable code — scripts + compiled)
+/// - `for: [scripts, source]`   = 22 types (text code — scripts + source languages)
+/// - `for: [binaries, source]`  = 17 types (compiled + source language files)
+///
+/// Anything requiring all three groups (scripts+binaries+source = 27 types) or
+/// broader (documents, media, etc.) should be narrowed or placed in an allowlisted
+/// directory.
+const BROAD_FILETYPE_THRESHOLD: usize = 23;
+const BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM: usize = 23;
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
 pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
@@ -1155,9 +1165,26 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
     "micro-behaviors/data/text/",
 ];
 
-/// Trait path prefixes where 6+ effective file types are permitted.
+/// Trait path prefixes where broad file type coverage is permitted.
+///
+/// These directories contain patterns (network indicators, encoding schemes, etc.)
+/// that legitimately appear across compiled binaries, scripts, source code, and
+/// documents — so requiring narrow file type targeting would silently drop coverage.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
+    // Text data patterns (encoding, obfuscation markers) appear in any file
     "micro-behaviors/data/text/",
+    // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
+    "micro-behaviors/communications/ip/",
+    // URLs and URL fragments appear in any file type
+    "micro-behaviors/communications/url/",
+    // C2 infrastructure indicators (IPs, domains, ports, tunnels) appear in any file
+    "objectives/command-and-control/infrastructure/",
+    // HTTP header names and values appear in binaries, scripts, and documents
+    "micro-behaviors/communications/http/headers/",
+    // Credential access patterns (passwords, tokens, keys, wallets) appear in any file
+    "objectives/credential-access/",
+    // IP discovery service hostnames are embedded in any executable (scripts, binaries, config)
+    "micro-behaviors/communications/http/ip-discovery/",
 ];
 
 /// Returns the effective platform count for a trait.
@@ -1214,23 +1241,68 @@ pub(crate) fn find_broad_platform_traits(
         .collect()
 }
 
-/// Find atomic traits with 6+ effective file types outside the broad-filetype allowlist.
+/// Find atomic traits that list `unix` alongside `linux` or `macos`, which is redundant.
+///
+/// `unix` is the superset that covers Linux and macOS (and other Unix-like systems). Listing
+/// `unix` together with `linux` or `macos` is redundant — `unix` already implies them.
+/// Correct form: use `[unix, windows]` instead of `[linux, macos, unix, windows]`.
+///
+/// Returns `Vec<(trait_id, source_file, redundant_platform)>` for violations.
+#[must_use]
+pub(crate) fn find_redundant_unix_platforms(
+    trait_definitions: &[TraitDefinition],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String)> {
+    trait_definitions
+        .iter()
+        .filter_map(|t| {
+            if !t.platforms.contains(&Platform::Unix) {
+                return None;
+            }
+            let redundant: Vec<&str> = t
+                .platforms
+                .iter()
+                .filter_map(|p| match p {
+                    Platform::Linux => Some("linux"),
+                    Platform::MacOS => Some("macos"),
+                    _ => None,
+                })
+                .collect();
+            if redundant.is_empty() {
+                return None;
+            }
+            let source = rule_source_files
+                .get(&t.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            Some((t.id.clone(), source, redundant.join(", ")))
+        })
+        .collect()
+}
+
+/// Find atomic traits with too many effective file types outside the broad-filetype allowlist.
 ///
 /// `FileType::All` always exceeds the threshold. Named groups are already expanded in
-/// `t.r#for`, so their member count is used directly. Traits must be in an allowlisted
-/// directory to use 6+ file types; otherwise they should target a narrower set.
+/// `t.r#for`, so their member count is used directly. Single-platform traits get a higher
+/// limit (12) since the platform already constrains the realistic type set. Multi-platform
+/// traits must stay within 10.
 ///
-/// Returns `Vec<(trait_id, source_file, type_count)>` for violations.
+/// Returns `Vec<(trait_id, source_file, type_count, matched_types)>` for violations.
 #[must_use]
 pub(crate) fn find_broad_filetype_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String, usize)> {
+) -> Vec<(String, String, usize, Vec<FileType>)> {
     trait_definitions
         .iter()
         .filter(|t| {
             let count = effective_filetype_count(t);
-            if count < BROAD_FILETYPE_THRESHOLD {
+            let threshold = if effective_platform_count(&t.platforms) <= 1 {
+                BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM
+            } else {
+                BROAD_FILETYPE_THRESHOLD
+            };
+            if count < threshold {
                 return false;
             }
             let source = rule_source_files.get(&t.id).map(String::as_str).unwrap_or("");
@@ -1243,7 +1315,12 @@ pub(crate) fn find_broad_filetype_traits(
                 .get(&t.id)
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            (t.id.clone(), source, effective_filetype_count(t))
+            let matched_types = if t.r#for.contains(&FileType::All) {
+                vec![FileType::All]
+            } else {
+                t.r#for.clone()
+            };
+            (t.id.clone(), source, effective_filetype_count(t), matched_types)
         })
         .collect()
 }

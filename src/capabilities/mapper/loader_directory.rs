@@ -20,7 +20,8 @@ use crate::capabilities::validation::{
     find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
     find_composite_only_wellknown_files, find_deprecated_string_value_usage, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
+    find_condition_scope_violations, find_empty_condition_clauses, find_excessive_file_types,
+    find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
     find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
     find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
@@ -36,7 +37,7 @@ use crate::capabilities::validation::{
     find_string_literal_should_use_text, find_string_pattern_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_broad_filetype_traits, find_broad_platform_traits,
+    find_broad_filetype_traits, find_broad_platform_traits, find_redundant_unix_platforms,
     BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
     validate_composite_trait_only, validate_directory_structure,
@@ -1942,38 +1943,105 @@ impl super::CapabilityMapper {
                 has_fatal_errors = true;
             }
 
-            // Validate: traits with 6+ effective file types must be in an allowlisted directory
-            tracing::trace!("Checking for over-broad file type scope (6+ effective types)");
+            // Validate: traits listing unix alongside linux or macos (redundant — unix is the superset)
+            tracing::trace!("Checking for redundant unix+linux/macos platform combinations");
+            let redundant_unix =
+                find_redundant_unix_platforms(&trait_definitions, &rule_source_files);
+            if !redundant_unix.is_empty() {
+                eprintln!(
+                    "\n⚠️  WARNING: {} traits list 'unix' with redundant specific platforms",
+                    redundant_unix.len()
+                );
+                eprintln!("   'unix' already covers linux and macos. Use [unix, windows] instead of [linux, macos, unix, windows].");
+                eprintln!();
+                for (trait_id, source_file, redundant) in &redundant_unix {
+                    let line_hint = find_line_number(source_file, "platforms:");
+                    if let Some(line) = line_hint {
+                        eprintln!("   {}:{}: '{}' (redundant: {})", source_file, line, trait_id, redundant);
+                    } else {
+                        eprintln!("   {}: '{}' (redundant: {})", source_file, trait_id, redundant);
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} traits list 'unix' with redundant linux/macos (unix is the superset)",
+                    redundant_unix.len()
+                ));
+            }
+
+            // Validate: traits with too many file types (10+ multi-platform, 12+ single-platform)
+            tracing::trace!("Checking for over-broad file type scope");
             let broad_ft =
                 find_broad_filetype_traits(&trait_definitions, &rule_source_files);
             if !broad_ft.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} traits target {} or more file types",
-                    broad_ft.len(),
-                    10
+                    "\n❌ ERROR: {} traits target too many file types (23+ types — exceeds 2-group threshold)",
+                    broad_ft.len()
                 );
                 eprintln!("   Narrow the file type scope or move to an allowlisted directory:");
                 for prefix in BROAD_FILETYPE_ALLOWLIST {
                     eprintln!("     {prefix}");
                 }
                 eprintln!();
-                for (trait_id, source_file, count) in &broad_ft {
+                for (trait_id, source_file, count, matched_types) in &broad_ft {
                     let line_hint = find_line_number(source_file, "for:");
                     let count_str = if *count == usize::MAX {
                         "all".to_string()
                     } else {
                         count.to_string()
                     };
+                    let types_str = matched_types
+                        .iter()
+                        .map(|ft| format!("{ft:?}").to_lowercase())
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: '{}' ({} types)", source_file, line, trait_id, count_str);
+                        eprintln!("   {}:{}: '{}' ({} types: {})", source_file, line, trait_id, count_str, types_str);
                     } else {
-                        eprintln!("   {}: '{}' ({} types)", source_file, trait_id, count_str);
+                        eprintln!("   {}: '{}' ({} types: {})", source_file, trait_id, count_str, types_str);
                     }
                 }
                 eprintln!();
                 warnings.push(format!(
                     "{} traits target 6+ file types (narrow scope or move to allowlisted directory)",
                     broad_ft.len()
+                ));
+                has_fatal_errors = true;
+            }
+
+            // Validate: condition-type-specific filetype scope limits
+            // ast: ≤2 types, symbol/hex/yara: ≤4 types
+            tracing::trace!("Checking condition-type filetype scope limits");
+            let cond_scope = find_condition_scope_violations(&trait_definitions, &rule_source_files);
+            if !cond_scope.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} traits exceed the filetype limit for their condition type",
+                    cond_scope.len()
+                );
+                eprintln!("   ast: ≤2 types  |  symbol/hex/yara: ≤4 types\n");
+                for (trait_id, source_file, kind, count, max) in &cond_scope {
+                    let count_str = if *count == usize::MAX {
+                        "all".to_string()
+                    } else {
+                        count.to_string()
+                    };
+                    let line_hint = find_line_number(source_file, "for:");
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: '{}' (type:{} has {} types, max {})",
+                            source_file, line, trait_id, kind, count_str, max
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: '{}' (type:{} has {} types, max {})",
+                            source_file, trait_id, kind, count_str, max
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} traits exceed filetype limit for condition type (ast≤2, symbol/hex/yara≤4)",
+                    cond_scope.len()
                 ));
                 has_fatal_errors = true;
             }

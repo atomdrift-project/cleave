@@ -586,32 +586,41 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     }
 
     let has_windows = platforms.contains(&Platform::Windows);
+    // Unix-like systems: Linux and generic Unix (BSD, AIX, Solaris, etc.).
+    // Note: `unix` is the superset — it conceptually includes Linux and macOS.
+    // Android is treated separately since it is a mobile OS, not a traditional Unix flavor.
     let has_unix = platforms
         .iter()
-        .any(|p| matches!(p, Platform::Linux | Platform::Unix | Platform::Android));
-    let has_linux_unix = platforms
-        .iter()
         .any(|p| matches!(p, Platform::Linux | Platform::Unix));
+    // Linux-specific features: systemd, deb, rpm require Linux, not generic Unix.
+    let has_linux = platforms.contains(&Platform::Linux);
+    let has_android = platforms.contains(&Platform::Android);
     let has_macos = platforms.contains(&Platform::MacOS);
     let has_apple = platforms
         .iter()
         .any(|p| matches!(p, Platform::MacOS | Platform::Ios));
-    // True when the platform set includes at least one desktop/server OS
-    let has_desktop = has_windows || has_linux_unix || has_macos;
+    // True when the platform set includes at least one desktop/server OS.
+    // Unix covers Linux and macOS for scripting language purposes.
+    let has_desktop = has_windows || has_unix || has_macos;
 
     if from_groups {
         // Silently filter incompatible types from group expansions
         file_types.retain(|ft| {
             match ft {
                 RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => has_windows,
-                RuleFileType::Elf => has_unix,
-                RuleFileType::Macho => has_apple,
+                // ELF runs on Linux, BSD, and Android native libs
+                RuleFileType::Elf => has_unix || has_android,
+                // Mach-O runs on macOS/iOS; unix is the superset that includes macOS
+                RuleFileType::Macho => has_apple || has_unix,
+                // Shell runs on all unix-like systems (unix covers Linux and macOS)
                 RuleFileType::Shell => has_unix || has_apple,
+                // AppleScript/Swift/ObjC are macOS/iOS-specific languages, not generic unix
                 RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
                     has_apple
                 }
                 RuleFileType::PowerShell => has_windows,
-                RuleFileType::Perl => has_linux_unix,
+                // Perl is a unix/linux scripting language, not a macOS-native concern
+                RuleFileType::Perl => has_unix,
                 // Server/desktop-only languages — not meaningful on mobile-only targets
                 RuleFileType::Python
                 | RuleFileType::Pyc
@@ -624,12 +633,12 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Lnk | RuleFileType::Nupkg => has_windows,
                 // Apple-specific formats
                 RuleFileType::Plist | RuleFileType::Ipa => has_apple,
-                // Linux/Unix-specific formats (systemd, deb, rpm)
+                // systemd/deb/rpm are Linux-specific, not generic Unix
                 RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
-                    has_linux_unix
+                    has_linux
                 }
-                // Android or Linux (apk is both Android packages and Alpine/Wolfi packages)
-                RuleFileType::Apk => has_unix,
+                // APK covers both Android packages and Alpine/Wolfi Linux packages
+                RuleFileType::Apk => has_unix || has_android,
                 _ => true,
             }
         });
@@ -640,16 +649,16 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => {
                     (has_windows, "windows")
                 }
-                RuleFileType::Elf => (has_unix, "linux, unix, or android"),
-                RuleFileType::Macho => (has_apple, "macos or ios"),
+                RuleFileType::Elf => (has_unix || has_android, "linux, unix, or android"),
+                RuleFileType::Macho => (has_apple || has_unix, "macos, ios, or unix"),
                 RuleFileType::Shell => {
-                    (has_unix || has_apple, "linux, unix, macos, android, or ios")
+                    (has_unix || has_apple, "linux, unix, macos, or ios")
                 }
                 RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
                     (has_apple, "macos or ios")
                 }
                 RuleFileType::PowerShell => (has_windows, "windows"),
-                RuleFileType::Perl => (has_linux_unix, "linux or unix"),
+                RuleFileType::Perl => (has_unix, "linux or unix"),
                 RuleFileType::Python
                 | RuleFileType::Pyc
                 | RuleFileType::Ruby
@@ -660,9 +669,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Lnk | RuleFileType::Nupkg => (has_windows, "windows"),
                 RuleFileType::Plist | RuleFileType::Ipa => (has_apple, "macos or ios"),
                 RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
-                    (has_linux_unix, "linux or unix")
+                    (has_linux, "linux")
                 }
-                RuleFileType::Apk => (has_unix, "linux, unix, or android"),
+                RuleFileType::Apk => (has_unix || has_android, "linux, unix, or android"),
                 _ => continue,
             };
             if !supported {
@@ -1357,7 +1366,7 @@ mod tests {
         );
         assert_eq!(w.len(), 1);
         assert!(
-            w[0].contains("macos or ios"),
+            w[0].contains("macos, ios, or unix"),
             "message should name required platforms"
         );
     }
@@ -1424,6 +1433,8 @@ mod tests {
 
     #[test]
     fn test_conflict_linux_macho() {
+        // Linux sets has_unix (linux | unix), which now permits Mach-O since unix is the superset
+        // of macOS. Linux alone is sufficient to allow macho — no conflict expected.
         let mut w = Vec::new();
         resolve_platform_filetype_conflicts(
             "rule.test",
@@ -1432,7 +1443,7 @@ mod tests {
             false,
             &mut w,
         );
-        assert_eq!(w.len(), 1);
+        assert!(w.is_empty(), "Linux covers Macho via unix superset: {w:?}");
     }
 
     #[test]
@@ -1524,7 +1535,7 @@ mod tests {
 
     #[test]
     fn test_conflict_partial_multiplatform() {
-        // windows+unix covers pe+elf fine, but macho still needs macos/ios
+        // windows+unix covers pe+elf+macho: unix is the superset including macOS, so no conflict
         let mut w = Vec::new();
         resolve_platform_filetype_conflicts(
             "rule.test",
@@ -1533,8 +1544,7 @@ mod tests {
             false,
             &mut w,
         );
-        assert_eq!(w.len(), 1, "only macho should be flagged: {w:?}");
-        assert!(w[0].contains("Macho") || w[0].contains("macos"));
+        assert!(w.is_empty(), "windows+unix should cover pe+elf+macho: {w:?}");
     }
 
     // ==================== from_groups filtering Tests ====================
@@ -1584,10 +1594,12 @@ mod tests {
         assert!(ft.contains(&RuleFileType::JavaScript));
         assert!(ft.contains(&RuleFileType::Ruby));
         assert!(ft.contains(&RuleFileType::Php));
-        assert!(ft.contains(&RuleFileType::Perl));
         assert!(ft.contains(&RuleFileType::Lua));
         assert!(ft.contains(&RuleFileType::PowerShell));
-        assert!(ft.contains(&RuleFileType::AppleScript));
+        // Perl requires unix — filtered out for windows-only
+        assert!(!ft.contains(&RuleFileType::Perl));
+        // AppleScript requires macos/ios — filtered out for windows-only
+        assert!(!ft.contains(&RuleFileType::AppleScript));
         // Shell requires unix/apple — filtered out for windows-only
         assert!(!ft.contains(&RuleFileType::Shell));
     }

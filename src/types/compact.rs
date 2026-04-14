@@ -89,6 +89,12 @@ pub struct CompactTrait {
     /// Confidence (omit when 0.5)
     #[serde(skip_serializing_if = "is_default_conf")]
     pub c: f32,
+    /// MBC (Malware Behavior Catalog) ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub m: Option<String>,
+    /// MITRE ATT&CK Technique ID
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub a: Option<String>,
     /// Evidence values (flattened from Evidence structs)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub e: Vec<String>,
@@ -242,6 +248,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
                     l: crit_to_int(finding.crit),
                     d: finding.desc.clone(),
                     c: finding.conf,
+                    m: finding.mbc.clone(),
+                    a: finding.attack.clone(),
                     e: evidence_values,
                 },
             );

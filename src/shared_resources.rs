@@ -186,7 +186,7 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
     // This is *not* a deadlock — rayon's work-stealing still services other tasks — but all
     // analysis threads are stalled until compilation finishes.
     if lock.get().is_none() {
-        tracing::warn!(
+        tracing::debug!(
             enable_third_party,
             on_rayon_thread = rayon::current_thread_index().is_some(),
             "YARA engine not yet initialized; this thread will block until compilation completes \

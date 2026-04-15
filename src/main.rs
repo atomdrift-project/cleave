@@ -49,6 +49,9 @@ fn main() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_ref(), &disabled);
+    if !disabled.yara {
+        cleave::prefetch_yara_engine(!disabled.third_party);
+    }
     if !matches!(args.command, Some(cli::Command::Version)) {
         print_version_banner(format);
     }

@@ -679,6 +679,17 @@ pub fn clear_all_thread_caches() {
     tracing::debug!("Cleared thread-local caches on all threads");
 }
 
+/// Pre-warm the YARA engine on a background thread.
+///
+/// Call this as early as possible after startup so YARA compilation overlaps with
+/// other setup work. The background thread races the first real scan; if YARA is
+/// already loaded by the time analysis begins, the analysis thread returns immediately.
+pub fn prefetch_yara_engine(enable_third_party: bool) {
+    std::thread::spawn(move || {
+        shared_resources::yara_engine(enable_third_party);
+    });
+}
+
 /// Analyze a single file and return a detailed report.
 ///
 /// This is the main entry point for analyzing files programmatically.

@@ -3092,20 +3092,22 @@ impl super::CapabilityMapper {
             }
 
             // Validate metric field references
-            let valid_metric_fields = super::helpers::get_valid_metric_fields();
+            let valid_metric_fields: rustc_hash::FxHashSet<String> =
+                crate::types::field_paths::all_valid_metric_paths()
+                    .into_iter()
+                    .collect();
             let mut invalid_metric_refs = Vec::new();
 
             for trait_def in &trait_definitions {
-                let metric_fields = super::helpers::collect_metric_refs_from_trait(trait_def);
-                for field in metric_fields {
-                    if !valid_metric_fields.contains(&field) {
+                if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if {
+                    if !valid_metric_fields.contains(field) {
                         let source_file = trait_source_files
                             .get(&trait_def.id)
-                            .map(std::string::String::as_str)
+                            .map(String::as_str)
                             .unwrap_or("unknown");
                         invalid_metric_refs.push((
                             trait_def.id.clone(),
-                            field,
+                            field.clone(),
                             source_file.to_string(),
                         ));
                     }

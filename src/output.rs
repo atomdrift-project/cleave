@@ -17,15 +17,6 @@ use crate::types::{AnalysisReport, Criticality, Finding};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::HashMap;
-use std::sync::OnceLock;
-
-/// Cached regex for stripping ANSI escape codes
-#[allow(dead_code)] // Used by binary target
-fn ansi_strip_regex() -> Option<&'static regex::Regex> {
-    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    RE.get_or_init(|| regex::Regex::new(r"\x1b\[[0-9;]*m").ok())
-        .as_ref()
-}
 
 /// Extract base trait ID for aggregation (strip ::variant suffix)
 /// e.g., "well-known/malware/trojan/macos-stealer-cpp::variant" -> "well-known/malware/trojan/macos-stealer-cpp"
@@ -582,7 +573,7 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+                            .filter_map(|v| v.as_str().map(str::to_string))
                             .collect()
                     })
                     .unwrap_or_default();
@@ -591,7 +582,7 @@ pub(crate) fn parse_jsonl(jsonl: &str) -> Result<AnalysisReport> {
                     .and_then(|v| v.as_array())
                     .map(|arr| {
                         arr.iter()
-                            .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
+                            .filter_map(|v| v.as_str().map(str::to_string))
                             .collect()
                     })
                     .unwrap_or_default();

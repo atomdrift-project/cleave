@@ -46,45 +46,20 @@ where
 }
 
 /// Check if a filename is a shared library based on extension and naming
-#[cfg(test)]
 pub(super) fn is_shared_library(filename: &str) -> bool {
     // Match patterns like: libssl.so, libssl.so.1, libssl.so.1.0.0
     filename.contains(".so") && (filename.ends_with(".so") || filename.contains(".so."))
 }
 
-#[cfg(not(test))]
-fn is_shared_library(filename: &str) -> bool {
-    // Match patterns like: libssl.so, libssl.so.1, libssl.so.1.0.0
-    filename.contains(".so") && (filename.ends_with(".so") || filename.contains(".so."))
-}
-
 /// Calculate similarity between two library names, ignoring version differences
-#[cfg(test)]
 pub(super) fn library_similarity(name1: &str, name2: &str) -> f64 {
     // Extract base name (before .so)
     let base1 = name1.split(".so").next().unwrap_or(name1);
     let base2 = name2.split(".so").next().unwrap_or(name2);
 
     if base1 == base2 {
-        // Same library, different version
         0.95
     } else {
-        // Use Levenshtein distance for the full names
-        strsim::normalized_levenshtein(name1, name2)
-    }
-}
-
-#[cfg(not(test))]
-fn library_similarity(name1: &str, name2: &str) -> f64 {
-    // Extract base name (before .so)
-    let base1 = name1.split(".so").next().unwrap_or(name1);
-    let base2 = name2.split(".so").next().unwrap_or(name2);
-
-    if base1 == base2 {
-        // Same library, different version
-        0.95
-    } else {
-        // Use Levenshtein distance for the full names
         strsim::normalized_levenshtein(name1, name2)
     }
 }

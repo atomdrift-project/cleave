@@ -150,29 +150,6 @@ fn check_condition(condition: &Condition, trait_id: &str, path: &Path) -> bool {
     false
 }
 
-/// Collect all metric field references from a trait definition
-pub(super) fn collect_metric_refs_from_trait(trait_def: &TraitDefinition) -> Vec<String> {
-    let mut fields = Vec::new();
-    collect_metric_refs_from_condition(&trait_def.r#if, &mut fields);
-    fields
-}
-
-/// Recursively collect metric field references from a condition
-fn collect_metric_refs_from_condition(condition: &Condition, fields: &mut Vec<String>) {
-    if let Condition::Metrics { field, .. } = condition {
-        fields.push(field.clone());
-    }
-}
-
-/// Get all valid metric field paths
-/// Dynamically extracts all field paths from metrics struct definitions
-pub(super) fn get_valid_metric_fields() -> FxHashSet<String> {
-    // Use the auto-generated field paths from the ValidFieldPaths derive macro
-    // This ensures the validation always stays in sync with actual struct definitions
-    crate::types::field_paths::all_valid_metric_paths()
-        .into_iter()
-        .collect()
-}
 
 /// Suggest a similar metric field for typos (simple Levenshtein distance)
 pub(super) fn suggest_metric_field(valid_fields: &FxHashSet<String>, typo: &str) -> Option<String> {

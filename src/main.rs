@@ -22,7 +22,7 @@ use cleave::cli;
 use cli_bootstrap::{
     apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool,
     default_zip_passwords, determine_default_log_file, init_logging, log_exit_summary, log_startup,
-    log_startup_diagnostics, print_version_banner, start_memory_logger,
+    print_version_banner, start_memory_logger,
 };
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
@@ -43,12 +43,12 @@ fn main() -> Result<()> {
     };
     let effective_log_file = args.log_file.clone().or(default_log_file);
 
-    init_logging(args.verbose, is_server, format, effective_log_file.as_ref());
-    log_startup(effective_log_file.as_ref(), args.verbose);
+    init_logging(args.verbose, is_server, format, effective_log_file.as_deref());
+    log_startup(effective_log_file.as_deref(), args.verbose);
     configure_rayon_thread_pool();
 
     let disabled = args.disabled_components();
-    apply_runtime_overrides(args.traits_dir.as_ref(), &disabled);
+    apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
     if !disabled.yara {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
@@ -57,12 +57,12 @@ fn main() -> Result<()> {
     }
 
     let zip_passwords = default_zip_passwords();
-    let sample_extraction = build_sample_extraction(args.extract_dir.as_ref());
+    let sample_extraction = build_sample_extraction(args.extract_dir.as_deref());
     let platforms = args.platforms();
     let max_memory_file_size = args.max_file_mem * 1024 * 1024;
     let max_scan_file_size = args.max_file_size * 1024 * 1024;
-    let _memory_logger = start_memory_logger(args.verbose, effective_log_file.as_ref());
-    log_startup_diagnostics();
+    let _memory_logger = start_memory_logger(args.verbose, effective_log_file.as_deref());
+    cleave::memory_tracker::log_startup_diagnostics();
 
     let dispatch_ctx = build_dispatch_context(&cli_dispatch::DispatchOptions {
         format: &format,

@@ -480,7 +480,7 @@ where
             source_file: None,
         });
     }
-    if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
+    if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
         report.metadata.tools_used.push("yara-x".to_string());
     }
     inline
@@ -983,17 +983,54 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Check for extension/content mismatch
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
-    // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers
+    // For binary types (PE, ELF, MachO) run the YARA scan concurrently with stng extraction.
+    // Both only need file_data and are independent of each other, so they can overlap.
+    // On production runs where radare2 is cached, YARA (~270ms) otherwise sits between
+    // stng (~290ms) and structural (~50ms), adding to the critical path.  Running them in
+    // parallel eliminates that 270ms from the wall-clock total.
+    let binary_yara_ftypes: Option<&[&str]> = if options.disable_yara {
+        None
+    } else {
+        match file_type {
+            FileType::Pe => Some(&["pe", "exe", "dll", "bat", "ps1"]),
+            FileType::Elf => Some(&["elf", "so", "ko"]),
+            FileType::MachO => Some(&["macho", "dylib", "kext"]),
+            _ => None,
+        }
+    };
+
+    // Extract strings with stng ONCE - used for encoded payloads and passed to analyzers.
     // Skip extraction for archive files themselves as they are expected to contain
     // binary noise and their contents will be analyzed separately.
-    let (stng_strings, stage_stng_ms) = if file_type.is_archive() {
-        (Vec::new(), 0)
+    // For binary types, overlap stng with YARA scan (both need only file_data).
+    let cancel_for_yara = options.cancellation.clone();
+    let ((stng_strings, stage_stng_ms), prefetched_yara) = if file_type.is_archive() {
+        ((Vec::new(), 0u64), None)
+    } else if let Some(ftypes) = binary_yara_ftypes {
+        rayon::join(
+            || {
+                let t = std::time::Instant::now();
+                let opts = analyzers::stng_analysis_opts(4);
+                let s = stng::extract_strings_with_options(file_data, &opts);
+                (s, t.elapsed().as_millis() as u64)
+            },
+            || {
+                if cancel_for_yara
+                    .as_ref()
+                    .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    return None;
+                }
+                yara_engine
+                    .filter(|e| e.is_loaded())
+                    .map(|e| e.scan_bytes_with_inline(file_data, Some(ftypes)))
+            },
+        )
     } else {
-        let stng_start = std::time::Instant::now();
+        let t = std::time::Instant::now();
         let opts = analyzers::stng_analysis_opts(4);
-        let strings = stng::extract_strings_with_options(file_data, &opts);
-        let elapsed = stng_start.elapsed().as_millis() as u64;
-        (strings, elapsed)
+        let s = stng::extract_strings_with_options(file_data, &opts);
+        ((s, t.elapsed().as_millis() as u64), None)
     };
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
@@ -1043,7 +1080,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let mut report = match file_type {
         FileType::MachO => {
             set_phase("macho:struct+yara");
-            // Run YARA scan in parallel with structural analysis for inline evidence
+            // YARA scan was already run concurrently with stng extraction above (prefetched_yara).
+            // Note: the stng+YARA join used full file_data for FAT binaries. The arch_data slice
+            // below selects the preferred slice for structural analysis, while YARA already
+            // covered the full binary which is correct (YARA targets the outer container).
             let analyzer = analyzers::macho::MachOAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
@@ -1054,37 +1094,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let is_fat = labeled_ranges.len() > 1;
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
-            let file_types: &[&str] = &["macho", "dylib", "kext"];
-            // Run structural analysis, YARA scan, and raw regex precompute in parallel.
-            // Raw regex precompute (~224ms) normally runs inside evaluate_and_merge_findings;
-            // starting it here overlaps it with structural analysis (~275ms).
             let rule_file_type = capability_mapper.detect_file_type("macho");
-            let cancel_macho = options.cancellation.clone();
-            let ((struct_result, yara_result), raw_regex) = rayon::join(
-                || {
-                    rayon::join(
-                        || {
-                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                                path,
-                                arch_data,
-                                input.sha256.clone(),
-                            ))
-                        },
-                        || {
-                            if cancel_macho
-                                .as_ref()
-                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                            {
-                                return None;
-                            }
-                            engine
-                                .filter(|e| e.is_loaded())
-                                .map(|e| e.scan_bytes_with_inline(arch_data, Some(file_types)))
-                        },
-                    )
-                },
-                || capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type),
-            );
+            let struct_result =
+                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, arch_data, input.sha256.clone()));
+            let raw_regex = capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, file_data);
 
@@ -1100,7 +1113,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
-                process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+                process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
             set_phase("macho:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
@@ -1115,54 +1128,27 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Elf => {
             set_phase("elf:struct+yara");
-            // rayon::join here spawns struct analysis (which calls rayon::join for r2 + goblin)
-            // and YARA scan (which calls par_iter over tiers) concurrently on the global pool.
-            // When this runs inside a rayon worker (e.g., archive par_iter member analysis),
-            // both sub-tasks must steal threads from the already-saturated pool.
-            // If the pool is full, tasks queue until a worker finishes its current job.
-            // This is the mechanism behind the 2+ min ELF stalls: r2 holds a rayon thread for
-            // its entire 15-min timeout budget while YARA tasks wait for workers to free up.
+            // YARA scan was already run concurrently with stng extraction above (prefetched_yara).
+            // Note: when running inside an archive par_iter (member analysis), the old pattern of
+            // rayon::join(struct, yara) could cause pool-saturation stalls (r2 holding a rayon
+            // thread while YARA tasks queued). Prefetching eliminates that race entirely.
             tracing::debug!(
                 on_rayon_thread = rayon::current_thread_index().is_some(),
                 data_bytes = file_data.len(),
-                "ELF: entering rayon::join for concurrent struct+YARA analysis"
+                "ELF: entering structural analysis (YARA already prefetched)"
             );
             let analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = yara_engine;
-            let file_types: &[&str] = &["elf", "so", "ko"];
             let rule_file_type = capability_mapper.detect_file_type("elf");
-            let cancel_elf = options.cancellation.clone();
-            let ((struct_result, yara_result), raw_regex) = rayon::join(
-                || {
-                    rayon::join(
-                        || {
-                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                                path,
-                                file_data,
-                                input.sha256.clone(),
-                            ))
-                        },
-                        || {
-                            if cancel_elf
-                                .as_ref()
-                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                            {
-                                return None;
-                            }
-                            engine
-                                .filter(|e| e.is_loaded())
-                                .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
-                        },
-                    )
-                },
-                || capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type),
-            );
+            let struct_result =
+                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone()));
+            let raw_regex = capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             let inline_yara =
-                process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+                process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             set_phase("elf:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -1178,16 +1164,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
         FileType::Pe => {
             set_phase("pe:struct+yara");
-            // Same nested-rayon concern as ELF. Additionally, .bat/.ps1 files are routed here
-            // (file_types includes "bat", "ps1") and are scanned by ALL PE-tier YARA rules.
-            // A 1.4 MB .bat with no PE structure triggers the full PE rule set; the slow_rule_ms
-            // threshold only covers composite trait evaluation, not the YARA scan itself.
-            // The 321 s .bat stall was a YARA-tier scan with no per-rule timeout logging firing
-            // because slow_rule_ms does not plumb into scan_bytes_with_inline — see SLOW_YARA_TIER_WARN_MS.
+            // YARA scan was already run concurrently with stng extraction above (prefetched_yara).
+            // .bat/.ps1 files are also routed here (file_types includes "bat", "ps1") and are
+            // scanned by all PE-tier YARA rules.
             tracing::debug!(
                 on_rayon_thread = rayon::current_thread_index().is_some(),
                 data_bytes = file_data.len(),
-                "PE: entering rayon::join for concurrent struct+YARA analysis"
+                "PE: entering structural analysis (YARA already prefetched)"
             );
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
@@ -1198,37 +1181,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
             let engine = yara_engine;
-            let file_types: &[&str] = &["pe", "exe", "dll", "bat", "ps1"];
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            let cancel_pe = options.cancellation.clone();
-            let ((struct_result, yara_result), raw_regex) = rayon::join(
-                || {
-                    rayon::join(
-                        || {
-                            Ok::<_, anyhow::Error>(analyzer.analyze_structural(
-                                path,
-                                file_data,
-                                input.sha256.clone(),
-                            ))
-                        },
-                        || {
-                            if cancel_pe
-                                .as_ref()
-                                .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                            {
-                                return None;
-                            }
-                            engine
-                                .filter(|e| e.is_loaded())
-                                .map(|e| e.scan_bytes_with_inline(file_data, Some(file_types)))
-                        },
-                    )
-                },
-                || capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type),
-            );
+            let struct_result =
+                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone()));
+            let raw_regex = capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             let inline_yara =
-                process_yara_result(&mut report, yara_result, engine.map(AsRef::as_ref));
+                process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             set_phase("pe:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -1610,7 +1569,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                                 report.findings.push(finding);
                             }
                         }
-                        if !report.metadata.tools_used.contains(&"yara-x".to_string()) {
+                        if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
                             report.metadata.tools_used.push("yara-x".to_string());
                         }
                     }

@@ -90,7 +90,7 @@ pub(crate) fn determine_default_log_file() -> Option<String> {
 }
 
 pub(crate) fn apply_runtime_overrides(
-    traits_dir: Option<&String>,
+    traits_dir: Option<&str>,
     disabled: &cli::DisabledComponents,
 ) {
     if let Some(traits_dir) = traits_dir {
@@ -106,14 +106,11 @@ pub(crate) fn apply_runtime_overrides(
 }
 
 pub(crate) fn default_zip_passwords() -> Vec<String> {
-    cli::DEFAULT_ZIP_PASSWORDS
-        .iter()
-        .map(std::string::ToString::to_string)
-        .collect()
+    cli::DEFAULT_ZIP_PASSWORDS.iter().copied().map(str::to_string).collect()
 }
 
 pub(crate) fn build_sample_extraction(
-    extract_dir: Option<&String>,
+    extract_dir: Option<&str>,
 ) -> Option<cleave::SampleExtractionConfig> {
     extract_dir.map(|dir| {
         let path = std::path::PathBuf::from(dir);
@@ -128,7 +125,7 @@ pub(crate) fn init_logging(
     verbose: bool,
     is_server: bool,
     format: cli::OutputFormat,
-    effective_log_file: Option<&String>,
+    effective_log_file: Option<&str>,
 ) {
     if let Some(log_file) = effective_log_file {
         use std::fs::OpenOptions;
@@ -235,7 +232,7 @@ pub(crate) fn init_logging(
     }
 }
 
-pub(crate) fn log_startup(effective_log_file: Option<&String>, verbose: bool) {
+pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     #[cfg(debug_assertions)]
     tracing::warn!(
         "DEBUG binary — cleave will be very slow; use `make release` for production builds"
@@ -246,7 +243,7 @@ pub(crate) fn log_startup(effective_log_file: Option<&String>, verbose: bool) {
     tracing::info!(
         pid = pid,
         ppid = ppid,
-        log_file = effective_log_file.map_or("none", String::as_str),
+        log_file = effective_log_file.unwrap_or("none"),
         "cleave started: {}",
         std::env::args().collect::<Vec<_>>().join(" ")
     );
@@ -284,7 +281,7 @@ pub(crate) fn print_version_banner(format: cli::OutputFormat) {
 
 pub(crate) fn start_memory_logger(
     verbose: bool,
-    effective_log_file: Option<&String>,
+    effective_log_file: Option<&str>,
 ) -> Option<cleave::memory_tracker::MemoryLoggerHandle> {
     if verbose || effective_log_file.is_some() {
         use cleave::memory_tracker;
@@ -297,9 +294,6 @@ pub(crate) fn start_memory_logger(
     }
 }
 
-pub(crate) fn log_startup_diagnostics() {
-    cleave::memory_tracker::log_startup_diagnostics();
-}
 
 pub(crate) fn log_exit_summary() {
     use cleave::memory_tracker;

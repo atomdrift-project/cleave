@@ -67,41 +67,10 @@ impl<'a> AnalyzeDispatchContext<'a> {
     }
 }
 
-struct TestDispatchContext<'a> {
-    disabled: &'a cli::DisabledComponents,
-    platforms: &'a [cleave::Platform],
-}
-
-impl<'a> TestDispatchContext<'a> {
-    fn new(disabled: &'a cli::DisabledComponents, platforms: &'a [cleave::Platform]) -> Self {
-        Self {
-            disabled,
-            platforms,
-        }
-    }
-}
-
 pub(crate) struct DispatchContext<'a> {
     format: &'a cli::OutputFormat,
     disabled: &'a cli::DisabledComponents,
     analyze: AnalyzeDispatchContext<'a>,
-    test: TestDispatchContext<'a>,
-}
-
-impl<'a> DispatchContext<'a> {
-    fn new(
-        format: &'a cli::OutputFormat,
-        disabled: &'a cli::DisabledComponents,
-        analyze: AnalyzeDispatchContext<'a>,
-        test: TestDispatchContext<'a>,
-    ) -> Self {
-        Self {
-            format,
-            disabled,
-            analyze,
-            test,
-        }
-    }
 }
 
 struct TestMatchRequest<'a> {
@@ -136,72 +105,6 @@ struct TestMatchRequest<'a> {
     max_size: Option<u64>,
 }
 
-impl<'a> TestMatchRequest<'a> {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        target: &'a str,
-        kind: cli::SearchType,
-        method: cli::MatchMethod,
-        pattern: Option<&'a str>,
-        kv_path: Option<&'a str>,
-        exists: Option<bool>,
-        size_min: Option<usize>,
-        size_max: Option<usize>,
-        file_type: Option<cli::DetectFileType>,
-        count_min: usize,
-        count_max: Option<usize>,
-        per_kb_min: Option<f64>,
-        per_kb_max: Option<f64>,
-        case_insensitive: bool,
-        section: Option<&'a str>,
-        offset: Option<i64>,
-        offset_range: Option<(i64, Option<i64>)>,
-        section_offset: Option<i64>,
-        section_offset_range: Option<(i64, Option<i64>)>,
-        is_check: Option<cleave::composite_rules::StringValidator>,
-        encoding: Option<&'a str>,
-        entropy_min: Option<f64>,
-        entropy_max: Option<f64>,
-        length_min: Option<u64>,
-        length_max: Option<u64>,
-        value_min: Option<f64>,
-        value_max: Option<f64>,
-        min_size: Option<u64>,
-        max_size: Option<u64>,
-    ) -> Self {
-        Self {
-            target,
-            kind,
-            method,
-            pattern,
-            kv_path,
-            exists,
-            size_min,
-            size_max,
-            file_type,
-            count_min,
-            count_max,
-            per_kb_min,
-            per_kb_max,
-            case_insensitive,
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            is_check,
-            encoding,
-            entropy_min,
-            entropy_max,
-            length_min,
-            length_max,
-            value_min,
-            value_max,
-            min_size,
-            max_size,
-        }
-    }
-}
 
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
     let mut results = Vec::with_capacity(targets.len());
@@ -349,7 +252,8 @@ fn run_server(
 
 fn run_test_match_command(
     req: &TestMatchRequest<'_>,
-    ctx: &TestDispatchContext<'_>,
+    disabled: &cli::DisabledComponents,
+    platforms: &[cleave::Platform],
 ) -> Result<String> {
     test_match(
         req.target,
@@ -381,8 +285,8 @@ fn run_test_match_command(
         req.value_max,
         req.min_size,
         req.max_size,
-        ctx.disabled,
-        ctx.platforms,
+        disabled,
+        platforms,
         cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
     )
@@ -391,13 +295,14 @@ fn run_test_match_command(
 fn run_test_rules_command(
     target: &str,
     rules: &str,
-    ctx: &TestDispatchContext<'_>,
+    disabled: &cli::DisabledComponents,
+    platforms: &[cleave::Platform],
 ) -> Result<String> {
     test_rules(
         target,
         rules,
-        ctx.disabled,
-        ctx.platforms.to_vec(),
+        disabled,
+        platforms.to_vec(),
         cleave::CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
         cleave::CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
     )
@@ -422,10 +327,10 @@ pub(crate) struct DispatchOptions<'a> {
 }
 
 pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> DispatchContext<'a> {
-    DispatchContext::new(
-        opts.format,
-        opts.disabled,
-        AnalyzeDispatchContext::new(
+    DispatchContext {
+        format: opts.format,
+        disabled: opts.disabled,
+        analyze: AnalyzeDispatchContext::new(
             opts.format,
             opts.disabled,
             opts.zip_passwords,
@@ -443,8 +348,7 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
             opts.all_files,
             !opts.disabled.third_party,
         ),
-        TestDispatchContext::new(opts.disabled, opts.platforms),
-    )
+    }
 }
 
 pub(crate) fn dispatch_command(
@@ -488,7 +392,7 @@ pub(crate) fn dispatch_command(
             extract_metrics_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
         Some(cli::Command::TestRules { target, rules }) => {
-            run_test_rules_command(&target, &rules, &ctx.test)?
+            run_test_rules_command(&target, &rules, ctx.disabled, ctx.analyze.platforms)?
         }
         Some(cli::Command::TestMatch {
             target,
@@ -521,12 +425,12 @@ pub(crate) fn dispatch_command(
             min_size,
             max_size,
         }) => run_test_match_command(
-            &TestMatchRequest::new(
-                &target,
-                r#type,
+            &TestMatchRequest {
+                target: &target,
+                kind: r#type,
                 method,
-                pattern.as_deref(),
-                kv_path.as_deref(),
+                pattern: pattern.as_deref(),
+                kv_path: kv_path.as_deref(),
                 exists,
                 size_min,
                 size_max,
@@ -536,13 +440,13 @@ pub(crate) fn dispatch_command(
                 per_kb_min,
                 per_kb_max,
                 case_insensitive,
-                section.as_deref(),
+                section: section.as_deref(),
                 offset,
                 offset_range,
                 section_offset,
                 section_offset_range,
-                is,
-                encoding.as_deref(),
+                is_check: is,
+                encoding: encoding.as_deref(),
                 entropy_min,
                 entropy_max,
                 length_min,
@@ -551,8 +455,9 @@ pub(crate) fn dispatch_command(
                 value_max,
                 min_size,
                 max_size,
-            ),
-            &ctx.test,
+            },
+            ctx.disabled,
+            ctx.analyze.platforms,
         )?,
         Some(cli::Command::UpdateRules { force, check, pin }) => {
             run_update_rules(force, check, pin)?;

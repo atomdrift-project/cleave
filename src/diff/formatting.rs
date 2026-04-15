@@ -92,16 +92,16 @@ pub(crate) fn format_diff_terminal(report: &DiffReport) -> String {
                 .iter()
                 .find(|e| {
                     e.location
-                        .as_ref()
-                        .is_some_and(|l: &String| l.starts_with("line:"))
+                        .as_deref()
+                        .is_some_and(|l| l.starts_with("line:"))
                 })
                 .or(cap.evidence.first())
                 .map(|ev| {
                     let loc = ev
                         .location
-                        .as_ref()
-                        .filter(|l: &&String| l.as_str() != "file" && !l.is_empty())
-                        .map(|l: &String| format!(":{}", l.trim_start_matches("line:")))
+                        .as_deref()
+                        .filter(|l| *l != "file" && !l.is_empty())
+                        .map(|l| format!(":{}", l.trim_start_matches("line:")))
                         .unwrap_or_default();
                     format!(" [{}{}]", ev.value, loc)
                 })

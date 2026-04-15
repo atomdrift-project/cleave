@@ -13,7 +13,7 @@ use stng::{ExtractedString, StringMethod};
 
 /// Convert stng StringMethod to a string for encoding_chain tracking
 /// Only tracks actual string construction/encoding methods, not extraction sources
-fn stng_method_to_string(method: StringMethod) -> String {
+fn stng_method_to_string(method: StringMethod) -> &'static str {
     match method {
         // String construction/encoding methods - worth tracking
         StringMethod::StackString => "stack",
@@ -26,9 +26,8 @@ fn stng_method_to_string(method: StringMethod) -> String {
         StringMethod::WideString => "wide",
 
         // Extraction sources and future variants - not worth tracking
-        _ => return String::new(),
+        _ => "",
     }
-    .to_string()
 }
 
 pub(crate) const MAX_STRINGS_PER_FILE: usize = 100_000;
@@ -229,7 +228,7 @@ impl StringExtractor {
         // This captures: StackString, decoded encodings, etc.
         let method_str = stng_method_to_string(es.method);
         if !method_str.is_empty() {
-            info.encoding_chain.push(method_str);
+            info.encoding_chain.push(method_str.to_string());
         }
 
         // Don't call detect_layers() here - stng already identified the encoding method

@@ -4,7 +4,10 @@ use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
 use crate::radare2::Radare2Analyzer;
 use crate::strings::StringExtractor;
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Function, Import, Metrics,
+    Section, StringInfo, StructuralFeature, TargetInfo,
+};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use chrono::TimeZone;

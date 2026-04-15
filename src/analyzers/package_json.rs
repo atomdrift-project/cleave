@@ -2,7 +2,10 @@
 use crate::analyzers::unified::UnifiedSourceAnalyzer;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, Criticality, Evidence, Finding, Import, StringInfo, StringType,
+    StructuralFeature, TargetInfo,
+};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashMap;
@@ -40,10 +43,9 @@ where
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
         serde_json::Value::String(s) => Ok(Some(s)),
-        serde_json::Value::Null => Ok(None),
         serde_json::Value::Number(n) => Ok(Some(n.to_string())),
         serde_json::Value::Bool(b) => Ok(Some(b.to_string())),
-        _ => Ok(None), // objects/arrays → treat as absent
+        _ => Ok(None), // null, objects, arrays → treat as absent
     }
 }
 

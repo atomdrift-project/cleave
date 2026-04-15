@@ -11,7 +11,7 @@
 
 use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
 use memchr::memmem;
 use std::path::Path;

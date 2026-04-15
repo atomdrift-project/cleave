@@ -106,7 +106,11 @@ pub(crate) fn apply_runtime_overrides(
 }
 
 pub(crate) fn default_zip_passwords() -> Vec<String> {
-    cli::DEFAULT_ZIP_PASSWORDS.iter().copied().map(str::to_string).collect()
+    cli::DEFAULT_ZIP_PASSWORDS
+        .iter()
+        .copied()
+        .map(str::to_string)
+        .collect()
 }
 
 pub(crate) fn build_sample_extraction(
@@ -294,6 +298,39 @@ pub(crate) fn start_memory_logger(
     }
 }
 
+/// Spawn a background thread that periodically checks for `parking_lot` lock cycles.
+///
+/// Only compiled in debug builds (`debug_assertions`). Has no effect in release.
+/// Logs a tracing error with thread IDs and backtrace if a deadlock is detected.
+#[cfg(debug_assertions)]
+pub(crate) fn start_deadlock_detector() {
+    let result = std::thread::Builder::new()
+        .name("deadlock-detector".into())
+        .spawn(|| loop {
+            std::thread::sleep(std::time::Duration::from_secs(5));
+            let deadlocks = parking_lot::deadlock::check_deadlock();
+            if deadlocks.is_empty() {
+                continue;
+            }
+            tracing::error!(
+                count = deadlocks.len(),
+                "parking_lot deadlock detected — threads involved:"
+            );
+            for (i, threads) in deadlocks.iter().enumerate() {
+                for t in threads {
+                    tracing::error!(
+                        cycle = i,
+                        thread_id = ?t.thread_id(),
+                        backtrace = ?t.backtrace(),
+                        "deadlocked thread"
+                    );
+                }
+            }
+        });
+    if let Err(e) = result {
+        tracing::warn!(error = %e, "Failed to spawn deadlock-detector thread");
+    }
+}
 
 pub(crate) fn log_exit_summary() {
     use cleave::memory_tracker;

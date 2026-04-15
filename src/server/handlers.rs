@@ -5,6 +5,7 @@ use crate::{analyze_file, AnalysisOptions, Criticality};
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -124,12 +125,37 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
     .into_response()
 }
 
+/// Clears `reload_in_progress` on drop, including on future cancellation.
+struct ReloadGuard<'a>(&'a AtomicBool);
+impl Drop for ReloadGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Reload trait definitions from disk.
+///
+/// Only one reload may run at a time; concurrent requests receive 409.
 pub(super) async fn reload(State(state): State<Arc<AppState>>) -> Response {
     let request_id = state.next_request_id();
     let span = info_span!("reload", request_id);
 
     async {
+        if state
+            .reload_in_progress
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            warn!("Reload already in progress, rejecting concurrent request");
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "reload already in progress"})),
+            )
+                .into_response();
+        }
+        // Guard clears the flag on drop, including on future cancellation.
+        let _guard = ReloadGuard(&state.reload_in_progress);
+
         let start = Instant::now();
         let task_span = Span::current();
         let result = tokio::task::spawn_blocking(move || {
@@ -548,12 +574,11 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
     }
 
     // Memory pressure detected — try to reclaim by clearing thread-local caches.
-    // Use block_in_place so tokio knows this thread will block on rayon::broadcast.
     info!(
         rss_mb = rss / 1024 / 1024,
         "Memory pressure detected, clearing thread-local caches"
     );
-    tokio::task::block_in_place(crate::clear_all_thread_caches);
+    crate::clear_all_thread_caches();
 
     // Re-check after clearing caches
     let rss_after = crate::memory_tracker::current_rss()?;
@@ -570,9 +595,12 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
 
     // Still overloaded — track duration and keep rejecting requests until the
     // process recovers or an external supervisor restarts it.
-    let mut overloaded = state.overloaded_since.lock();
-    let since = *overloaded.get_or_insert_with(Instant::now);
-    let overloaded_secs = since.elapsed().as_secs();
+    let overloaded_secs = {
+        let mut overloaded = state.overloaded_since.lock();
+        let since = *overloaded.get_or_insert_with(Instant::now);
+        drop(overloaded);
+        since.elapsed().as_secs()
+    };
 
     if overloaded_secs > 30 {
         tracing::error!(
@@ -727,8 +755,8 @@ async fn analyze_path_inner(
     let path_owned = path.to_owned();
     let task_span = Span::current();
 
-    // Run analysis in blocking thread with timeout
-    // Use the request counter to periodically clear caches (avoids rayon::broadcast on every request)
+    // Run analysis in blocking thread with timeout.
+    // Periodically clear thread-local caches to prevent unbounded memory growth.
     let should_clear_caches = state
         .next_request_id
         .load(std::sync::atomic::Ordering::Relaxed)
@@ -759,8 +787,6 @@ async fn analyze_path_inner(
             analyze_file(&path_owned, &opts)
         }));
         // Periodically clear thread-local caches to prevent unbounded memory growth.
-        // Done every 50 requests rather than every request to avoid rayon::broadcast
-        // contention under concurrent load.
         if should_clear_caches {
             crate::clear_all_thread_caches();
         }

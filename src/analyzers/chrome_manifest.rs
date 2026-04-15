@@ -8,7 +8,7 @@
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
 use std::collections::HashSet;
@@ -44,7 +44,6 @@ where
     match value {
         serde_json::Value::Bool(b) => Ok(Some(b)),
         serde_json::Value::String(s) => Ok(Some(s.eq_ignore_ascii_case("true"))),
-        serde_json::Value::Null => Ok(None),
         _ => Ok(None),
     }
 }
@@ -58,7 +57,6 @@ where
     match value {
         serde_json::Value::Number(n) => Ok(n.as_u64().and_then(|n| u8::try_from(n).ok())),
         serde_json::Value::String(s) => Ok(s.trim().parse::<u8>().ok()),
-        serde_json::Value::Null => Ok(None),
         _ => Ok(None),
     }
 }
@@ -71,7 +69,6 @@ where
     let value = serde_json::Value::deserialize(deserializer)?;
     match value {
         serde_json::Value::String(s) => Ok(Some(s)),
-        serde_json::Value::Null => Ok(None),
         serde_json::Value::Number(n) => Ok(Some(n.to_string())),
         serde_json::Value::Bool(b) => Ok(Some(b.to_string())),
         _ => Ok(None),

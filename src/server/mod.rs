@@ -13,7 +13,7 @@ use axum::response::{IntoResponse, Json, Response};
 use axum::routing::{get, post};
 use axum::Router;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -103,6 +103,9 @@ pub struct AppState {
     pub overloaded_since: parking_lot::Mutex<Option<Instant>>,
     /// Currently in-flight analysis requests, keyed by request ID.
     pub in_flight: dashmap::DashMap<u64, InFlightRequest>,
+    /// Whether a reload is currently in progress.
+    /// Prevents concurrent reloads from piling up spawn_blocking threads.
+    pub reload_in_progress: AtomicBool,
 }
 
 impl AppState {
@@ -165,6 +168,7 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
         max_concurrent_tasks: max_concurrent,
         overloaded_since: parking_lot::Mutex::new(None),
         in_flight: dashmap::DashMap::new(),
+        reload_in_progress: AtomicBool::new(false),
     });
 
     // Prune stale RE disk-cache entries on startup (unbounded without eviction).

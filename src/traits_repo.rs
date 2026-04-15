@@ -352,10 +352,10 @@ fn is_git_repo(path: &Path) -> bool {
 }
 
 fn check_git_available() -> std::io::Result<()> {
-    Command::new("git").arg("--version").output().map_err(|_| {
+    Command::new("git").arg("--version").output().map_err(|e| {
         std::io::Error::new(
             std::io::ErrorKind::NotFound,
-            "git is not installed or not in PATH",
+            format!("git is not installed or not in PATH: {e}"),
         )
     })?;
     Ok(())

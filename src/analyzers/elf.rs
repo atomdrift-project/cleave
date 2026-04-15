@@ -9,7 +9,10 @@ use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
 use crate::strings::StringExtractor;
 use crate::types::binary_metrics::ElfMetrics;
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Function, Import, Metrics,
+    Section, StringInfo, StructuralFeature, TargetInfo,
+};
 use anyhow::{Context, Result};
 use goblin::elf::note::NT_GNU_BUILD_ID;
 use goblin::elf::Elf;
@@ -968,8 +971,11 @@ impl ElfAnalyzer {
     }
     /// Compute ELF-specific metrics from parsed ELF binary
     fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>, data: &[u8]) -> ElfMetrics {
-        use goblin::elf::dynamic::*;
-        use goblin::elf::program_header::*;
+        use goblin::elf::dynamic::{
+            DT_BIND_NOW, DT_FINI_ARRAYSZ, DT_GNU_HASH, DT_INIT_ARRAYSZ, DT_RPATH, DT_RUNPATH,
+            DT_TEXTREL,
+        };
+        use goblin::elf::program_header::{PF_X, PT_GNU_RELRO, PT_GNU_STACK, PT_LOAD};
         use goblin::elf::sym::STB_LOCAL;
 
         let mut metrics = ElfMetrics {

@@ -7,7 +7,7 @@ use crate::diff::utils::{
     calculate_file_similarity, detect_renames, extract_library_base, is_shared_library,
     library_similarity,
 };
-use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 use chrono::Utc;
 
 fn create_test_report_for_diff(path: &str, trait_ids: &[&str]) -> AnalysisReport {

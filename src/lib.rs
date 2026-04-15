@@ -596,6 +596,7 @@ pub struct PhaseTracker(Arc<std::sync::RwLock<String>>);
 
 impl PhaseTracker {
     /// Create a new tracker with an empty phase.
+    #[must_use]
     pub fn new() -> Self {
         Self(Arc::new(std::sync::RwLock::new(String::new())))
     }
@@ -609,6 +610,7 @@ impl PhaseTracker {
     }
 
     /// Read the current phase.
+    #[must_use]
     pub fn get(&self) -> String {
         self.0.read().map(|p| p.clone()).unwrap_or_default()
     }
@@ -648,35 +650,14 @@ impl Default for AnalysisOptions {
     }
 }
 
-/// Clear thread-local caches on ALL rayon worker threads.
+/// Clear thread-local caches on the calling thread.
 ///
-/// Call this periodically during long-running scans to free memory from:
-/// - UTF-8 conversion caches (can hold large strings from previous files)
-/// - YARA scanner caches
-///
-/// This uses rayon's `broadcast` to ensure all worker threads clear their caches.
-///
-/// # Example
-///
-/// ```ignore
-/// // After processing every N files, clear caches to prevent memory growth
-/// if file_count % 100 == 0 {
-///     cleave::clear_all_thread_caches();
-/// }
-/// ```
+/// Frees UTF-8 conversion and YARA scanner caches accumulated during analysis.
+/// Rayon worker threads clear their own caches per-file, so no broadcast is needed.
 pub fn clear_all_thread_caches() {
-    // Clear on the main thread
     clear_thread_local_caches();
-
-    // Clear on all global rayon worker threads
-    rayon::broadcast(|_| {
-        clear_thread_local_caches();
-    });
-
-    // Clear global condition stats (bounded by condition type count, but useful for fresh stats)
     clear_condition_stats();
-
-    tracing::debug!("Cleared thread-local caches on all threads");
+    tracing::debug!("Cleared thread-local caches on calling thread");
 }
 
 /// Pre-warm the YARA engine on a background thread.
@@ -1095,9 +1076,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("macho");
-            let struct_result =
-                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, arch_data, input.sha256.clone()));
-            let raw_regex = capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                path,
+                arch_data,
+                input.sha256.clone(),
+            ));
+            let raw_regex =
+                capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, file_data);
 
@@ -1143,9 +1128,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 .with_preextracted_strings(preextracted_strings.clone());
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
-            let struct_result =
-                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone()));
-            let raw_regex = capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                path,
+                file_data,
+                input.sha256.clone(),
+            ));
+            let raw_regex =
+                capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
@@ -1182,9 +1171,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            let struct_result =
-                Ok::<_, anyhow::Error>(analyzer.analyze_structural(path, file_data, input.sha256.clone()));
-            let raw_regex = capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+                path,
+                file_data,
+                input.sha256.clone(),
+            ));
+            let raw_regex =
+                capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));

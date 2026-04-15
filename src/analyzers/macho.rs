@@ -5,7 +5,10 @@ use crate::capabilities::CapabilityMapper;
 use crate::entropy::{calculate_entropy, EntropyLevel};
 use crate::radare2::Radare2Analyzer;
 use crate::strings::StringExtractor;
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Function, Import,
+    MachoMetrics, Metrics, Section, StringInfo, StructuralFeature, TargetInfo,
+};
 use anyhow::{Context, Result};
 use goblin::mach::{Mach, MachO};
 use std::fs;

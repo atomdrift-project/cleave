@@ -4,7 +4,7 @@
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;

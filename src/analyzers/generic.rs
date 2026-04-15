@@ -8,7 +8,7 @@ use crate::analyzers::symbol_extraction;
 use crate::analyzers::FileType;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Metrics, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;

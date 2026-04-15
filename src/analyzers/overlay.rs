@@ -6,7 +6,7 @@
 use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::analyzers::Analyzer;
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use std::sync::Arc;

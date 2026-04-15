@@ -26,7 +26,10 @@
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
 use crate::analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType, FileTypeExt};
-use crate::types::*;
+use crate::types::{
+    encode_archive_path, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, StringInfo,
+    StringType, TargetInfo, YaraMatch,
+};
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::HashSet;
@@ -278,7 +281,14 @@ impl ArchiveAnalyzer {
                         .spawn(move || nested.analyze(&path))
                         .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
                         .join()
-                        .map_err(|_| anyhow::anyhow!("Nested archive thread panicked"))?
+                        .map_err(|e| {
+                            let msg = e
+                                .downcast_ref::<String>()
+                                .map(String::as_str)
+                                .or_else(|| e.downcast_ref::<&str>().copied())
+                                .unwrap_or("unknown panic payload");
+                            anyhow::anyhow!("Nested archive thread panicked: {msg}")
+                        })?
                         .map(Some)
                 }
             }
@@ -436,7 +446,7 @@ impl ArchiveAnalyzer {
         temp_dir: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
-    ) -> Result<()> {
+    ) {
         // Find main class from MANIFEST.MF
         let main_class = find_main_class(temp_dir);
         if let Some(ref mc) = main_class {
@@ -924,8 +934,6 @@ impl ArchiveAnalyzer {
             "yara".to_string(),
             "java_class_analyzer".to_string(),
         ];
-
-        Ok(())
     }
 
     /// Analyze generic archives (non-JAR formats).
@@ -948,7 +956,7 @@ impl ArchiveAnalyzer {
         temp_dir: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
-    ) -> Result<()> {
+    ) {
         debug!(
             "Analyzing generic archive, scanning temp dir: {:?}",
             temp_dir
@@ -1205,8 +1213,6 @@ impl ArchiveAnalyzer {
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec!["archive_analyzer".to_string(), "walkdir".to_string()];
-
-        Ok(())
     }
 
     /// Route an extracted file to the appropriate analyzer based on file type.

@@ -1160,10 +1160,8 @@ const BROAD_FILETYPE_THRESHOLD: usize = 23;
 const BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM: usize = 23;
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
-pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] = &[
-    "objectives/supply-chain/",
-    "micro-behaviors/data/text/",
-];
+pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
+    &["objectives/supply-chain/", "micro-behaviors/data/text/"];
 
 /// Trait path prefixes where broad file type coverage is permitted.
 ///
@@ -1226,7 +1224,10 @@ pub(crate) fn find_broad_platform_traits(
             if count < BROAD_PLATFORM_THRESHOLD {
                 return false;
             }
-            let source = rule_source_files.get(&t.id).map(String::as_str).unwrap_or("");
+            let source = rule_source_files
+                .get(&t.id)
+                .map(String::as_str)
+                .unwrap_or("");
             !BROAD_PLATFORM_ALLOWLIST
                 .iter()
                 .any(|prefix| source.contains(prefix))
@@ -1305,7 +1306,10 @@ pub(crate) fn find_broad_filetype_traits(
             if count < threshold {
                 return false;
             }
-            let source = rule_source_files.get(&t.id).map(String::as_str).unwrap_or("");
+            let source = rule_source_files
+                .get(&t.id)
+                .map(String::as_str)
+                .unwrap_or("");
             !BROAD_FILETYPE_ALLOWLIST
                 .iter()
                 .any(|prefix| source.contains(prefix))
@@ -1320,7 +1324,12 @@ pub(crate) fn find_broad_filetype_traits(
             } else {
                 t.r#for.clone()
             };
-            (t.id.clone(), source, effective_filetype_count(t), matched_types)
+            (
+                t.id.clone(),
+                source,
+                effective_filetype_count(t),
+                matched_types,
+            )
         })
         .collect()
 }
@@ -1413,4 +1422,3 @@ pub(crate) fn find_meta_missing_section_filter(
         })
         .collect()
 }
-

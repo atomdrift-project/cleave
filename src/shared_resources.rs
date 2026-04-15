@@ -102,6 +102,7 @@ pub(crate) fn capability_mapper() -> anyhow::Result<Arc<CapabilityMapper>> {
         return Ok(existing.clone());
     }
     *guard = Some(mapper.clone());
+    drop(guard);
     Ok(mapper)
 }
 
@@ -117,6 +118,7 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
         let mapper = CapabilityMapper::empty();
         let mut guard = CAPABILITY_MAPPER.write();
         *guard = Some(Arc::new(mapper));
+        drop(guard);
         return Ok((0, 0));
     }
 
@@ -155,18 +157,12 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     *guard = Some(Arc::new(mapper));
     drop(guard);
 
-    // SAFETY: The old CapabilityMapper (and its Rules) may be dropped once all
-    // Arc references are released. Thread-local YARA scanner caches hold transmuted
-    // 'static references to those Rules. We must flush them on ALL threads before
-    // any new analysis uses the new mapper, or scanners will dereference freed memory.
-    crate::composite_rules::evaluators::clear_scanner_cache();
-    rayon::broadcast(|_| {
-        crate::composite_rules::evaluators::clear_scanner_cache();
-    });
+    // Arc swap is sufficient: in-flight analyses hold their own Arc clone.
+    // rayon::broadcast was removed — it deadlocks when workers are stuck in YARA scans.
     tracing::info!(
         traits = trait_count,
         composites = composite_count,
-        "CapabilityMapper reloaded (scanner caches flushed)"
+        "CapabilityMapper reloaded"
     );
     Ok((trait_count, composite_count))
 }

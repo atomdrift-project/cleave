@@ -1,7 +1,7 @@
 //! Capability detection for Java bytecode.
 
 use super::parsing::ClassInfo;
-use crate::types::*;
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 
 impl super::JavaClassAnalyzer {
     pub(super) fn detect_capabilities(&self, class_info: &ClassInfo, report: &mut AnalysisReport) {

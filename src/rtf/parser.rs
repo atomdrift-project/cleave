@@ -1,7 +1,9 @@
 use crate::rtf::error::{Result, RtfError};
 use crate::rtf::hex_decoder::decode_hex_tolerant;
 use crate::rtf::ole_extractor;
-use crate::rtf::types::*;
+use crate::rtf::types::{
+    ControlWord, DocumentMetadata, OleObject, RtfDocument, RtfHeader, SuspiciousFlag,
+};
 use regex::Regex;
 use std::sync::OnceLock;
 

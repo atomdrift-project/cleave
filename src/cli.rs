@@ -556,7 +556,7 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
     let start: i64 = parts[0]
         .trim()
         .parse()
-        .map_err(|_| format!("invalid start offset: {}", parts[0]))?;
+        .map_err(|e| format!("invalid start offset {}: {e}", parts[0]))?;
     let end = if parts[1].trim().is_empty() {
         None
     } else {
@@ -564,7 +564,7 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
             parts[1]
                 .trim()
                 .parse()
-                .map_err(|_| format!("invalid end offset: {}", parts[1]))?,
+                .map_err(|e| format!("invalid end offset {}: {e}", parts[1]))?,
         )
     };
     Ok((start, end))

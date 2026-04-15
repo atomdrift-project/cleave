@@ -2,7 +2,9 @@
 //!
 //! Identifies environment variable access and categorizes by sensitivity.
 
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, EnvVarAccessType, EnvVarCategory, EnvVarInfo, Evidence, Finding, StringInfo,
+};
 
 /// Extract environment variable access from strings and categorize them
 #[must_use]

@@ -2153,7 +2153,7 @@ impl YaraEngine {
         let version = u32::from_le_bytes(
             mmap[4..8]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("cache header version truncated"))?,
+                .map_err(|e| anyhow::anyhow!("cache header version truncated: {e}"))?,
         );
         if version != CACHE_VERSION {
             anyhow::bail!(
@@ -2166,7 +2166,7 @@ impl YaraEngine {
         let manifest_len = u64::from_le_bytes(
             mmap[8..16]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("cache header manifest length truncated"))?,
+                .map_err(|e| anyhow::anyhow!("cache header manifest length truncated: {e}"))?,
         ) as usize;
         let manifest_end = CACHE_HEADER_SIZE + manifest_len;
         if manifest_end > mmap.len() {

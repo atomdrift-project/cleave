@@ -4,7 +4,7 @@
 //! validation to minimize false positives. Common in dropper malware, reflective
 //! loaders, and multi-stage payloads.
 
-use crate::types::*;
+use crate::types::{Criticality, Evidence, Finding, FindingKind};
 use memchr::memmem;
 use std::sync::atomic::{AtomicBool, Ordering};
 

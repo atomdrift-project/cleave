@@ -170,7 +170,7 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                     segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
                 }
                 let low_nibble = u8::from_str_radix(&token[1..2], 16)
-                    .map_err(|_| format!("invalid nibble: {}", token))?;
+                    .map_err(|e| format!("invalid nibble {token}: {e}"))?;
                 segments.push(HexSegment::NibbleMask {
                     high_mask: 0x00,
                     low_mask: 0x0F,
@@ -183,7 +183,7 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                     segments.push(HexSegment::Bytes(std::mem::take(&mut current_bytes)));
                 }
                 let high_nibble = u8::from_str_radix(&token[0..1], 16)
-                    .map_err(|_| format!("invalid nibble: {}", token))?;
+                    .map_err(|e| format!("invalid nibble {token}: {e}"))?;
                 segments.push(HexSegment::NibbleMask {
                     high_mask: 0xF0,
                     low_mask: 0x00,
@@ -193,7 +193,7 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
             }
             // Fall through to regular hex byte parsing for non-wildcard 2-char tokens
             let byte = u8::from_str_radix(token, 16)
-                .map_err(|_| format!("invalid hex byte: {}", token))?;
+                .map_err(|e| format!("invalid hex byte {token}: {e}"))?;
             current_bytes.push(byte);
         } else if token.starts_with('(') && token.ends_with(')') {
             // Byte alternation: (XX|YY|ZZ)
@@ -206,7 +206,7 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
                 .split('|')
                 .map(|s| {
                     u8::from_str_radix(s.trim(), 16)
-                        .map_err(|_| format!("invalid alternation byte: {}", s))
+                        .map_err(|e| format!("invalid alternation byte {s}: {e}"))
                 })
                 .collect();
 
@@ -225,21 +225,21 @@ fn parse_hex_pattern(pattern: &str) -> Result<Vec<HexSegment>, String> {
             if let Some(dash_pos) = inner.find('-') {
                 let min: usize = inner[..dash_pos]
                     .parse()
-                    .map_err(|_| format!("invalid gap min: {}", inner))?;
+                    .map_err(|e| format!("invalid gap min in {inner}: {e}"))?;
                 let max: usize = inner[dash_pos + 1..]
                     .parse()
-                    .map_err(|_| format!("invalid gap max: {}", inner))?;
+                    .map_err(|e| format!("invalid gap max in {inner}: {e}"))?;
                 segments.push(HexSegment::Gap { min, max });
             } else {
                 let n: usize = inner
                     .parse()
-                    .map_err(|_| format!("invalid gap: {}", inner))?;
+                    .map_err(|e| format!("invalid gap {inner}: {e}"))?;
                 segments.push(HexSegment::Gap { min: n, max: n });
             }
         } else {
             // Regular hex byte
             let byte = u8::from_str_radix(token, 16)
-                .map_err(|_| format!("invalid hex byte: {}", token))?;
+                .map_err(|e| format!("invalid hex byte {token}: {e}"))?;
             current_bytes.push(byte);
         }
     }

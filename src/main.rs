@@ -19,6 +19,8 @@ mod cli_dispatch;
 use anyhow::Result;
 use clap::Parser;
 use cleave::cli;
+#[cfg(debug_assertions)]
+use cli_bootstrap::start_deadlock_detector;
 use cli_bootstrap::{
     apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool,
     default_zip_passwords, determine_default_log_file, init_logging, log_exit_summary, log_startup,
@@ -43,9 +45,16 @@ fn main() -> Result<()> {
     };
     let effective_log_file = args.log_file.clone().or(default_log_file);
 
-    init_logging(args.verbose, is_server, format, effective_log_file.as_deref());
+    init_logging(
+        args.verbose,
+        is_server,
+        format,
+        effective_log_file.as_deref(),
+    );
     log_startup(effective_log_file.as_deref(), args.verbose);
     configure_rayon_thread_pool();
+    #[cfg(debug_assertions)]
+    start_deadlock_detector();
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);

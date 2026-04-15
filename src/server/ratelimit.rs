@@ -82,12 +82,14 @@ impl RateLimiter {
         bucket.last_update = now;
 
         // Try to consume one token
-        if bucket.tokens >= 1.0 {
+        let allowed = if bucket.tokens >= 1.0 {
             bucket.tokens -= 1.0;
             true
         } else {
             false
-        }
+        };
+        drop(entry);
+        allowed
     }
 
     /// Remove stale entries older than the given duration.

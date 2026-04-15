@@ -2,7 +2,7 @@
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Evidence, StructuralFeature, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;

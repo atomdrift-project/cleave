@@ -607,9 +607,15 @@ pub(crate) fn resolve_platform_filetype_conflicts(
         // Silently filter incompatible types from group expansions
         file_types.retain(|ft| {
             match ft {
-                RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => has_windows,
-                // ELF runs on Linux, BSD, and Android native libs
-                RuleFileType::Elf => has_unix || has_android,
+                // Windows-only formats and languages
+                RuleFileType::Pe
+                | RuleFileType::Batch
+                | RuleFileType::Vbs
+                | RuleFileType::PowerShell
+                | RuleFileType::Lnk
+                | RuleFileType::Nupkg => has_windows,
+                // ELF and APK both run on Linux/Android
+                RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
                 // Mach-O runs on macOS/iOS; unix is the superset that includes macOS
                 RuleFileType::Macho => has_apple || has_unix,
                 // Shell runs on all unix-like systems (unix covers Linux and macOS)
@@ -618,7 +624,6 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
                     has_apple
                 }
-                RuleFileType::PowerShell => has_windows,
                 // Perl is a unix/linux scripting language, not a macOS-native concern
                 RuleFileType::Perl => has_unix,
                 // Server/desktop-only languages — not meaningful on mobile-only targets
@@ -629,16 +634,10 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => has_desktop,
-                // Windows-specific formats
-                RuleFileType::Lnk | RuleFileType::Nupkg => has_windows,
                 // Apple-specific formats
                 RuleFileType::Plist | RuleFileType::Ipa => has_apple,
                 // systemd/deb/rpm are Linux-specific, not generic Unix
-                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
-                    has_linux
-                }
-                // APK covers both Android packages and Alpine/Wolfi Linux packages
-                RuleFileType::Apk => has_unix || has_android,
+                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => has_linux,
                 _ => true,
             }
         });
@@ -646,18 +645,25 @@ pub(crate) fn resolve_platform_filetype_conflicts(
         // Warn on explicitly specified incompatible types
         for ft in file_types.iter() {
             let (supported, required) = match ft {
-                RuleFileType::Pe | RuleFileType::Batch | RuleFileType::Vbs => {
-                    (has_windows, "windows")
+                // Windows-only formats and languages
+                RuleFileType::Pe
+                | RuleFileType::Batch
+                | RuleFileType::Vbs
+                | RuleFileType::PowerShell
+                | RuleFileType::Lnk
+                | RuleFileType::Nupkg => (has_windows, "windows"),
+                // ELF and APK both run on Linux/Android
+                RuleFileType::Elf | RuleFileType::Apk => {
+                    (has_unix || has_android, "linux, unix, or android")
                 }
-                RuleFileType::Elf => (has_unix || has_android, "linux, unix, or android"),
                 RuleFileType::Macho => (has_apple || has_unix, "macos, ios, or unix"),
-                RuleFileType::Shell => {
-                    (has_unix || has_apple, "linux, unix, macos, or ios")
-                }
-                RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
-                    (has_apple, "macos or ios")
-                }
-                RuleFileType::PowerShell => (has_windows, "windows"),
+                RuleFileType::Shell => (has_unix || has_apple, "linux, unix, macos, or ios"),
+                // Apple-specific languages and formats
+                RuleFileType::AppleScript
+                | RuleFileType::Swift
+                | RuleFileType::ObjectiveC
+                | RuleFileType::Plist
+                | RuleFileType::Ipa => (has_apple, "macos or ios"),
                 RuleFileType::Perl => (has_unix, "linux or unix"),
                 RuleFileType::Python
                 | RuleFileType::Pyc
@@ -666,12 +672,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => (has_desktop, "linux, unix, macos, or windows"),
-                RuleFileType::Lnk | RuleFileType::Nupkg => (has_windows, "windows"),
-                RuleFileType::Plist | RuleFileType::Ipa => (has_apple, "macos or ios"),
                 RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
                     (has_linux, "linux")
                 }
-                RuleFileType::Apk => (has_unix || has_android, "linux, unix, or android"),
                 _ => continue,
             };
             if !supported {
@@ -1544,7 +1547,10 @@ mod tests {
             false,
             &mut w,
         );
-        assert!(w.is_empty(), "windows+unix should cover pe+elf+macho: {w:?}");
+        assert!(
+            w.is_empty(),
+            "windows+unix should cover pe+elf+macho: {w:?}"
+        );
     }
 
     // ==================== from_groups filtering Tests ====================

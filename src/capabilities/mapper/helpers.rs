@@ -150,7 +150,6 @@ fn check_condition(condition: &Condition, trait_id: &str, path: &Path) -> bool {
     false
 }
 
-
 /// Suggest a similar metric field for typos (simple Levenshtein distance)
 pub(super) fn suggest_metric_field(valid_fields: &FxHashSet<String>, typo: &str) -> Option<String> {
     let mut best_match: Option<(String, usize)> = None;

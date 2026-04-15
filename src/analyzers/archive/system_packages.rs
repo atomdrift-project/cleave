@@ -195,7 +195,7 @@ pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
         let toc_compressed = u64::from_be_bytes(
             header[8..16]
                 .try_into()
-                .map_err(|_| anyhow::anyhow!("XAR header too short"))?,
+                .map_err(|e| anyhow::anyhow!("XAR header too short: {e}"))?,
         );
         if toc_compressed > data_len {
             anyhow::bail!(

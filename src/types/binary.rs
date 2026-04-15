@@ -160,7 +160,7 @@ where
             let s = v.trim().trim_start_matches("0x").trim_start_matches("0X");
             u64::from_str_radix(s, 16)
                 .map(Some)
-                .map_err(|_| de::Error::custom(format!("invalid hex offset: {}", v)))
+                .map_err(|e| de::Error::custom(format!("invalid hex offset {v}: {e}")))
         }
     }
 

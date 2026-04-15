@@ -5,7 +5,7 @@
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
-use crate::types::*;
+use crate::types::{AnalysisReport, Import, TargetInfo};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;

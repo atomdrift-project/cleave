@@ -14,7 +14,10 @@ pub(crate) use guards::MAX_ZIP_ENTRIES;
 
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, Criticality, Evidence, FileAnalysis, Finding, FindingCounts, FindingKind,
+    Metrics, ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
+};
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use std::fs::File;
@@ -627,7 +630,7 @@ impl ArchiveAnalyzer {
         });
 
         // Proceed to analyze the directory contents (SFX installers are analyzed as generic archives)
-        self.analyze_generic_archive(dir_path, &mut report, start)?;
+        self.analyze_generic_archive(dir_path, &mut report, start);
 
         Ok(report)
     }
@@ -728,9 +731,9 @@ impl ArchiveAnalyzer {
 
         let is_jar = matches!(file_type, FileType::Jar | FileType::Zip | FileType::Crx);
         if is_jar {
-            self.analyze_jar_archive(temp_dir.path(), &mut report, start)?;
+            self.analyze_jar_archive(temp_dir.path(), &mut report, start);
         } else {
-            self.analyze_generic_archive(temp_dir.path(), &mut report, start)?;
+            self.analyze_generic_archive(temp_dir.path(), &mut report, start);
         }
 
         let analysis_elapsed = start.elapsed();

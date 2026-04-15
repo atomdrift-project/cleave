@@ -43,6 +43,9 @@ fn offset_in_range(offset: Option<u64>, range: Option<(u64, u64)>) -> bool {
 // Helper functions moved to mod.rs
 
 /// Evaluate symbol condition - matches symbols in imports/exports.
+// Each parameter encodes a distinct matching mode (exact, substr, pattern, platform guard,
+// validator, pre-compiled regex/finder, negation exceptions) — no meaningful grouping exists.
+#[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn eval_symbol<'a>(
     exact: Option<&String>,
@@ -1061,6 +1064,7 @@ pub(crate) fn eval_raw<'a>(
                         Ok(re) => {
                             let mut guard = cache.write();
                             guard.put(key, re.clone());
+                            drop(guard);
                             Some(re)
                         }
                         Err(_) => None,

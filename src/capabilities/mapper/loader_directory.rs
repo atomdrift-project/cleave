@@ -17,11 +17,11 @@ use crate::capabilities::validation::{
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_composite_only_wellknown_files, find_deprecated_string_value_usage, find_depth_violations,
+    find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
+    find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
+    find_condition_scope_violations, find_deprecated_string_value_usage, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
-    find_condition_scope_violations, find_empty_condition_clauses, find_excessive_file_types,
-    find_excessive_skip_conditions,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
     find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
     find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
@@ -32,17 +32,15 @@ use crate::capabilities::validation::{
     find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
     find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_short_pattern_warnings, find_should_use_defaults,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates, find_too_short_patterns,
-    find_unanchored_wellknown_composites, find_wellknown_category_violations,
-    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    find_broad_filetype_traits, find_broad_platform_traits, find_redundant_unix_platforms,
-    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
-    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
-    validate_composite_trait_only, validate_directory_structure,
+    find_redundant_needs_one, find_redundant_unix_platforms, find_short_pattern_warnings,
+    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_too_short_patterns, find_unanchored_wellknown_composites,
+    find_wellknown_category_violations, find_wellknown_missing_section_filter,
+    find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
+    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
-    MAX_TRAITS_PER_DIRECTORY,
+    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -1914,8 +1912,7 @@ impl super::CapabilityMapper {
 
             // Validate: traits with 4+ effective platforms must be in an allowlisted directory
             tracing::trace!("Checking for over-broad platform scope (4+ effective platforms)");
-            let broad_plat =
-                find_broad_platform_traits(&trait_definitions, &rule_source_files);
+            let broad_plat = find_broad_platform_traits(&trait_definitions, &rule_source_files);
             if !broad_plat.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} traits target {} or more platforms",
@@ -1930,7 +1927,10 @@ impl super::CapabilityMapper {
                 for (trait_id, source_file, count) in &broad_plat {
                     let line_hint = find_line_number(source_file, "platforms:");
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: '{}' ({} platforms)", source_file, line, trait_id, count);
+                        eprintln!(
+                            "   {}:{}: '{}' ({} platforms)",
+                            source_file, line, trait_id, count
+                        );
                     } else {
                         eprintln!("   {}: '{}' ({} platforms)", source_file, trait_id, count);
                     }
@@ -1957,9 +1957,15 @@ impl super::CapabilityMapper {
                 for (trait_id, source_file, redundant) in &redundant_unix {
                     let line_hint = find_line_number(source_file, "platforms:");
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: '{}' (redundant: {})", source_file, line, trait_id, redundant);
+                        eprintln!(
+                            "   {}:{}: '{}' (redundant: {})",
+                            source_file, line, trait_id, redundant
+                        );
                     } else {
-                        eprintln!("   {}: '{}' (redundant: {})", source_file, trait_id, redundant);
+                        eprintln!(
+                            "   {}: '{}' (redundant: {})",
+                            source_file, trait_id, redundant
+                        );
                     }
                 }
                 eprintln!();
@@ -1971,8 +1977,7 @@ impl super::CapabilityMapper {
 
             // Validate: traits with too many file types (10+ multi-platform, 12+ single-platform)
             tracing::trace!("Checking for over-broad file type scope");
-            let broad_ft =
-                find_broad_filetype_traits(&trait_definitions, &rule_source_files);
+            let broad_ft = find_broad_filetype_traits(&trait_definitions, &rule_source_files);
             if !broad_ft.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} traits target too many file types (23+ types — exceeds 2-group threshold)",
@@ -1996,9 +2001,15 @@ impl super::CapabilityMapper {
                         .collect::<Vec<_>>()
                         .join(", ");
                     if let Some(line) = line_hint {
-                        eprintln!("   {}:{}: '{}' ({} types: {})", source_file, line, trait_id, count_str, types_str);
+                        eprintln!(
+                            "   {}:{}: '{}' ({} types: {})",
+                            source_file, line, trait_id, count_str, types_str
+                        );
                     } else {
-                        eprintln!("   {}: '{}' ({} types: {})", source_file, trait_id, count_str, types_str);
+                        eprintln!(
+                            "   {}: '{}' ({} types: {})",
+                            source_file, trait_id, count_str, types_str
+                        );
                     }
                 }
                 eprintln!();
@@ -2012,7 +2023,8 @@ impl super::CapabilityMapper {
             // Validate: condition-type-specific filetype scope limits
             // ast: ≤2 types, symbol/hex/yara: ≤4 types
             tracing::trace!("Checking condition-type filetype scope limits");
-            let cond_scope = find_condition_scope_violations(&trait_definitions, &rule_source_files);
+            let cond_scope =
+                find_condition_scope_violations(&trait_definitions, &rule_source_files);
             if !cond_scope.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} traits exceed the filetype limit for their condition type",

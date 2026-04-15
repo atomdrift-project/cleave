@@ -2,7 +2,10 @@
 //!
 //! Maps file paths to security-relevant categories (tmp files, config, etc).
 
-use crate::types::*;
+use crate::types::{
+    AnalysisReport, DirectoryAccess, DirectoryAccessPattern, Evidence, Finding, PathCategory,
+    PathInfo, PathType, StringInfo, StringType,
+};
 use std::collections::HashMap;
 
 /// Extract paths from strings and categorize them

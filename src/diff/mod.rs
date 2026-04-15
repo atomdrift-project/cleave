@@ -25,7 +25,10 @@ use utils::{compute_added_removed, detect_renames};
 
 use crate::analyzers::{archive::ArchiveAnalyzer, detect_file_type, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{
+    AnalysisMetadata, AnalysisReport, DiffCounts, DiffReport, FileChanges, FileDiff,
+    FileRenameInfo, Finding, FullDiffReport, MetricsDelta, ModifiedFileAnalysis,
+};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use std::collections::{HashMap, HashSet};

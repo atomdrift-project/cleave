@@ -105,7 +105,6 @@ struct TestMatchRequest<'a> {
     max_size: Option<u64>,
 }
 
-
 fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Result<String> {
     let mut results = Vec::with_capacity(targets.len());
     for target in targets {

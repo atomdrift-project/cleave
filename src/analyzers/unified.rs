@@ -19,7 +19,7 @@ use crate::analyzers::{
     FileType, FileTypeExt,
 };
 use crate::capabilities::CapabilityMapper;
-use crate::types::*;
+use crate::types::{AnalysisReport, Function, Metrics, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::path::Path;

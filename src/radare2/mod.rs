@@ -1123,4 +1123,48 @@ mod tests {
         assert_eq!(RADARE2_DISABLED.load(Ordering::SeqCst), before);
         assert_eq!(is_disabled(), was_disabled);
     }
+
+    /// Regression test: subprocess spawned with process_group(0) must not hang.
+    ///
+    /// process_group(0) places the child in its own (background) process group.
+    /// Any stdin read attempt from that group triggers SIGTTIN, suspending the
+    /// process indefinitely — which is what happened to rizin in practice.
+    /// Redirecting stdin to /dev/null (Stdio::null()) prevents the read and lets
+    /// the process exit normally.
+    ///
+    /// `cat` with no arguments reads stdin until EOF, making it a reliable probe:
+    /// with an inherited terminal stdin in a background group it suspends;
+    /// with Stdio::null() it sees EOF immediately and exits cleanly.
+    #[cfg(unix)]
+    #[test]
+    fn test_background_process_group_stdin_null_prevents_sigttin() {
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let mut child = Command::new("cat")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .process_group(0)
+            .spawn()
+            .expect("failed to spawn cat");
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            match child.try_wait().expect("try_wait failed") {
+                Some(s) => break s,
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!(
+                        "subprocess did not exit within 5s — likely suspended by SIGTTIN. \
+                         Ensure stdin(Stdio::null()) is set whenever process_group(0) is used."
+                    );
+                }
+                None => std::thread::sleep(Duration::from_millis(5)),
+            }
+        };
+
+        assert!(status.success(), "cat should exit 0 when stdin is /dev/null");
+    }
 }

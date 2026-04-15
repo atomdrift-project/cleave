@@ -11,8 +11,7 @@
 //! — that work happens during full analysis and is split out by the caller
 //! (see hopper's ExplodeArchiveMembers).
 
-use crate::analyzers::{detect_file_type_from_data, is_analyzable, FileTypeExt};
-use crate::file_io;
+use crate::analyzers::{detect_file_type, is_analyzable, FileTypeExt};
 use anyhow::Result;
 use serde::Serialize;
 use std::io::{BufWriter, Write};
@@ -87,8 +86,7 @@ fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -
         return Ok(());
     }
 
-    let file_data = file_io::read_file_smart(path)?;
-    let file_type = detect_file_type_from_data(path, file_data.as_slice());
+    let file_type = detect_file_type(path)?;
     if !is_analyzable(path, &file_type) {
         return Ok(());
     }

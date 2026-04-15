@@ -84,15 +84,16 @@ pub fn extract_xor_strings(data: &[u8]) -> Vec<DecodedString> {
             {
                 // Extract the interesting substring
                 let interesting_part = if let Some(pos) = decoded_str.find("http") {
-                    let start = pos;
-                    let end = (pos + 100).min(decoded_str.len());
+                    let start = decoded_str.floor_char_boundary(pos);
+                    let end = decoded_str.floor_char_boundary((pos + 100).min(decoded_str.len()));
                     decoded_str[start..end].to_string()
                 } else if let Some(pos) = decoded_str.find("eval(") {
-                    let start = pos.saturating_sub(10);
-                    let end = (pos + 50).min(decoded_str.len());
+                    let start = decoded_str.floor_char_boundary(pos.saturating_sub(10));
+                    let end = decoded_str.floor_char_boundary((pos + 50).min(decoded_str.len()));
                     decoded_str[start..end].to_string()
                 } else {
-                    decoded_str[..100.min(decoded_str.len())].to_string()
+                    let end = decoded_str.floor_char_boundary(100.min(decoded_str.len()));
+                    decoded_str[..end].to_string()
                 };
 
                 results.push(DecodedString {

@@ -355,7 +355,7 @@ fn find_dde_links(
                 if line_upper.contains("DDEAUTO") || line_upper.contains("DDE ") {
                     let trimmed = line.trim();
                     if trimmed.len() > 200 {
-                        dde_links.push(format!("{}...", &trimmed[..200]));
+                        dde_links.push(format!("{}...", &trimmed[..trimmed.floor_char_boundary(200)]));
                     } else {
                         dde_links.push(trimmed.to_string());
                     }

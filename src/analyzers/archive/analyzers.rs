@@ -32,7 +32,7 @@ use crate::types::{
 };
 use anyhow::Result;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
@@ -581,7 +581,8 @@ impl ArchiveAnalyzer {
         let mut total_capabilities = HashSet::new();
         let mut total_traits = HashSet::new();
         let expected_count = classes_to_analyze.len();
-        let mut collected_traits = Vec::<Finding>::with_capacity(expected_count.min(500));
+        let mut collected_traits =
+            HashMap::<String, Finding>::with_capacity(expected_count.min(500));
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
         let mut collected_strings = Vec::<StringInfo>::with_capacity((expected_count * 2).min(200));
         let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(expected_count);
@@ -683,28 +684,33 @@ impl ArchiveAnalyzer {
                 file_report.findings.len()
             );
 
-            // Aggregate findings
+            // Aggregate findings — keep highest (crit, conf) per trait ID
             for f in &file_report.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id)
-                    && collected_traits.len() < 10_000
-                {
-                    let mut new_finding = f.clone();
-                    for evidence in &mut new_finding.evidence {
-                        match &evidence.location {
-                            None => {
-                                evidence.location = Some(result.archive_location.clone());
-                            }
-                            Some(loc) if !loc.starts_with("archive:") => {
-                                evidence.location =
-                                    Some(format!("{}:{}", result.archive_location, loc));
-                            }
-                            _ => {}
+                let mut new_finding = f.clone();
+                for evidence in &mut new_finding.evidence {
+                    match &evidence.location {
+                        None => {
+                            evidence.location = Some(result.archive_location.clone());
                         }
+                        Some(loc) if !loc.starts_with("archive:") => {
+                            evidence.location =
+                                Some(format!("{}:{}", result.archive_location, loc));
+                        }
+                        _ => {}
                     }
-                    collected_traits.push(new_finding);
                 }
+                collected_traits
+                    .entry(new_finding.id.clone())
+                    .and_modify(|existing| {
+                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
+                            > (existing.crit, std::cmp::Ordering::Equal)
+                        {
+                            *existing = new_finding.clone();
+                        }
+                    })
+                    .or_insert(new_finding);
             }
 
             // Aggregate YARA matches
@@ -846,24 +852,29 @@ impl ArchiveAnalyzer {
             for f in &file_report.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id)
-                    && collected_traits.len() < 10_000
-                {
-                    let mut new_finding = f.clone();
-                    for evidence in &mut new_finding.evidence {
-                        match &evidence.location {
-                            None => {
-                                evidence.location = Some(result.archive_location.clone());
-                            }
-                            Some(loc) if !loc.starts_with("archive:") => {
-                                evidence.location =
-                                    Some(format!("{}:{}", result.archive_location, loc));
-                            }
-                            _ => {}
+                let mut new_finding = f.clone();
+                for evidence in &mut new_finding.evidence {
+                    match &evidence.location {
+                        None => {
+                            evidence.location = Some(result.archive_location.clone());
                         }
+                        Some(loc) if !loc.starts_with("archive:") => {
+                            evidence.location =
+                                Some(format!("{}:{}", result.archive_location, loc));
+                        }
+                        _ => {}
                     }
-                    collected_traits.push(new_finding);
                 }
+                collected_traits
+                    .entry(new_finding.id.clone())
+                    .and_modify(|existing| {
+                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
+                            > (existing.crit, std::cmp::Ordering::Equal)
+                        {
+                            *existing = new_finding.clone();
+                        }
+                    })
+                    .or_insert(new_finding);
             }
 
             for yara_match in &file_report.yara_matches {
@@ -904,7 +915,7 @@ impl ArchiveAnalyzer {
         }
 
         // Merge JAR collected results into the report
-        for t in collected_traits {
+        for (_, t) in collected_traits {
             if !report.findings.iter().any(|existing| existing.id == t.id) {
                 report.findings.push(t);
             }
@@ -990,7 +1001,7 @@ impl ArchiveAnalyzer {
         // Collect results lock-free, aggregate single-threaded afterwards
         let mut total_capabilities = HashSet::new();
         let mut total_traits = HashSet::new();
-        let mut collected_traits = Vec::<Finding>::with_capacity(total_files.min(500));
+        let mut collected_traits = HashMap::<String, Finding>::with_capacity(total_files.min(500));
         let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
         let mut collected_strings = Vec::<StringInfo>::with_capacity((total_files * 2).min(200));
         let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
@@ -1124,28 +1135,33 @@ impl ArchiveAnalyzer {
             file_entry.compute_summary();
             file_entry.extracted_path = result.extracted_path.clone();
 
-            // Aggregate findings
+            // Aggregate findings — keep highest (crit, conf) per trait ID
             for f in &file_entry.findings {
                 total_traits.insert(f.id.clone());
                 total_capabilities.insert(f.id.clone());
-                if !collected_traits.iter().any(|existing| existing.id == f.id)
-                    && collected_traits.len() < 10_000
-                {
-                    let mut new_finding = f.clone();
-                    for evidence in &mut new_finding.evidence {
-                        match &evidence.location {
-                            None => {
-                                evidence.location = Some(result.archive_location.clone());
-                            }
-                            Some(loc) if !loc.starts_with("archive:") => {
-                                evidence.location =
-                                    Some(format!("{}:{}", result.archive_location, loc));
-                            }
-                            _ => {}
+                let mut new_finding = f.clone();
+                for evidence in &mut new_finding.evidence {
+                    match &evidence.location {
+                        None => {
+                            evidence.location = Some(result.archive_location.clone());
                         }
+                        Some(loc) if !loc.starts_with("archive:") => {
+                            evidence.location =
+                                Some(format!("{}:{}", result.archive_location, loc));
+                        }
+                        _ => {}
                     }
-                    collected_traits.push(new_finding);
                 }
+                collected_traits
+                    .entry(new_finding.id.clone())
+                    .and_modify(|existing| {
+                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
+                            > (existing.crit, std::cmp::Ordering::Equal)
+                        {
+                            *existing = new_finding.clone();
+                        }
+                    })
+                    .or_insert(new_finding);
             }
 
             for yara_match in &file_entry.yara_matches {
@@ -1189,7 +1205,7 @@ impl ArchiveAnalyzer {
         collected_files.truncate(100_000);
 
         // Merge collected results into the report
-        for t in collected_traits {
+        for (_, t) in collected_traits {
             if !report.findings.iter().any(|existing| existing.id == t.id) {
                 report.findings.push(t);
             }

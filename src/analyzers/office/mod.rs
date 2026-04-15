@@ -15,7 +15,7 @@ use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo
 use anyhow::Result;
 use regex::Regex;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -160,7 +160,15 @@ impl OfficeAnalyzer {
                     // Take findings before consuming the report
                     let sub_findings = std::mem::take(&mut sub_report.findings);
 
-                    // Merge findings upward, tagging with source location
+                    // Merge findings upward, tagging with source location.
+                    // Build a map of existing findings for O(1) dedup with best-wins semantics.
+                    let mut by_id: HashMap<String, usize> = report
+                        .findings
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| (f.id.clone(), i))
+                        .collect();
+
                     for mut finding in sub_findings {
                         for evidence in &mut finding.evidence {
                             if let Some(ref loc) = evidence.location {
@@ -169,7 +177,20 @@ impl OfficeAnalyzer {
                                 evidence.location = Some(format!("vba:{}", module.name));
                             }
                         }
-                        report.findings.push(finding);
+                        match by_id.get(&finding.id) {
+                            Some(&idx) => {
+                                let existing = &report.findings[idx];
+                                if (finding.crit, finding.conf.total_cmp(&existing.conf))
+                                    > (existing.crit, std::cmp::Ordering::Equal)
+                                {
+                                    report.findings[idx] = finding;
+                                }
+                            }
+                            None => {
+                                by_id.insert(finding.id.clone(), report.findings.len());
+                                report.findings.push(finding);
+                            }
+                        }
                     }
 
                     // Convert to FileAnalysis and add as nested file

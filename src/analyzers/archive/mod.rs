@@ -754,8 +754,11 @@ impl ArchiveAnalyzer {
                 .files
                 .iter()
                 .flat_map(|f| f.findings.iter().cloned())
-                .take(50_000)
                 .collect();
+            nested_findings.sort_unstable_by(|a, b| {
+                b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf))
+            });
+            nested_findings.truncate(50_000);
 
             let entry_names: Vec<String> = report
                 .archive_contents

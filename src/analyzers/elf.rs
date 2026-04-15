@@ -205,6 +205,7 @@ impl ElfAnalyzer {
                             needs_r2_strings,
                             precomputed_sha256,
                             self.cancellation.as_ref(),
+                            Some(data),
                         ))
                     },
                     || {
@@ -475,6 +476,7 @@ impl ElfAnalyzer {
                         needs_r2_strings,
                         fallback_sha256,
                         self.cancellation.as_ref(),
+                        Some(data),
                     ) {
                         Ok(batched) => {
                             tools_used.push("radare2".to_string());

@@ -332,6 +332,7 @@ impl ArchiveAnalyzer {
                             false, // include_strings: stng handles strings
                             Some(r2_sha256),
                             r2_cancelled.as_ref(),
+                            Some(data),
                         );
                     });
                     crate::memory_tracker::set_current_phase(&prelaunch_label);

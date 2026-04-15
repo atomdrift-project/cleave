@@ -355,6 +355,41 @@ fn execute_rizin_with_timeout(
     }
 }
 
+struct EffectiveInputPath {
+    temp_file: Option<tempfile::NamedTempFile>,
+}
+
+impl EffectiveInputPath {
+    fn new(file_path: &Path, fallback_data: Option<&[u8]>) -> Result<Self> {
+        if file_path.exists() || fallback_data.is_none() {
+            return Ok(Self { temp_file: None });
+        }
+
+        let data = fallback_data.expect("checked is_some above");
+        debug!(
+            path = %file_path.display(),
+            bytes = data.len(),
+            "writing in-memory bytes to temp file for rizin"
+        );
+
+        let mut tmp =
+            tempfile::NamedTempFile::new().context("failed to create rizin temp file")?;
+        {
+            use std::io::Write as _;
+            tmp.write_all(data)
+                .context("failed to write bytes to rizin temp file")?;
+        }
+
+        Ok(Self {
+            temp_file: Some(tmp),
+        })
+    }
+
+    fn path<'a>(&'a self, file_path: &'a Path) -> &'a Path {
+        self.temp_file.as_ref().map_or(file_path, tempfile::NamedTempFile::path)
+    }
+}
+
 /// Batched analysis result containing all data from a single r2 session
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub(crate) struct BatchedAnalysis {
@@ -495,18 +530,26 @@ impl Radare2Analyzer {
         include_strings: bool,
         precomputed_sha256: Option<String>,
         cancellation: Option<&Arc<AtomicBool>>,
+        fallback_data: Option<&[u8]>,
     ) -> Result<BatchedAnalysis> {
         let t_start = std::time::Instant::now();
 
+        // If the logical path does not exist on disk and in-memory bytes are provided,
+        // write them to a temporary file. rizin requires a real filesystem path.
+        let effective_input = EffectiveInputPath::new(file_path, fallback_data)?;
+        // effective_path is the real on-disk path passed to rizin and metadata checks.
+        // file_path is kept for log messages so they show the logical (original) name.
+        let effective_path = effective_input.path(file_path);
+
         // Use precomputed SHA256 for cache lookup if available
-        let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(file_path));
+        let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(effective_path));
 
         // Check file size - skip expensive function analysis for large binaries
         // Binaries >20MB take minutes to analyze with 'aa'
         const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 20 * 1024 * 1024; // 20MB
         const MAX_SIZE_FOR_DEEP_ANALYSIS: u64 = 5 * 1024 * 1024; // 5MB
 
-        let file_size = std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(effective_path).map(|m| m.len()).unwrap_or(0);
         let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
 
         // Use a lighter analysis for medium-sized files
@@ -603,7 +646,7 @@ impl Radare2Analyzer {
             debug!("Stripped binary, skipping function analysis (aa/aflj)");
         }
 
-        let file_path_str = file_path.to_string_lossy().to_string();
+        let file_path_str = effective_path.to_string_lossy().to_string();
 
         // Helper to parse JSON from a SEP-delimited part
         let parse_json_part = |part: Option<&&str>| -> Option<String> {
@@ -1029,6 +1072,7 @@ impl Default for Radare2Analyzer {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_syscall_info_serialize() {
@@ -1122,6 +1166,47 @@ mod tests {
 
         assert_eq!(RADARE2_DISABLED.load(Ordering::SeqCst), before);
         assert_eq!(is_disabled(), was_disabled);
+    }
+
+    #[test]
+    fn test_effective_input_path_uses_original_when_file_exists() {
+        let tmp = tempfile::NamedTempFile::new().expect("create temp file");
+        fs::write(tmp.path(), b"disk").expect("write temp file");
+
+        let resolved =
+            EffectiveInputPath::new(tmp.path(), Some(b"fallback")).expect("resolve input path");
+
+        assert_eq!(resolved.path(tmp.path()), tmp.path());
+    }
+
+    #[test]
+    fn test_effective_input_path_writes_temp_file_for_missing_path() {
+        let missing = std::env::temp_dir().join(format!(
+            "cleave-rizin-missing-{}",
+            std::process::id()
+        ));
+        let data = b"in-memory bytes";
+
+        let resolved =
+            EffectiveInputPath::new(&missing, Some(data)).expect("resolve missing input path");
+        let effective_path = resolved.path(&missing);
+
+        assert_ne!(effective_path, missing.as_path());
+        assert!(effective_path.exists());
+        assert_eq!(fs::read(effective_path).expect("read temp file"), data);
+    }
+
+    #[test]
+    fn test_effective_input_path_keeps_missing_path_without_fallback_bytes() {
+        let missing = std::env::temp_dir().join(format!(
+            "cleave-rizin-missing-no-fallback-{}",
+            std::process::id()
+        ));
+
+        let resolved = EffectiveInputPath::new(&missing, None).expect("resolve input path");
+
+        assert_eq!(resolved.path(&missing), missing.as_path());
+        assert!(!resolved.path(&missing).exists());
     }
 
     /// Regression test: subprocess spawned with process_group(0) must not hang.

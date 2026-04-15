@@ -359,6 +359,7 @@ impl MachOAnalyzer {
                 needs_r2_strings,
                 precomputed_sha256,
                 self.cancellation.as_ref(),
+                Some(data),
             ) {
                 // Compute metrics from batched data (radare2-specific metrics)
                 let r2_binary_metrics =
@@ -1310,6 +1311,7 @@ impl MachOAnalyzer {
                     true,  // include_strings: no stng pre-extraction in this path
                     precomputed_sha256,
                     self.cancellation.as_ref(),
+                    Some(data),
                 ) {
                     Ok(batched) => {
                         let bm = self.radare2.compute_metrics_from_batched(

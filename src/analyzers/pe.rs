@@ -702,6 +702,7 @@ impl PEAnalyzer {
                         needs_r2_strings,
                         precomputed_sha256,
                         self.cancellation.as_ref(),
+                        Some(original_data),
                     ));
                 }
             });

@@ -295,12 +295,58 @@ impl ArchiveAnalyzer {
         } else if let Some(analyzer) =
             crate::analyzers::analyzer_for_file_type_arc(file_type, self.capability_mapper.clone())
         {
-            let opts = crate::analyzers::stng_analysis_opts(4);
-            let stng_strings = stng::extract_strings_with_options(data, &opts);
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
             let skip_rizin_reason =
                 Self::archive_member_rizin_skip_reason(relative_path, file_type);
-            let payloads = if extract_payloads {
+
+            // For native binaries where rizin will run, pre-launch the rizin subprocess
+            // in a rayon task before stng so they execute in parallel. Rizin dominates
+            // wall-clock time (20+ min for deep analysis vs 2s for stng). The result is
+            // stored in the SHA256-keyed disk cache; when the PE/ELF/MachO analyzer calls
+            // extract_batched moments later it gets an instant cache hit.
+            //
+            // Conservative pre-call parameters:
+            //   has_symbols=true  → full aa;aflj function analysis (correct for most real binaries)
+            //   goblin_ok=false   → also extract iSj/iij (goblin overrides these on success anyway)
+            //   include_strings=false → stng provides strings; skip rizin izj
+            let should_prelaunched_rizin = skip_rizin_reason.is_none()
+                && !crate::cache::skip_cache()
+                && crate::radare2::Radare2Analyzer::is_available();
+            let prelaunch_label = format!("prelaunching rizin on {relative_path}");
+
+            let stng_strings;
+            let payloads;
+            if should_prelaunched_rizin {
+                let r2 = crate::radare2::Radare2Analyzer::new();
+                let r2_path = file_path.to_path_buf();
+                let r2_sha256 = sha256.to_string();
+                let r2_cancelled = self.cancelled.clone();
+                let mut stng_result = Vec::new();
+                rayon::scope(|s| {
+                    s.spawn(|_| {
+                        tracing::debug!(relative_path, "Pre-launching rizin in parallel with stng");
+                        let _ = r2.extract_batched(
+                            &r2_path,
+                            true,  // has_symbols: conservative assumption (full aa;aflj)
+                            false, // goblin_ok: also capture iSj/iij for fallback
+                            false, // include_strings: stng handles strings
+                            Some(r2_sha256),
+                            r2_cancelled.as_ref(),
+                        );
+                    });
+                    crate::memory_tracker::set_current_phase(&prelaunch_label);
+                    let opts = crate::analyzers::stng_analysis_opts(4);
+                    stng_result = stng::extract_strings_with_options(data, &opts);
+                    crate::memory_tracker::clear_current_phase();
+                });
+                stng_strings = stng_result;
+            } else {
+                crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
+                let opts = crate::analyzers::stng_analysis_opts(4);
+                stng_strings = stng::extract_strings_with_options(data, &opts);
+                crate::memory_tracker::clear_current_phase();
+            }
+            payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {
                 Vec::new()
@@ -366,10 +412,12 @@ impl ArchiveAnalyzer {
                         yara_filters = ?yara_filetypes,
                         "Running archive member YARA scan"
                     );
+                    crate::memory_tracker::set_current_phase(format!("yara on {relative_path}"));
                     let yara_start = std::time::Instant::now();
                     match yara_engine.scan_bytes_filtered(data, yara_filter) {
                         Ok(matches) => {
                             let elapsed_ms = yara_start.elapsed().as_millis();
+                            crate::memory_tracker::clear_current_phase();
                             if elapsed_ms > SLOW_ARCHIVE_MEMBER_YARA_MS {
                                 tracing::warn!(
                                     relative_path,
@@ -389,6 +437,7 @@ impl ArchiveAnalyzer {
                             report.yara_matches = matches;
                         }
                         Err(e) => {
+                            crate::memory_tracker::clear_current_phase();
                             debug!("YARA scan failed for {}: {}", relative_path, e);
                         }
                     }

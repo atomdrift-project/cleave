@@ -159,7 +159,13 @@ fn execute_rizin_with_timeout(
     );
 
     let mut cmd = Command::new("rizin");
-    cmd.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // stdin must be /dev/null: process_group(0) places rizin in a background
+    // process group, so any terminal read attempt triggers SIGTTIN and suspends
+    // the process indefinitely. Redirecting to null prevents that entirely.
+    cmd.args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
 
     #[cfg(unix)]
     cmd.process_group(0);
@@ -202,9 +208,25 @@ fn execute_rizin_with_timeout(
     // Uses a dedicated thread for child.wait() + recv_timeout to avoid
     // the 100ms poll-sleep loop that wastes rayon worker thread time.
     let child_id = child.id();
+    tracing::info!(pid = child_id, command = %args_str, "Rizin process spawned");
     let (wait_tx, wait_rx) = mpsc::channel();
     let wait_thread = std::thread::spawn(move || {
         let status = child.wait();
+        tracing::info!(
+            pid = child_id,
+            exit_code = status.as_ref().ok().and_then(|s| s.code()),
+            "Rizin process exited; killing process group to release pipes"
+        );
+        // After the rizin process exits, kill its entire process group to
+        // release any stdout/stderr pipe handles held by child processes
+        // rizin may have spawned (e.g. during `aa` analysis). Without this,
+        // read_to_end() in the stdout/stderr threads blocks indefinitely
+        // because orphaned grandchildren still hold the write-end of the pipes.
+        #[cfg(unix)]
+        unsafe {
+            libc::kill(-(child_id as libc::pid_t), libc::SIGKILL);
+        }
+        tracing::info!(pid = child_id, "Process group killed; waiting for pipe drain");
         let _ = wait_tx.send(status);
     });
 
@@ -238,6 +260,12 @@ fn execute_rizin_with_timeout(
             let _ = stderr_thread.join();
             let stdout = stdout_rx.recv().unwrap_or_default();
             let stderr = stderr_rx.recv().unwrap_or_default();
+            tracing::info!(
+                pid = child_id,
+                elapsed_ms = elapsed.as_millis(),
+                stdout_bytes = stdout.len(),
+                "Rizin pipe drain complete"
+            );
 
             let output = std::process::Output {
                 status,
@@ -247,7 +275,7 @@ fn execute_rizin_with_timeout(
 
             if status.success() {
                 RIZIN_SUCCESSES.fetch_add(1, Ordering::Relaxed);
-                debug!(
+                tracing::info!(
                     elapsed_ms = elapsed.as_millis(),
                     stdout_bytes = output.stdout.len(),
                     "Rizin completed successfully"
@@ -619,6 +647,12 @@ impl Radare2Analyzer {
         // Use a bounded timeout so one slow file does not stall the whole scan.
         let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
 
+        let phase_label = format!(
+            "rizin ({}) on {}",
+            mode.label(),
+            file_path.file_name().unwrap_or(file_path.as_os_str()).to_string_lossy()
+        );
+        crate::memory_tracker::set_current_phase(&phase_label);
         let output = execute_rizin_with_timeout(
             &[
                 "-NN",
@@ -634,6 +668,7 @@ impl Radare2Analyzer {
             timeout,
             cancellation,
         );
+        crate::memory_tracker::clear_current_phase();
 
         // Handle timeout as a tool limitation; callers may choose how to surface it.
         let output = match output {

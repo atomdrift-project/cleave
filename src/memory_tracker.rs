@@ -7,6 +7,28 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
+/// Global tracker for the currently-running analysis phase.
+///
+/// Set this before slow operations (rizin, stng, YARA) so the periodic
+/// memory-check log line can tell you exactly what cleave is doing instead
+/// of silently incrementing a counter.
+static CURRENT_PHASE: parking_lot::Mutex<Option<String>> = parking_lot::const_mutex(None);
+
+/// Record what the current analysis phase is (e.g. "rizin: aa; aflj on foo.exe").
+/// The string is included in every subsequent periodic memory-check log line.
+pub(crate) fn set_current_phase(phase: impl Into<String>) {
+    *CURRENT_PHASE.lock() = Some(phase.into());
+}
+
+/// Clear the current phase (call when the slow operation finishes).
+pub(crate) fn clear_current_phase() {
+    *CURRENT_PHASE.lock() = None;
+}
+
+fn current_phase_snapshot() -> Option<String> {
+    CURRENT_PHASE.lock().clone()
+}
+
 /// Global memory statistics tracker
 #[derive(Debug)]
 pub struct MemoryTracker {
@@ -280,10 +302,12 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
             let rss_mb = rss / 1024 / 1024;
             let rss_gb = rss / 1024 / 1024 / 1024;
 
+            let phase = current_phase_snapshot();
             info!(
                 rss_mb = rss_mb,
                 rss_gb = rss_gb,
                 iteration = iteration,
+                current_op = phase.as_deref().unwrap_or("idle"),
                 "Periodic memory check"
             );
 

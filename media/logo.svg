@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 80" width="240" height="80">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Oxanium:wght@700&amp;display=swap');
+    </style>
+  </defs>
+  <text x="120" y="42" text-anchor="middle" font-family="'Oxanium', sans-serif" font-weight="700" font-size="38" letter-spacing="0.5" fill="#1a1a1a">cleave</text>
+  <g transform="translate(99, 54)">
+    <rect x="0" y="0" width="20" height="3" rx="1.5" fill="#378ADD"/>
+    <rect x="22" y="0" width="20" height="3" rx="1.5" fill="#185FA5"/>
+  </g>
+</svg>

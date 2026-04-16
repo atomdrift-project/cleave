@@ -1,52 +1,47 @@
-![cleave](media/logo.png)
+<p align="center">
+  <img src="media/logo.svg" alt="cleave" width="240">
+</p>
 
-AST-aware software decomposition engine for supply-chain security. Detects capabilities and behaviors across 20+ languages and six binary formats in a single pass — built for security engineers and ML classification pipelines alike.
+cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[47,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Built for supply-chain and malware triage.
 
 ![screenshot](media/screenshot.png)
 
 ## What It Analyzes
 
-- **Binaries** (header parsing + optional disassembly via Rizin): Mach-O, ELF, PE, Java .class, Python .pyc, compiled AppleScript
-- **Source code** (tree-sitter AST): Python, JavaScript, TypeScript, Go, Rust, C/C++, Java, C#, Swift, Objective-C, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
-- **Archives** (recursive unpacking): ZIP, TAR, 7z, RAR, plus JAR/WAR, deb, rpm, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
+- **Binaries**: Mach-O, ELF, PE, Java `.class`, Python `.pyc`, compiled AppleScript
+- **Source** (~20 languages via tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
+- **Archives** (recursive): zip, tar, 7z, rar, jar/war, deb, rpm, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
 - **Documents & data**: RTF, LNK, PNG (steganography), PDF, plist, VBScript, Batch, package manifests, GitHub Actions workflows
 
 ## Quick Start
 
 ```bash
-# macOS (Homebrew)
 brew tap atomdrift/tap https://codeberg.org/atomdrift/homebrew-tap.git
 brew install atomdrift/tap/cleave
-
-# From source
-make install
+# or: make install
 ```
 
 ```bash
-cleave suspect.bin
-cleave /tmp/box-o-malware   # recursive, unpacks archives
+cleave suspect.bin                            # single sample
+cleave /tmp/box-o-malware                     # recursive, unpacks archives
+cleave --format jsonl --min-crit suspicious   # streaming triage feed
+cleave diff old.tgz new.tgz                   # behavior delta across releases
 ```
 
-Optionally install [rizin](https://github.com/rizinorg/rizin) for disassembly and [upx](https://github.com/upx/upx) for runtime unpacking.
+Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](https://github.com/upx/upx) for runtime unpacking.
 
-## Under the Hood
+## Why Security Engineers Use It
 
-**Tree-sitter** for language-aware AST traversal, **Rizin** for binary reverse engineering, **Goblin** for header parsing, **YARA-X** for signature matching, and **[stng](https://codeberg.org/atomdrift/stng)** for payload decoding (Base64, hex, AES, XOR key material).
+- **Capabilities, not verdicts.** Findings ranked from `baseline` to `hostile`, fed straight into ML classifiers like [litmus](https://codeberg.org/atomdrift/litmus).
+- **Supply-chain first.** Every archive member is analyzed; no size or "looks benign" skips.
+- **Layered unpacking.** UPX, embedded binaries, and base64/hex/AES/XOR payloads decoded via [stng](https://codeberg.org/atomdrift/stng).
+- **Pipeline-ready.** JSONL streaming, SHA256-keyed cache, deterministic output.
+- **AST matching** over string greps; YARA-X for signatures, [Goblin](https://github.com/m4b/goblin) for headers.
 
-## Detection Philosophy
+## Related
 
-cleave does not judge whether a program is malicious — it extracts what a program *can do*, producing structured output for classifiers like [litmus](https://codeberg.org/atomdrift/litmus). Detection rules ([traits](https://codeberg.org/atomdrift/cleave-traits)) align with the [MBC](https://github.com/MBCProject/mbc-markdown) hierarchy:
-
-- **[micro-behaviors](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/micro-behaviors)**: atomic capabilities (`mmap`, `gethostbyname`)
-- **[objectives](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/objectives)**: composite traits indicating behavior in service of a goal
-- **[well-known](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/well-known)**: specific malware family signatures
-- **[meta](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/meta)**: structural traits
-- **[third-party](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/third-party)**: third-party YARA rules
-
-## Related Tools
-
-- [malcontent](https://github.com/chainguard-dev/malcontent) — our previous approach. cleave replaces it with ~2× accuracy through AST-aware analysis.
-- [capa](https://github.com/mandiant/capa) — our original inspiration. cleave is faster, with 15× rule coverage and broader format support.
+- [malcontent](https://github.com/chainguard-dev/malcontent) — predecessor; cleave roughly doubles accuracy via AST analysis.
+- [capa](https://github.com/mandiant/capa) — original inspiration; ~15× rule coverage, broader format support.
 
 ## License
 

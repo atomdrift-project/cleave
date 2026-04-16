@@ -200,7 +200,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # HTTP server (for `cleave server` subcommand)
 axum = { version = "0.8", features = ["multipart"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "signal", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "signal", "io-util", "sync"] }
 tower = { version = "0.5", features = ["timeout", "limit"] }
 tower-http = { version = "0.6", features = ["limit"] }
 multer = "3"

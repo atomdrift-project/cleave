@@ -101,6 +101,15 @@ impl ElfAnalyzer {
             .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
+    /// Create analyzer with shared YARA engine
+    #[must_use]
+    pub(crate) fn with_yara_arc(self, yara_engine: Arc<crate::yara_engine::YaraEngine>) -> Self {
+        // ELF analyzer currently doesn't use YARA engine directly for structural analysis,
+        // but we accept it for consistency with other analyzers and future use.
+        let _ = yara_engine;
+        self
+    }
+
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, capability_mapper: CapabilityMapper) -> Self {
@@ -514,6 +523,25 @@ impl ElfAnalyzer {
             });
         }
 
+        // --- Shared post-processing (strings, embedded code, metrics, overlay) ---
+
+        // String extraction (preference: stng_strings > preextracted > extract_smart)
+        let (report_strings, raw_stng_strings) = if let Some(strings) = stng_strings {
+            (
+                self.string_extractor.convert_stng_strings(strings),
+                Some(strings.to_vec()),
+            )
+        } else if let Some(ref strings) = self.preextracted_strings {
+            (strings.clone(), None)
+        } else {
+            let raw = self.string_extractor.extract_raw_smart(data, r2_strings);
+            (
+                self.string_extractor.convert_stng_strings(&raw),
+                Some(raw),
+            )
+        };
+        report.strings = report_strings;
+
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan && !is_core_dump {
             let host_name = std::path::Path::new(&report.target.path)
@@ -541,30 +569,18 @@ impl ElfAnalyzer {
                 let slice_end = (binary.offset + binary.estimated_size).min(data.len());
                 let embedded_bytes = &data[binary.offset..slice_end];
                 let kind_str = binary.kind.as_str();
-                if let Some(fa) = analyze_embedded_as_child(
+                if let Some(fa) = crate::analyzers::utils::analyze_embedded_as_child(
                     embedded_bytes,
                     &host_name,
                     kind_str,
                     binary.offset,
                     self.capability_mapper.clone(),
+                    None, // YARA handled by child
+                    raw_stng_strings.as_deref().unwrap_or(&[]),
                 ) {
                     report.files.push(fa);
                 }
             }
-        }
-
-        // Use strings in order of preference:
-        // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
-        // 2. self.preextracted_strings (legacy builder pattern)
-        // 3. Extract fresh with stng/r2
-        let _t_stng = std::time::Instant::now();
-        if let Some(strings) = stng_strings {
-            report.strings = self.string_extractor.convert_stng_strings(strings);
-        } else if let Some(ref strings) = self.preextracted_strings {
-            report.strings = strings.clone();
-        } else {
-            // Extract strings using language-aware extraction (Go/Rust)
-            report.strings = self.string_extractor.extract_smart(data, r2_strings);
         }
 
         // Report string truncation if limits were hit
@@ -1332,42 +1348,6 @@ impl Analyzer for ElfAnalyzer {
             false
         }
     }
-}
-
-/// Extract embedded binary bytes to a temp file, analyze with the appropriate analyzer,
-/// and return a FileAnalysis suitable for inclusion as a nested child (depth=1).
-fn analyze_embedded_as_child(
-    bytes: &[u8],
-    host_name: &str,
-    kind_str: &str,
-    offset: usize,
-    capability_mapper: std::sync::Arc<crate::capabilities::CapabilityMapper>,
-) -> Option<crate::types::FileAnalysis> {
-    let suffix = if kind_str == "pe" { ".exe" } else { "" };
-    let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
-    std::fs::write(temp.path(), bytes).ok()?;
-
-    let report = if kind_str == "pe" {
-        crate::analyzers::pe::PEAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
-            .without_embedded_scan()
-            .analyze(temp.path())
-            .ok()?
-    } else {
-        ElfAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
-            .without_embedded_scan()
-            .analyze(temp.path())
-            .ok()?
-    };
-
-    let child_name = format!("embedded:{}@{:#x}", kind_str, offset);
-    let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
-
-    let (mut fa, _nested, _) = report.into_file_analysis(0);
-    fa.path = child_path;
-    fa.depth = 1;
-    Some(fa)
 }
 
 #[cfg(test)]

@@ -683,6 +683,10 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_start = std::time::Instant::now();
+
+                // Acquire a permit before starting analysis to prevent pool saturation.
+                let _permit = self.analysis_semaphore.acquire();
+
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -873,6 +877,10 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_start = std::time::Instant::now();
+
+                // Acquire a permit before starting analysis to prevent pool saturation.
+                let _permit = self.analysis_semaphore.acquire();
+
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -1151,6 +1159,10 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_start = std::time::Instant::now();
+
+                // Acquire a permit before starting analysis to prevent pool saturation.
+                let _permit = self.analysis_semaphore.acquire();
+
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),

@@ -121,6 +121,16 @@ impl StringExtractor {
         data: &[u8],
         r2_strings: Option<Vec<R2String>>,
     ) -> Vec<StringInfo> {
+        let raw = self.extract_raw_smart(data, r2_strings);
+        self.convert_stng_strings(&raw)
+    }
+
+    /// Extract raw stng strings from binary data.
+    pub(crate) fn extract_raw_smart(
+        &self,
+        data: &[u8],
+        r2_strings: Option<Vec<R2String>>,
+    ) -> Vec<ExtractedString> {
         let mut opts = crate::analyzers::stng_analysis_opts(self.min_length);
 
         // Convert and pass r2 strings to stng if available
@@ -146,30 +156,7 @@ impl StringExtractor {
             opts = opts.with_r2_strings(stng_r2_strings);
         }
 
-        let lang_strings = stng::extract_strings_with_options(data, &opts);
-        let mut strings = Vec::with_capacity(lang_strings.len().min(MAX_STRINGS_PER_FILE));
-        let mut total_bytes = 0;
-        self.truncated
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        for es in lang_strings {
-            if strings.len() >= MAX_STRINGS_PER_FILE {
-                self.truncated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                break;
-            }
-
-            let value_len = es.value.len();
-            if total_bytes + value_len > MAX_TOTAL_STRING_BYTES {
-                self.truncated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                break;
-            }
-
-            total_bytes += value_len;
-            strings.push(self.convert_extracted_string(es));
-        }
-        strings
+        stng::extract_strings_with_options(data, &opts)
     }
 
     /// Convert pre-extracted stng strings to StringInfo (public API for reuse)

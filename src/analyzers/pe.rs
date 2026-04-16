@@ -1045,13 +1045,23 @@ impl PEAnalyzer {
         // --- Shared post-processing (strings, embedded code, metrics, overlay, SFX) ---
 
         // String extraction (preference: stng_strings > preextracted > extract_smart)
-        if let Some(strings) = stng_strings {
-            report.strings = self.string_extractor.convert_stng_strings(strings);
+        let (report_strings, raw_stng_strings) = if let Some(strings) = stng_strings {
+            (
+                self.string_extractor.convert_stng_strings(strings),
+                Some(strings.to_vec()),
+            )
         } else if let Some(ref strings) = self.preextracted_strings {
-            report.strings = strings.clone();
+            // If we have preextracted strings but they are already converted, we can't easily get back to raw.
+            // But usually preextracted_strings are from stng-local path or similar.
+            (strings.clone(), None)
         } else {
-            report.strings = self.string_extractor.extract_smart(pe_data, r2_strings);
-        }
+            let raw = self.string_extractor.extract_raw_smart(pe_data, r2_strings);
+            (
+                self.string_extractor.convert_stng_strings(&raw),
+                Some(raw),
+            )
+        };
+        report.strings = report_strings;
 
         // Report string truncation if limits were hit
         if self
@@ -1336,13 +1346,14 @@ impl PEAnalyzer {
                 let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
                 let embedded_bytes = &pe_data[binary.offset..slice_end];
                 let kind_str = binary.kind.as_str();
-                if let Some(fa) = analyze_embedded_as_child(
+                if let Some(fa) = crate::analyzers::utils::analyze_embedded_as_child(
                     embedded_bytes,
                     &host_name,
                     kind_str,
                     binary.offset,
                     self.capability_mapper.clone(),
                     self.yara_engine.clone(),
+                    raw_stng_strings.as_deref().unwrap_or(&[]),
                 ) {
                     if finding.crit == Criticality::Suspicious
                         && fa.findings.iter().any(|child_finding| {
@@ -2115,47 +2126,6 @@ fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
         }
     }
     None
-}
-
-/// Extract embedded binary bytes to a temp file, analyze with the appropriate analyzer,
-/// and return a FileAnalysis suitable for inclusion as a nested child (depth=1).
-///
-/// Returns `None` if extraction or analysis fails — the parent finding is still emitted.
-fn analyze_embedded_as_child(
-    bytes: &[u8],
-    host_name: &str,
-    kind_str: &str,
-    offset: usize,
-    capability_mapper: Arc<CapabilityMapper>,
-    yara_engine: Option<Arc<YaraEngine>>,
-) -> Option<crate::types::FileAnalysis> {
-    let suffix = if kind_str == "pe" { ".exe" } else { "" };
-    let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
-    std::fs::write(temp.path(), bytes).ok()?;
-
-    let report = if kind_str == "pe" {
-        let mut analyzer = PEAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
-            .without_embedded_scan();
-        if let Some(yara) = yara_engine {
-            analyzer = analyzer.with_yara_arc(yara);
-        }
-        analyzer.analyze(temp.path()).ok()?
-    } else {
-        crate::analyzers::elf::ElfAnalyzer::new()
-            .with_capability_mapper_arc(capability_mapper)
-            .without_embedded_scan()
-            .analyze(temp.path())
-            .ok()?
-    };
-
-    let child_name = format!("embedded:{}@{:#x}", kind_str, offset);
-    let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
-
-    let (mut fa, _nested, _) = report.into_file_analysis(0);
-    fa.path = child_path;
-    fa.depth = 1;
-    Some(fa)
 }
 
 #[cfg(test)]

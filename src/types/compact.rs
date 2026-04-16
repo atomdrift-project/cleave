@@ -14,6 +14,9 @@ use super::core::{AnalysisReport, Criticality};
 /// Maximum strings per file in compact output
 const MAX_STRINGS: usize = 256;
 
+/// Maximum imports per file in compact output
+const MAX_IMPORTS: usize = 4096;
+
 /// Maximum chars per string value
 const MAX_STRING_CHARS: usize = 128;
 
@@ -281,8 +284,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         })
         .collect();
 
-    // Flatten imports to bare symbol names
-    let imports: Vec<String> = file.imports.iter().map(|i| i.symbol.clone()).collect();
+    // Flatten imports to bare symbol names, capped to prevent oversized output
+    let imports: Vec<String> = file.imports.iter().take(MAX_IMPORTS).map(|i| i.symbol.clone()).collect();
 
     // Round metrics floats to 2dp
     let metrics = file.metrics.as_ref().and_then(|m| {

@@ -354,6 +354,8 @@ pub(crate) struct ArchiveAnalyzer {
     cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Analysis options for member-level cache lookups.
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
+    /// Semaphore to limit concurrent archive member analysis and prevent pool saturation.
+    analysis_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 /// Decompress a single-file stream into `dest_dir`, applying size and ratio guards.
@@ -382,6 +384,12 @@ impl ArchiveAnalyzer {
     /// Create a new archive analyzer with default settings
     #[must_use]
     pub(crate) fn new() -> Self {
+        // Default to half of available threads for archive member analysis.
+        // This leaves the other half for the inner rayon::join calls (struct+yara)
+        // and prevents deadlocks/starvation in large archives.
+        let threads = rayon::current_num_threads();
+        let concurrency = (threads / 2).max(1);
+
         Self {
             max_depth: 3,
             current_depth: 0,
@@ -393,6 +401,7 @@ impl ArchiveAnalyzer {
             max_memory_file_size: DEFAULT_MAX_MEMORY_FILE_SIZE,
             cancelled: None,
             analysis_options: None,
+            analysis_semaphore: Arc::new(tokio::sync::Semaphore::new(concurrency)),
         }
     }
 
@@ -500,6 +509,13 @@ impl ArchiveAnalyzer {
         self
     }
 
+    /// Set a shared semaphore for limiting concurrent archive member analysis.
+    #[must_use]
+    pub(crate) fn with_semaphore(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
+        self.analysis_semaphore = semaphore;
+        self
+    }
+
     /// Create a copy of this analyzer with the sample_extraction config updated
     /// to use the given archive SHA256 for extraction directory grouping.
     #[allow(dead_code)] // Used by binary target
@@ -519,6 +535,7 @@ impl ArchiveAnalyzer {
             max_memory_file_size: self.max_memory_file_size,
             cancelled: self.cancelled.clone(),
             analysis_options: self.analysis_options.clone(),
+            analysis_semaphore: self.analysis_semaphore.clone(),
         }
     }
 

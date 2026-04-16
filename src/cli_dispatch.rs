@@ -193,7 +193,6 @@ fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()>
 fn run_server(
     bind: &str,
     qps: u32,
-    timeout: u64,
     max_size_mb: u64,
     max_rss_gb: Option<u64>,
     dangerous_local_file_paths: Option<String>,
@@ -235,7 +234,6 @@ fn run_server(
     let config = cleave::server::ServerConfig {
         bind: bind_addr,
         qps,
-        timeout_secs: timeout,
         max_body_size: (max_size_mb * 1024 * 1024) as usize,
         max_rss_bytes: max_rss_gb
             .map(|gb| gb * 1024 * 1024 * 1024)
@@ -465,7 +463,6 @@ pub(crate) fn dispatch_command(
         Some(cli::Command::Serve {
             bind,
             qps,
-            timeout,
             max_size_mb,
             max_rss_gb,
             dangerous_local_file_paths,
@@ -474,7 +471,6 @@ pub(crate) fn dispatch_command(
             run_server(
                 &bind,
                 qps,
-                timeout,
                 max_size_mb,
                 max_rss_gb,
                 dangerous_local_file_paths,

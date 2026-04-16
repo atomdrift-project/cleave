@@ -41,8 +41,6 @@ pub struct ServerConfig {
     pub bind: SocketAddr,
     /// Requests per second limit per IP.
     pub qps: u32,
-    /// Analysis timeout in seconds.
-    pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
     /// Maximum RSS (memory usage) in bytes before rejecting requests.
@@ -61,7 +59,6 @@ impl Default for ServerConfig {
         Self {
             bind: SocketAddr::from(([127, 0, 0, 1], 8080)),
             qps: 100,
-            timeout_secs: 900,
             max_body_size: 250 * 1024 * 1024, // 250 MB
             max_rss_bytes: sysmem::memory_limit(),
             allowed_local_paths: Vec::new(),
@@ -75,8 +72,6 @@ impl Default for ServerConfig {
 pub struct AppState {
     /// Per-IP rate limiter.
     pub rate_limiter: RateLimiter,
-    /// Analysis timeout in seconds.
-    pub timeout_secs: u64,
     /// Maximum request body size in bytes.
     pub max_body_size: usize,
     /// Maximum RSS in bytes before rejecting requests.
@@ -88,15 +83,10 @@ pub struct AppState {
     pub extract_dir: Option<std::path::PathBuf>,
     /// Request ID counter.
     pub next_request_id: AtomicU64,
-    /// Number of active analysis tasks (including orphaned timed-out tasks).
+    /// Number of active analysis tasks.
     pub active_tasks: AtomicUsize,
-    /// Number of orphaned tasks whose slots were recycled after the grace period.
-    /// These threads are still running in the background but no longer block new work.
-    /// A high value signals the server should be restarted.
-    pub recycled_orphans: AtomicUsize,
     /// Hard cap on concurrent analysis tasks. Requests are rejected with 503
-    /// when active_tasks >= this value, preventing orphaned blocking tasks
-    /// from piling up and consuming unbounded memory.
+    /// when active_tasks >= this value.
     pub max_concurrent_tasks: usize,
     /// When the server first entered the memory-overloaded state.
     /// Reset to None when memory drops below the threshold.
@@ -157,14 +147,12 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
 
     let state = Arc::new(AppState {
         rate_limiter: RateLimiter::new(config.qps),
-        timeout_secs: config.timeout_secs,
         max_body_size: config.max_body_size,
         max_rss_bytes: config.max_rss_bytes,
         allowed_local_paths,
         extract_dir,
         next_request_id: AtomicU64::new(1),
         active_tasks: AtomicUsize::new(0),
-        recycled_orphans: AtomicUsize::new(0),
         max_concurrent_tasks: max_concurrent,
         overloaded_since: parking_lot::Mutex::new(None),
         in_flight: dashmap::DashMap::new(),
@@ -214,10 +202,9 @@ pub async fn run(config: ServerConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
 
     eprintln!(
-        "Listening on http://{} (rate limit: {} req/s, timeout: {}s, max size: {} MB)",
+        "Listening on http://{} (rate limit: {} req/s, max size: {} MB)",
         config.bind,
         config.qps,
-        config.timeout_secs,
         config.max_body_size / 1024 / 1024
     );
     eprintln!("Press Ctrl+C to stop");

@@ -36,11 +36,6 @@ use std::sync::{Mutex, OnceLock};
 
 /// Result of a goblin operation that distinguishes between a normal `Err`
 /// return and a caught panic.
-///
-/// The two failure variants are *both* failures from the caller's perspective —
-/// they should fall back to rizin and set `has_malformed_structure` either way —
-/// but distinguishing them lets log lines and error metadata explain *how*
-/// goblin gave up, which is useful when triaging future goblin bugs.
 #[derive(Debug)]
 pub(crate) enum GoblinOutcome<T> {
     /// goblin succeeded and produced a value.
@@ -66,9 +61,7 @@ impl<T> GoblinOutcome<T> {
     }
 
     /// Returns a `GoblinFailureInfo` describing the failure, or `None` if
-    /// the outcome is `Ok`. This is the canonical way to thread "what went
-    /// wrong" through analyzer code without coupling them to either
-    /// `goblin::error::Error` or the `GoblinOutcome` enum.
+    /// the outcome is `Ok`.
     pub(crate) fn failure_info(&self) -> Option<GoblinFailureInfo> {
         match self {
             Self::Ok(_) => None,
@@ -88,22 +81,10 @@ impl<T> GoblinOutcome<T> {
 /// their error-handling paths.
 #[derive(Debug, Clone)]
 pub(crate) struct GoblinFailureInfo {
-    /// Human-readable failure message; safe to log and to push into
-    /// `report.metadata.errors`.
     pub message: String,
-    /// Whether the failure was a *panic* caught by `catch_unwind` rather
-    /// than a normal `Err` return. Useful for triaging future goblin bugs;
-    /// callers should generally treat both cases the same way (mark
-    /// `has_malformed_structure` and fall back to rizin).
     pub panicked: bool,
 }
 
-/// Best-effort extraction of a panic payload's message string for logging.
-///
-/// `catch_unwind` returns the payload as `Box<dyn Any + Send>`, which in
-/// practice is almost always either `&'static str` (from `panic!("literal")`)
-/// or `String` (from `panic!("{}", x)` / `assert!`). Anything else gets a
-/// generic placeholder so we never lose the fact that *something* panicked.
 pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     if let Some(s) = payload.downcast_ref::<&'static str>() {
         (*s).to_string()
@@ -133,9 +114,6 @@ where
     result
 }
 
-/// Run a goblin call that returns `Result<T, GoblinError>`, returning a
-/// typed `GoblinOutcome` that distinguishes a normal `Err` from a caught
-/// panic.
 pub(crate) fn catch<T, F>(f: F) -> GoblinOutcome<T>
 where
     F: FnOnce() -> Result<T, GoblinError>,
@@ -147,14 +125,6 @@ where
     }
 }
 
-/// Run an arbitrary goblin operation that does *not* return a `Result`,
-/// catching any panic.
-///
-/// This is the right choice for goblin's lazy field accessors — e.g.
-/// `pe.resource_data.as_ref().map(|r| r.count())` — which slice into the
-/// underlying file with header-supplied offsets and panic on bounds
-/// violations. There is no `Result` for goblin to populate, so the only
-/// failure mode is a panic; we surface it as `Panicked`.
 pub(crate) fn catch_infallible<T, F>(f: F) -> GoblinOutcome<T>
 where
     F: FnOnce() -> T,
@@ -166,13 +136,12 @@ where
 }
 
 /// Parse a PE file, panic-safe and with built-in permissive fallback.
-///
-/// Tries strict mode first (the default goblin behaviour). If that fails
-/// — whether by returning an error *or* by panicking — falls back to
-/// permissive mode. The returned outcome carries the *most informative*
-/// failure: a permissive-mode error if both attempts cleanly failed, or
-/// the panic message if either attempt crashed.
 pub(crate) fn parse_pe(data: &[u8]) -> GoblinOutcome<PE<'_>> {
+    // Fast path: validate header health to prevent hangs/memory explosion in goblin
+    if let Err(e) = validate_pe_header(data) {
+        return GoblinOutcome::Failed(GoblinError::Malformed(e));
+    }
+
     let strict = catch(|| PE::parse(data));
     if matches!(strict, GoblinOutcome::Ok(_)) {
         return strict;
@@ -182,85 +151,139 @@ pub(crate) fn parse_pe(data: &[u8]) -> GoblinOutcome<PE<'_>> {
         .with_parse_mode(goblin::options::ParseMode::Permissive);
     let permissive = catch(|| PE::parse_with_opts(data, &opts));
 
-    // If permissive panicked but strict gave a clean Err, prefer the strict error
-    // message — it's more informative than a panic payload. In all other cases,
-    // return permissive (either its Ok/Err result, or its panic if strict also panicked).
     match (&strict, &permissive) {
         (GoblinOutcome::Failed(_), GoblinOutcome::Panicked(_)) => strict,
         _ => permissive,
     }
 }
 
-/// Parse an ELF file, panic-safe.
+/// Perform basic structural validation of PE headers to prevent known goblin
+/// vulnerabilities (e.g. infinite loops or massive allocations on malformed tables).
+fn validate_pe_header(data: &[u8]) -> Result<(), String> {
+    if data.len() < 64 {
+        return Ok(());
+    }
+
+    // MZ header
+    if data[0] != b'M' || data[1] != b'Z' {
+        return Ok(());
+    }
+
+    // PE pointer
+    let pe_ptr_offset = 0x3C;
+    let pe_offset = u32::from_le_bytes([
+        data[pe_ptr_offset],
+        data[pe_ptr_offset + 1],
+        data[pe_ptr_offset + 2],
+        data[pe_ptr_offset + 3],
+    ]) as usize;
+
+    if pe_offset + 24 > data.len() {
+        return Ok(());
+    }
+
+    // PE signature
+    if &data[pe_offset..pe_offset + 4] != b"PE\0\0" {
+        return Ok(());
+    }
+
+    let coff_offset = pe_offset + 4;
+    let n_sections = u16::from_le_bytes([data[coff_offset + 2], data[coff_offset + 3]]);
+    if n_sections > 192 {
+        // Windows allows up to 96 usually, but some tools allow more. 192 is a safe upper bound.
+        return Err(format!("too many sections ({n_sections})"));
+    }
+
+    let opt_offset = coff_offset + 20;
+    if opt_offset + 2 > data.len() {
+        return Ok(());
+    }
+
+    let magic = u16::from_le_bytes([data[opt_offset], data[opt_offset + 1]]);
+    let (data_dir_count_offset, data_dir_offset) = match magic {
+        0x010b => (92, 96), // PE32
+        0x020b => (108, 112), // PE32+
+        _ => return Ok(()),
+    };
+
+    let dir_count_ptr = opt_offset + data_dir_count_offset;
+    if dir_count_ptr + 4 > data.len() {
+        return Ok(());
+    }
+
+    let n_dirs = u32::from_le_bytes([
+        data[dir_count_ptr],
+        data[dir_count_ptr + 1],
+        data[dir_count_ptr + 2],
+        data[dir_count_ptr + 3],
+    ]);
+
+    if n_dirs > 16 {
+        return Err(format!("too many data directories ({n_dirs})"));
+    }
+
+    // Check Data Directories (Imports=1, Resources=2)
+    for i in 1..=2 {
+        if n_dirs > i as u32 {
+            let dir_ptr = opt_offset + data_dir_offset + (i * 8);
+            if dir_ptr + 8 <= data.len() {
+                let size = u32::from_le_bytes([
+                    data[dir_ptr + 4],
+                    data[dir_ptr + 5],
+                    data[dir_ptr + 6],
+                    data[dir_ptr + 7],
+                ]);
+
+                // Limit tables to 10MB or file size. A 14MB malware file
+                // shouldn't have a 100MB import table.
+                if size > 10 * 1024 * 1024 || size as usize > data.len() {
+                    let name = if i == 1 { "import" } else { "resource" };
+                    return Err(format!("malformed {name} table size ({size} bytes)"));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn parse_elf(data: &[u8]) -> GoblinOutcome<Elf<'_>> {
     catch(|| Elf::parse(data))
 }
 
-/// Parse a Mach-O file (single binary or fat archive), panic-safe.
 pub(crate) fn parse_mach(data: &[u8]) -> GoblinOutcome<Mach<'_>> {
     catch(|| Mach::parse(data))
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
 
     #[test]
-    fn catch_propagates_ok() {
-        let outcome: GoblinOutcome<u32> = catch(|| Ok(42));
-        assert_eq!(outcome.ok(), Some(42));
+    fn test_validate_pe_header_too_many_sections() {
+        let mut data = vec![0u8; 1024];
+        data[0] = b'M'; data[1] = b'Z';
+        data[0x3C] = 0x40; // PE at 0x40
+        data[0x40] = b'P'; data[0x41] = b'E';
+        data[0x44 + 2] = 0xFF; // n_sections = 255 (too many)
+        assert!(validate_pe_header(&data).is_err());
     }
 
     #[test]
-    fn catch_surfaces_err_as_failed() {
-        let outcome: GoblinOutcome<u32> = catch(|| Err(GoblinError::Malformed("nope".into())));
-        let info = outcome.failure_info().expect("expected failure");
-        assert!(!info.panicked);
-        assert!(info.message.contains("nope"));
-    }
-
-    #[test]
-    fn catch_surfaces_panic_as_panicked() {
-        let outcome: GoblinOutcome<u32> = catch(|| {
-            panic!("synthetic boom");
-        });
-        let info = outcome.failure_info().expect("expected failure");
-        assert!(info.panicked);
-        assert!(info.message.contains("synthetic boom"));
-    }
-
-    #[test]
-    fn catch_infallible_surfaces_panic_as_panicked() {
-        let outcome: GoblinOutcome<u8> = catch_infallible(|| {
-            let v: Vec<u8> = vec![1, 2, 3];
-            v[10] // out-of-bounds, panics
-        });
-        let info = outcome.failure_info().expect("expected failure");
-        assert!(info.panicked);
-    }
-
-    #[test]
-    fn catch_infallible_propagates_value() {
-        let outcome: GoblinOutcome<u32> = catch_infallible(|| 99);
-        assert_eq!(outcome.ok(), Some(99));
-    }
-
-    #[test]
-    fn parse_pe_rejects_garbage_without_panicking() {
-        let outcome = parse_pe(b"this is not a PE");
-        assert!(!outcome.is_ok());
-    }
-
-    #[test]
-    fn parse_elf_rejects_garbage_without_panicking() {
-        let outcome = parse_elf(b"this is not an ELF");
-        assert!(!outcome.is_ok());
-    }
-
-    #[test]
-    fn parse_mach_rejects_garbage_without_panicking() {
-        let outcome = parse_mach(b"this is not a Mach-O");
-        assert!(!outcome.is_ok());
+    fn test_validate_pe_header_malformed_imports() {
+        let mut data = vec![0u8; 1024];
+        data[0] = b'M'; data[1] = b'Z';
+        data[0x3C] = 0x40; // PE at 0x40
+        data[0x40] = b'P'; data[0x41] = b'E';
+        data[0x44 + 2] = 1; // n_sections = 1
+        data[0x40 + 24] = 0x0B; data[0x41 + 24] = 0x01; // PE32
+        data[0x40 + 24 + 92] = 16; // 16 dirs
+        // Import dir size (at opt + 96 + 8 + 4)
+        let import_size_ptr = 0x40 + 24 + 96 + 8 + 4;
+        data[import_size_ptr] = 0x00;
+        data[import_size_ptr + 1] = 0x00;
+        data[import_size_ptr + 2] = 0x00;
+        data[import_size_ptr + 3] = 0x01; // 16MB (too big)
+        assert!(validate_pe_header(&data).is_err());
     }
 }

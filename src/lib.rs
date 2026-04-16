@@ -923,7 +923,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     preloaded: Option<file_io::FileData>,
     analysis_depth: u32,
 ) -> Result<AnalysisReport> {
+    struct ThreadLocalCacheClearGuard {
+        enabled: bool,
+    }
+
+    impl Drop for ThreadLocalCacheClearGuard {
+        fn drop(&mut self) {
+            if self.enabled {
+                crate::composite_rules::evaluators::clear_thread_local_caches();
+            }
+        }
+    }
+
     let path = path.as_ref();
+    let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard {
+        enabled: analysis_depth == 0,
+    };
     let span = tracing::info_span!("analyze", path = %path.display());
     let _enter = span.enter();
 

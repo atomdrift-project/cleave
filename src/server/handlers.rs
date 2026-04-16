@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tempfile::Builder as TempBuilder;
 use tracing::{error, info, info_span, warn, Instrument, Span};
 
@@ -97,9 +97,6 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
         )
             .into_response();
     }
-    let recycled_orphans = state
-        .recycled_orphans
-        .load(std::sync::atomic::Ordering::Relaxed);
     if active_tasks >= state.max_concurrent_tasks {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -109,7 +106,6 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
                 "rss_mb": rss_mb,
                 "active_tasks": active_tasks,
                 "max_concurrent_tasks": state.max_concurrent_tasks,
-                "recycled_orphans": recycled_orphans,
                 "rayon_threads": rayon::current_num_threads(),
             })),
         )
@@ -119,7 +115,6 @@ pub(super) async fn health(State(state): State<Arc<AppState>>) -> Response {
         "status": "ok",
         "rss_mb": rss_mb,
         "active_tasks": active_tasks,
-        "recycled_orphans": recycled_orphans,
         "rayon_threads": rayon::current_num_threads(),
     }))
     .into_response()
@@ -358,9 +353,7 @@ async fn analyze_inner(
 
     info!(size = file_size, filename = %filename, "Starting analysis");
 
-    // Hard gate: reject if too many analysis tasks are running (including orphans).
-    // This prevents timed-out-but-still-running blocking tasks from piling up
-    // and consuming unbounded memory over long server lifetimes.
+    // Hard gate: reject if too many analysis tasks are running.
     let active = state
         .active_tasks
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -368,7 +361,7 @@ async fn analyze_inner(
         warn!(
             active_tasks = active,
             max = state.max_concurrent_tasks,
-            "Rejecting request: too many active analysis tasks (including orphans)"
+            "Rejecting request: too many active analysis tasks"
         );
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -377,7 +370,6 @@ async fn analyze_inner(
             .into_response();
     }
 
-    let timeout_duration = Duration::from_secs(state.timeout_secs);
     state
         .active_tasks
         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -397,7 +389,7 @@ async fn analyze_inner(
         .is_multiple_of(50);
     let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancellation_for_task = cancellation.clone();
-    let mut handle = tokio::task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         let opts = AnalysisOptions {
             cancellation: Some(cancellation_for_task),
@@ -417,77 +409,16 @@ async fn analyze_inner(
         }
     });
 
-    let result = tokio::select! {
-        res = &mut handle => Some(res),
-        _ = tokio::time::sleep(timeout_duration) => None,
-    };
-
-    // On success/error, the blocking task is done — decrement and clean up.
-    // On timeout, signal cancellation and give the task a short grace period.
-    if result.is_some() {
-        state
-            .active_tasks
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        state.in_flight.remove(&request_id);
-        drop(temp_dir);
-    } else {
-        cancellation.store(true, std::sync::atomic::Ordering::Release);
-        let active = state
-            .active_tasks
-            .load(std::sync::atomic::Ordering::Relaxed);
-        warn!(
-            filename = %filename,
-            active_tasks = active,
-            "Analysis timed out but blocking task still running"
-        );
-        let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(1800);
-        tokio::spawn(async move {
-            // Phase 1: wait up to the grace period for the task to finish.
-            let grace_result = tokio::time::timeout(orphan_timeout, &mut handle).await;
-            orphan_state.in_flight.remove(&request_id);
-
-            // Release the slot regardless — the thread is stuck on a file-specific
-            // operation, so a new request for a different file won't hit the same issue.
-            orphan_state
-                .active_tasks
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-
-            if grace_result.is_ok() {
-                drop(temp_dir);
-                tracing::info!(request_id, "Orphaned task completed during grace period");
-                return;
-            }
-
-            let recycled = orphan_state
-                .recycled_orphans
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1;
-            tracing::error!(
-                request_id,
-                recycled_orphans = recycled,
-                "Orphaned analysis task exceeded grace period, slot recycled — still awaiting thread join"
-            );
-
-            // Phase 2: keep waiting (unbounded) so the thread is properly joined
-            // and its resources (temp files, allocations) are reclaimed when it
-            // eventually finishes. Without this, the JoinHandle is dropped and
-            // the thread is detached forever.
-            let _ = handle.await;
-            drop(temp_dir);
-            orphan_state
-                .recycled_orphans
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!(
-                request_id,
-                "Detached orphan finally completed and was joined"
-            );
-        });
-    }
+    let result = handle.await;
+    state
+        .active_tasks
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    state.in_flight.remove(&request_id);
+    drop(temp_dir);
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Some(Ok(Ok(mut report))) => {
+        Ok(Ok(mut report)) => {
             let hostile = report
                 .findings
                 .iter()
@@ -518,12 +449,12 @@ async fn analyze_inner(
             let compact = crate::types::compact_from_files(&report.files);
             Json(compact).into_response()
         }
-        Some(Ok(Err(e))) => {
+        Ok(Err(e)) => {
             let status = analysis_error_status(&e);
             warn!(filename = %filename, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
             analysis_error_response(&e)
         }
-        Some(Err(e)) => {
+        Err(e) => {
             let detail = if e.is_panic() {
                 let msg = e.into_panic();
                 let msg = panic_payload_message(&msg);
@@ -537,14 +468,6 @@ async fn analyze_inner(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": detail})),
-            )
-                .into_response()
-        }
-        None => {
-            warn!(filename = %filename, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"error": "Analysis timed out"})),
             )
                 .into_response()
         }
@@ -734,7 +657,7 @@ async fn analyze_path_inner(
 
     info!(path = %path_str, "Starting analysis");
 
-    // Hard gate: reject if too many analysis tasks are running (including orphans).
+    // Hard gate: reject if too many analysis tasks are running.
     let active = state
         .active_tasks
         .load(std::sync::atomic::Ordering::Relaxed);
@@ -742,7 +665,7 @@ async fn analyze_path_inner(
         warn!(
             active_tasks = active,
             max = state.max_concurrent_tasks,
-            "Rejecting request: too many active analysis tasks (including orphans)"
+            "Rejecting request: too many active analysis tasks"
         );
         return (
             StatusCode::SERVICE_UNAVAILABLE,
@@ -751,7 +674,6 @@ async fn analyze_path_inner(
             .into_response();
     }
 
-    let timeout_duration = Duration::from_secs(state.timeout_secs);
     let path_owned = path.to_owned();
     let task_span = Span::current();
 
@@ -776,7 +698,7 @@ async fn analyze_path_inner(
     let cancellation = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let extract_dir_for_response = extract_dir.clone();
     let cancellation_for_task = cancellation.clone();
-    let mut handle = tokio::task::spawn_blocking(move || {
+    let handle = tokio::task::spawn_blocking(move || {
         let _enter = task_span.enter();
         let mut opts = AnalysisOptions::default();
         if let Some(dir) = extract_dir {
@@ -799,69 +721,16 @@ async fn analyze_path_inner(
         }
     });
 
-    let result = tokio::select! {
-        res = &mut handle => Some(res),
-        _ = tokio::time::sleep(timeout_duration) => None,
-    };
-
-    // Decrement active tasks on completion; on timeout, spawn a watcher
-    // that gives the task a bounded grace period before abandoning it.
-    if result.is_some() {
-        state
-            .active_tasks
-            .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-        state.in_flight.remove(&request_id);
-    } else {
-        cancellation.store(true, std::sync::atomic::Ordering::Release);
-        let active = state
-            .active_tasks
-            .load(std::sync::atomic::Ordering::Relaxed);
-        warn!(
-            path = %path_str,
-            active_tasks = active,
-            "Analysis timed out but blocking task still running"
-        );
-        let orphan_state = Arc::clone(&state);
-        let orphan_timeout = Duration::from_secs(1800);
-        tokio::spawn(async move {
-            let grace_result = tokio::time::timeout(orphan_timeout, &mut handle).await;
-            orphan_state.in_flight.remove(&request_id);
-            orphan_state
-                .active_tasks
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-
-            if grace_result.is_ok() {
-                tracing::info!(request_id, "Orphaned task completed during grace period");
-                return;
-            }
-
-            let recycled = orphan_state
-                .recycled_orphans
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-                + 1;
-            tracing::error!(
-                request_id,
-                recycled_orphans = recycled,
-                "Orphaned analysis task exceeded grace period, slot recycled — still awaiting thread join"
-            );
-
-            // Keep waiting so the thread is properly joined and its resources
-            // are reclaimed when it eventually finishes.
-            let _ = handle.await;
-            orphan_state
-                .recycled_orphans
-                .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-            tracing::info!(
-                request_id,
-                "Detached orphan finally completed and was joined"
-            );
-        });
-    }
+    let result = handle.await;
+    state
+        .active_tasks
+        .fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    state.in_flight.remove(&request_id);
 
     let elapsed_ms = request_start.elapsed().as_millis();
 
     match result {
-        Some(Ok(Ok(mut report))) => {
+        Ok(Ok(mut report)) => {
             let hostile = report
                 .findings
                 .iter()
@@ -909,12 +778,12 @@ async fn analyze_path_inner(
             };
             Json(response).into_response()
         }
-        Some(Ok(Err(e))) => {
+        Ok(Err(e)) => {
             let status = analysis_error_status(&e);
             warn!(path = %path_str, elapsed_ms = elapsed_ms, status = status.as_u16(), "Analysis failed: {:?}", e);
             analysis_error_response(&e)
         }
-        Some(Err(e)) => {
+        Err(e) => {
             let detail = if e.is_panic() {
                 let msg = e.into_panic();
                 let msg = panic_payload_message(&msg);
@@ -928,14 +797,6 @@ async fn analyze_path_inner(
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(serde_json::json!({"error": detail})),
-            )
-                .into_response()
-        }
-        None => {
-            warn!(path = %path_str, elapsed_ms = elapsed_ms, "Analysis timed out after {}s", state.timeout_secs);
-            (
-                StatusCode::GATEWAY_TIMEOUT,
-                Json(serde_json::json!({"error": "Analysis timed out"})),
             )
                 .into_response()
         }
@@ -986,7 +847,6 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
         },
         "server": {
             "active_tasks": state.active_tasks.load(std::sync::atomic::Ordering::Relaxed),
-            "recycled_orphans": state.recycled_orphans.load(std::sync::atomic::Ordering::Relaxed),
             "requests_total": state.next_request_id.load(std::sync::atomic::Ordering::Relaxed),
             "rate_limiter_ips": state.rate_limiter.active_count(),
             "rate_limiter_max_ips": 50_000,

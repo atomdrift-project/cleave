@@ -505,10 +505,6 @@ pub enum Command {
         #[arg(long, default_value = "100")]
         qps: u32,
 
-        /// Analysis timeout in seconds (default: 120)
-        #[arg(long, default_value = "120")]
-        timeout: u64,
-
         /// Max upload size in MB (default: 100)
         #[arg(long, default_value = "100")]
         max_size_mb: u64,

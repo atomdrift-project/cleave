@@ -63,6 +63,14 @@ const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 500;
 /// Warn when a single archive member analysis exceeds this threshold.
 const SLOW_ARCHIVE_MEMBER_ANALYSIS_MS: u128 = 30_000;
 
+struct ThreadLocalCacheClearGuard;
+
+impl Drop for ThreadLocalCacheClearGuard {
+    fn drop(&mut self) {
+        crate::composite_rules::evaluators::clear_thread_local_caches();
+    }
+}
+
 /// Log archive analysis statistics.
 #[allow(dead_code)]
 pub(crate) fn log_archive_analysis_stats() {
@@ -167,7 +175,8 @@ impl ArchiveAnalyzer {
 
         let mut nested = ArchiveAnalyzer::new()
             .with_depth(self.current_depth + 1)
-            .with_archive_prefix(nested_prefix);
+            .with_archive_prefix(nested_prefix)
+            .with_semaphore(self.analysis_semaphore.clone());
 
         if let Some(ref mapper) = self.capability_mapper {
             nested = nested.with_capability_mapper_arc(mapper.clone());
@@ -642,6 +651,7 @@ impl ArchiveAnalyzer {
         let member_results: Vec<MemberAnalysisResult> = classes_to_analyze
             .par_iter()
             .filter_map(|entry| {
+                let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
                 }
@@ -831,6 +841,7 @@ impl ArchiveAnalyzer {
         let non_class_results: Vec<MemberAnalysisResult> = non_class_files
             .par_iter()
             .filter_map(|entry| {
+                let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
                 }
@@ -1107,6 +1118,7 @@ impl ArchiveAnalyzer {
         let generic_results: Vec<MemberAnalysisResult> = files
             .par_iter()
             .filter_map(|entry| {
+                let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
                 }

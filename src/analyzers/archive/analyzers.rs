@@ -817,6 +817,17 @@ impl ArchiveAnalyzer {
             .take(100)
             .collect();
 
+        let member_count = non_class_files.len();
+        let members_done = std::sync::atomic::AtomicUsize::new(0);
+        let analysis_start = std::time::Instant::now();
+
+        tracing::info!(
+            archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+            members = member_count,
+            depth = self.current_depth,
+            "starting parallel archive member analysis",
+        );
+
         let non_class_results: Vec<MemberAnalysisResult> = non_class_files
             .par_iter()
             .filter_map(|entry| {
@@ -850,6 +861,7 @@ impl ArchiveAnalyzer {
                     size_bytes: file_data.len() as u64,
                 };
 
+                let member_start = std::time::Instant::now();
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -874,6 +886,28 @@ impl ArchiveAnalyzer {
                         None
                     }
                 };
+
+                let done = members_done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                let member_ms = member_start.elapsed().as_millis();
+                if member_ms > 5000 {
+                    tracing::warn!(
+                        archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+                        member = %entry_path,
+                        file_type = %file_type.report_file_type(),
+                        size_kb = file_data.len() / 1024,
+                        elapsed_ms = member_ms,
+                        progress = %format!("{done}/{member_count}"),
+                        rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
+                        "slow archive member analysis",
+                    );
+                } else if done % 50 == 0 || done == member_count {
+                    tracing::info!(
+                        archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+                        progress = %format!("{done}/{member_count}"),
+                        total_elapsed_ms = analysis_start.elapsed().as_millis() as u64,
+                        "archive member analysis progress",
+                    );
+                }
 
                 Some(MemberAnalysisResult {
                     entry_path,

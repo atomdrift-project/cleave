@@ -691,6 +691,12 @@ impl PEAnalyzer {
             Vec::new(),
         );
 
+        let scope_start = std::time::Instant::now();
+        tracing::debug!(
+            path = %logical_path.display(),
+            rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
+            "PE: entering rayon::scope for structural analysis",
+        );
         rayon::scope(|s| {
             // Task 1: Radare2 (Slowest)
             s.spawn(|_| {
@@ -735,6 +741,16 @@ impl PEAnalyzer {
                 });
             }
         });
+        let scope_ms = scope_start.elapsed().as_millis();
+        if scope_ms > 10000 {
+            tracing::warn!(
+                path = %logical_path.display(),
+                elapsed_ms = scope_ms,
+                rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
+                on_rayon_pool = rayon::current_thread_index().is_some(),
+                "PE rayon::scope completed slowly — rayon threads may have been starved",
+            );
+        }
 
         // Merge goblin results
         report.structure.extend(goblin_report_parts.0);

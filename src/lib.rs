@@ -622,6 +622,51 @@ impl Default for PhaseTracker {
     }
 }
 
+/// Spawns a background thread that logs rayon pool diagnostics every 5 minutes.
+/// Call once at startup. The thread exits when the process exits.
+pub fn start_rayon_diagnostics() {
+    std::thread::Builder::new()
+        .name("rayon-diag".into())
+        .spawn(|| {
+            let interval = std::time::Duration::from_secs(300);
+            loop {
+                std::thread::sleep(interval);
+                // Probe the rayon pool by trying to execute a trivial task.
+                // If the pool is starved, this will block — measure how long.
+                let probe_start = std::time::Instant::now();
+                let (idle_sender, idle_receiver) = std::sync::mpsc::channel();
+                rayon::spawn(move || {
+                    let _ = idle_sender.send(());
+                });
+                let probe_ok = idle_receiver.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
+                let probe_ms = probe_start.elapsed().as_millis();
+
+                let rss_mb = memory_tracker::current_rss()
+                    .map(|b| b / 1024 / 1024)
+                    .unwrap_or(0);
+
+                if probe_ok && probe_ms < 100 {
+                    tracing::info!(
+                        rayon_threads = rayon::current_num_threads(),
+                        probe_ms,
+                        rss_mb,
+                        "rayon pool healthy",
+                    );
+                } else {
+                    tracing::error!(
+                        rayon_threads = rayon::current_num_threads(),
+                        probe_ms,
+                        probe_responded = probe_ok,
+                        rss_mb,
+                        "rayon pool appears STARVED — trivial task {}",
+                        if probe_ok { "was slow" } else { "timed out (5s)" },
+                    );
+                }
+            }
+        })
+        .ok(); // best-effort; don't fail if thread creation fails
+}
+
 impl Default for AnalysisOptions {
     fn default() -> Self {
         Self {

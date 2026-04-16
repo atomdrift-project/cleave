@@ -72,7 +72,7 @@ pub(crate) fn analyze_embedded_as_child(
         let mut analyzer = ElfAnalyzer::new()
             .with_capability_mapper_arc(capability_mapper)
             .without_embedded_scan();
-        if let Some(yara) = yara_engine {
+        if let Some(ref yara) = yara_engine {
             analyzer = analyzer.with_yara_arc(yara);
         }
         analyzer.analyze_input(&input).ok()?

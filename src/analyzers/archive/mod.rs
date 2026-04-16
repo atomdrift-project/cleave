@@ -65,6 +65,7 @@ impl SyncSemaphore {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
         }
         *count -= 1;
+        drop(count);
         SemaphorePermit { sem: self }
     }
 }
@@ -81,6 +82,7 @@ impl Drop for SemaphorePermit<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *count += 1;
+        drop(count);
         self.sem.condvar.notify_one();
     }
 }

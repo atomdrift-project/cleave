@@ -214,7 +214,7 @@ fn execute_rizin_with_timeout(
         let status = child.wait();
         tracing::info!(
             pid = child_id,
-            exit_code = status.as_ref().ok().and_then(|s| s.code()),
+            exit_code = status.as_ref().ok().and_then(std::process::ExitStatus::code),
             "Rizin process exited; killing process group to release pipes"
         );
         // After the rizin process exits, kill its entire process group to
@@ -361,11 +361,9 @@ struct EffectiveInputPath {
 
 impl EffectiveInputPath {
     fn new(file_path: &Path, fallback_data: Option<&[u8]>) -> Result<Self> {
-        if file_path.exists() || fallback_data.is_none() {
+        let Some(data) = fallback_data.filter(|_| !file_path.exists()) else {
             return Ok(Self { temp_file: None });
-        }
-
-        let data = fallback_data.expect("checked is_some above");
+        };
         debug!(
             path = %file_path.display(),
             bytes = data.len(),

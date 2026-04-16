@@ -324,7 +324,6 @@ impl ArchiveAnalyzer {
             let prelaunch_label = format!("prelaunching rizin on {relative_path}");
 
             let stng_strings;
-            let payloads;
             if should_prelaunched_rizin {
                 let r2 = crate::radare2::Radare2Analyzer::new();
                 let r2_path = file_path.to_path_buf();
@@ -356,7 +355,7 @@ impl ArchiveAnalyzer {
                 stng_strings = stng::extract_strings_with_options(data, &opts);
                 crate::memory_tracker::clear_current_phase();
             }
-            payloads = if extract_payloads {
+            let payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {
                 Vec::new()
@@ -919,7 +918,7 @@ impl ArchiveAnalyzer {
                         rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
                         "slow archive member analysis",
                     );
-                } else if done % 50 == 0 || done == member_count {
+                } else if done.is_multiple_of(50) || done == member_count {
                     tracing::info!(
                         archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
                         progress = %format!("{done}/{member_count}"),

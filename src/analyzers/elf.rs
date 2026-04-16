@@ -103,10 +103,9 @@ impl ElfAnalyzer {
 
     /// Create analyzer with shared YARA engine
     #[must_use]
-    pub(crate) fn with_yara_arc(self, yara_engine: Arc<crate::yara_engine::YaraEngine>) -> Self {
+    pub(crate) fn with_yara_arc(self, _yara_engine: &Arc<crate::yara_engine::YaraEngine>) -> Self {
         // ELF analyzer currently doesn't use YARA engine directly for structural analysis,
         // but we accept it for consistency with other analyzers and future use.
-        let _ = yara_engine;
         self
     }
 

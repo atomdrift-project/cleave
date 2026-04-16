@@ -129,10 +129,14 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
     // If target is a directory, process files recursively
     if path.is_dir() {
         let options_arc = std::sync::Arc::new(options);
-        let results = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let results_clone = results.clone();
-        let format_val = *config.format;
         let stream_stdout = !config.output_to_file;
+        let (results_tx, results_rx) = if stream_stdout {
+            (None, None)
+        } else {
+            let (tx, rx) = crossbeam_channel::unbounded::<String>();
+            (Some(tx), Some(rx))
+        };
+        let format_val = *config.format;
         let min_crit = config.min_crit;
         let max_crit = config.max_crit;
         let min_file_crit = config.min_file_crit;
@@ -171,19 +175,23 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                         String::new()
                     }
                 };
-                if !stream_stdout && !formatted.is_empty() {
-                    if let Ok(mut guard) = results_clone.lock() {
-                        guard.push(formatted);
+                if let Some(tx) = &results_tx {
+                    if !formatted.is_empty() {
+                        let _ = tx.send(formatted);
                     }
                 }
             }
         })?;
 
-        if config.output_to_file {
-            let final_results = results
-                .lock()
-                .map_err(|e| anyhow::anyhow!("mutex poisoned: {e}"))?;
-            return Ok(final_results.join(""));
+        if let Some(rx) = results_rx {
+            // scan_directory dropped the callback on return, which dropped the
+            // sender. recv() drains buffered messages and returns Err once the
+            // channel is empty and disconnected.
+            let mut out = String::new();
+            while let Ok(chunk) = rx.recv() {
+                out.push_str(&chunk);
+            }
+            return Ok(out);
         }
         // Results already streamed to stdout in the callback.
         return Ok(String::new());

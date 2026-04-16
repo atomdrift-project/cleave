@@ -38,55 +38,6 @@ const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
 const MAX_PATH_CORPUS_FILE_SIZE: u64 = 512;
 const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
 
-/// A counting semaphore backed by std primitives, safe to use from rayon worker threads.
-#[derive(Debug)]
-pub(crate) struct SyncSemaphore {
-    count: std::sync::Mutex<usize>,
-    condvar: std::sync::Condvar,
-}
-
-impl SyncSemaphore {
-    fn new(n: usize) -> Self {
-        Self {
-            count: std::sync::Mutex::new(n),
-            condvar: std::sync::Condvar::new(),
-        }
-    }
-
-    fn acquire(&self) -> SemaphorePermit<'_> {
-        let mut count = self
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        while *count == 0 {
-            count = self
-                .condvar
-                .wait(count)
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-        }
-        *count -= 1;
-        drop(count);
-        SemaphorePermit { sem: self }
-    }
-}
-
-struct SemaphorePermit<'a> {
-    sem: &'a SyncSemaphore,
-}
-
-impl Drop for SemaphorePermit<'_> {
-    fn drop(&mut self) {
-        let mut count = self
-            .sem
-            .count
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *count += 1;
-        drop(count);
-        self.sem.condvar.notify_one();
-    }
-}
-
 fn archive_finding(
     id: &str,
     desc: String,
@@ -403,8 +354,6 @@ pub(crate) struct ArchiveAnalyzer {
     cancelled: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Analysis options for member-level cache lookups.
     analysis_options: Option<Arc<crate::AnalysisOptions>>,
-    /// Semaphore to limit concurrent archive member analysis and prevent pool saturation.
-    analysis_semaphore: Arc<SyncSemaphore>,
 }
 
 /// Decompress a single-file stream into `dest_dir`, applying size and ratio guards.
@@ -433,12 +382,6 @@ impl ArchiveAnalyzer {
     /// Create a new archive analyzer with default settings
     #[must_use]
     pub(crate) fn new() -> Self {
-        // Default to half of available threads for archive member analysis.
-        // This leaves the other half for the inner rayon::join calls (struct+yara)
-        // and prevents deadlocks/starvation in large archives.
-        let threads = rayon::current_num_threads();
-        let concurrency = (threads / 2).max(1);
-
         Self {
             max_depth: 3,
             current_depth: 0,
@@ -450,7 +393,6 @@ impl ArchiveAnalyzer {
             max_memory_file_size: DEFAULT_MAX_MEMORY_FILE_SIZE,
             cancelled: None,
             analysis_options: None,
-            analysis_semaphore: Arc::new(SyncSemaphore::new(concurrency)),
         }
     }
 
@@ -558,13 +500,6 @@ impl ArchiveAnalyzer {
         self
     }
 
-    /// Set a shared semaphore for limiting concurrent archive member analysis.
-    #[must_use]
-    pub(crate) fn with_semaphore(mut self, semaphore: Arc<SyncSemaphore>) -> Self {
-        self.analysis_semaphore = semaphore;
-        self
-    }
-
     /// Create a copy of this analyzer with the sample_extraction config updated
     /// to use the given archive SHA256 for extraction directory grouping.
     #[allow(dead_code)] // Used by binary target
@@ -584,7 +519,6 @@ impl ArchiveAnalyzer {
             max_memory_file_size: self.max_memory_file_size,
             cancelled: self.cancelled.clone(),
             analysis_options: self.analysis_options.clone(),
-            analysis_semaphore: self.analysis_semaphore.clone(),
         }
     }
 

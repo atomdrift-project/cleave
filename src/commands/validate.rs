@@ -81,9 +81,8 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
     match cleave::analyze_file(path, &options) {
         Ok(mut report) => {
             report.finalize();
-            let file = match report.files.first() {
-                Some(f) => f,
-                None => return,
+            let Some(file) = report.files.first() else {
+                return;
             };
             let score = file.score;
             let display = path.display();

@@ -175,8 +175,7 @@ impl ArchiveAnalyzer {
 
         let mut nested = ArchiveAnalyzer::new()
             .with_depth(self.current_depth + 1)
-            .with_archive_prefix(nested_prefix)
-            .with_semaphore(self.analysis_semaphore.clone());
+            .with_archive_prefix(nested_prefix);
 
         if let Some(ref mapper) = self.capability_mapper {
             nested = nested.with_capability_mapper_arc(mapper.clone());
@@ -683,9 +682,6 @@ impl ArchiveAnalyzer {
 
                 let member_start = std::time::Instant::now();
 
-                // Acquire a permit before starting analysis to prevent pool saturation.
-                let _permit = self.analysis_semaphore.acquire();
-
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -876,9 +872,6 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_start = std::time::Instant::now();
-
-                // Acquire a permit before starting analysis to prevent pool saturation.
-                let _permit = self.analysis_semaphore.acquire();
 
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
@@ -1110,17 +1103,13 @@ impl ArchiveAnalyzer {
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
         let mut files_analyzed: usize = 0;
 
-        // Analyze files in parallel — no shared Mutexes.
-        // NOTE: This par_iter runs on the global rayon pool. Each closure calls
-        // analyze_extracted_member → analyze_bytes_internal → rayon::join (struct+YARA) and
-        // scan_bytes_with_inline → par_iter (YARA tiers). Nested rayon is safe via work-stealing
-        // but saturates the pool: if the pool has N threads and there are N archive members, all
-        // N are consumed here and the inner rayon::join calls must wait for a stolen slot.
-        // This is the primary cause of >2 min stalls on large archives with many ELF/PE members.
+        // Analyze files in parallel — no shared Mutexes. Nested rayon calls
+        // (analyze_extracted_member → rayon::join, scan_bytes → par_iter) are
+        // handled by work-stealing; the outer worker participates in inner tasks.
         tracing::debug!(
             file_count = total_files,
             on_rayon_thread = rayon::current_thread_index().is_some(),
-            "Starting parallel archive member analysis (nested rayon — pool saturation possible)"
+            "Starting parallel archive member analysis"
         );
         let generic_results: Vec<MemberAnalysisResult> = files
             .par_iter()
@@ -1158,9 +1147,6 @@ impl ArchiveAnalyzer {
                 };
 
                 let member_start = std::time::Instant::now();
-
-                // Acquire a permit before starting analysis to prevent pool saturation.
-                let _permit = self.analysis_semaphore.acquire();
 
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(

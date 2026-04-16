@@ -31,8 +31,9 @@ use goblin::elf::Elf;
 use goblin::error::Error as GoblinError;
 use goblin::mach::Mach;
 use goblin::pe::PE;
-use std::panic::{self, PanicHookInfo};
-use std::sync::{Mutex, OnceLock};
+use std::cell::Cell;
+use std::panic;
+use std::sync::Once;
 
 /// Result of a goblin operation that distinguishes between a normal `Err`
 /// return and a caught panic.
@@ -95,23 +96,46 @@ pub(crate) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-fn goblin_panic_hook_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
+thread_local! {
+    static SUPPRESS_PANIC_OUTPUT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Install a process-wide panic hook that chains to the previous hook unless
+/// the current thread has opted into suppression via [`SUPPRESS_PANIC_OUTPUT`].
+///
+/// Replaces the earlier pattern of `panic::take_hook` / `set_hook` around every
+/// goblin call (which required a global Mutex to serialize hook swaps) with a
+/// single, race-free install. Once installed, suppression is O(1) per call and
+/// never contends across threads.
+fn install_suppression_hook() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let previous = panic::take_hook();
+        panic::set_hook(Box::new(move |info| {
+            if SUPPRESS_PANIC_OUTPUT.with(Cell::get) {
+                return;
+            }
+            previous(info);
+        }));
+    });
 }
 
 fn run_with_suppressed_panic_hook<T, F>(f: F) -> std::thread::Result<T>
 where
     F: FnOnce() -> T,
 {
-    let _guard = goblin_panic_hook_lock()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let previous_hook = panic::take_hook();
-    panic::set_hook(Box::new(|_info: &PanicHookInfo<'_>| {}));
-    let result = panic::catch_unwind(panic::AssertUnwindSafe(f));
-    panic::set_hook(previous_hook);
-    result
+    install_suppression_hook();
+
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SUPPRESS_PANIC_OUTPUT.with(|flag| flag.set(false));
+        }
+    }
+
+    SUPPRESS_PANIC_OUTPUT.with(|flag| flag.set(true));
+    let _restore = Restore;
+    panic::catch_unwind(panic::AssertUnwindSafe(f))
 }
 
 pub(crate) fn catch<T, F>(f: F) -> GoblinOutcome<T>

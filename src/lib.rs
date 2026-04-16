@@ -1939,6 +1939,7 @@ where
                 rayon::current_num_threads().min(8)
             }
         });
+    let scan_pool = shared_resources::scan_pool(scan_threads);
     let analyze_files = || {
         files.par_iter().for_each(|file_path| {
         // Catch panics from any analyzer so one malformed file doesn't
@@ -2028,22 +2029,9 @@ where
     })
     };
 
-    match rayon::ThreadPoolBuilder::new()
-        .num_threads(scan_threads)
-        .build()
-    {
-        Ok(scan_pool) => {
-            tracing::info!(scan_threads, "Directory scan thread pool created");
-            scan_pool.install(analyze_files);
-        }
-        Err(error) => {
-            tracing::warn!(
-                scan_threads,
-                %error,
-                "Failed to build dedicated directory scan thread pool; using global Rayon pool"
-            );
-            analyze_files();
-        }
+    match scan_pool {
+        Some(pool) => pool.install(analyze_files),
+        None => analyze_files(),
     }
 
     let final_analyzed = analyzed.load(Ordering::Relaxed);

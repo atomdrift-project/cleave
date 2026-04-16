@@ -761,7 +761,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     // Fast path: check the analysis cache before loading expensive resources.
     // SHA256 of the file is cheap (~1ms); loading CapabilityMapper + YARA is not (~800ms).
     // Keep the pre-read data to pass through on cache miss, avoiding a second read.
-    let preloaded = if path.is_file() {
+    let (preloaded, precomputed_sha) = if path.is_file() {
         let file_data = file_io::read_file_smart(path)?;
         let sha256 = analyzers::utils::calculate_sha256(file_data.as_slice());
         if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
@@ -770,9 +770,9 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
             tracing::info!("Cache hit (fast path)");
             return Ok(report);
         }
-        Some(file_data)
+        (Some(file_data), Some(sha256))
     } else {
-        None
+        (None, None)
     };
 
     // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
@@ -789,7 +789,14 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         },
     );
     let mapper = mapper_result?;
-    analyze_file_with_resources(path, options, &mapper, yara_engine.as_ref(), preloaded)
+    analyze_file_with_resources_and_sha256(
+        path,
+        options,
+        &mapper,
+        yara_engine.as_ref(),
+        preloaded,
+        precomputed_sha,
+    )
 }
 
 /// Analyze in-memory file data without requiring a file on disk.
@@ -815,17 +822,32 @@ pub fn analyze_bytes(
     filename: &str,
     options: &AnalysisOptions,
 ) -> Result<AnalysisReport> {
+    analyze_bytes_owned(data.to_vec(), filename, options)
+}
+
+/// Analyze in-memory file data without requiring a file on disk, consuming the
+/// input `Vec<u8>` to avoid the copy that [`analyze_bytes`] must perform.
+///
+/// Prefer this over `analyze_bytes` when the caller already owns the bytes
+/// (e.g. a worker that downloaded a sample into a `Vec<u8>`). At scale this
+/// saves one full-size memcpy and allocation per file.
+pub fn analyze_bytes_owned(
+    data: Vec<u8>,
+    filename: &str,
+    options: &AnalysisOptions,
+) -> Result<AnalysisReport> {
     // Use a synthetic path for extension-based type detection and reporting.
     let path = Path::new(filename);
 
-    let preloaded = file_io::FileData::Owned(data.to_vec());
-    let sha256 = analyzers::utils::calculate_sha256(data);
+    let sha256 = analyzers::utils::calculate_sha256(&data);
     if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
         report.target.path = filename.to_string();
         report.analysis_timestamp = Some(chrono::Utc::now());
         tracing::info!("Cache hit (fast path)");
         return Ok(report);
     }
+
+    let preloaded = file_io::FileData::Owned(data);
 
     let (mapper_result, yara_engine) = rayon::join(
         || shared_resources::capability_mapper_with_options(options),
@@ -840,12 +862,13 @@ pub fn analyze_bytes(
         },
     );
     let mapper = mapper_result?;
-    analyze_file_with_resources(
+    analyze_file_with_resources_and_sha256(
         path,
         options,
         &mapper,
         yara_engine.as_ref(),
         Some(preloaded),
+        Some(sha256),
     )
 }
 
@@ -897,6 +920,29 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
     preloaded: Option<file_io::FileData>,
 ) -> Result<AnalysisReport> {
+    analyze_file_with_resources_and_sha256(
+        path,
+        options,
+        capability_mapper,
+        yara_engine,
+        preloaded,
+        None,
+    )
+}
+
+/// Same as [`analyze_file_with_resources`] but accepts a precomputed SHA256.
+///
+/// Callers that already hashed the file for a fast-path cache lookup pass it
+/// through so the internal pipeline does not recompute the digest on the same
+/// bytes — a non-trivial cost on large inputs.
+fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
+    path: P,
+    options: &AnalysisOptions,
+    capability_mapper: &Arc<CapabilityMapper>,
+    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+    preloaded: Option<file_io::FileData>,
+    precomputed_sha256: Option<String>,
+) -> Result<AnalysisReport> {
     let _disable_guards = AnalysisDisableGuards::from_options(options);
     analyze_file_with_resources_at_depth(
         path,
@@ -904,6 +950,7 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
         capability_mapper,
         yara_engine,
         preloaded,
+        precomputed_sha256,
         0,
     )
 }
@@ -944,6 +991,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     capability_mapper: &Arc<CapabilityMapper>,
     yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
     preloaded: Option<file_io::FileData>,
+    precomputed_sha256: Option<String>,
     analysis_depth: u32,
 ) -> Result<AnalysisReport> {
     struct ThreadLocalCacheClearGuard {
@@ -1012,8 +1060,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     memory_tracker::global_tracker()
         .record_file_read(file_size, path.to_str().unwrap_or("unknown"));
 
-    // Compute SHA256 early for cache lookup (also reused by analyzers)
-    let sha256_hex = analyzers::utils::calculate_sha256(file_data);
+    // Reuse a precomputed hash when the caller already hashed these bytes for a
+    // fast-path cache lookup; otherwise compute it here. Skipping the recompute
+    // matters for large inputs — SHA256 of a 100 MB archive is ~200 ms.
+    let sha256_hex = precomputed_sha256
+        .unwrap_or_else(|| analyzers::utils::calculate_sha256(file_data));
 
     // Set current file ID for IP validation cache
     let file_id = hash_str(&sha256_hex);
@@ -1584,6 +1635,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 options,
                 capability_mapper,
                 yara_engine,
+                None,
                 None,
                 analysis_depth + 1,
             ) {
@@ -2229,6 +2281,7 @@ mod tests {
             &mapper,
             yara.as_ref(),
             None,
+            None,
             MAX_ANALYSIS_DEPTH,
         )
         .expect("analysis should succeed even at depth limit");
@@ -2278,7 +2331,7 @@ mod tests {
 
         #[allow(clippy::expect_used)]
         let report =
-            analyze_file_with_resources_at_depth(tmp.path(), &options, &mapper, None, None, 0)
+            analyze_file_with_resources_at_depth(tmp.path(), &options, &mapper, None, None, None, 0)
                 .expect("analysis should succeed");
 
         assert!(

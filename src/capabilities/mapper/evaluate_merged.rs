@@ -79,6 +79,7 @@ impl super::CapabilityMapper {
             inline_yara,
             None,
             None,
+            None,
         )
     }
 
@@ -92,6 +93,7 @@ impl super::CapabilityMapper {
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) {
         let t_total = std::time::Instant::now();
         // Detect file type once
@@ -236,6 +238,14 @@ impl super::CapabilityMapper {
             ast_kind_cache,
         };
 
+        if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            tracing::warn!(
+                path = %report.target.path,
+                "skipping trait evaluation: analysis cancelled"
+            );
+            return;
+        }
+
         let independent_findings = self.evaluate_traits_filtered_with_cache(
             report,
             binary_data,
@@ -243,6 +253,7 @@ impl super::CapabilityMapper {
             inline_yara,
             false,
             &cache,
+            cancellation,
         );
 
         // Merge independent findings into report
@@ -260,6 +271,9 @@ impl super::CapabilityMapper {
         let t_eval2 = std::time::Instant::now();
         const MAX_ITERATIONS: usize = 10; // Prevent infinite loops
         for _ in 0..MAX_ITERATIONS {
+            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                break;
+            }
             let dependent_findings = self.evaluate_traits_filtered_with_cache(
                 report,
                 binary_data,
@@ -267,6 +281,7 @@ impl super::CapabilityMapper {
                 inline_yara,
                 true,
                 &cache,
+                cancellation,
             );
 
             if dependent_findings.is_empty() {

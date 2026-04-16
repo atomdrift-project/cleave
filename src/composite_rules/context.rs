@@ -51,6 +51,8 @@ pub(crate) struct EvaluationContext<'a> {
     pub string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<(String, String, Option<u64>)>>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
+    /// Cooperative cancellation flag (set by litmus timeout).
+    pub cancellation: Option<&'a std::sync::atomic::AtomicBool>,
     /// Per-architecture byte ranges for fat/universal binaries.
     pub arch_ranges: Option<&'a [(Arch, std::ops::Range<usize>)]>,
     /// Warn threshold for slow rule evaluation in milliseconds
@@ -119,6 +121,7 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             deadline: None,
+            cancellation: None,
             arch_ranges: None,
             slow_rule_ms: 4000,
             cached_evidence: None,
@@ -145,6 +148,17 @@ impl<'a> EvaluationContext<'a> {
     pub(crate) fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);
         self
+    }
+
+    /// Set the cooperative cancellation flag.
+    pub(crate) fn with_cancellation(mut self, flag: &'a std::sync::atomic::AtomicBool) -> Self {
+        self.cancellation = Some(flag);
+        self
+    }
+
+    /// Returns true if cancellation has been requested.
+    pub(crate) fn is_cancelled(&self) -> bool {
+        self.cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Set the inline YARA results
@@ -340,6 +354,7 @@ impl<'a> EvaluationContext<'a> {
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
             deadline: None,
+            cancellation: None,
             arch_ranges: None,
             slow_rule_ms: 4000,
             cached_evidence: None,

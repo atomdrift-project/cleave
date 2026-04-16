@@ -251,6 +251,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cancellation: None,
         }
     }
 
@@ -559,6 +560,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cancellation: None,
         };
 
         match condition {
@@ -1451,6 +1453,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cancellation: None,
         };
 
         // Actually evaluate the inline YARA rule
@@ -1826,6 +1829,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cancellation: None,
         };
 
         let eval_result = crate::composite_rules::evaluators::eval_ast(
@@ -1912,6 +1916,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cancellation: None,
         };
 
         let eval_result = eval_hex(

@@ -163,6 +163,7 @@ impl super::CapabilityMapper {
             inline_yara,
             false,
             &cache,
+            None,
         );
 
         // Pass 2: Evaluate dependent traits (iteratively until fixed point)
@@ -180,6 +181,7 @@ impl super::CapabilityMapper {
                 inline_yara,
                 true,
                 &cache,
+                None,
             );
 
             if dep_findings.is_empty() {
@@ -287,6 +289,7 @@ impl super::CapabilityMapper {
                 arch_ranges: None,
                 ast_kind_cache: None,
             },
+            None,
         )
     }
 
@@ -301,6 +304,7 @@ impl super::CapabilityMapper {
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         dependent_only: bool,
         cache: &TraitEvalCache<'_>,
+        cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
@@ -317,6 +321,10 @@ impl super::CapabilityMapper {
         .with_cached_evidence(Some(cache.cached_evidence))
         .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
         .with_slow_rule_ms(self.slow_rule_ms);
+
+        if let Some(flag) = cancellation {
+            ctx = ctx.with_cancellation(flag);
+        }
 
         if let Some(ref ast_cache) = cache.ast_kind_cache {
             ctx = ctx.with_ast_kind_cache(ast_cache);
@@ -384,6 +392,13 @@ impl super::CapabilityMapper {
         }
 
         let eval_trait = |&idx: &usize| {
+            // Check cancellation before each trait — this is the innermost
+            // loop that processes ~9000 traits per file, and is the main reason
+            // analysis can't be interrupted once it enters trait evaluation.
+            if ctx.is_cancelled() {
+                return None;
+            }
+
             let trait_def = &self.trait_definitions[idx];
             // For dependent traits, skip string-based optimizations since
             // we're matching on trait: conditions, not strings

@@ -1108,6 +1108,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 Some(&inline_yara),
                 Some(raw_regex),
                 fat_arch_ranges.as_deref(),
+                options.cancellation.as_deref(),
             );
             Ok(report)
         }
@@ -1146,6 +1147,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,
+                options.cancellation.as_deref(),
             );
             path_mapper::analyze_and_link_paths(&mut report);
             env_mapper::analyze_and_link_env_vars(&mut report);
@@ -1189,6 +1191,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,
+                options.cancellation.as_deref(),
             );
             Ok(report)
         }

@@ -29,21 +29,25 @@ pub fn run() -> Result<()> {
 /// Ground-truth score checks against known benign system binaries.
 ///
 /// These catch trait regressions (false positives, miscategorized criticality,
-/// taxonomy violations) that inflate scores beyond expected ranges.
+/// taxonomy violations) that inflate scores beyond expected ranges. Also checks
+/// that no `objectives/` or `well-known/` traits fire on known-benign binaries,
+/// since those tiers infer attacker intent which should never apply to platform
+/// utilities. Low-criticality binary metrics (component/baseline) are exempt.
 fn run_ground_truth_checks() -> Result<()> {
     eprintln!("\nRunning ground-truth checks...");
     let mut failures = Vec::new();
 
     // /bin/ls: benign system utility with xattr/stat/symlink/group-lookup/ACL capabilities.
-    // Higher indicates false positives or inflated findings that violate TAXONOMY.md guidance.
-    check_binary_score("/bin/ls", 1, 15, &mut failures);
+    check_binary_score("/bin/ls", 1, 8, &mut failures);
+
+    // /bin/cp: file copy utility with chmod/chown/fts/mknod capabilities.
+    check_binary_score("/bin/cp", 1, 7, &mut failures);
 
     // /bin/sh: minimal shell stub (macOS). Only exec and platform-signing traits.
-    check_binary_score("/bin/sh", 1, 10, &mut failures);
+    check_binary_score("/bin/sh", 1, 5, &mut failures);
 
     // /usr/bin/curl: network transfer tool with HTTP/SOCKS/OAuth/TLS/crypto capabilities.
-    // Higher indicates trait inflation for legitimate network behaviors.
-    check_binary_score("/usr/bin/curl", 5, 30, &mut failures);
+    check_binary_score("/usr/bin/curl", 5, 12, &mut failures);
 
     if failures.is_empty() {
         eprintln!("✅ All ground-truth checks passed.");
@@ -58,6 +62,7 @@ fn run_ground_truth_checks() -> Result<()> {
         )
     }
 }
+
 
 fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>) {
     let path = Path::new(path);
@@ -76,34 +81,42 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
     match cleave::analyze_file(path, &options) {
         Ok(mut report) => {
             report.finalize();
-            let score = report.files.first().map_or(0, |f| f.score);
+            let file = match report.files.first() {
+                Some(f) => f,
+                None => return,
+            };
+            let score = file.score;
+            let display = path.display();
 
             if score < min {
                 failures.push(format!(
-                    "{} has an unusually low score of {} (expected {}-{}), \
-                     check for missing notable findings that describe its purpose",
-                    path.display(),
-                    score,
-                    min,
-                    max
+                    "{display} score {score} below minimum {min} — \
+                     check for missing notable findings"
                 ));
             } else if score > max {
                 failures.push(format!(
-                    "{} has an unusually high score of {} (expected {}-{}), \
-                     check for misleading or inflated findings that violate TAXONOMY.md guidance",
-                    path.display(),
-                    score,
-                    min,
-                    max
+                    "{display} score {score} above cap {max} — \
+                     check for misleading/inflated findings (TAXONOMY.md)"
                 ));
             } else {
-                eprintln!(
-                    "  ✅ {}: score {} (expected {}-{})",
-                    path.display(),
-                    score,
-                    min,
-                    max
-                );
+                eprintln!("  ✅ {display}: score {score} (expected {min}-{max})");
+            }
+
+            // Flag ANY objectives/ or well-known/ traits on known-benign binaries.
+            // These tiers infer attacker intent — if they fire on platform utilities
+            // the trait is misplaced (belongs in micro-behaviors/ or metadata/) or
+            // mistargeted (needs a tighter `for`/`unless`/`downgrade`).
+            for finding in &file.findings {
+                let id = &finding.id;
+                if !id.starts_with("objectives/") && !id.starts_with("well-known/") {
+                    continue;
+                }
+                failures.push(format!(
+                    "{display}: objectives/well-known trait fired on known-benign binary: \
+                     {id} (\"{}\") — either constrain this rule better \
+                     or move it to a neutral tier (micro-behaviors/ or metadata/)",
+                    finding.desc
+                ));
             }
         }
         Err(e) => {

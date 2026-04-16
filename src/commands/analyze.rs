@@ -265,7 +265,8 @@ fn analyze_and_format(
         );
     }
 
-    // Filter unmatched component traits for terminal output
+    // Filter unmatched component traits for terminal output only —
+    // JSON retains them for ML features and debugging.
     if *format == cli::OutputFormat::Terminal {
         let removed = report.filter_unmatched_components();
         if removed > 0 {

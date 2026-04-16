@@ -422,6 +422,7 @@ impl AnalysisReport {
             file.compute_summary();
         }
 
+
         // Compute report summary and merge metadata into it
         let mut summary = ReportSummary::from_files(&self.files);
         summary.duration_ms = self.metadata.analysis_duration_ms;

@@ -716,6 +716,29 @@ pub fn prefetch_yara_engine(enable_third_party: bool) {
     });
 }
 
+/// Pre-warm the capability mapper on a background thread.
+///
+/// Companion to [`prefetch_yara_engine`]. The mapper first-load parses every
+/// trait definition and can take seconds; doing it in the background avoids
+/// blocking the first real analysis.
+pub fn prefetch_capability_mapper() {
+    std::thread::spawn(|| {
+        if let Err(e) = shared_resources::capability_mapper() {
+            tracing::warn!(error = %e, "capability mapper prefetch failed");
+        }
+    });
+}
+
+/// Pre-warm both YARA and the capability mapper.
+///
+/// Call this once at process startup (e.g. at the top of a worker or server
+/// main) so the first incoming request does not pay the multi-second cold-start
+/// cost. Safe to call multiple times; subsequent calls are cheap.
+pub fn prefetch_shared_resources(enable_third_party: bool) {
+    prefetch_yara_engine(enable_third_party);
+    prefetch_capability_mapper();
+}
+
 /// Analyze a single file and return a detailed report.
 ///
 /// This is the main entry point for analyzing files programmatically.

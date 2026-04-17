@@ -214,7 +214,10 @@ fn execute_rizin_with_timeout(
         let status = child.wait();
         tracing::info!(
             pid = child_id,
-            exit_code = status.as_ref().ok().and_then(std::process::ExitStatus::code),
+            exit_code = status
+                .as_ref()
+                .ok()
+                .and_then(std::process::ExitStatus::code),
             "Rizin process exited; killing process group to release pipes"
         );
         // After the rizin process exits, kill its entire process group to
@@ -226,7 +229,10 @@ fn execute_rizin_with_timeout(
         unsafe {
             libc::kill(-(child_id as libc::pid_t), libc::SIGKILL);
         }
-        tracing::info!(pid = child_id, "Process group killed; waiting for pipe drain");
+        tracing::info!(
+            pid = child_id,
+            "Process group killed; waiting for pipe drain"
+        );
         let _ = wait_tx.send(status);
     });
 
@@ -370,8 +376,7 @@ impl EffectiveInputPath {
             "writing in-memory bytes to temp file for rizin"
         );
 
-        let mut tmp =
-            tempfile::NamedTempFile::new().context("failed to create rizin temp file")?;
+        let mut tmp = tempfile::NamedTempFile::new().context("failed to create rizin temp file")?;
         {
             use std::io::Write as _;
             tmp.write_all(data)
@@ -384,7 +389,9 @@ impl EffectiveInputPath {
     }
 
     fn path<'a>(&'a self, file_path: &'a Path) -> &'a Path {
-        self.temp_file.as_ref().map_or(file_path, tempfile::NamedTempFile::path)
+        self.temp_file
+            .as_ref()
+            .map_or(file_path, tempfile::NamedTempFile::path)
     }
 }
 
@@ -412,26 +419,7 @@ const fn default_true() -> bool {
     true
 }
 
-/// Heuristic: is this a Go binary?
-///
-/// Go binaries (ELF, PE, Mach-O) embed a Go-buildinfo blob that starts with
-/// the 14-byte magic `\xffGo buildinf:`. It lives in a dedicated section
-/// (`.go.buildinfo` / `__go_buildinfo` / etc.) and is present in every Go
-/// binary since Go 1.13.
-///
-/// We bail out on `aa` (rizin's per-symbol crawl) for Go because Go injects
-/// a huge runtime symbol table: `aa` on a 35MB Go binary took ~5 minutes in
-/// benchmarking vs seconds for comparable C/C++ binaries. `aap` (prologue
-/// scan) still finds the user's actual functions and scales with file size
-/// rather than symbol count.
-fn looks_like_go_binary(data: &[u8]) -> bool {
-    const GO_BUILDINFO_MAGIC: &[u8] = b"\xffGo buildinf:";
-    // Scan only the first ~16 MB — the buildinfo section is always near the
-    // start of the file in practice, and unbounded scans would defeat the
-    // purpose of the optimization.
-    let horizon = data.len().min(16 * 1024 * 1024);
-    memchr::memmem::find(&data[..horizon], GO_BUILDINFO_MAGIC).is_some()
-}
+use crate::analyzers::looks_like_go_binary;
 
 #[derive(Clone, Copy, Debug)]
 enum RizinMode {
@@ -589,15 +577,15 @@ impl Radare2Analyzer {
         const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 100 * 1024 * 1024; // 100MB
         const MAX_SIZE_FOR_PROLOGUE_SCAN: u64 = 15 * 1024 * 1024; // 15MB
 
-        let file_size = std::fs::metadata(effective_path).map(|m| m.len()).unwrap_or(0);
+        let file_size = std::fs::metadata(effective_path)
+            .map(|m| m.len())
+            .unwrap_or(0);
 
         // Go detection: Go binaries embed a massive runtime symbol table and
         // `aa`'s per-symbol crawl degrades catastrophically (e.g. 5 min on a
         // 35MB Go binary vs seconds for comparable C binaries). Route Go to
         // the prologue-only path which scales with file size, not symbol count.
-        let is_go_binary = fallback_data
-            .map(looks_like_go_binary)
-            .unwrap_or(false);
+        let is_go_binary = fallback_data.map(looks_like_go_binary).unwrap_or(false);
 
         // We always run *some* function analysis for metric fidelity. The three
         // possible commands are: `aa;aap` (full), `aa` (light, symbol-driven),
@@ -605,11 +593,9 @@ impl Radare2Analyzer {
         // very large files where `aa`'s symbol crawl is too expensive, and Go
         // binaries where the runtime's symbol table poisons `aa` specifically).
         let skip_function_analysis = false;
-        let use_prologue_only = !has_symbols
-            || is_go_binary
-            || file_size > MAX_SIZE_FOR_FULL_ANALYSIS;
-        let use_light_analysis =
-            !use_prologue_only && file_size > MAX_SIZE_FOR_PROLOGUE_SCAN;
+        let use_prologue_only =
+            !has_symbols || is_go_binary || file_size > MAX_SIZE_FOR_FULL_ANALYSIS;
+        let use_light_analysis = !use_prologue_only && file_size > MAX_SIZE_FOR_PROLOGUE_SCAN;
 
         let mode = match (!skip_function_analysis, include_strings) {
             (false, false) => RizinMode::MetadataOnly,
@@ -638,8 +624,7 @@ impl Radare2Analyzer {
                 MAX_SIZE_FOR_PROLOGUE_SCAN / 1024 / 1024
             )
         } else {
-            "full analysis (aa;aap;aflj): rich metrics via entry-point + prologue scan"
-                .to_string()
+            "full analysis (aa;aap;aflj): rich metrics via entry-point + prologue scan".to_string()
         };
         let string_reason = if include_strings {
             "string extraction enabled: no pre-extracted stng strings available".to_string()
@@ -746,7 +731,10 @@ impl Radare2Analyzer {
         let phase_label = format!(
             "rizin ({}) on {}",
             mode.label(),
-            file_path.file_name().unwrap_or(file_path.as_os_str()).to_string_lossy()
+            file_path
+                .file_name()
+                .unwrap_or(file_path.as_os_str())
+                .to_string_lossy()
         );
         crate::memory_tracker::set_current_phase(&phase_label);
         let output = execute_rizin_with_timeout(
@@ -1244,10 +1232,8 @@ mod tests {
 
     #[test]
     fn test_effective_input_path_writes_temp_file_for_missing_path() {
-        let missing = std::env::temp_dir().join(format!(
-            "cleave-rizin-missing-{}",
-            std::process::id()
-        ));
+        let missing =
+            std::env::temp_dir().join(format!("cleave-rizin-missing-{}", std::process::id()));
         let data = b"in-memory bytes";
 
         let resolved =
@@ -1313,6 +1299,9 @@ mod tests {
             }
         };
 
-        assert!(status.success(), "cat should exit 0 when stdin is /dev/null");
+        assert!(
+            status.success(),
+            "cat should exit 0 when stdin is /dev/null"
+        );
     }
 }

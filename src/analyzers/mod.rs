@@ -79,14 +79,34 @@ use std::sync::Arc;
 
 /// Standard stng extraction options for analysis.
 ///
-/// All analysis code paths MUST use this to ensure consistent string extraction.
-/// In particular, XOR scanning must always be enabled so that decoded strings
-/// are available for trait matching (string_value conditions).
+/// All analysis code paths MUST use this to ensure consistent string
+/// extraction. XOR scanning is enabled so decoded strings are available for
+/// trait matching (string_value conditions); stng internally gates the scan
+/// on platform-signed/Go heuristics so unproductive scans are cheap.
 #[must_use]
 pub fn stng_analysis_opts(min_length: usize) -> stng::ExtractOptions {
     stng::ExtractOptions::new(min_length)
         .with_garbage_filter(true)
         .with_xor(None)
+}
+
+/// Heuristic: does this byte slice look like a Go binary?
+///
+/// Go binaries (ELF, PE, Mach-O) embed a Go-buildinfo blob that starts with
+/// the 14-byte magic `\xffGo buildinf:`. It lives in a dedicated section
+/// (`.go.buildinfo` / `__go_buildinfo` / `_go_buildinfo`) and is present in
+/// every Go binary since Go 1.13 — it's the canonical runtime-agnostic marker.
+///
+/// Used by rizin routing: Go binaries get `aap` instead of `aa` to avoid
+/// the pathological per-symbol crawl over Go's large runtime symbol table.
+#[must_use]
+pub fn looks_like_go_binary(data: &[u8]) -> bool {
+    const GO_BUILDINFO_MAGIC: &[u8] = b"\xffGo buildinf:";
+    // Scan only the first ~16 MB — the buildinfo section is always near the
+    // start of the file in practice, and unbounded scans would defeat the
+    // purpose of this cheap check.
+    let horizon = data.len().min(16 * 1024 * 1024);
+    memchr::memmem::find(&data[..horizon], GO_BUILDINFO_MAGIC).is_some()
 }
 
 /// Create an analyzer for the given file type.

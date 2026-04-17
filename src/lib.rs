@@ -638,7 +638,9 @@ pub fn start_rayon_diagnostics() {
                 rayon::spawn(move || {
                     let _ = idle_sender.send(());
                 });
-                let probe_ok = idle_receiver.recv_timeout(std::time::Duration::from_secs(5)).is_ok();
+                let probe_ok = idle_receiver
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .is_ok();
                 let probe_ms = probe_start.elapsed().as_millis();
 
                 let rss_mb = memory_tracker::current_rss()
@@ -659,7 +661,11 @@ pub fn start_rayon_diagnostics() {
                         probe_responded = probe_ok,
                         rss_mb,
                         "rayon pool appears STARVED — trivial task {}",
-                        if probe_ok { "was slow" } else { "timed out (5s)" },
+                        if probe_ok {
+                            "was slow"
+                        } else {
+                            "timed out (5s)"
+                        },
                     );
                 }
             }
@@ -1063,8 +1069,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Reuse a precomputed hash when the caller already hashed these bytes for a
     // fast-path cache lookup; otherwise compute it here. Skipping the recompute
     // matters for large inputs — SHA256 of a 100 MB archive is ~200 ms.
-    let sha256_hex = precomputed_sha256
-        .unwrap_or_else(|| analyzers::utils::calculate_sha256(file_data));
+    let sha256_hex =
+        precomputed_sha256.unwrap_or_else(|| analyzers::utils::calculate_sha256(file_data));
 
     // Set current file ID for IP validation cache
     let file_id = hash_str(&sha256_hex);
@@ -2336,9 +2342,16 @@ mod tests {
             .expect("mapper should load for depth-zero test");
 
         #[allow(clippy::expect_used)]
-        let report =
-            analyze_file_with_resources_at_depth(tmp.path(), &options, &mapper, None, None, None, 0)
-                .expect("analysis should succeed");
+        let report = analyze_file_with_resources_at_depth(
+            tmp.path(),
+            &options,
+            &mapper,
+            None,
+            None,
+            None,
+            0,
+        )
+        .expect("analysis should succeed");
 
         assert!(
             !report

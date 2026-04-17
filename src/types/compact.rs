@@ -285,7 +285,12 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         .collect();
 
     // Flatten imports to bare symbol names, capped to prevent oversized output
-    let imports: Vec<String> = file.imports.iter().take(MAX_IMPORTS).map(|i| i.symbol.clone()).collect();
+    let imports: Vec<String> = file
+        .imports
+        .iter()
+        .take(MAX_IMPORTS)
+        .map(|i| i.symbol.clone())
+        .collect();
 
     // Round metrics floats to 2dp
     let metrics = file.metrics.as_ref().and_then(|m| {

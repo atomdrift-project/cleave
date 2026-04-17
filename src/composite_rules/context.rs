@@ -158,7 +158,8 @@ impl<'a> EvaluationContext<'a> {
 
     /// Returns true if cancellation has been requested.
     pub(crate) fn is_cancelled(&self) -> bool {
-        self.cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        self.cancellation
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Set the inline YARA results

@@ -229,11 +229,11 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
 /// Allowed subdirectories in micro-behaviors/communications/
 const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "async-io",
-    "bacnet",     // BACnet building/industrial automation      (UDP 47808)
+    "bacnet", // BACnet building/industrial automation      (UDP 47808)
     "benchmark",
     "capture",
     "dns",
-    "dnp3",       // DNP3 SCADA/utility protocol                (TCP 20000)
+    "dnp3", // DNP3 SCADA/utility protocol                (TCP 20000)
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
     "ftp",
@@ -241,11 +241,11 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "icmp",
     "ip",
     "ipc",
-    "modbus",     // Modbus industrial control protocol          (TCP 502)
-    "opcua",      // OPC UA industrial interoperability          (TCP 4840)
-    "profinet",   // PROFINET industrial Ethernet                (RT/IRT)
+    "modbus",   // Modbus industrial control protocol          (TCP 502)
+    "opcua",    // OPC UA industrial interoperability          (TCP 4840)
+    "profinet", // PROFINET industrial Ethernet                (RT/IRT)
     "proxy",
-    "s7",         // Siemens S7comm/ISO-TSAP                     (TCP 102)
+    "s7", // Siemens S7comm/ISO-TSAP                     (TCP 102)
     "socket",
     "ssh",
     "url",

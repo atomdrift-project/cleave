@@ -225,7 +225,7 @@ fn validate_pe_header(data: &[u8]) -> Result<(), String> {
 
     let magic = u16::from_le_bytes([data[opt_offset], data[opt_offset + 1]]);
     let (data_dir_count_offset, data_dir_offset) = match magic {
-        0x010b => (92, 96), // PE32
+        0x010b => (92, 96),   // PE32
         0x020b => (108, 112), // PE32+
         _ => return Ok(()),
     };
@@ -286,9 +286,11 @@ mod tests {
     #[test]
     fn test_validate_pe_header_too_many_sections() {
         let mut data = vec![0u8; 1024];
-        data[0] = b'M'; data[1] = b'Z';
+        data[0] = b'M';
+        data[1] = b'Z';
         data[0x3C] = 0x40; // PE at 0x40
-        data[0x40] = b'P'; data[0x41] = b'E';
+        data[0x40] = b'P';
+        data[0x41] = b'E';
         data[0x44 + 2] = 0xFF; // n_sections = 255 (too many)
         assert!(validate_pe_header(&data).is_err());
     }
@@ -296,13 +298,16 @@ mod tests {
     #[test]
     fn test_validate_pe_header_malformed_imports() {
         let mut data = vec![0u8; 1024];
-        data[0] = b'M'; data[1] = b'Z';
+        data[0] = b'M';
+        data[1] = b'Z';
         data[0x3C] = 0x40; // PE at 0x40
-        data[0x40] = b'P'; data[0x41] = b'E';
+        data[0x40] = b'P';
+        data[0x41] = b'E';
         data[0x44 + 2] = 1; // n_sections = 1
-        data[0x40 + 24] = 0x0B; data[0x41 + 24] = 0x01; // PE32
+        data[0x40 + 24] = 0x0B;
+        data[0x41 + 24] = 0x01; // PE32
         data[0x40 + 24 + 92] = 16; // 16 dirs
-        // Import dir size (at opt + 96 + 8 + 4)
+                                   // Import dir size (at opt + 96 + 8 + 4)
         let import_size_ptr = 0x40 + 24 + 96 + 8 + 4;
         data[import_size_ptr] = 0x00;
         data[import_size_ptr + 1] = 0x00;

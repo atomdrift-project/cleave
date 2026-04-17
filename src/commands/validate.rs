@@ -63,7 +63,6 @@ fn run_ground_truth_checks() -> Result<()> {
     }
 }
 
-
 fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>) {
     let path = Path::new(path);
     if !path.exists() {

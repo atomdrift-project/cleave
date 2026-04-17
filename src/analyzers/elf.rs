@@ -556,10 +556,7 @@ impl ElfAnalyzer {
             (strings.clone(), None)
         } else {
             let raw = self.string_extractor.extract_raw_smart(data, r2_strings);
-            (
-                self.string_extractor.convert_stng_strings(&raw),
-                Some(raw),
-            )
+            (self.string_extractor.convert_stng_strings(&raw), Some(raw))
         };
         report.strings = report_strings;
 

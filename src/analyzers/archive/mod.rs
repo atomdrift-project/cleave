@@ -2,8 +2,8 @@
 
 pub(crate) mod analyzers;
 mod guards;
-// #[cfg(test)]
-// mod guards_test;
+#[cfg(test)]
+mod guards_test;
 mod system_packages;
 mod tar;
 pub(crate) mod utils;
@@ -45,7 +45,9 @@ fn archive_finding(
     evidence: Vec<Evidence>,
     match_count: usize,
 ) -> Finding {
-    let crit = if id == "anti-analysis/archive/excessive-size" {
+    let crit = if id == "anti-analysis/archive/excessive-size"
+        || id == "anti-analysis/archive/long-entry-name"
+    {
         Criticality::Notable
     } else {
         Criticality::Suspicious
@@ -162,6 +164,32 @@ fn push_archive_hostile_findings(
                     match_count: 1,
                     source_file: None,
                 });
+            }
+            HostileArchiveReason::ExcessiveEntryName { len, preview } => {
+                let (id, desc) = if len > 1024 {
+                    (
+                        "anti-analysis/archive/hostile-entry-name",
+                        format!("Archive entry has hostile-length name ({len} bytes)"),
+                    )
+                } else {
+                    (
+                        "anti-analysis/archive/long-entry-name",
+                        format!("Archive entry has excessively long name ({len} bytes)"),
+                    )
+                };
+                report.findings.push(archive_finding(
+                    id,
+                    desc,
+                    source,
+                    vec![Evidence {
+                        method: "archive_extraction".to_string(),
+                        source: source.to_string(),
+                        value: format!("name_len:{len} preview:{preview}"),
+                        location: None,
+                        ..Default::default()
+                    }],
+                    1,
+                ));
             }
             HostileArchiveReason::SymlinkEscape(path) => {
                 if !is_benign_archive_symlink_escape(&path) {

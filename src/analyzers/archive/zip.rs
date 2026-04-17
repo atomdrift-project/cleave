@@ -12,7 +12,7 @@
 
 use super::guards::{
     sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
-    LimitedReader, MAX_FILE_SIZE,
+    LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
 use crate::types::{container_metrics::ArchiveMetrics, ArchiveEntry};
 use anyhow::{Context, Result};
@@ -262,6 +262,13 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
 
         let entry_name = entry.name().to_string();
         trace!("Entry {}: {}", i, entry_name);
+
+        if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                len: entry_name.len(),
+                preview: entry_name.chars().take(80).collect(),
+            });
+        }
 
         // Sanitize path to prevent zip slip
         let Some(outpath) = sanitize_entry_path(&entry_name, dest_dir) else {

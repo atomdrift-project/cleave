@@ -62,6 +62,13 @@ pub(crate) enum HostileArchiveReason {
     },
     /// A symlink target points outside the extraction directory
     SymlinkEscape(String),
+    /// An archive entry has an excessively long name
+    ExcessiveEntryName {
+        /// Length of the entry name in bytes
+        len: usize,
+        /// Truncated preview of the name
+        preview: String,
+    },
 }
 
 /// Tracks extraction limits and detects hostile patterns
@@ -171,7 +178,15 @@ impl ExtractionGuard {
     }
 }
 
-/// Sanitize archive entry path to prevent path traversal attacks (zip slip)
+/// Maximum length of a single path component (Linux NAME_MAX).
+pub(crate) const MAX_PATH_COMPONENT_LEN: usize = 255;
+
+/// Sanitize archive entry path to prevent path traversal attacks (zip slip).
+///
+/// Individual path components longer than 255 bytes are truncated to avoid
+/// ENAMETOOLONG errors on extraction. The caller should separately check
+/// `entry_name.len()` and record a [`HostileArchiveReason::ExcessiveEntryName`]
+/// when appropriate.
 pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<PathBuf> {
     let path = Path::new(entry_name);
 
@@ -184,7 +199,16 @@ pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<P
     let mut result = dest_dir.to_path_buf();
     for component in path.components() {
         match component {
-            Component::Normal(c) => result.push(c),
+            Component::Normal(c) => {
+                let s = c.to_string_lossy();
+                if s.len() > MAX_PATH_COMPONENT_LEN {
+                    // Truncate on a char boundary to avoid splitting a multi-byte sequence.
+                    let truncated = truncate_to_char_boundary(&s, MAX_PATH_COMPONENT_LEN);
+                    result.push(truncated);
+                } else {
+                    result.push(c);
+                }
+            }
             Component::CurDir => {} // Skip "."
             Component::ParentDir | Component::Prefix(_) | Component::RootDir => {
                 // Reject "..", drive prefixes, and root
@@ -199,6 +223,18 @@ pub(crate) fn sanitize_entry_path(entry_name: &str, dest_dir: &Path) -> Option<P
     }
 
     Some(result)
+}
+
+/// Truncate `s` to at most `max_bytes` without splitting a UTF-8 character.
+fn truncate_to_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
 }
 
 /// Check if a symlink target would escape the extraction directory

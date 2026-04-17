@@ -14,7 +14,7 @@
 
 use super::guards::{
     sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
-    MAX_FILE_SIZE,
+    MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
 use anyhow::{Context, Result};
 use std::fs::{self, File};
@@ -37,6 +37,13 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
         let mut entry = entry_result.context("Failed to read tar entry")?;
         let entry_path = entry.path()?;
         let entry_name = entry_path.to_string_lossy().to_string();
+
+        if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                len: entry_name.len(),
+                preview: entry_name.chars().take(80).collect(),
+            });
+        }
 
         let Some(outpath) = sanitize_entry_path(&entry_name, dest_dir) else {
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));

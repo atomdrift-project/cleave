@@ -541,3 +541,119 @@ fn test_symlink_at_root_level() {
     // "../escape" goes above dest - ESCAPES
     assert!(symlink_escapes(&symlink_path, "../escape", dest));
 }
+
+// =============================================================================
+// Long Entry Name Tests
+// =============================================================================
+
+#[test]
+fn test_sanitize_truncates_long_path_component() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // A 300-byte filename should be truncated to 255 bytes, not rejected.
+    let long_name = "X".repeat(300);
+    let result = sanitize_entry_path(&long_name, dest);
+    assert!(result.is_some(), "long filename should be truncated, not rejected");
+
+    let path = result.unwrap();
+    let component = path.file_name().unwrap().to_string_lossy();
+    assert_eq!(component.len(), 255);
+    assert!(path.starts_with(dest));
+}
+
+#[test]
+fn test_sanitize_truncates_long_component_in_nested_path() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    let long_dir = "D".repeat(400);
+    let entry = format!("{}/file.txt", long_dir);
+    let result = sanitize_entry_path(&entry, dest);
+    assert!(result.is_some());
+
+    let path = result.unwrap();
+    // The long directory component should be truncated
+    let parent_name = path.parent().unwrap().file_name().unwrap().to_string_lossy();
+    assert_eq!(parent_name.len(), 255);
+    // The short filename should be preserved as-is
+    assert_eq!(path.file_name().unwrap().to_string_lossy(), "file.txt");
+}
+
+#[test]
+fn test_sanitize_truncates_on_char_boundary() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Build a name that would split a multi-byte char at exactly 255.
+    // Each '文' is 3 bytes. 84 * 3 = 252, then "XXXX" = 256 bytes total.
+    let mut name = "文".repeat(84); // 252 bytes
+    name.push_str("XXXX"); // 256 bytes
+    assert_eq!(name.len(), 256);
+
+    let result = sanitize_entry_path(&name, dest).unwrap();
+    let component = result.file_name().unwrap().to_string_lossy();
+    // Must be valid UTF-8 and <= 255 bytes
+    assert!(component.len() <= 255);
+    assert!(component.len() >= 252); // should keep as much as possible
+}
+
+#[test]
+fn test_sanitize_normal_names_unchanged() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Names under 255 bytes should pass through unchanged
+    let name = "normal_file.txt";
+    let result = sanitize_entry_path(name, dest).unwrap();
+    assert_eq!(result.file_name().unwrap().to_string_lossy(), name);
+
+    let name_255 = "A".repeat(255);
+    let result = sanitize_entry_path(&name_255, dest).unwrap();
+    assert_eq!(result.file_name().unwrap().to_string_lossy().len(), 255);
+}
+
+#[test]
+fn test_sanitize_mega_filename_extracts_without_error() {
+    let temp_dir = TempDir::new().unwrap();
+    let dest = temp_dir.path();
+
+    // Simulate the pax-bad-hdr-large.tar.bz2 case: ~1MB filename
+    let mega_name = "X".repeat(1_048_563);
+    let result = sanitize_entry_path(&mega_name, dest);
+    assert!(result.is_some(), "million-byte filename must not crash");
+
+    let path = result.unwrap();
+    // Should be writable on the filesystem
+    std::fs::create_dir_all(path.parent().unwrap_or(dest)).unwrap();
+    std::fs::write(&path, b"ok").unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"ok");
+}
+
+#[test]
+fn test_excessive_entry_name_hostile_reason() {
+    let guard = ExtractionGuard::new();
+
+    // >255 should be flagged
+    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+        len: 300,
+        preview: "X".repeat(80),
+    });
+
+    // >1024 should also be flagged
+    guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+        len: 1_048_563,
+        preview: "Y".repeat(80),
+    });
+
+    let reasons = guard.take_reasons();
+    assert_eq!(reasons.len(), 2);
+    assert!(matches!(
+        &reasons[0],
+        HostileArchiveReason::ExcessiveEntryName { len: 300, .. }
+    ));
+    assert!(matches!(
+        &reasons[1],
+        HostileArchiveReason::ExcessiveEntryName { len: 1_048_563, .. }
+    ));
+}

@@ -1226,6 +1226,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut report = struct_result?;
             analyzer.apply_fat_metadata(&mut report, file_data);
 
+            // For FAT binaries, parse the non-preferred arch slices with goblin and
+            // union their imports/exports into the report. Without this, malware
+            // hidden in a non-preferred arch (e.g. malicious x86_64 slice with a
+            // benign arm64 slice) escapes goblin-derived trait rules. YARA and stng
+            // already cover the full file, so this closes the remaining gap.
+            if is_fat {
+                let preferred_offset = range.start;
+                analyzer.union_supplementary_arches(&mut report, file_data, preferred_offset);
+            }
+
             // For FAT binaries, re-extract strings from full file for correct offsets
             if is_fat && preextracted_strings.is_empty() {
                 report.strings = string_extractor.extract_smart(file_data, None);

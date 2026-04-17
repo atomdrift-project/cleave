@@ -686,7 +686,21 @@ impl PEAnalyzer {
                 .iter()
                 .any(|sec| (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)
         });
-        let allow_rizin = allow_rizin && (pe.is_none() || has_executable_section);
+        // Pure IL-only .NET assemblies contain managed bytecode (CIL), not native
+        // machine code. Rizin's `aa` pass enumerates the symbol table and tries to
+        // disassemble at each address; on a ~500KB .NET DLL this costs ~17 seconds
+        // while producing "functions" that are actually CIL method stubs with no
+        // meaningful native CFG. Mixed-mode assemblies (ones with a native
+        // entrypoint or without the ILONLY flag) are kept on the rizin path so
+        // their native code still gets analyzed. This is the inverse of the
+        // `mixed_mode` condition applied to metrics further down.
+        let is_il_only_dotnet = pe.is_some_and(|pe| {
+            pe.clr_data.as_ref().is_some_and(|clr| {
+                clr.cor20_header.is_il_only() && !clr.cor20_header.is_native_entrypoint()
+            })
+        });
+        let allow_rizin =
+            allow_rizin && (pe.is_none() || has_executable_section) && !is_il_only_dotnet;
         let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
 
         let mut r2_result = None;

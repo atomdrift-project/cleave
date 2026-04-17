@@ -100,10 +100,15 @@ pub(crate) fn parse_code_signature(
         HashMap::new()
     };
 
-    // Extract team ID and signature type from CMS blob
+    // Extract team ID and signature type from CMS blob. A Mach-O with a
+    // CodeDirectory but no CMS (no certificate chain) is adhoc-signed — this
+    // is the default for Go's linker on macOS since Go 1.20 and for any
+    // developer-local build before `codesign -s ...`.
     let (team_id, signature_type, authorities) =
         if let Some(cms_data) = blobs.get(&CMS_SIGNATURE_MAGIC) {
             extract_certificate_info(cms_data)
+        } else if blobs.contains_key(&CODE_DIRECTORY_MAGIC) {
+            (None, SignatureType::Adhoc, vec![])
         } else {
             (None, SignatureType::Unknown, vec![])
         };

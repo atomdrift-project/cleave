@@ -617,14 +617,16 @@ impl ElfAnalyzer {
         // Populate common binary metrics (strings, entropy, etc.)
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
 
-        // ELF binaries are usually unsigned (or use non-standard signing)
+        // ELF binaries are usually unsigned (or use non-standard signing) —
+        // this is the norm on Linux/BSD, so it's baseline metadata rather
+        // than a notable deviation (unlike PE / Mach-O where signing is expected).
         if !is_core_dump {
             report.findings.push(Finding {
                 id: "metadata/unsigned".to_string(),
                 kind: FindingKind::Capability,
                 desc: "Binary is not digitally signed".to_string(),
                 conf: 1.0,
-                crit: Criticality::Notable,
+                crit: Criticality::Baseline,
                 mbc: None,
                 attack: None,
                 trait_refs: vec![],

@@ -23,6 +23,7 @@ pub fn run() -> Result<()> {
     eprintln!("✅ All trait validation checks passed.");
 
     run_ground_truth_checks()?;
+    run_does_nothing_check()?;
 
     Ok(())
 }
@@ -146,4 +147,69 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
             eprintln!("  ⚠ {}: analysis failed: {}", path.display(), e);
         }
     }
+}
+
+/// Per-file score cap for `testdata/does-nothing/` samples.
+///
+/// These files are crafted to do nothing interesting; any trait that fires on
+/// them above this threshold is almost certainly over-broad or miscategorized.
+const DOES_NOTHING_MAX_SCORE: u32 = 1;
+
+/// Check that no file under `<traits>/testdata/does-nothing/` scores above
+/// [`DOES_NOTHING_MAX_SCORE`]. Warns and returns `Ok` if the directory is absent.
+fn run_does_nothing_check() -> Result<()> {
+    let traits_dir = match cleave::traits_repo::try_resolve() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("\n⚠ Skipping does-nothing check: {e}");
+            return Ok(());
+        }
+    };
+    let dir = traits_dir.join("testdata").join("does-nothing");
+    if !dir.is_dir() {
+        eprintln!(
+            "\n⚠ Skipping does-nothing check: {} not found",
+            dir.display()
+        );
+        return Ok(());
+    }
+
+    eprintln!("\nRunning does-nothing score check on {}...", dir.display());
+
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    let options = cleave::AnalysisOptions {
+        disable_yara: true,
+        ..Default::default()
+    };
+
+    let reports = cleave::analyze_directory(&dir, &options)?;
+
+    let mut analyzed = 0usize;
+    let mut offenders: Vec<(u32, String)> = Vec::new();
+    for mut report in reports {
+        report.finalize();
+        for file in &report.files {
+            analyzed += 1;
+            if file.score > DOES_NOTHING_MAX_SCORE {
+                offenders.push((file.score, file.path.clone()));
+            }
+        }
+    }
+
+    if offenders.is_empty() {
+        eprintln!(
+            "✅ All {analyzed} does-nothing file(s) score <= {DOES_NOTHING_MAX_SCORE}."
+        );
+        return Ok(());
+    }
+
+    offenders.sort_by(|a, b| b.0.cmp(&a.0));
+    for (score, path) in &offenders {
+        eprintln!("❌ {path}: score {score} exceeds cap {DOES_NOTHING_MAX_SCORE}");
+    }
+    anyhow::bail!(
+        "{} does-nothing file(s) exceed the score cap of {DOES_NOTHING_MAX_SCORE} \
+         — review findings for over-broad or miscategorized traits",
+        offenders.len()
+    )
 }

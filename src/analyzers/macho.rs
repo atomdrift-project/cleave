@@ -1263,6 +1263,124 @@ impl MachOAnalyzer {
         vec![0..data.len()]
     }
 
+    /// Parse every non-preferred arch slice of a fat Mach-O and union its imports
+    /// and exports into the report, running capability lookups on each new import
+    /// so rules matching on goblin-derived imports still fire for malware hidden
+    /// in a non-preferred arch.
+    ///
+    /// Preferred arch has already been parsed by the main structural pass, so
+    /// imports/exports already present are skipped (deduped by normalized symbol
+    /// name + library for imports; by symbol name for exports).
+    ///
+    /// Only runs on fat binaries; caller is expected to check.
+    pub(crate) fn union_supplementary_arches(
+        &self,
+        report: &mut AnalysisReport,
+        data: &[u8],
+        preferred_offset: usize,
+    ) {
+        use std::collections::HashSet;
+
+        let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() else {
+            return;
+        };
+        let Ok(arches) = fat.arches() else {
+            return;
+        };
+
+        // Build dedup sets from what's already in the report.
+        let mut seen_imports: HashSet<(String, Option<String>)> = report
+            .imports
+            .iter()
+            .map(|i| (i.symbol.clone(), i.library.clone()))
+            .collect();
+        let mut seen_exports: HashSet<String> =
+            report.exports.iter().map(|e| e.symbol.clone()).collect();
+        let baseline_imports = report.imports.len();
+        let baseline_exports = report.exports.len();
+        let mut arches_parsed = 0;
+
+        for arch in arches.iter() {
+            let offset = arch.offset as usize;
+            if offset == preferred_offset {
+                continue;
+            }
+            let size = arch.size as usize;
+            if offset.saturating_add(size) > data.len() {
+                continue;
+            }
+            let slice = &data[offset..offset + size];
+            let arch_name = self.arch_name_from_cputype(arch.cputype);
+            let import_source = format!("goblin-{}", arch_name);
+
+            let parse = goblin_safe::parse_mach(slice);
+            let Some(Mach::Binary(macho)) = parse.ok() else {
+                continue;
+            };
+            arches_parsed += 1;
+
+            let goblin_imports = macho.imports().unwrap_or_default();
+            if !goblin_imports.is_empty() {
+                for imp in &goblin_imports {
+                    let symbol = crate::types::binary::normalize_symbol(imp.name);
+                    let library = Some(imp.dylib.to_string());
+                    if !seen_imports.insert((symbol.clone(), library.clone())) {
+                        continue;
+                    }
+                    report
+                        .imports
+                        .push(Import::new(imp.name, library, import_source.clone()));
+                    if let Some(cap) = self.capability_mapper.lookup(&symbol, "goblin") {
+                        if !report.findings.iter().any(|c| c.id == cap.id) {
+                            report.findings.push(cap);
+                        }
+                    }
+                }
+            } else if let Some(syms) = &macho.symbols {
+                // Mirror analyze_imports' symtab fallback: N_EXT+undefined means import
+                for (name, sym) in syms.iter().flatten() {
+                    if (sym.n_type & 0x01 != 0) && (sym.n_type & 0x0e == 0) {
+                        let symbol = crate::types::binary::normalize_symbol(name);
+                        if !seen_imports.insert((symbol.clone(), None)) {
+                            continue;
+                        }
+                        report.imports.push(Import::new(name, None, import_source.clone()));
+                        if let Some(cap) = self.capability_mapper.lookup(&symbol, "goblin") {
+                            if !report.findings.iter().any(|c| c.id == cap.id) {
+                                report.findings.push(cap);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if let Ok(exports) = macho.exports() {
+                for exp in &exports {
+                    let symbol = crate::types::binary::normalize_symbol(&exp.name);
+                    if !seen_exports.insert(symbol) {
+                        continue;
+                    }
+                    report.exports.push(Export::new(
+                        &exp.name,
+                        Some(format!("0x{:x}", exp.offset)),
+                        import_source.clone(),
+                    ));
+                }
+            }
+        }
+
+        let extra_imports = report.imports.len() - baseline_imports;
+        let extra_exports = report.exports.len() - baseline_exports;
+        if arches_parsed > 0 && (extra_imports > 0 || extra_exports > 0) {
+            tracing::debug!(
+                arches_parsed,
+                extra_imports,
+                extra_exports,
+                "fat mach-O supplementary arch union"
+            );
+        }
+    }
+
     /// Updates a report with fat binary metadata (architecture list, universal binary flag).
     /// No-op for thin binaries.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
@@ -1410,6 +1528,11 @@ impl Analyzer for MachOAnalyzer {
         // For FAT binaries, strings should already be file-relative from input.strings
         // (extracted from the full file by the entry point)
         let is_fat = arch_ranges.len() > 1;
+
+        if is_fat {
+            let preferred_offset = self.preferred_arch_range(input.data).start;
+            self.union_supplementary_arches(&mut report, input.data, preferred_offset);
+        }
 
         // Evaluate traits against binary data.
         // For FAT binaries, evaluate against the full file since strings have file-relative offsets.

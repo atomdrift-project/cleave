@@ -2008,13 +2008,18 @@ where
 
     // Dedicated thread pool for directory scanning. Each thread holds an in-flight
     // analysis (~0.5-1.5 GB), so this directly controls peak memory.
-    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > cpus * 3/4.
+    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > cpus * 3/2.
     //
-    // The 3/4 default was picked empirically: on a 16-core machine the 200MB
-    // benchmark runs 30% faster at n=12 than at n=8, while n=16 regresses
-    // (oversubscription contention with residual intra-file work like
-    // populate_binary_metrics and trait-eval pattern matching). Leaving ~25%
-    // of cores slack for inner work is the sweet spot across workloads.
+    // Empirical 5-run averages on a 16-core machine (200MB cold-cache bench):
+    //   n=12 (cpus*3/4): median 72.0s, σ 8.3
+    //   n=16 (cpus):     median 66.4s, σ 4.3
+    //   n=24 (cpus*3/2): median 64.6s, σ 3.0  ← best + lowest variance
+    //
+    // Workers spend ~⅓ of their wall time blocked on the rizin subprocess.
+    // 1.5× oversubscription keeps cores busy during those blocks without
+    // inflating memory pressure. Inner rayon contention is no longer a
+    // concern because Option-A flattening + rayon::join for rizin‖goblin
+    // keeps per-file CPU work modest.
     let scan_threads = std::env::var("CLEAVE_SCAN_THREADS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -2023,7 +2028,7 @@ where
             if options.scan_threads > 0 {
                 options.scan_threads
             } else {
-                (rayon::current_num_threads() * 3 / 4).max(4)
+                (rayon::current_num_threads() * 3 / 2).max(4)
             }
         });
     let scan_pool = shared_resources::scan_pool(scan_threads);

@@ -676,6 +676,17 @@ impl PEAnalyzer {
         let has_symbols = pe.is_none_or(|pe| {
             !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
         });
+        // Skip rizin entirely for resource-only DLLs (e.g. `.mui` MUI files):
+        // goblin has all the structure we need, and rizin on a binary with no
+        // executable sections will only do startup/teardown work, adding thread
+        // contention without producing any function metrics worth the cost.
+        let has_executable_section = pe.is_some_and(|pe| {
+            use goblin::pe::section_table::IMAGE_SCN_MEM_EXECUTE;
+            pe.sections
+                .iter()
+                .any(|sec| (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)
+        });
+        let allow_rizin = allow_rizin && (pe.is_none() || has_executable_section);
         let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
 
         let mut r2_result = None;
@@ -692,89 +703,41 @@ impl PEAnalyzer {
         );
 
         let scope_start = std::time::Instant::now();
-        // When already running on a rayon worker (batch mode via par_iter over files),
-        // nested rayon::scope starves the pool: every worker is holding one file's
-        // scope, leaving no threads to steal inner work. Each file's scope can then
-        // wait minutes for sub-tasks to run. Detect this and execute sequentially —
-        // batch-level parallelism already saturates the cores.
-        let already_on_pool = rayon::current_thread_index().is_some();
-        tracing::debug!(
-            path = %logical_path.display(),
-            rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
-            nested = already_on_pool,
-            "PE: structural analysis",
-        );
-        if already_on_pool {
-            // Sequential path (batch mode): one file per worker is enough parallelism.
-            if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
-                r2_result = Some(self.radare2.extract_batched(
-                    analysis_path,
-                    has_symbols,
-                    goblin_ok,
-                    needs_r2_strings,
-                    precomputed_sha256,
-                    self.cancellation.as_ref(),
-                    Some(original_data),
-                ));
-            }
-            if let Some(pe) = pe {
-                goblin_report_parts.0 = self.get_structure(pe);
-                goblin_report_parts.1 = self.get_imports(pe);
-                goblin_report_parts.2 = self.get_exports(pe, pe_data);
-                goblin_report_parts.3 = self.get_sections(pe, pe_data);
-            }
-        } else {
-            rayon::scope(|s| {
-                s.spawn(|_| {
-                    if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
-                        r2_result = Some(self.radare2.extract_batched(
-                            analysis_path,
-                            has_symbols,
-                            goblin_ok,
-                            needs_r2_strings,
-                            precomputed_sha256,
-                            self.cancellation.as_ref(),
-                            Some(original_data),
-                        ));
-                    }
-                });
-                if let Some(pe) = pe {
-                    s.spawn(|_| {
-                        rayon::join(
-                            || {
-                                goblin_report_parts.0 = self.get_structure(pe);
-                            },
-                            || {
-                                rayon::join(
-                                    || {
-                                        goblin_report_parts.1 = self.get_imports(pe);
-                                    },
-                                    || {
-                                        rayon::join(
-                                            || {
-                                                goblin_report_parts.2 =
-                                                    self.get_exports(pe, pe_data);
-                                            },
-                                            || {
-                                                goblin_report_parts.3 =
-                                                    self.get_sections(pe, pe_data);
-                                            },
-                                        );
-                                    },
-                                );
-                            },
-                        );
-                    });
+        // Overlap rizin (subprocess-bound) with goblin structural work (CPU-bound)
+        // via a single 2-way `rayon::join`. This is shallow enough not to trigger
+        // the pool-starvation pattern that deeper nested scopes cause while still
+        // hiding the rizin subprocess wait behind the goblin parse — roughly
+        // halving per-file latency when rizin is active. The goblin sub-steps run
+        // sequentially inside their arm because goblin parsing is already fast
+        // and splitting it further only adds stealing overhead.
+        rayon::join(
+            || {
+                if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                    r2_result = Some(self.radare2.extract_batched(
+                        analysis_path,
+                        has_symbols,
+                        goblin_ok,
+                        needs_r2_strings,
+                        precomputed_sha256,
+                        self.cancellation.as_ref(),
+                        Some(original_data),
+                    ));
                 }
-            });
-        }
+            },
+            || {
+                if let Some(pe) = pe {
+                    goblin_report_parts.0 = self.get_structure(pe);
+                    goblin_report_parts.1 = self.get_imports(pe);
+                    goblin_report_parts.2 = self.get_exports(pe, pe_data);
+                    goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                }
+            },
+        );
         let scope_ms = scope_start.elapsed().as_millis();
         if scope_ms > 10000 {
             tracing::warn!(
                 path = %logical_path.display(),
                 elapsed_ms = scope_ms,
-                rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
-                on_rayon_pool = already_on_pool,
                 "PE structural analysis completed slowly",
             );
         }

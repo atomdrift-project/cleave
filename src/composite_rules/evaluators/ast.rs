@@ -10,13 +10,13 @@ use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
-use std::cell::RefCell;
+use parking_lot::RwLock;
 use std::num::NonZeroUsize;
 use std::ops::ControlFlow;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use streaming_iterator::StreamingIterator;
 
-/// Maximum number of compiled tree-sitter queries to cache per thread.
+/// Maximum number of compiled tree-sitter queries to cache.
 /// Queries are keyed by (FileType, query_string). The set of distinct queries
 /// is bounded by the number of trait definitions, so 256 is generous while
 /// keeping memory modest (~10-50 KB per compiled query).
@@ -26,18 +26,21 @@ const QUERY_CACHE_SIZE: NonZeroUsize = {
     NonZeroUsize::new(QUERY_CACHE_MAX_SIZE).expect("QUERY_CACHE_MAX_SIZE is non-zero")
 };
 
-thread_local! {
-    static QUERY_CACHE: RefCell<lru::LruCache<(FileType, String), Arc<tree_sitter::Query>>> = {
-        RefCell::new(lru::LruCache::new(QUERY_CACHE_SIZE))
-    };
-}
+/// Process-wide compiled-query cache.
+///
+/// Was previously per-thread — but `tree_sitter::Query` is `Send + Sync` via
+/// `Arc`, and CPU profiles showed `ts_query_new` consuming thousands of
+/// samples because each rayon worker recompiled the same queries
+/// independently. Sharing across threads eliminates that redundancy. Writes
+/// are rare (cache miss on cold start), reads are frequent; `RwLock` keeps
+/// reads parallel.
+static QUERY_CACHE: LazyLock<RwLock<lru::LruCache<(FileType, String), Arc<tree_sitter::Query>>>> =
+    LazyLock::new(|| RwLock::new(lru::LruCache::new(QUERY_CACHE_SIZE)));
 
-/// Clear the thread-local AST query cache for this thread.
+/// Clear the shared AST query cache.
 #[allow(dead_code)] // Called via clear_thread_local_caches
 pub(crate) fn clear_ast_query_cache() {
-    QUERY_CACHE.with(|cache| {
-        cache.borrow_mut().clear();
-    });
+    QUERY_CACHE.write().clear();
 }
 
 /// Match mode for AST pattern matching
@@ -471,25 +474,25 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    // Compile the query (cached per thread to avoid recompilation across files).
-    // Uses Arc so the Query stays alive even if evicted from the LRU cache mid-use.
-    let query_arc = QUERY_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-        let key = (ctx.file_type, query_str.to_string());
-        if let Some(q) = cache.get(&key) {
-            return Some(Arc::clone(q));
-        }
+    // Compile the query (cached process-wide to avoid recompilation across
+    // files and threads). Uses Arc so the Query stays alive even if evicted
+    // from the LRU cache mid-use. Reads use `peek` to skip LRU promotion —
+    // with a 256-entry cache and a bounded trait set the LRU eviction order
+    // doesn't meaningfully help correctness, and avoiding the `get`-induced
+    // promotion keeps reads on the read-lock fast path.
+    let key = (ctx.file_type, query_str.to_string());
+    let cached = QUERY_CACHE.read().peek(&key).map(Arc::clone);
+    let query = if let Some(q) = cached {
+        q
+    } else {
         match tree_sitter::Query::new(&lang, query_str) {
             Ok(q) => {
                 let arc = Arc::new(q);
-                cache.put(key, Arc::clone(&arc));
-                Some(arc)
+                QUERY_CACHE.write().put(key, Arc::clone(&arc));
+                arc
             }
-            Err(_) => None,
+            Err(_) => return ConditionResult::no_match(),
         }
-    });
-    let Some(query) = query_arc else {
-        return ConditionResult::no_match();
     };
 
     // Execute the query with safety limits

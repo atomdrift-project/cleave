@@ -200,55 +200,29 @@ impl ElfAnalyzer {
                 let needs_r2_strings =
                     stng_strings.is_none() && self.preextracted_strings.is_none();
 
-                // When already on a rayon worker (batch mode), sequentialize to avoid
-                // starving the pool. See comment in pe.rs analyze_pe for details.
-                let (r2_inner, _) = if rayon::current_thread_index().is_some() {
-                    let r2_res = if !allow_rizin
-                        || self.is_cancelled()
-                        || !Radare2Analyzer::is_available()
-                    {
-                        None
-                    } else {
+                // Overlap rizin (subprocess-bound) with goblin structural work
+                // (CPU-bound) via a 2-way `rayon::join`. See pe.rs for rationale.
+                let (r2_inner, _) = rayon::join(
+                    || {
+                        if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
+                            return None;
+                        }
                         Some(self.radare2.extract_batched(
                             analysis_path,
                             symbols_found,
-                            true,
+                            true, // goblin_success
                             needs_r2_strings,
                             precomputed_sha256,
                             self.cancellation.as_ref(),
                             Some(data),
                         ))
-                    };
-                    self.analyze_structure(&elf, data, &mut report);
-                    self.analyze_dynamic_symbols(&elf, data, &mut report);
-                    self.analyze_sections(&elf, data, &mut report);
-                    (r2_res, ())
-                } else {
-                    rayon::join(
-                        || {
-                            if !allow_rizin
-                                || self.is_cancelled()
-                                || !Radare2Analyzer::is_available()
-                            {
-                                return None;
-                            }
-                            Some(self.radare2.extract_batched(
-                                analysis_path,
-                                symbols_found,
-                                true, // goblin_success
-                                needs_r2_strings,
-                                precomputed_sha256,
-                                self.cancellation.as_ref(),
-                                Some(data),
-                            ))
-                        },
-                        || {
-                            self.analyze_structure(&elf, data, &mut report);
-                            self.analyze_dynamic_symbols(&elf, data, &mut report);
-                            self.analyze_sections(&elf, data, &mut report);
-                        },
-                    )
-                };
+                    },
+                    || {
+                        self.analyze_structure(&elf, data, &mut report);
+                        self.analyze_dynamic_symbols(&elf, data, &mut report);
+                        self.analyze_sections(&elf, data, &mut report);
+                    },
+                );
 
                 // Process Radare2 results if available
                 let r2_strings_extracted = if let Some(Ok(batched)) = r2_inner {

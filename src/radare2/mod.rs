@@ -412,6 +412,27 @@ const fn default_true() -> bool {
     true
 }
 
+/// Heuristic: is this a Go binary?
+///
+/// Go binaries (ELF, PE, Mach-O) embed a Go-buildinfo blob that starts with
+/// the 14-byte magic `\xffGo buildinf:`. It lives in a dedicated section
+/// (`.go.buildinfo` / `__go_buildinfo` / etc.) and is present in every Go
+/// binary since Go 1.13.
+///
+/// We bail out on `aa` (rizin's per-symbol crawl) for Go because Go injects
+/// a huge runtime symbol table: `aa` on a 35MB Go binary took ~5 minutes in
+/// benchmarking vs seconds for comparable C/C++ binaries. `aap` (prologue
+/// scan) still finds the user's actual functions and scales with file size
+/// rather than symbol count.
+fn looks_like_go_binary(data: &[u8]) -> bool {
+    const GO_BUILDINFO_MAGIC: &[u8] = b"\xffGo buildinf:";
+    // Scan only the first ~16 MB — the buildinfo section is always near the
+    // start of the file in practice, and unbounded scans would defeat the
+    // purpose of the optimization.
+    let horizon = data.len().min(16 * 1024 * 1024);
+    memchr::memmem::find(&data[..horizon], GO_BUILDINFO_MAGIC).is_some()
+}
+
 #[derive(Clone, Copy, Debug)]
 enum RizinMode {
     MetadataOnly,
@@ -569,12 +590,24 @@ impl Radare2Analyzer {
         const MAX_SIZE_FOR_PROLOGUE_SCAN: u64 = 15 * 1024 * 1024; // 15MB
 
         let file_size = std::fs::metadata(effective_path).map(|m| m.len()).unwrap_or(0);
+
+        // Go detection: Go binaries embed a massive runtime symbol table and
+        // `aa`'s per-symbol crawl degrades catastrophically (e.g. 5 min on a
+        // 35MB Go binary vs seconds for comparable C binaries). Route Go to
+        // the prologue-only path which scales with file size, not symbol count.
+        let is_go_binary = fallback_data
+            .map(looks_like_go_binary)
+            .unwrap_or(false);
+
         // We always run *some* function analysis for metric fidelity. The three
         // possible commands are: `aa;aap` (full), `aa` (light, symbol-driven),
-        // `aap` (light, prologue-driven — the right choice for stripped binaries
-        // and for very large files where `aa`'s symbol crawl is too expensive).
+        // `aap` (light, prologue-driven — the right choice for stripped binaries,
+        // very large files where `aa`'s symbol crawl is too expensive, and Go
+        // binaries where the runtime's symbol table poisons `aa` specifically).
         let skip_function_analysis = false;
-        let use_prologue_only = !has_symbols || file_size > MAX_SIZE_FOR_FULL_ANALYSIS;
+        let use_prologue_only = !has_symbols
+            || is_go_binary
+            || file_size > MAX_SIZE_FOR_FULL_ANALYSIS;
         let use_light_analysis =
             !use_prologue_only && file_size > MAX_SIZE_FOR_PROLOGUE_SCAN;
 
@@ -587,6 +620,9 @@ impl Radare2Analyzer {
         let function_reason = if use_prologue_only {
             if !has_symbols {
                 "prologue-only analysis (aap;aflj): stripped binary — no usable symbol table"
+                    .to_string()
+            } else if is_go_binary {
+                "prologue-only analysis (aap;aflj): Go binary — avoiding aa's symbol crawl"
                     .to_string()
             } else {
                 format!(

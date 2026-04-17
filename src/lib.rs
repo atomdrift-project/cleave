@@ -2002,7 +2002,13 @@ where
 
     // Dedicated thread pool for directory scanning. Each thread holds an in-flight
     // analysis (~0.5-1.5 GB), so this directly controls peak memory.
-    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > min(8, cpus).
+    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > cpus * 3/4.
+    //
+    // The 3/4 default was picked empirically: on a 16-core machine the 200MB
+    // benchmark runs 30% faster at n=12 than at n=8, while n=16 regresses
+    // (oversubscription contention with residual intra-file work like
+    // populate_binary_metrics and trait-eval pattern matching). Leaving ~25%
+    // of cores slack for inner work is the sweet spot across workloads.
     let scan_threads = std::env::var("CLEAVE_SCAN_THREADS")
         .ok()
         .and_then(|s| s.parse::<usize>().ok())
@@ -2011,7 +2017,7 @@ where
             if options.scan_threads > 0 {
                 options.scan_threads
             } else {
-                rayon::current_num_threads().min(8)
+                (rayon::current_num_threads() * 3 / 4).max(4)
             }
         });
     let scan_pool = shared_resources::scan_pool(scan_threads);

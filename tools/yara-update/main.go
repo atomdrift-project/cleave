@@ -329,6 +329,16 @@ func updateDep(kind string) error {
 			return err
 		}
 
+	case "taogoldi":
+		rel, tmpdir, err = gitClone("https://github.com/taogoldi/YARA.git")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(tmpdir)
+		if err := copyAll(tmpdir, kind); err != nil {
+			return err
+		}
+
 	default:
 		return fmt.Errorf("unknown kind: %s", kind)
 	}
@@ -372,7 +382,7 @@ func main() {
 
 	// No args: update every directory that contains a RELEASE file,
 	// or all known deps if none are found (e.g. fresh/empty directory).
-	allKinds := []string{"YARAForge", "huntress", "bartblaze", "JPCERT", "TTC-CERT", "elastic", "RussianPanda95"}
+	allKinds := []string{"YARAForge", "huntress", "bartblaze", "JPCERT", "TTC-CERT", "elastic", "RussianPanda95", "taogoldi"}
 
 	slog.Info("scanning for existing deps", "dir", cwd)
 	entries, err := os.ReadDir(".")

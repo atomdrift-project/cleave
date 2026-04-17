@@ -4,6 +4,7 @@
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
 use anyhow::Result;
+use cleave::Criticality;
 use std::path::Path;
 
 /// Run full trait validation against the configured traits directory.
@@ -40,11 +41,11 @@ fn run_ground_truth_checks() -> Result<()> {
     // /bin/ls: benign system utility with xattr/stat/symlink/group-lookup/ACL capabilities.
     check_binary_score("/bin/ls", 1, 8, &mut failures);
 
-    // /bin/cp: file copy utility with chmod/chown/fts/mknod capabilities.
-    check_binary_score("/bin/cp", 1, 7, &mut failures);
+    // /bin/cp: file copy utility with chmod/chown/fts/mknod/xattr/ACL capabilities.
+    check_binary_score("/bin/cp", 1, 10, &mut failures);
 
-    // /bin/sh: minimal shell stub (macOS). Only exec and platform-signing traits.
-    check_binary_score("/bin/sh", 1, 5, &mut failures);
+    // /bin/sh: shell with fork/setsid/exec/signal/pty capabilities.
+    check_binary_score("/bin/sh", 1, 8, &mut failures);
 
     // /usr/bin/curl: network transfer tool with HTTP/SOCKS/OAuth/TLS/crypto capabilities.
     check_binary_score("/usr/bin/curl", 5, 12, &mut failures);
@@ -92,9 +93,33 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
                      check for missing notable findings"
                 ));
             } else if score > max {
+                eprintln!(
+                    "❌ {display} has an unusually high score of {score} \
+                     (expected {min}-{max}), check for misleading or inflated \
+                     findings that violate TAXONOMY.md guidance"
+                );
+                eprintln!("   Findings contributing to score:");
+                for finding in &file.findings {
+                    if finding.crit == Criticality::Component
+                        || finding.crit == Criticality::Filtered
+                    {
+                        continue;
+                    }
+                    eprintln!(
+                        "     {:12} {}  {}",
+                        format!("{:?}", finding.crit).to_lowercase(),
+                        finding.id,
+                        finding.desc
+                    );
+                }
+                eprintln!(
+                    "   Fix any false-positives or misleading results by improving \
+                     the rules (add unless/downgrade/for constraints, move to \
+                     correct tier, or adjust criticality) until the score comes down."
+                );
                 failures.push(format!(
                     "{display} score {score} above cap {max} — \
-                     check for misleading/inflated findings (TAXONOMY.md)"
+                     see trait list above"
                 ));
             } else {
                 eprintln!("  ✅ {display}: score {score} (expected {min}-{max})");

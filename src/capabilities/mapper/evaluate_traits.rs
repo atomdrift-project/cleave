@@ -120,21 +120,32 @@ impl super::CapabilityMapper {
         // Pre-filter using batched Aho-Corasick string matching WITH evidence caching
         let all_strings = super::build_all_strings(report);
 
-        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
+        let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
+        {
             self.string_match_index
                 .find_matches_with_evidence(&all_strings)
         } else {
             (FxHashSet::default(), FxHashMap::default())
         };
 
-        // Run symbol matching ONCE
+        // Run symbol matching ONCE across exact, substr, and regex patterns.
+        // Evidence flows into cached_evidence so eval_symbol's FAST PATH 0 can
+        // skip the per-symbol iteration on repeat trait evaluation.
         let all_symbols: Vec<String> = report
             .imports
             .iter()
             .map(|i| i.symbol.clone())
             .chain(report.exports.iter().map(|e| e.symbol.clone()))
             .collect();
-        let symbol_matched_traits = self.symbol_match_index.find_matches(&all_symbols);
+        let (symbol_matched_traits, symbol_evidence) = self
+            .symbol_match_index
+            .find_matches_with_evidence(&all_symbols);
+        for (trait_idx, mut ev) in symbol_evidence {
+            cached_evidence
+                .entry(trait_idx)
+                .or_default()
+                .append(&mut ev);
+        }
 
         // Also find regex candidates based on literal prefix matching
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
@@ -255,20 +266,29 @@ impl super::CapabilityMapper {
 
         // Build all_strings
         let all_strings = super::build_all_strings(report);
-        let (string_matched_traits, cached_evidence) = if self.string_match_index.has_patterns() {
+        let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
+        {
             self.string_match_index
                 .find_matches_with_evidence(&all_strings)
         } else {
             (FxHashSet::default(), FxHashMap::default())
         };
-        // Run symbol matching ONCE
+        // Run symbol matching ONCE across exact, substr, and regex patterns.
         let all_symbols: Vec<String> = report
             .imports
             .iter()
             .map(|i| i.symbol.clone())
             .chain(report.exports.iter().map(|e| e.symbol.clone()))
             .collect();
-        let symbol_matched_traits = self.symbol_match_index.find_matches(&all_symbols);
+        let (symbol_matched_traits, symbol_evidence) = self
+            .symbol_match_index
+            .find_matches_with_evidence(&all_symbols);
+        for (trait_idx, mut ev) in symbol_evidence {
+            cached_evidence
+                .entry(trait_idx)
+                .or_default()
+                .append(&mut ev);
+        }
 
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);
         drop(all_strings);

@@ -692,63 +692,90 @@ impl PEAnalyzer {
         );
 
         let scope_start = std::time::Instant::now();
+        // When already running on a rayon worker (batch mode via par_iter over files),
+        // nested rayon::scope starves the pool: every worker is holding one file's
+        // scope, leaving no threads to steal inner work. Each file's scope can then
+        // wait minutes for sub-tasks to run. Detect this and execute sequentially —
+        // batch-level parallelism already saturates the cores.
+        let already_on_pool = rayon::current_thread_index().is_some();
         tracing::debug!(
             path = %logical_path.display(),
             rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
-            "PE: entering rayon::scope for structural analysis",
+            nested = already_on_pool,
+            "PE: structural analysis",
         );
-        rayon::scope(|s| {
-            // Task 1: Radare2 (Slowest)
-            s.spawn(|_| {
-                if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
-                    r2_result = Some(self.radare2.extract_batched(
-                        analysis_path,
-                        has_symbols,
-                        goblin_ok,
-                        needs_r2_strings,
-                        precomputed_sha256,
-                        self.cancellation.as_ref(),
-                        Some(original_data),
-                    ));
+        if already_on_pool {
+            // Sequential path (batch mode): one file per worker is enough parallelism.
+            if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                r2_result = Some(self.radare2.extract_batched(
+                    analysis_path,
+                    has_symbols,
+                    goblin_ok,
+                    needs_r2_strings,
+                    precomputed_sha256,
+                    self.cancellation.as_ref(),
+                    Some(original_data),
+                ));
+            }
+            if let Some(pe) = pe {
+                goblin_report_parts.0 = self.get_structure(pe);
+                goblin_report_parts.1 = self.get_imports(pe);
+                goblin_report_parts.2 = self.get_exports(pe, pe_data);
+                goblin_report_parts.3 = self.get_sections(pe, pe_data);
+            }
+        } else {
+            rayon::scope(|s| {
+                s.spawn(|_| {
+                    if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                        r2_result = Some(self.radare2.extract_batched(
+                            analysis_path,
+                            has_symbols,
+                            goblin_ok,
+                            needs_r2_strings,
+                            precomputed_sha256,
+                            self.cancellation.as_ref(),
+                            Some(original_data),
+                        ));
+                    }
+                });
+                if let Some(pe) = pe {
+                    s.spawn(|_| {
+                        rayon::join(
+                            || {
+                                goblin_report_parts.0 = self.get_structure(pe);
+                            },
+                            || {
+                                rayon::join(
+                                    || {
+                                        goblin_report_parts.1 = self.get_imports(pe);
+                                    },
+                                    || {
+                                        rayon::join(
+                                            || {
+                                                goblin_report_parts.2 =
+                                                    self.get_exports(pe, pe_data);
+                                            },
+                                            || {
+                                                goblin_report_parts.3 =
+                                                    self.get_sections(pe, pe_data);
+                                            },
+                                        );
+                                    },
+                                );
+                            },
+                        );
+                    });
                 }
             });
-
-            // Task 2: Goblin structural components (Parallelized internally)
-            if let Some(pe) = pe {
-                s.spawn(|_| {
-                    rayon::join(
-                        || {
-                            goblin_report_parts.0 = self.get_structure(pe);
-                        },
-                        || {
-                            rayon::join(
-                                || {
-                                    goblin_report_parts.1 = self.get_imports(pe);
-                                },
-                                || {
-                                    rayon::join(
-                                        || {
-                                            goblin_report_parts.2 = self.get_exports(pe, pe_data);
-                                        },
-                                        || {
-                                            goblin_report_parts.3 = self.get_sections(pe, pe_data);
-                                        },
-                                    );
-                                },
-                            );
-                        },
-                    );
-                });
-            }
-        });
+        }
         let scope_ms = scope_start.elapsed().as_millis();
         if scope_ms > 10000 {
             tracing::warn!(
                 path = %logical_path.display(),
                 elapsed_ms = scope_ms,
                 rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
-                on_rayon_pool = rayon::current_thread_index().is_some(),
-                "PE rayon::scope completed slowly — rayon threads may have been starved",
+                on_rayon_pool = already_on_pool,
+                "PE structural analysis completed slowly",
             );
         }
 

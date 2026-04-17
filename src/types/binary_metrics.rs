@@ -215,6 +215,14 @@ pub struct BinaryMetrics {
     pub string_length_stddev: f32,
 
     // === Functions ===
+    /// Depth of function analysis rizin performed, so rules can discriminate
+    /// metrics-driven detections based on the analysis budget:
+    /// - `0` = skipped (file too large or stripped; `function_count` etc. are 0
+    ///         and function-count thresholds should be ignored)
+    /// - `1` = light (`aa` only; entry-point analysis, no prologue scan)
+    /// - `2` = full  (`aa;aap`; entry-point + prologue scan, richest metrics)
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub function_analysis_depth: u32,
     /// Function count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub function_count: u32,

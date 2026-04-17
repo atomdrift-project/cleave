@@ -401,6 +401,11 @@ pub(crate) struct BatchedAnalysis {
     /// True if rizin analysis timed out and returned no batched results.
     #[serde(default)]
     pub timed_out: bool,
+    /// Depth of function analysis rizin actually performed. Mirrors the
+    /// `binary.function_analysis_depth` metric: 0 = skipped, 1 = light (`aa`
+    /// only), 2 = full (`aa;aap`).
+    #[serde(default)]
+    pub function_analysis_depth: u32,
 }
 
 const fn default_true() -> bool {
@@ -542,16 +547,36 @@ impl Radare2Analyzer {
         // Use precomputed SHA256 for cache lookup if available
         let sha256 = precomputed_sha256.or_else(|| Self::compute_file_sha256(effective_path));
 
-        // Check file size - skip expensive function analysis for large binaries
-        // Binaries >20MB take minutes to analyze with 'aa'
-        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 20 * 1024 * 1024; // 20MB
-        const MAX_SIZE_FOR_DEEP_ANALYSIS: u64 = 5 * 1024 * 1024; // 5MB
+        // File-size tiered analysis. Per brute-force measurement on representative
+        // MachO/PE binaries:
+        //   `aa;aap` produces the same function set as `aas;aap` (within 0.01%) but
+        //   runs 55x faster on 12MB binaries (14s vs 775s). `aas` does recursive
+        //   cross-reference analysis that explodes on binaries with many symbols.
+        //   `aflj` alone (without prior `aa`/`aap`) returns 0 functions — analysis
+        //   must run first for any function metrics to appear.
+        //
+        // Policy: always emit function metrics; empty metrics are unacceptable.
+        // The analysis tier is recorded in `function_analysis_depth` so rules
+        // can discriminate.
+        //
+        //   unstripped, ≤15MB  → `aa;aap;aflj` (depth=2, rich: entry-point + prologue)
+        //   unstripped, ≤100MB → `aa;aflj`     (depth=1, entry-point only; aap drops
+        //                                       as cost scales with file size)
+        //   stripped OR >100MB → `aap;aflj`    (depth=1, prologue scan — works without
+        //                                       symbols, and on huge binaries is faster
+        //                                       than `aa`'s per-symbol crawl)
+        const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 100 * 1024 * 1024; // 100MB
+        const MAX_SIZE_FOR_PROLOGUE_SCAN: u64 = 15 * 1024 * 1024; // 15MB
 
         let file_size = std::fs::metadata(effective_path).map(|m| m.len()).unwrap_or(0);
-        let skip_function_analysis = file_size > MAX_SIZE_FOR_FULL_ANALYSIS || !has_symbols;
-
-        // Use a lighter analysis for medium-sized files
-        let use_light_analysis = file_size > MAX_SIZE_FOR_DEEP_ANALYSIS;
+        // We always run *some* function analysis for metric fidelity. The three
+        // possible commands are: `aa;aap` (full), `aa` (light, symbol-driven),
+        // `aap` (light, prologue-driven — the right choice for stripped binaries
+        // and for very large files where `aa`'s symbol crawl is too expensive).
+        let skip_function_analysis = false;
+        let use_prologue_only = !has_symbols || file_size > MAX_SIZE_FOR_FULL_ANALYSIS;
+        let use_light_analysis =
+            !use_prologue_only && file_size > MAX_SIZE_FOR_PROLOGUE_SCAN;
 
         let mode = match (!skip_function_analysis, include_strings) {
             (false, false) => RizinMode::MetadataOnly,
@@ -559,23 +584,25 @@ impl Radare2Analyzer {
             (true, false) => RizinMode::FunctionsOnly,
             (true, true) => RizinMode::Full,
         };
-        let function_reason = if file_size > MAX_SIZE_FOR_FULL_ANALYSIS {
-            format!(
-                "function analysis disabled: file {} MB exceeds {} MB threshold",
-                file_size / 1024 / 1024,
-                MAX_SIZE_FOR_FULL_ANALYSIS / 1024 / 1024
-            )
-        } else if !has_symbols {
-            "function analysis disabled: no symbols/imports/sections discovered pre-rizin"
-                .to_string()
+        let function_reason = if use_prologue_only {
+            if !has_symbols {
+                "prologue-only analysis (aap;aflj): stripped binary — no usable symbol table"
+                    .to_string()
+            } else {
+                format!(
+                    "prologue-only analysis (aap;aflj): file {} MB exceeds {} MB full-analysis threshold",
+                    file_size / 1024 / 1024,
+                    MAX_SIZE_FOR_FULL_ANALYSIS / 1024 / 1024
+                )
+            }
         } else if use_light_analysis {
             format!(
-                "light function analysis enabled (aas; aap): file {} MB exceeds {} MB deep analysis threshold",
+                "light analysis (aa;aflj): file {} MB exceeds {} MB prologue-scan threshold",
                 file_size / 1024 / 1024,
-                MAX_SIZE_FOR_DEEP_ANALYSIS / 1024 / 1024
+                MAX_SIZE_FOR_PROLOGUE_SCAN / 1024 / 1024
             )
         } else {
-            "full function analysis enabled (aa): symbol/structure hints suggest aflj is worthwhile"
+            "full analysis (aa;aap;aflj): rich metrics via entry-point + prologue scan"
                 .to_string()
         };
         let string_reason = if include_strings {
@@ -635,15 +662,6 @@ impl Radare2Analyzer {
             }
         }
 
-        if file_size > MAX_SIZE_FOR_FULL_ANALYSIS {
-            debug!(
-                "File size {} MB > 5 MB, skipping function analysis",
-                file_size / 1024 / 1024
-            );
-        } else if !has_symbols {
-            debug!("Stripped binary, skipping function analysis (aa/aflj)");
-        }
-
         let file_path_str = effective_path.to_string_lossy().to_string();
 
         // Helper to parse JSON from a SEP-delimited part
@@ -657,19 +675,20 @@ impl Radare2Analyzer {
 
         // SINGLE r2 spawn with ALL data extraction
         // Commands separated by "echo SEP" for parsing:
-        // - aa: full analysis (only for unstripped binaries under 5MB)
-        // - aas; aap: light analysis (for binaries 5MB-20MB)
-        // - aflj: functions as JSON
-        // - iSj: sections as JSON (skipped if goblin_success)
-        // - izj: strings as JSON
-        // - iij: imports as JSON (skipped if goblin_success)
+        // - aa;aap: full analysis (entry-point + prologue scan); unstripped ≤15MB
+        // - aa:     entry-point analysis only; unstripped 15-100MB
+        // - aap:    prologue-only analysis; stripped or >100MB
+        // - aflj:   functions as JSON
+        // - iSj:    sections as JSON (skipped if goblin_success)
+        // - izj:    strings as JSON
+        // - iij:    imports as JSON (skipped if goblin_success)
         let mut commands = Vec::new();
-        if !skip_function_analysis {
-            if use_light_analysis {
-                commands.push("aas; aap; aflj");
-            } else {
-                commands.push("aa; aflj");
-            }
+        if use_prologue_only {
+            commands.push("aap; aflj");
+        } else if use_light_analysis {
+            commands.push("aa; aflj");
+        } else {
+            commands.push("aa; aap; aflj");
         }
         if !goblin_success {
             commands.push("iSj");
@@ -793,6 +812,14 @@ impl Radare2Analyzer {
             "radare2 batched analysis completed"
         );
 
+        let function_analysis_depth = if use_prologue_only || use_light_analysis {
+            1 // `aap` alone or `aa` alone
+        } else {
+            2 // `aa;aap`
+        };
+        // depth=0 (skipped) is reserved for callers that bypass this path (e.g.,
+        // MetadataOnly mode above). The tiered path always emits at least depth=1.
+
         let result = BatchedAnalysis {
             functions,
             sections,
@@ -800,6 +827,7 @@ impl Radare2Analyzer {
             strings_extracted: include_strings,
             imports,
             timed_out: false,
+            function_analysis_depth,
         };
 
         // Save to cache (unless CLEAVE_SKIP_CACHE is set)
@@ -825,6 +853,7 @@ impl Radare2Analyzer {
         let mut metrics = BinaryMetrics {
             section_count: batched.sections.len() as u32,
             file_size, // Use actual file size from caller
+            function_analysis_depth: batched.function_analysis_depth,
             ..Default::default()
         };
         let mut entropies: Vec<f32> = Vec::new();

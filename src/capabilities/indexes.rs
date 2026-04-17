@@ -246,57 +246,351 @@ impl TraitBitSet {
     }
 }
 
+/// Normalize a symbol for matching without allocating — mirrors the rule normalization
+/// (strip leading `_`, up to 2). Symbols from the report are already normalized at
+/// extraction time, so this is usually a no-op, but we stay safe for edge cases and
+/// for patterns that weren't normalized at rule load time.
+#[inline(always)]
+fn normalize_symbol_ref(s: &str) -> &str {
+    let s = s.strip_prefix('_').unwrap_or(s);
+    s.strip_prefix('_').unwrap_or(s)
+}
+
 /// Index for fast symbol matching.
+///
+/// Batches three pattern kinds across traits in a single pass per symbol:
+/// - `exact`: hashmap lookup (O(1) per symbol per pattern).
+/// - `substr`: Aho-Corasick automaton (O(symbol_len) per symbol, all patterns at once).
+/// - `regex`: literal-prefix Aho-Corasick prefilter + full-regex verification on candidates.
+///   Regexes with no extractable literal are batched into a single `RegexSet` so the
+///   fallback path is O(symbol_len × set_cost) instead of O(symbols × patterns).
 #[derive(Clone, Default, Debug)]
 pub(crate) struct SymbolMatchIndex {
     /// Case-sensitive exact symbol -> trait indices
     exact_symbols: FxHashMap<String, Vec<usize>>,
     /// Set of all trait indices with symbol patterns (for lookup)
     symbol_trait_indices: FxHashSet<usize>,
+
+    /// Aho-Corasick automaton for substr symbol patterns (normalized).
+    substr_automaton: Option<AhoCorasick>,
+    /// Maps AC pattern index -> trait indices.
+    substr_to_traits: Vec<Vec<usize>>,
+
+    /// Aho-Corasick automaton over regex literal prefixes (normalized).
+    regex_literal_automaton: Option<AhoCorasick>,
+    /// Maps AC pattern index -> trait indices that share that literal.
+    regex_literal_to_traits: Vec<Vec<usize>>,
+    /// Per-trait compiled regex for verification after literal-prefilter hit.
+    /// Dense Vec indexed by trait_idx (None = not a regex trait). Vec lookup is
+    /// ~3× faster than a hashmap here because trait_idx is a dense usize range.
+    trait_regex: Vec<Option<regex::Regex>>,
+
+    /// Regex traits with no extractable literal prefix, compiled into a single
+    /// RegexSet (str-based, unlike the bytes-based one used for raw content
+    /// matching elsewhere in this module) for batched matching.
+    /// `regex_fallback_traits[i]` is the trait index for pattern `i`.
+    regex_fallback_set: Option<regex::RegexSet>,
+    regex_fallback_traits: Vec<usize>,
 }
 
 impl SymbolMatchIndex {
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
-        let mut exact_symbols = FxHashMap::default();
-        let mut symbol_trait_indices = FxHashSet::default();
+        let num_traits = traits.len();
+        let mut exact_symbols: FxHashMap<String, Vec<usize>> = FxHashMap::default();
+        let mut symbol_trait_indices: FxHashSet<usize> = FxHashSet::default();
+
+        // Substr collection — de-dupe patterns so multiple traits sharing the
+        // same substr share one AC slot.
+        let mut substr_patterns: Vec<String> = Vec::new();
+        let mut substr_pattern_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut substr_to_traits: Vec<Vec<usize>> = Vec::new();
+
+        // Regex-literal-prefix collection
+        let mut regex_literals: Vec<String> = Vec::new();
+        let mut regex_literal_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut regex_literal_to_traits: Vec<Vec<usize>> = Vec::new();
+
+        // Dense Vec for per-trait regex lookup.
+        let mut trait_regex: Vec<Option<regex::Regex>> = vec![None; num_traits];
+
+        let mut regex_fallback_traits: Vec<usize> = Vec::new();
+        let mut regex_fallback_patterns: Vec<String> = Vec::new();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
-            if let Condition::Symbol {
-                exact: Some(ref exact_str),
-                substr: None,
-                regex: None,
-                ..
-            } = &trait_def.r#if
-            {
-                exact_symbols
-                    .entry(normalize_symbol(exact_str))
-                    .or_insert_with(Vec::new)
-                    .push(trait_idx);
-                symbol_trait_indices.insert(trait_idx);
+            match &trait_def.r#if {
+                Condition::Symbol {
+                    exact: Some(exact_str),
+                    substr: None,
+                    regex: None,
+                    ..
+                } => {
+                    exact_symbols
+                        .entry(normalize_symbol(exact_str))
+                        .or_default()
+                        .push(trait_idx);
+                    symbol_trait_indices.insert(trait_idx);
+                }
+                Condition::Symbol {
+                    exact: None,
+                    substr: Some(substr_str),
+                    regex: None,
+                    ..
+                } => {
+                    let normalized = normalize_symbol(substr_str);
+                    if normalized.is_empty() {
+                        continue;
+                    }
+                    symbol_trait_indices.insert(trait_idx);
+                    if let Some(&idx) = substr_pattern_map.get(&normalized) {
+                        substr_to_traits[idx].push(trait_idx);
+                    } else {
+                        let idx = substr_patterns.len();
+                        substr_pattern_map.insert(normalized.clone(), idx);
+                        substr_patterns.push(normalized);
+                        substr_to_traits.push(vec![trait_idx]);
+                    }
+                }
+                Condition::Symbol {
+                    exact: None,
+                    substr: None,
+                    regex: Some(regex_str),
+                    compiled_regex: Some(compiled),
+                    ..
+                } => {
+                    symbol_trait_indices.insert(trait_idx);
+                    trait_regex[trait_idx] = Some(compiled.clone());
+                    match StringMatchIndex::extract_regex_literal(regex_str) {
+                        Some(literal) => {
+                            let normalized = normalize_symbol(&literal);
+                            if normalized.len() >= 3 {
+                                if let Some(&idx) = regex_literal_map.get(&normalized) {
+                                    regex_literal_to_traits[idx].push(trait_idx);
+                                } else {
+                                    let idx = regex_literals.len();
+                                    regex_literal_map.insert(normalized.clone(), idx);
+                                    regex_literals.push(normalized);
+                                    regex_literal_to_traits.push(vec![trait_idx]);
+                                }
+                            } else {
+                                regex_fallback_traits.push(trait_idx);
+                                regex_fallback_patterns.push(regex_str.clone());
+                            }
+                        }
+                        None => {
+                            regex_fallback_traits.push(trait_idx);
+                            regex_fallback_patterns.push(regex_str.clone());
+                        }
+                    }
+                }
+                _ => {}
             }
         }
+
+        let substr_automaton = (!substr_patterns.is_empty())
+            .then(|| {
+                AhoCorasick::builder()
+                    .ascii_case_insensitive(false)
+                    .build(&substr_patterns)
+                    .ok()
+            })
+            .flatten();
+
+        let regex_literal_automaton = (!regex_literals.is_empty())
+            .then(|| {
+                AhoCorasick::builder()
+                    .ascii_case_insensitive(false)
+                    .build(&regex_literals)
+                    .ok()
+            })
+            .flatten();
+
+        let regex_fallback_set = (!regex_fallback_patterns.is_empty())
+            .then(|| regex::RegexSet::new(&regex_fallback_patterns).ok())
+            .flatten();
+
+        tracing::debug!(
+            "Built SymbolMatchIndex: {} exact, {} substr, {} regex-literal, {} regex-fallback",
+            exact_symbols.len(),
+            substr_to_traits.len(),
+            regex_literal_to_traits.len(),
+            regex_fallback_traits.len(),
+        );
 
         Self {
             exact_symbols,
             symbol_trait_indices,
+            substr_automaton,
+            substr_to_traits,
+            regex_literal_automaton,
+            regex_literal_to_traits,
+            trait_regex,
+            regex_fallback_set,
+            regex_fallback_traits,
         }
     }
 
+    /// Legacy entry point — returns only the matched trait indices.
+    /// Prefer `find_matches_with_evidence`.
     pub(crate) fn find_matches(&self, symbols: &[String]) -> FxHashSet<usize> {
-        let mut matched = FxHashSet::default();
+        self.find_matches_with_evidence(symbols).0
+    }
+
+    /// Emit one Evidence for (trait_idx, symbol) into `evidence`, respecting the
+    /// per-trait MAX cap. Pulls the entry once per (trait, symbol) pair — cheaper
+    /// than `entry().or_default()` when a trait matches many symbols.
+    #[inline(always)]
+    fn push_evidence(
+        evidence: &mut FxHashMap<usize, Vec<Evidence>>,
+        trait_idx: usize,
+        symbol: &str,
+    ) {
+        let entry = evidence.entry(trait_idx).or_default();
+        if entry.len() >= MAX_EVIDENCE_PER_TRAIT {
+            return;
+        }
+        entry.push(Evidence {
+            method: "symbol".to_string(),
+            source: "symbol_index".to_string(),
+            value: symbol.to_string(),
+            location: None,
+            ..Default::default()
+        });
+    }
+
+    /// Single pass over `symbols`: simultaneously evaluates exact, substr-AC,
+    /// regex-literal-prefilter, and regex fallback RegexSet. For each hit,
+    /// records evidence so trait evaluation can reuse it via the
+    /// `cached_evidence` fast path.
+    pub(crate) fn find_matches_with_evidence(
+        &self,
+        symbols: &[String],
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
+        // Parallel path threshold matches StringMatchIndex.
+        const PARALLEL_THRESHOLD: usize = 4096;
+        if symbols.len() >= PARALLEL_THRESHOLD
+            && (self.substr_automaton.is_some()
+                || self.regex_literal_automaton.is_some()
+                || self.regex_fallback_set.is_some())
+        {
+            return self.find_matches_parallel(symbols);
+        }
+        self.find_matches_sequential(symbols)
+    }
+
+    fn find_matches_sequential(
+        &self,
+        symbols: &[String],
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
+        let mut matched: FxHashSet<usize> = FxHashSet::default();
+        let mut evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+        // Reused across symbols to avoid per-symbol allocation.
+        let mut seen_candidates: FxHashSet<usize> = FxHashSet::default();
+
         for symbol in symbols {
-            let normalized = normalize_symbol(symbol);
-            if let Some(trait_indices) = self.exact_symbols.get(&normalized) {
+            let normalized = normalize_symbol_ref(symbol);
+            if normalized.is_empty() {
+                continue;
+            }
+
+            // Exact: O(1) hashmap lookup.
+            if let Some(trait_indices) = self.exact_symbols.get(normalized) {
                 for &trait_idx in trait_indices {
                     matched.insert(trait_idx);
+                    Self::push_evidence(&mut evidence, trait_idx, symbol);
+                }
+            }
+
+            // Substr: one AC pass covers all substr patterns at once.
+            if let Some(ref ac) = self.substr_automaton {
+                for mat in ac.find_overlapping_iter(normalized) {
+                    let idx = mat.pattern().as_usize();
+                    // Safety: idx from AC always < substr_to_traits.len().
+                    for &trait_idx in &self.substr_to_traits[idx] {
+                        matched.insert(trait_idx);
+                        Self::push_evidence(&mut evidence, trait_idx, symbol);
+                    }
+                }
+            }
+
+            // Regex literal prefilter + per-trait verification.
+            if let Some(ref ac) = self.regex_literal_automaton {
+                seen_candidates.clear();
+                for mat in ac.find_overlapping_iter(normalized) {
+                    let idx = mat.pattern().as_usize();
+                    for &trait_idx in &self.regex_literal_to_traits[idx] {
+                        if !seen_candidates.insert(trait_idx) {
+                            continue;
+                        }
+                        if let Some(Some(re)) = self.trait_regex.get(trait_idx) {
+                            if re.is_match(normalized) {
+                                matched.insert(trait_idx);
+                                Self::push_evidence(&mut evidence, trait_idx, symbol);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Regex fallback: RegexSet checks all no-literal patterns in one pass.
+            if let Some(ref set) = self.regex_fallback_set {
+                for pattern_idx in set.matches(normalized) {
+                    let trait_idx = self.regex_fallback_traits[pattern_idx];
+                    matched.insert(trait_idx);
+                    Self::push_evidence(&mut evidence, trait_idx, symbol);
                 }
             }
         }
-        matched
+
+        let evidence: FxHashMap<usize, Vec<Evidence>> = evidence
+            .into_iter()
+            .map(|(k, v)| (k, deduplicate_evidence(v)))
+            .collect();
+
+        (matched, evidence)
+    }
+
+    /// Parallel scan: chunks the symbol list across rayon workers and merges
+    /// per-chunk (matched, evidence) results. Only used when the symbol set is
+    /// large enough to amortize the merge cost.
+    fn find_matches_parallel(
+        &self,
+        symbols: &[String],
+    ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
+        let chunk_size = (symbols.len() / rayon::current_num_threads().max(1)).max(512);
+        let results: Vec<(FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>)> = symbols
+            .par_chunks(chunk_size)
+            .map(|chunk| self.find_matches_sequential(chunk))
+            .collect();
+
+        let mut merged_matched: FxHashSet<usize> = FxHashSet::default();
+        let mut merged_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
+        for (m, e) in results {
+            merged_matched.extend(m);
+            for (trait_idx, evs) in e {
+                let entry = merged_evidence.entry(trait_idx).or_default();
+                for ev in evs {
+                    if entry.len() >= MAX_EVIDENCE_PER_TRAIT {
+                        break;
+                    }
+                    entry.push(ev);
+                }
+            }
+        }
+        let merged_evidence: FxHashMap<usize, Vec<Evidence>> = merged_evidence
+            .into_iter()
+            .map(|(k, v)| (k, deduplicate_evidence(v)))
+            .collect();
+        (merged_matched, merged_evidence)
     }
 
     pub(crate) fn is_symbol_trait(&self, trait_idx: usize) -> bool {
         self.symbol_trait_indices.contains(&trait_idx)
+    }
+
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) fn has_fallback(&self) -> bool {
+        self.regex_fallback_set.is_some()
     }
 }
 

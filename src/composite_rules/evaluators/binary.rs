@@ -9,7 +9,7 @@
 use super::build_regex;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
-use regex::Regex;
+use regex::RegexSet;
 
 /// Evaluate exports count condition
 #[must_use]
@@ -357,6 +357,15 @@ pub(crate) fn eval_import_combination<'a>(
     max_total: Option<usize>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
+    // EARLY OUT: max_total is the cheapest possible filter (imports.len() is O(1)).
+    // Do it before touching the imports list so huge-import binaries don't pay for
+    // the regex work that would be discarded anyway.
+    if let Some(max) = max_total {
+        if ctx.report.imports.len() > max {
+            return ConditionResult::no_match();
+        }
+    }
+
     let import_symbols: Vec<&str> = ctx
         .report
         .imports
@@ -365,37 +374,52 @@ pub(crate) fn eval_import_combination<'a>(
         .collect();
     let mut evidence = Vec::new();
 
-    // Check required imports - all must be present
+    // Check required imports: every pattern must match at least one symbol.
+    // Use RegexSet to match all patterns in a single pass per symbol instead of
+    // N_patterns × N_imports independent regex passes.
     if let Some(req) = required {
-        for pattern in req {
-            let Ok(re) = build_regex(pattern, false) else {
-                continue;
-            };
-            let found = import_symbols.iter().any(|sym| re.is_match(sym));
-            if !found {
-                return ConditionResult::no_match();
+        let Ok(set) = RegexSet::new(req.iter()) else {
+            return ConditionResult::no_match();
+        };
+        let mut pattern_hits = vec![false; req.len()];
+        let mut remaining = req.len();
+        for sym in &import_symbols {
+            if remaining == 0 {
+                break;
             }
-            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                evidence.push(Evidence {
-                    method: "import".to_string(),
-                    source: "required".to_string(),
-                    value: pattern.clone(),
-                    location: None,
-                    ..Default::default()
-                });
+            for idx in set.matches(sym) {
+                if !pattern_hits[idx] {
+                    pattern_hits[idx] = true;
+                    remaining -= 1;
+                }
             }
+        }
+        if pattern_hits.iter().any(|hit| !hit) {
+            return ConditionResult::no_match();
+        }
+        for (pattern, _) in req.iter().zip(pattern_hits.iter()) {
+            if evidence.len() >= MAX_EVIDENCE_PER_TRAIT {
+                break;
+            }
+            evidence.push(Evidence {
+                method: "import".to_string(),
+                source: "required".to_string(),
+                value: pattern.clone(),
+                location: None,
+                ..Default::default()
+            });
         }
     }
 
-    // Count suspicious imports — each import counted at most once even if it matches multiple patterns
+    // Count suspicious imports: each symbol counted at most once if it matches any
+    // suspicious pattern. RegexSet does all alternatives in a single DFA pass.
     let mut suspicious_count = 0;
     if let Some(susp) = suspicious {
-        let compiled: Vec<Regex> = susp
-            .iter()
-            .filter_map(|p| build_regex(p, false).ok())
-            .collect();
+        let Ok(set) = RegexSet::new(susp.iter()) else {
+            return ConditionResult::no_match();
+        };
         for sym in &import_symbols {
-            if compiled.iter().any(|re| re.is_match(sym)) {
+            if set.is_match(sym) {
                 suspicious_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -417,11 +441,8 @@ pub(crate) fn eval_import_combination<'a>(
         }
     }
 
-    // Check maximum total imports
+    // Add the max_total evidence line (we already validated it at the top)
     if let Some(max) = max_total {
-        if ctx.report.imports.len() > max {
-            return ConditionResult::no_match();
-        }
         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
             evidence.push(Evidence {
                 method: "import_count".to_string(),

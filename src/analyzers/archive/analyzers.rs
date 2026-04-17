@@ -328,25 +328,47 @@ impl ArchiveAnalyzer {
                 let r2_path = file_path.to_path_buf();
                 let r2_sha256 = sha256.to_string();
                 let r2_cancelled = self.cancelled.clone();
-                let mut stng_result = Vec::new();
-                rayon::scope(|s| {
-                    s.spawn(|_| {
-                        tracing::debug!(relative_path, "Pre-launching rizin in parallel with stng");
-                        let _ = r2.extract_batched(
-                            &r2_path,
-                            true,  // has_symbols: conservative assumption (full aa;aflj)
-                            false, // goblin_ok: also capture iSj/iij for fallback
-                            false, // include_strings: stng handles strings
-                            Some(r2_sha256),
-                            r2_cancelled.as_ref(),
-                            Some(data),
-                        );
-                    });
+                let stng_result;
+                if rayon::current_thread_index().is_some() {
+                    // Batch mode: sequentialize to avoid pool starvation.
                     crate::memory_tracker::set_current_phase(&prelaunch_label);
                     let opts = crate::analyzers::stng_analysis_opts(4);
                     stng_result = stng::extract_strings_with_options(data, &opts);
                     crate::memory_tracker::clear_current_phase();
-                });
+                    let _ = r2.extract_batched(
+                        &r2_path,
+                        true,
+                        false,
+                        false,
+                        Some(r2_sha256),
+                        r2_cancelled.as_ref(),
+                        Some(data),
+                    );
+                } else {
+                    let mut inner_stng_result = Vec::new();
+                    rayon::scope(|s| {
+                        s.spawn(|_| {
+                            tracing::debug!(
+                                relative_path,
+                                "Pre-launching rizin in parallel with stng"
+                            );
+                            let _ = r2.extract_batched(
+                                &r2_path,
+                                true,
+                                false,
+                                false,
+                                Some(r2_sha256),
+                                r2_cancelled.as_ref(),
+                                Some(data),
+                            );
+                        });
+                        crate::memory_tracker::set_current_phase(&prelaunch_label);
+                        let opts = crate::analyzers::stng_analysis_opts(4);
+                        inner_stng_result = stng::extract_strings_with_options(data, &opts);
+                        crate::memory_tracker::clear_current_phase();
+                    });
+                    stng_result = inner_stng_result;
+                }
                 stng_strings = stng_result;
             } else {
                 crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));

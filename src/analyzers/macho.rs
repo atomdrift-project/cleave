@@ -191,9 +191,12 @@ impl MachOAnalyzer {
             });
 
         // Analyze header and structure
+        let _t = std::time::Instant::now();
         self.analyze_structure_with_signature(&macho, &mut report, codesig_data.as_ref());
+        let structure_ms = _t.elapsed().as_millis();
 
         // Generate signature findings from parsed code signature
+        let _t = std::time::Instant::now();
         if let Some(ref codesig) = codesig_data {
             self.generate_signature_findings(codesig, &mut report);
         } else {
@@ -211,15 +214,32 @@ impl MachOAnalyzer {
                 source_file: None,
             });
         }
+        let sig_findings_ms = _t.elapsed().as_millis();
 
         // Extract imports and map to capabilities
+        let _t = std::time::Instant::now();
         let _ = self.analyze_imports(&macho, &mut report);
+        let imports_ms = _t.elapsed().as_millis();
 
         // Extract exports
+        let _t = std::time::Instant::now();
         let _ = self.analyze_exports(&macho, &mut report);
+        let exports_ms = _t.elapsed().as_millis();
 
         // Analyze sections and entropy
+        let _t = std::time::Instant::now();
         let _ = self.analyze_sections(&macho, data, &mut report);
+        let sections_ms = _t.elapsed().as_millis();
+
+        tracing::info!(
+            path = %logical_path.display(),
+            structure_ms,
+            sig_findings_ms,
+            imports_ms,
+            exports_ms,
+            sections_ms,
+            "macho:phase1"
+        );
 
         // Initialize metrics with Mach-O header info
         let mut macho_metrics = MachoMetrics {
@@ -461,10 +481,13 @@ impl MachOAnalyzer {
             None
         };
 
+        let r2_total_ms = _t_r2.elapsed().as_millis();
+
         // Use strings in order of preference:
         // 1. stng_strings parameter (from AnalysisInput - avoids redundant extraction)
         // 2. self.preextracted_strings (legacy builder pattern)
         // 3. Extract fresh with stng/r2
+        let _t = std::time::Instant::now();
         if let Some(strings) = stng_strings {
             report.strings = self.string_extractor.convert_stng_strings(strings);
         } else if let Some(ref strings) = self.preextracted_strings {
@@ -473,6 +496,7 @@ impl MachOAnalyzer {
             // Extract strings using language-aware extraction (Go/Rust)
             report.strings = self.string_extractor.extract_smart(data, r2_strings);
         }
+        let strings_ms = _t.elapsed().as_millis();
 
         // Report string truncation if limits were hit
         if self
@@ -509,6 +533,8 @@ impl MachOAnalyzer {
         }
 
         // Analyze embedded code in strings
+        let _t = std::time::Instant::now();
+        let string_count = report.strings.len();
         let (encoded_layers, plain_findings) =
             crate::analyzers::embedded_code_detector::process_all_strings(
                 &logical_path.display().to_string(),
@@ -519,9 +545,22 @@ impl MachOAnalyzer {
             );
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
+        let embedded_ms = _t.elapsed().as_millis();
 
         // Populate common binary metrics (strings, entropy, etc.)
+        let _t = std::time::Instant::now();
         crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
+        let metrics_ms = _t.elapsed().as_millis();
+
+        tracing::info!(
+            path = %logical_path.display(),
+            r2_total_ms,
+            strings_ms,
+            string_count,
+            embedded_ms,
+            metrics_ms,
+            "macho:phase2"
+        );
 
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {

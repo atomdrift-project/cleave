@@ -145,7 +145,11 @@ fn test_compression_ratio_extreme_bomb() {
 
     let reasons = guard.take_reasons();
     assert_eq!(reasons.len(), 1);
-    if let HostileArchiveReason::ZipBomb { compressed, uncompressed } = &reasons[0] {
+    if let HostileArchiveReason::ZipBomb {
+        compressed,
+        uncompressed,
+    } = &reasons[0]
+    {
         assert_eq!(*compressed, 100);
         assert_eq!(*uncompressed, 1_000_000_000);
     } else {
@@ -243,14 +247,16 @@ fn test_single_file_within_size_limit() {
 fn test_single_file_exceeds_size_limit() {
     let guard = ExtractionGuard::new();
 
-    // 200 MB file - exceeds MAX_FILE_SIZE (100 MB)
-    assert!(!guard.check_bytes(200 * 1024 * 1024, "large.bin"));
+    // A file just over MAX_FILE_SIZE should be rejected. Pin to the constant
+    // so raising MAX_FILE_SIZE doesn't silently break this test.
+    let oversize = MAX_FILE_SIZE + 1;
+    assert!(!guard.check_bytes(oversize, "large.bin"));
 
     let reasons = guard.take_reasons();
     assert_eq!(reasons.len(), 1);
     if let HostileArchiveReason::ExcessiveFileSize { file, size } = &reasons[0] {
         assert_eq!(file, "large.bin");
-        assert_eq!(*size, 200 * 1024 * 1024);
+        assert_eq!(*size, oversize);
     } else {
         panic!("Expected ExcessiveFileSize reason");
     }
@@ -274,12 +280,15 @@ fn test_total_size_within_limit() {
 fn test_total_size_exceeds_limit() {
     let guard = ExtractionGuard::new();
 
-    // Extract files totaling over MAX_TOTAL_SIZE (1 GB)
-    // 11 files of 100 MB each would exceed 1 GB
-    for i in 0..11 {
+    // Each chunk must fit under MAX_FILE_SIZE; add enough of them to exceed
+    // MAX_TOTAL_SIZE. Pinning to the constants keeps this test honest when
+    // either limit is changed.
+    let chunk_size = MAX_FILE_SIZE / 2;
+    let needed_chunks = (MAX_TOTAL_SIZE / chunk_size) + 1;
+    for i in 0..needed_chunks {
         let filename = format!("file{}.bin", i);
-        let result = guard.check_bytes(100 * 1024 * 1024, &filename);
-        if i < 10 {
+        let result = guard.check_bytes(chunk_size, &filename);
+        if i + 1 < needed_chunks {
             assert!(result, "File {} should succeed", i);
         } else {
             assert!(!result, "File {} should fail (exceeds total size)", i);
@@ -295,12 +304,12 @@ fn test_total_size_exceeds_limit() {
 fn test_total_size_boundary() {
     let guard = ExtractionGuard::new();
 
-    // Test exactly at the 1 GB boundary by adding multiple smaller files
-    // (Can't use a single 1GB file as it would exceed MAX_FILE_SIZE of 100MB)
-
-    // Add 10 files of 100 MB each = 1000 MB
-    let chunk_size = 100 * 1024 * 1024; // 100 MB
-    for i in 0..10 {
+    // Test exactly at the MAX_TOTAL_SIZE boundary using multiple chunks under
+    // MAX_FILE_SIZE. Pinning to constants keeps this test valid across limit
+    // changes.
+    let chunk_size = MAX_FILE_SIZE / 2;
+    let fitting_chunks = MAX_TOTAL_SIZE / chunk_size;
+    for i in 0..fitting_chunks {
         assert!(
             guard.check_bytes(chunk_size, &format!("chunk{}.bin", i)),
             "Chunk {} should succeed",
@@ -308,10 +317,10 @@ fn test_total_size_boundary() {
         );
     }
 
-    // Add one more 100 MB chunk - this should fail as total would be 1100 MB > 1024 MB
+    // One more chunk should push the total past MAX_TOTAL_SIZE.
     assert!(
         !guard.check_bytes(chunk_size, "overflow.bin"),
-        "Should fail when total exceeds 1 GB"
+        "Should fail when total exceeds MAX_TOTAL_SIZE"
     );
 
     let reasons = guard.take_reasons();
@@ -406,8 +415,12 @@ fn test_limited_reader_not_limited_when_data_fits() {
 fn test_hostile_reasons_accumulate() {
     let guard = ExtractionGuard::new();
 
-    // Trigger multiple violations
-    guard.check_compression_ratio(1, 1000); // Bomb
+    // Trigger multiple violations. Zip-bomb flagging requires both a high
+    // compression ratio AND an uncompressed size above MIN_ZIP_BOMB_UNCOMPRESSED_SIZE,
+    // so feed values derived from the constants.
+    let big_uncompressed = MIN_ZIP_BOMB_UNCOMPRESSED_SIZE + 1;
+    let tiny_compressed = big_uncompressed / (MAX_COMPRESSION_RATIO + 1);
+    guard.check_compression_ratio(tiny_compressed, big_uncompressed); // Bomb
     guard.check_bytes(MAX_FILE_SIZE + 1, "huge.bin"); // Too large
 
     let reasons = guard.take_reasons();
@@ -554,7 +567,10 @@ fn test_sanitize_truncates_long_path_component() {
     // A 300-byte filename should be truncated to 255 bytes, not rejected.
     let long_name = "X".repeat(300);
     let result = sanitize_entry_path(&long_name, dest);
-    assert!(result.is_some(), "long filename should be truncated, not rejected");
+    assert!(
+        result.is_some(),
+        "long filename should be truncated, not rejected"
+    );
 
     let path = result.unwrap();
     let component = path.file_name().unwrap().to_string_lossy();
@@ -574,7 +590,12 @@ fn test_sanitize_truncates_long_component_in_nested_path() {
 
     let path = result.unwrap();
     // The long directory component should be truncated
-    let parent_name = path.parent().unwrap().file_name().unwrap().to_string_lossy();
+    let parent_name = path
+        .parent()
+        .unwrap()
+        .file_name()
+        .unwrap()
+        .to_string_lossy();
     assert_eq!(parent_name.len(), 255);
     // The short filename should be preserved as-is
     assert_eq!(path.file_name().unwrap().to_string_lossy(), "file.txt");

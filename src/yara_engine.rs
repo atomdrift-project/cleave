@@ -241,9 +241,9 @@ impl YaraEngine {
 
         tracing::info!("Loading YARA rules");
 
-        let skip_cache = crate::cache::skip_cache();
+        let skip_cache = crate::cache::skip_yara_cache();
         if skip_cache {
-            tracing::info!("Skipping YARA cache (CLEAVE_SKIP_CACHE set or debug build)");
+            tracing::info!("Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE set or debug build)");
         } else {
             // Try to load from cache
             if let Ok(cache_path) = crate::cache::yara_cache_path(enable_third_party) {

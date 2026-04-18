@@ -164,9 +164,15 @@ pub(crate) fn eval_ast<'a>(
         }
     }
 
-    // Use cached AST or parse
-    let Ok(source) = std::str::from_utf8(ctx.binary_data) else {
-        return ConditionResult::no_match();
+    // Use cached AST or parse. Prefer the per-file cached UTF-8 view populated in
+    // `EvaluationContext::new` — it avoids re-running from_utf8 on the full file
+    // once per rule, which dominated CPU on large source archives.
+    let source = match ctx.cached_source_utf8 {
+        Some(s) => s,
+        None => match std::str::from_utf8(ctx.binary_data) {
+            Ok(s) => s,
+            Err(_) => return ConditionResult::no_match(),
+        },
     };
 
     if let Some(cached_tree) = ctx.cached_ast {
@@ -396,9 +402,13 @@ fn walk_ast_for_pattern_multi<'a>(
 /// Evaluate full tree-sitter query condition
 #[must_use]
 pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
-    // Only works for source code files
-    let Ok(source) = std::str::from_utf8(ctx.binary_data) else {
-        return ConditionResult::no_match();
+    // Only works for source code files — prefer the cached UTF-8 view when available.
+    let source = match ctx.cached_source_utf8 {
+        Some(s) => s,
+        None => match std::str::from_utf8(ctx.binary_data) {
+            Ok(s) => s,
+            Err(_) => return ConditionResult::no_match(),
+        },
     };
 
     // Get the appropriate language for this file type

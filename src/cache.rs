@@ -24,7 +24,7 @@ use std::sync::OnceLock;
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
-/// Returns `true` if caching should be skipped.
+/// Returns `true` if the analysis-result cache should be skipped.
 ///
 /// - `CLEAVE_SKIP_CACHE=1` / `true`  → skip
 /// - `CLEAVE_SKIP_CACHE=0` / `false` → don't skip
@@ -36,6 +36,26 @@ pub fn skip_cache() -> bool {
         Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
         Err(_) => cfg!(debug_assertions),
     }
+}
+
+/// Returns `true` if the YARA rule-compilation cache should be skipped.
+///
+/// The YARA cache is invalidated by YAR-file mtime changes; re-compiling
+/// otherwise costs 4-18 s per process (worst case: debug build, no cache).
+/// Prefer `CLEAVE_SKIP_YARA_CACHE=1` when you specifically need to force a
+/// recompile (editing inline YARA inside YAML). `CLEAVE_SKIP_CACHE` is
+/// honored as a superset for backwards compatibility.
+///
+/// - `CLEAVE_SKIP_YARA_CACHE=1` / `true` → skip
+/// - `CLEAVE_SKIP_CACHE=1`               → skip (legacy behavior)
+/// - Env vars unset + debug build        → skip (debug default)
+/// - Env vars unset + release build      → don't skip
+#[must_use]
+pub fn skip_yara_cache() -> bool {
+    if let Ok(v) = std::env::var("CLEAVE_SKIP_YARA_CACHE") {
+        return v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    skip_cache()
 }
 
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").

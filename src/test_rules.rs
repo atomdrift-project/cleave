@@ -251,6 +251,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
             cancellation: None,
         }
     }
@@ -560,6 +561,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
             cancellation: None,
         };
 
@@ -669,6 +671,8 @@ impl<'a> RuleDebugger<'a> {
                 suspicious,
                 min_suspicious,
                 max_total,
+                compiled_required: _,
+                compiled_suspicious: _,
             } => self.debug_import_combination_condition(
                 required.as_ref(),
                 suspicious.as_ref(),
@@ -1453,6 +1457,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
             cancellation: None,
         };
 
@@ -1829,6 +1834,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
             cancellation: None,
         };
 
@@ -1916,6 +1922,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
             cancellation: None,
         };
 

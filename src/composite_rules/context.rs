@@ -61,6 +61,9 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_evidence: Option<&'a FxHashMap<usize, Vec<Evidence>>>,
     /// Current trait index being evaluated
     pub current_trait_idx: Option<usize>,
+    /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
+    /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
+    pub cached_source_utf8: Option<&'a str>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -103,6 +106,15 @@ impl<'a> EvaluationContext<'a> {
             })
             .unwrap_or_else(|| vec![Arch::All].into());
 
+        // Pre-validate UTF-8 once for source-code file types. AST/text evaluators
+        // otherwise re-run from_utf8 on the full file for every rule they touch,
+        // which dominates CPU time on large source archives.
+        let cached_source_utf8 = if file_type.uses_raw_text_search() {
+            std::str::from_utf8(binary_data).ok()
+        } else {
+            None
+        };
+
         Self {
             report,
             binary_data,
@@ -126,6 +138,7 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8,
         }
     }
 
@@ -360,6 +373,7 @@ impl<'a> EvaluationContext<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
+            cached_source_utf8: None,
         }
     }
 }

@@ -853,6 +853,8 @@ impl From<ConditionDeser> for Condition {
                     suspicious,
                     min_suspicious,
                     max_total,
+                    compiled_required: None,
+                    compiled_suspicious: None,
                 },
                 ConditionTagged::StringValueCount {
                     min,
@@ -1185,6 +1187,8 @@ impl From<Condition> for ConditionTagged {
                 suspicious,
                 min_suspicious,
                 max_total,
+                compiled_required: _,
+                compiled_suspicious: _,
             } => ConditionTagged::ImportCombination {
                 required,
                 suspicious,
@@ -1702,6 +1706,12 @@ pub(crate) enum Condition {
         /// Maximum total import count (low count = suspicious)
         #[serde(skip_serializing_if = "Option::is_none")]
         max_total: Option<usize>,
+        /// Pre-compiled RegexSet for `required` patterns (populated by precompile)
+        #[serde(skip)]
+        compiled_required: Option<regex::RegexSet>,
+        /// Pre-compiled RegexSet for `suspicious` patterns (populated by precompile)
+        #[serde(skip)]
+        compiled_suspicious: Option<regex::RegexSet>,
     },
 
     /// Check extracted string value count
@@ -3192,6 +3202,30 @@ impl Condition {
                             )
                         })?
                 });
+            }
+            Condition::ImportCombination {
+                required,
+                suspicious,
+                compiled_required,
+                compiled_suspicious,
+                ..
+            } => {
+                if let Some(patterns) = required {
+                    *compiled_required = Some(regex::RegexSet::new(patterns).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile import_combination.required RegexSet: {}",
+                            e
+                        )
+                    })?);
+                }
+                if let Some(patterns) = suspicious {
+                    *compiled_suspicious = Some(regex::RegexSet::new(patterns).map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile import_combination.suspicious RegexSet: {}",
+                            e
+                        )
+                    })?);
+                }
             }
             _ => {}
         }

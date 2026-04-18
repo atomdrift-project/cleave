@@ -530,6 +530,8 @@ fn score_condition(condition: &Condition) -> f32 {
             suspicious,
             min_suspicious,
             max_total,
+            compiled_required: _,
+            compiled_suspicious: _,
         } => {
             if let Some(values) = required {
                 for value in values {

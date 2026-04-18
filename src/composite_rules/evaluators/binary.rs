@@ -355,6 +355,8 @@ pub(crate) fn eval_import_combination<'a>(
     suspicious: Option<&Vec<String>>,
     min_suspicious: Option<usize>,
     max_total: Option<usize>,
+    compiled_required: Option<&RegexSet>,
+    compiled_suspicious: Option<&RegexSet>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     // EARLY OUT: max_total is the cheapest possible filter (imports.len() is O(1)).
@@ -376,11 +378,18 @@ pub(crate) fn eval_import_combination<'a>(
 
     // Check required imports: every pattern must match at least one symbol.
     // Use RegexSet to match all patterns in a single pass per symbol instead of
-    // N_patterns × N_imports independent regex passes.
+    // N_patterns × N_imports independent regex passes. Prefer the pre-compiled
+    // RegexSet populated at trait-load time so we don't rebuild the DFA per file.
     if let Some(req) = required {
-        let Ok(set) = RegexSet::new(req.iter()) else {
-            return ConditionResult::no_match();
+        let owned_req: Option<RegexSet> = if compiled_required.is_none() {
+            match RegexSet::new(req.iter()) {
+                Ok(s) => Some(s),
+                Err(_) => return ConditionResult::no_match(),
+            }
+        } else {
+            None
         };
+        let set = compiled_required.unwrap_or_else(|| owned_req.as_ref().unwrap());
         let mut pattern_hits = vec![false; req.len()];
         let mut remaining = req.len();
         for sym in &import_symbols {
@@ -415,9 +424,15 @@ pub(crate) fn eval_import_combination<'a>(
     // suspicious pattern. RegexSet does all alternatives in a single DFA pass.
     let mut suspicious_count = 0;
     if let Some(susp) = suspicious {
-        let Ok(set) = RegexSet::new(susp.iter()) else {
-            return ConditionResult::no_match();
+        let owned_susp: Option<RegexSet> = if compiled_suspicious.is_none() {
+            match RegexSet::new(susp.iter()) {
+                Ok(s) => Some(s),
+                Err(_) => return ConditionResult::no_match(),
+            }
+        } else {
+            None
         };
+        let set = compiled_suspicious.unwrap_or_else(|| owned_susp.as_ref().unwrap());
         for sym in &import_symbols {
             if set.is_match(sym) {
                 suspicious_count += 1;

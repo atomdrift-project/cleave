@@ -220,6 +220,12 @@ pub(crate) fn get_utf8_cached(
 ///
 /// Note: This only clears the cache for the CURRENT thread. When using rayon,
 /// call this from within a parallel context to clear caches on worker threads.
+///
+/// Does NOT touch the process-wide AST query cache. Those `tree_sitter::Query`
+/// entries are keyed by `(FileType, query_str)` and never become stale — wiping
+/// them between archive members forced every rayon worker to recompile the
+/// same queries on the next member, which was the dominant hotspot after the
+/// ImportCombination/UTF-8 experiments.
 #[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
     UTF8_CACHE.with(|cache| {
@@ -227,7 +233,6 @@ pub fn clear_thread_local_caches() {
     });
     crate::ip_validator::clear_current_file_id();
     crate::yara_engine::clear_engine_scanner_cache();
-    ast::clear_ast_query_cache();
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

@@ -456,7 +456,7 @@ fn test_eval_import_combination_required_only() {
 
     let required = vec!["VirtualAlloc".to_string(), "WriteProcessMemory".to_string()];
 
-    let result = eval_import_combination(Some(&required), None, None, None, &ctx);
+    let result = eval_import_combination(Some(&required), None, None, None, None, None, &ctx);
     assert!(result.matched);
 }
 
@@ -476,7 +476,7 @@ fn test_eval_import_combination_required_missing() {
         "WriteProcessMemory".to_string(), // Missing!
     ];
 
-    let result = eval_import_combination(Some(&required), None, None, None, &ctx);
+    let result = eval_import_combination(Some(&required), None, None, None, None, None, &ctx);
     assert!(!result.matched);
 }
 
@@ -507,6 +507,8 @@ fn test_eval_import_combination_suspicious() {
         Some(&suspicious),
         Some(1), // At least 1 suspicious
         None,
+        None,
+        None,
         &ctx,
     );
     assert!(result.matched);
@@ -530,7 +532,7 @@ fn test_eval_import_combination_min_suspicious() {
     ];
 
     // Require 1 suspicious but have 0
-    let result = eval_import_combination(Some(&required), Some(&suspicious), Some(1), None, &ctx);
+    let result = eval_import_combination(Some(&required), Some(&suspicious), Some(1), None, None, None, &ctx);
     assert!(!result.matched);
 }
 
@@ -548,11 +550,11 @@ fn test_eval_import_combination_max_total() {
     let ctx = create_test_context(&report, &data);
 
     // Max 10 imports but we have 20
-    let result = eval_import_combination(None, None, None, Some(10), &ctx);
+    let result = eval_import_combination(None, None, None, Some(10), None, None, &ctx);
     assert!(!result.matched);
 
     // Max 30 imports
-    let result = eval_import_combination(None, None, None, Some(30), &ctx);
+    let result = eval_import_combination(None, None, None, Some(30), None, None, &ctx);
     assert!(result.matched);
 }
 
@@ -941,7 +943,7 @@ fn test_import_combination_empty_constraints_no_match() {
     let ctx = create_test_context(&report, &data);
 
     // No required, no suspicious, no max — should NOT match
-    let result = eval_import_combination(None, None, None, None, &ctx);
+    let result = eval_import_combination(None, None, None, None, None, None, &ctx);
     assert!(!result.matched, "Empty import_combination should not match");
 }
 
@@ -963,7 +965,7 @@ fn test_import_combination_suspicious_no_double_count() {
 
     // Two patterns that both match "VirtualAlloc"
     let suspicious = vec!["Virtual.*".to_string(), ".*Alloc".to_string()];
-    let result = eval_import_combination(None, Some(&suspicious), Some(1), None, &ctx);
+    let result = eval_import_combination(None, Some(&suspicious), Some(1), None, None, None, &ctx);
     assert!(result.matched);
     // VirtualAlloc matches both patterns but should be counted only once
     // CreateFile matches neither

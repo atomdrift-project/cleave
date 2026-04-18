@@ -1348,6 +1348,8 @@ impl TraitDefinition {
                 suspicious,
                 min_suspicious,
                 max_total,
+                compiled_required,
+                compiled_suspicious,
             } => timed_eval!(
                 "import_combo",
                 eval_import_combination(
@@ -1355,6 +1357,8 @@ impl TraitDefinition {
                     suspicious.as_ref(),
                     *min_suspicious,
                     *max_total,
+                    compiled_required.as_ref(),
+                    compiled_suspicious.as_ref(),
                     ctx,
                 )
             ),
@@ -2480,6 +2484,8 @@ impl CompositeTrait {
                 suspicious,
                 min_suspicious,
                 max_total,
+                compiled_required,
+                compiled_suspicious,
             } => timed_eval!(
                 "import_combo",
                 eval_import_combination(
@@ -2487,6 +2493,8 @@ impl CompositeTrait {
                     suspicious.as_ref(),
                     *min_suspicious,
                     *max_total,
+                    compiled_required.as_ref(),
+                    compiled_suspicious.as_ref(),
                     ctx,
                 )
             ),

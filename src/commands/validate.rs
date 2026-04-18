@@ -72,8 +72,12 @@ fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>
         return;
     }
 
-    // Skip cache to ensure fresh analysis against current traits
+    // Skip analysis cache to ensure fresh scoring against current traits, but
+    // keep the YARA-rule compilation cache warm — re-compiling 14k+ YARA rules
+    // costs 4 s (release) / 18 s (debug) per invocation and YAR-file mtime
+    // already invalidates it when rules actually change.
     std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    std::env::set_var("CLEAVE_SKIP_YARA_CACHE", "0");
     let options = cleave::AnalysisOptions {
         disable_yara: true,
         ..Default::default()

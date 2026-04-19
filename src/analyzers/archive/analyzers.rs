@@ -890,8 +890,13 @@ impl ArchiveAnalyzer {
         let members_done = std::sync::atomic::AtomicUsize::new(0);
         let analysis_start = std::time::Instant::now();
 
+        let archive_display: &str = self
+            .archive_path_prefix
+            .as_deref()
+            .unwrap_or(report.target.path.as_str());
+
         tracing::info!(
-            archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+            archive = archive_display,
             members = member_count,
             depth = self.current_depth,
             "starting parallel archive member analysis",
@@ -961,7 +966,7 @@ impl ArchiveAnalyzer {
                 let member_ms = member_start.elapsed().as_millis();
                 if member_ms > 5000 {
                     tracing::warn!(
-                        archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+                        archive = archive_display,
                         member = %entry_path,
                         file_type = %file_type.report_file_type(),
                         size_kb = file_data.len() / 1024,
@@ -972,7 +977,7 @@ impl ArchiveAnalyzer {
                     );
                 } else if done.is_multiple_of(50) || done == member_count {
                     tracing::info!(
-                        archive = self.archive_path_prefix.as_deref().unwrap_or("?"),
+                        archive = archive_display,
                         progress = %format!("{done}/{member_count}"),
                         total_elapsed_ms = analysis_start.elapsed().as_millis() as u64,
                         "archive member analysis progress",

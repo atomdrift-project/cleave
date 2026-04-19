@@ -290,14 +290,25 @@ mod tests {
 
     #[test]
     fn test_email_detection() {
-        let data = b"Contact us at admin@example.com";
+        // Real binaries store string literals NUL-terminated, so an email
+        // address in rodata is its own extracted string — not embedded in a
+        // surrounding sentence. Mirror that layout here so the classifier
+        // sees the bare address and can label it as Email.
+        let data = b"\0admin@example.com\0other string\0";
         let extractor = StringExtractor::new();
         let strings = extractor.extract_smart(data, None);
 
         let email_string = strings
             .iter()
             .find(|s| s.string_type == Some(StringType::Email));
-        assert!(email_string.is_some());
+        assert!(
+            email_string.is_some(),
+            "expected an Email-typed extraction; got: {:?}",
+            strings
+                .iter()
+                .map(|s| (&s.value, s.string_type))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]

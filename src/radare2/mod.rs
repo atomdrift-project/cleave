@@ -47,7 +47,7 @@ use tracing::{debug, trace, warn};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-/// Default timeout for rizin subprocess execution (900 seconds / 15 minutes).
+/// Default timeout for rizin subprocess execution (1200 seconds / 20 minutes).
 /// This prevents hung processes from accumulating during archive analysis.
 const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 1200;
 

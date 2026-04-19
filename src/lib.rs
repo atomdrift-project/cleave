@@ -592,29 +592,81 @@ pub struct AnalysisOptions {
 /// (archive extraction, YARA, structural analysis, …) so the caller
 /// can expose the current phase in diagnostic endpoints like `/_/requests`.
 ///
+/// Trackers created via [`PhaseTracker::with_label`] register themselves
+/// in a process-global list so [`start_rayon_diagnostics`] can enumerate
+/// in-flight work and show which analyses are stuck.
+///
 /// Cloning is cheap (`Arc`). Updating is a short `RwLock` write.
 #[derive(Clone, Debug)]
-pub struct PhaseTracker(Arc<std::sync::RwLock<String>>);
+pub struct PhaseTracker(Arc<PhaseInner>);
+
+#[derive(Debug)]
+struct PhaseInner {
+    /// Caller-supplied identifier (typically `sha256_short filename`).
+    /// Empty for anonymous trackers, which are not registered.
+    label: String,
+    created_at: std::time::Instant,
+    state: std::sync::RwLock<PhaseState>,
+}
+
+#[derive(Debug)]
+struct PhaseState {
+    name: String,
+    /// Updated on every `set()` so diag can report per-phase elapsed time.
+    started_at: std::time::Instant,
+}
 
 impl PhaseTracker {
-    /// Create a new tracker with an empty phase.
+    /// Create an unlabeled, unregistered tracker.
+    ///
+    /// Used by [`AnalysisOptions::default`] and anywhere a caller wants
+    /// the tracker type but does not want the overhead of registration
+    /// (for example because the caller already reports phase externally).
     #[must_use]
     pub fn new() -> Self {
-        Self(Arc::new(std::sync::RwLock::new(String::new())))
+        Self::build("")
+    }
+
+    /// Create a labeled tracker and register it in the global in-flight
+    /// registry so [`start_rayon_diagnostics`] can show it in its periodic
+    /// snapshot. The label should identify the unit of work (e.g. a
+    /// shortened sha256 plus filename).
+    #[must_use]
+    pub fn with_label(label: impl Into<String>) -> Self {
+        let this = Self::build(label.into());
+        register_phase(&this.0);
+        this
+    }
+
+    fn build(label: impl Into<String>) -> Self {
+        let now = std::time::Instant::now();
+        Self(Arc::new(PhaseInner {
+            label: label.into(),
+            created_at: now,
+            state: std::sync::RwLock::new(PhaseState {
+                name: String::new(),
+                started_at: now,
+            }),
+        }))
     }
 
     /// Update the current phase description.
     pub fn set(&self, phase: &str) {
-        if let Ok(mut p) = self.0.write() {
-            p.clear();
-            p.push_str(phase);
+        if let Ok(mut s) = self.0.state.write() {
+            s.name.clear();
+            s.name.push_str(phase);
+            s.started_at = std::time::Instant::now();
         }
     }
 
     /// Read the current phase.
     #[must_use]
     pub fn get(&self) -> String {
-        self.0.read().map(|p| p.clone()).unwrap_or_default()
+        self.0
+            .state
+            .read()
+            .map(|s| s.name.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -622,6 +674,42 @@ impl Default for PhaseTracker {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Snapshot row for one in-flight analysis: (label, phase name, time in
+/// current phase, total tracker age).
+type PhaseSnapshot = (String, String, std::time::Duration, std::time::Duration);
+
+static PHASE_REGISTRY: std::sync::LazyLock<std::sync::Mutex<Vec<std::sync::Weak<PhaseInner>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+fn register_phase(inner: &Arc<PhaseInner>) {
+    if let Ok(mut reg) = PHASE_REGISTRY.lock() {
+        reg.retain(|w| w.strong_count() > 0);
+        reg.push(Arc::downgrade(inner));
+    }
+}
+
+/// Snapshot all currently-live registered phase trackers, sorted oldest-first.
+fn snapshot_active_phases() -> Vec<PhaseSnapshot> {
+    let mut out = Vec::new();
+    if let Ok(mut reg) = PHASE_REGISTRY.lock() {
+        reg.retain(|w| w.strong_count() > 0);
+        for weak in reg.iter() {
+            if let Some(arc) = weak.upgrade() {
+                if let Ok(state) = arc.state.read() {
+                    out.push((
+                        arc.label.clone(),
+                        state.name.clone(),
+                        state.started_at.elapsed(),
+                        arc.created_at.elapsed(),
+                    ));
+                }
+            }
+        }
+    }
+    out.sort_by(|a, b| b.3.cmp(&a.3));
+    out
 }
 
 /// Spawns a background thread that logs rayon pool diagnostics every 5 minutes.
@@ -649,12 +737,21 @@ pub fn start_rayon_diagnostics() {
                     .map(|b| b / 1024 / 1024)
                     .unwrap_or(0);
 
+                let active = snapshot_active_phases();
+                let in_flight = active.len();
+                let oldest_age_s = active
+                    .first()
+                    .map(|(_, _, _, total)| total.as_secs())
+                    .unwrap_or(0);
+
                 if probe_ok && probe_ms < 100 {
                     tracing::info!(
                         rayon_threads = rayon::current_num_threads(),
                         probe_ms,
                         rss_mb,
-                        "rayon pool healthy",
+                        in_flight,
+                        oldest_age_s,
+                        "rayon pool snapshot",
                     );
                 } else {
                     tracing::error!(
@@ -662,12 +759,36 @@ pub fn start_rayon_diagnostics() {
                         probe_ms,
                         probe_responded = probe_ok,
                         rss_mb,
+                        in_flight,
+                        oldest_age_s,
                         "rayon pool appears STARVED — trivial task {}",
                         if probe_ok {
                             "was slow"
                         } else {
                             "timed out (5s)"
                         },
+                    );
+                }
+
+                // Emit one line per in-flight analysis so `grep in_flight` shows
+                // exactly what is still outstanding (and what phase each is in).
+                // Cap to keep the log readable if thousands of requests queue up;
+                // the summary above still reports the true count.
+                const MAX_LINES: usize = 64;
+                for (label, phase, phase_age, total_age) in active.iter().take(MAX_LINES) {
+                    let phase_shown: &str = if phase.is_empty() { "(unset)" } else { phase };
+                    tracing::info!(
+                        label = %label,
+                        phase = %phase_shown,
+                        phase_elapsed_ms = phase_age.as_millis() as u64,
+                        total_elapsed_ms = total_age.as_millis() as u64,
+                        "in_flight",
+                    );
+                }
+                if in_flight > MAX_LINES {
+                    tracing::info!(
+                        truncated = in_flight - MAX_LINES,
+                        "in_flight snapshot truncated",
                     );
                 }
             }
@@ -2235,6 +2356,40 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn test_max_analysis_depth_constant() {
         assert_eq!(MAX_ANALYSIS_DEPTH, 8);
+    }
+
+    /// `PhaseTracker::new()` must not register (otherwise every default
+    /// `AnalysisOptions` would leave an entry in the global list).
+    /// `with_label` registers; dropping the last handle removes the entry
+    /// from snapshots on the next call.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn phase_tracker_registry_lifecycle() {
+        fn contains_label(snap: &[PhaseSnapshot], label: &str) -> bool {
+            snap.iter().any(|(l, _, _, _)| l == label)
+        }
+
+        let marker = format!("phase-test-{}", std::process::id());
+
+        // Unlabeled trackers never appear in the registry.
+        let _anon = PhaseTracker::new();
+        assert!(!contains_label(&snapshot_active_phases(), &marker));
+
+        // Labeled tracker shows up while alive and carries the current phase.
+        {
+            let t = PhaseTracker::with_label(&marker);
+            t.set("yara");
+            let snap = snapshot_active_phases();
+            let entry = snap
+                .iter()
+                .find(|(l, _, _, _)| l == &marker)
+                .expect("registered tracker should appear in snapshot");
+            assert_eq!(entry.1, "yara");
+        }
+
+        // Dropping the handle removes it on the next snapshot (the retain()
+        // pass prunes Weak references with no surviving Arc).
+        assert!(!contains_label(&snapshot_active_phases(), &marker));
     }
 
     /// Verify that analyzing a file at the depth limit emits the deep-nesting

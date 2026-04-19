@@ -4,9 +4,10 @@
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
 use anyhow::Result;
-use cleave::{AnalysisReport, Criticality, FileAnalysis};
+use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis};
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// A single file to analyze during validation and how to judge its score.
 enum Target {
@@ -52,8 +53,6 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
 pub fn run() -> Result<()> {
-    cleave::validate_traits()?;
-
     let targets = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set.
@@ -63,12 +62,21 @@ pub fn run() -> Result<()> {
         ..Default::default()
     };
 
-    // Parallel analysis — `analyze_file` shares the global CapabilityMapper
-    // singleton, so the first worker loads it and the rest reuse that Arc.
+    // Load the mapper once with full validation enabled. This replaces the
+    // separate `validate_traits()` call — validation errors surface here — and
+    // every analysis worker below reuses this same Arc, so the trait set is
+    // parsed from disk exactly once per run.
+    let mapper = Arc::new(CapabilityMapper::try_new_with_load_options(
+        CapabilityMapper::DEFAULT_MIN_HOSTILE_PRECISION,
+        CapabilityMapper::DEFAULT_MIN_SUSPICIOUS_PRECISION,
+        true,
+        false,
+    )?);
+
     let results: Vec<(Target, Result<AnalysisReport>)> = targets
         .into_par_iter()
         .map(|t| {
-            let report = cleave::analyze_file(t.path(), &options);
+            let report = cleave::analyze_file_with_mapper(t.path(), &options, &mapper);
             (t, report)
         })
         .collect();

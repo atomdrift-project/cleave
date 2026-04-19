@@ -16,7 +16,7 @@ use crate::malecule_bridge;
 use crate::types::{AnalysisReport, Criticality, Finding};
 use anyhow::Result;
 use colored::Colorize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Extract base trait ID for aggregation (strip ::variant suffix)
 /// e.g., "well-known/malware/trojan/macos-stealer-cpp::variant" -> "well-known/malware/trojan/macos-stealer-cpp"
@@ -726,14 +726,31 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             continue;
         }
 
-        // Aggregate findings by directory path
-        let aggregated = aggregate_findings_by_directory(&file.findings);
-
-        // Filter: remove baseline and low-confidence findings
-        let filtered: Vec<Finding> = aggregated
-            .into_iter()
-            .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
+        // Per RULES.md: components are hidden from terminal output unless a
+        // matched composite that references them fires. Build the set of
+        // component IDs referenced by notable-or-higher composites, then keep
+        // components only when they appear in that set.
+        let referenced_component_ids: HashSet<&str> = file
+            .findings
+            .iter()
+            .filter(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
+            .flat_map(|f| f.trait_refs.iter().map(String::as_str))
             .collect();
+
+        let pre_filtered: Vec<Finding> = file
+            .findings
+            .iter()
+            .filter(|f| f.conf >= 0.5)
+            .filter(|f| {
+                f.crit >= Criticality::Notable
+                    || (f.crit == Criticality::Component
+                        && referenced_component_ids.contains(f.id.as_str()))
+            })
+            .cloned()
+            .collect();
+
+        // Aggregate remaining findings by directory path
+        let filtered = aggregate_findings_by_directory(&pre_filtered);
 
         if filtered.is_empty() {
             continue;

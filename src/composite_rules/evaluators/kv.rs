@@ -32,6 +32,12 @@ use crate::types::Evidence;
 use regex::Regex;
 use serde_json::Value;
 use std::path::Path;
+use std::sync::LazyLock;
+
+/// Resolved once: reading via `std::env::var` on every `eval_kv` call serializes
+/// rayon workers through libc's getenv mutex on macOS.
+static DEBUG_KV_REGEX_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("DEBUG_KV_REGEX").is_ok());
 
 /// Detected format of the structured data file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1130,7 +1136,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     let content = ctx.binary_data;
 
     // Debug: check if regex should be compiled but isn't
-    if std::env::var("DEBUG_KV_REGEX").is_ok() && regex_str.is_some() && compiled_regex.is_none() {
+    if *DEBUG_KV_REGEX_ENABLED && regex_str.is_some() && compiled_regex.is_none() {
         eprintln!(
             "DEBUG_KV_REGEX: path={} has regex={:?} but compiled_regex is NONE!",
             path, regex_str

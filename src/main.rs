@@ -58,7 +58,14 @@ fn main() -> Result<()> {
 
     let disabled = args.disabled_components();
     apply_runtime_overrides(args.traits_dir.as_deref(), &disabled);
-    if !disabled.yara {
+    // `cleave validate` analyzes with `disable_yara: true` (ground-truth checks
+    // and the does-nothing score check don't need YARA scanning), so skip the
+    // ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA rules that
+    // the prefetch triggers. Trait-structure validation in `validate_traits()`
+    // doesn't require YARA to have compiled either — mapper loading is
+    // independent.
+    let is_validate_command = matches!(args.command, Some(cli::Command::Validate));
+    if !disabled.yara && !is_validate_command {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
     if !matches!(args.command, Some(cli::Command::Version)) {

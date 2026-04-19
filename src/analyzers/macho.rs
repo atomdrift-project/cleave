@@ -381,6 +381,8 @@ impl MachOAnalyzer {
                 self.cancellation.as_ref(),
                 Some(data),
             ) {
+                crate::radare2::push_rizin_warnings(&mut report, &batched);
+
                 // Compute metrics from batched data (radare2-specific metrics)
                 let r2_binary_metrics =
                     self.radare2
@@ -1471,6 +1473,7 @@ impl MachOAnalyzer {
                     Some(data),
                 ) {
                     Ok(batched) => {
+                        crate::radare2::push_rizin_warnings(&mut report, &batched);
                         let bm = self.radare2.compute_metrics_from_batched(
                             &batched,
                             data.len() as u64,

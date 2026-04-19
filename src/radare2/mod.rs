@@ -51,6 +51,17 @@ use std::os::unix::process::CommandExt;
 /// This prevents hung processes from accumulating during archive analysis.
 const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 1200;
 
+/// Soft memory cap for a single rizin subprocess (4 GiB).
+///
+/// Enforced via `setrlimit(RLIMIT_AS, ...)` (Linux) / `setrlimit(RLIMIT_DATA, ...)`
+/// (macOS) in a `pre_exec` hook. Legitimate rizin analysis never approaches this
+/// size — exceeding it indicates a pathological input (adversarial binary,
+/// runaway analysis, memory leak) and the kernel will abort the subprocess
+/// instead of letting it drag the whole scan into OOM.
+const RIZIN_MEMORY_LIMIT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+static RIZIN_MEMORY_EXCEEDED: AtomicU64 = AtomicU64::new(0);
+
 /// Global disable counter for radare2 analysis.
 ///
 /// A positive value means radare2 is disabled. This supports both permanent
@@ -96,24 +107,26 @@ pub(crate) fn is_disabled() -> bool {
 
 /// Get rizin execution statistics for debugging.
 #[allow(dead_code)]
-pub(crate) fn rizin_stats() -> (u64, u64, u64, u64) {
+pub(crate) fn rizin_stats() -> (u64, u64, u64, u64, u64) {
     (
         RIZIN_TOTAL_CALLS.load(Ordering::Relaxed),
         RIZIN_SUCCESSES.load(Ordering::Relaxed),
         RIZIN_TIMEOUTS.load(Ordering::Relaxed),
         RIZIN_FAILURES.load(Ordering::Relaxed),
+        RIZIN_MEMORY_EXCEEDED.load(Ordering::Relaxed),
     )
 }
 
 /// Log rizin statistics for post-mortem analysis.
 pub(crate) fn log_rizin_stats() {
-    let (total, successes, timeouts, failures) = rizin_stats();
+    let (total, successes, timeouts, failures, memory_exceeded) = rizin_stats();
     if total > 0 {
         tracing::info!(
             total_calls = total,
             successes = successes,
             timeouts = timeouts,
             failures = failures,
+            memory_exceeded = memory_exceeded,
             timeout_rate_pct = (timeouts as f64 / total as f64) * 100.0,
             failure_rate_pct = (failures as f64 / total as f64) * 100.0,
             "Rizin subprocess statistics"
@@ -168,7 +181,33 @@ fn execute_rizin_with_timeout(
         .stderr(Stdio::piped());
 
     #[cfg(unix)]
-    cmd.process_group(0);
+    {
+        cmd.process_group(0);
+        // Apply the soft memory cap after fork() but before exec(). setrlimit
+        // is on the POSIX async-signal-safe list, which is the hard constraint
+        // on pre_exec code: no allocation, no locks, no non-signal-safe calls.
+        unsafe {
+            cmd.pre_exec(|| {
+                let limit = libc::rlimit {
+                    rlim_cur: RIZIN_MEMORY_LIMIT_BYTES as libc::rlim_t,
+                    rlim_max: RIZIN_MEMORY_LIMIT_BYTES as libc::rlim_t,
+                };
+                // RLIMIT_AS caps total virtual address space on Linux — this is
+                // the one that actually bites mmap/malloc. RLIMIT_DATA is the
+                // best available approximation on macOS (limits brk; modern
+                // libmalloc bypasses it for large allocations but it's still a
+                // useful backstop). Failures are ignored: if the caller is
+                // already limited below our target, EINVAL is expected and the
+                // caller's tighter limit wins anyway.
+                #[cfg(target_os = "linux")]
+                {
+                    libc::setrlimit(libc::RLIMIT_AS, &limit);
+                }
+                libc::setrlimit(libc::RLIMIT_DATA, &limit);
+                Ok(())
+            });
+        }
+    }
 
     let mut child = cmd.spawn().context("Failed to spawn rizin process")?;
 
@@ -408,6 +447,10 @@ pub(crate) struct BatchedAnalysis {
     /// True if rizin analysis timed out and returned no batched results.
     #[serde(default)]
     pub timed_out: bool,
+    /// True if rizin appeared to exceed its soft memory cap (killed by signal
+    /// or SIGKILL without cancellation/timeout). See `RIZIN_MEMORY_LIMIT_BYTES`.
+    #[serde(default)]
+    pub memory_exceeded: bool,
     /// Depth of function analysis rizin actually performed. Mirrors the
     /// `binary.function_analysis_depth` metric: 0 = skipped, 1 = light (`aa`
     /// only), 2 = full (`aa;aap`).
@@ -417,6 +460,45 @@ pub(crate) struct BatchedAnalysis {
 
 const fn default_true() -> bool {
     true
+}
+
+/// Surface rizin tool-level anomalies as findings on the report.
+///
+/// Both `timed_out` and `memory_exceeded` are signals that the binary was
+/// pathological enough to break the analyzer — that is itself a useful
+/// structural trait (e.g. malware that deliberately bloats symbol tables to
+/// evade deep analysis).
+pub(crate) fn push_rizin_warnings(
+    report: &mut crate::types::AnalysisReport,
+    batched: &BatchedAnalysis,
+) {
+    if batched.memory_exceeded {
+        // Legitimate binaries do not push rizin past 4 GiB. Exceeding the cap is
+        // itself an evasion signal — adversarial symbol tables, decompression
+        // bombs, or deliberately pathological control flow designed to blow up
+        // static analyzers. Treat it as suspicious, not structural noise.
+        let mut finding = crate::types::Finding::new(
+            "metadata/analysis/rizin-memory-exceeded".to_string(),
+            crate::types::FindingKind::Indicator,
+            format!(
+                "rizin subprocess exceeded its {} GiB memory cap — possible anti-analysis bloat",
+                RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024
+            ),
+            0.6,
+        );
+        finding.crit = crate::types::Criticality::Suspicious;
+        report.findings.push(finding);
+    }
+    if batched.timed_out {
+        let mut finding = crate::types::Finding::new(
+            "metadata/analysis/rizin-timeout".to_string(),
+            crate::types::FindingKind::Structural,
+            "rizin subprocess timed out — deep binary analysis was truncated".to_string(),
+            0.4,
+        );
+        finding.crit = crate::types::Criticality::Component;
+        report.findings.push(finding);
+    }
 }
 
 use crate::analyzers::looks_like_go_binary;
@@ -779,6 +861,34 @@ impl Radare2Analyzer {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            // Signal-based termination with no cancellation/timeout is the
+            // signature of the RLIMIT_AS/RLIMIT_DATA cap biting: rizin's libc
+            // either SIGSEGVs on a NULL malloc return, or the kernel's OOM
+            // killer sends SIGKILL. Either way, surface it as a memory event
+            // rather than a generic rizin failure.
+            #[cfg(unix)]
+            let signaled = {
+                use std::os::unix::process::ExitStatusExt;
+                output.status.signal().is_some()
+            };
+            #[cfg(not(unix))]
+            let signaled = false;
+
+            if signaled {
+                RIZIN_MEMORY_EXCEEDED.fetch_add(1, Ordering::Relaxed);
+                warn!(
+                    path = %file_path.display(),
+                    status = %output.status,
+                    stderr = %stderr,
+                    limit_gb = RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024,
+                    "rizin killed by signal — likely exceeded memory cap"
+                );
+                return Ok(BatchedAnalysis {
+                    strings_extracted: include_strings,
+                    memory_exceeded: true,
+                    ..Default::default()
+                });
+            }
             warn!(status = %output.status, stderr = %stderr, "radare2 exited with error");
             anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr);
         }
@@ -851,6 +961,7 @@ impl Radare2Analyzer {
             strings_extracted: include_strings,
             imports,
             timed_out: false,
+            memory_exceeded: false,
             function_analysis_depth,
         };
 

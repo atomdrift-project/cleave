@@ -794,6 +794,7 @@ impl PEAnalyzer {
         // --- Process radare2 results, with fallback for goblin gaps ---
         let r2_strings = if let Some(Ok(batched)) = r2_result {
             tools_used.push("radare2".to_string());
+            crate::radare2::push_rizin_warnings(&mut report, &batched);
 
             let mut binary_metrics = self.radare2.compute_metrics_from_batched(
                 &batched,

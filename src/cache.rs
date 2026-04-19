@@ -40,22 +40,25 @@ pub fn skip_cache() -> bool {
 
 /// Returns `true` if the YARA rule-compilation cache should be skipped.
 ///
-/// The YARA cache is invalidated by YAR-file mtime changes; re-compiling
-/// otherwise costs 4-18 s per process (worst case: debug build, no cache).
-/// Prefer `CLEAVE_SKIP_YARA_CACHE=1` when you specifically need to force a
-/// recompile (editing inline YARA inside YAML). `CLEAVE_SKIP_CACHE` is
-/// honored as a superset for backwards compatibility.
+/// The YARA cache is invalidated by YAR-file mtime; re-compiling otherwise
+/// costs 4-18 s per process (release → debug). Debug builds DO NOT default
+/// to skip (unlike the analysis cache) — skipping would re-pay the compile
+/// cost on every `make validate` / quick iteration, and the mtime check
+/// already catches rule edits. Set `CLEAVE_SKIP_YARA_CACHE=1` explicitly to
+/// force a recompile (useful when editing inline YARA inside YAML).
 ///
 /// - `CLEAVE_SKIP_YARA_CACHE=1` / `true` → skip
 /// - `CLEAVE_SKIP_CACHE=1`               → skip (legacy behavior)
-/// - Env vars unset + debug build        → skip (debug default)
-/// - Env vars unset + release build      → don't skip
+/// - Env vars unset                      → don't skip (even in debug)
 #[must_use]
 pub fn skip_yara_cache() -> bool {
     if let Ok(v) = std::env::var("CLEAVE_SKIP_YARA_CACHE") {
         return v == "1" || v.eq_ignore_ascii_case("true");
     }
-    skip_cache()
+    if let Ok(v) = std::env::var("CLEAVE_SKIP_CACHE") {
+        return v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    false
 }
 
 /// Format seconds into a human-readable age string (e.g., "2h 30m", "3d 12h").

@@ -14,6 +14,13 @@ use crate::composite_rules::context::{ConditionResult, EvaluationContext, String
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::contains_external_ip_cached;
 use cleave::bitcoin_validator::contains_bitcoin_address;
+use std::sync::LazyLock;
+
+/// Resolved once at startup. `std::env::var` calls libc `getenv`, which takes a
+/// process-wide mutex on macOS — hitting that on every rule evaluation was ~3.6%
+/// of total CPU as lock-wait samples across 24 rayon workers.
+static PROFILE_TIMING_ENABLED: LazyLock<bool> =
+    LazyLock::new(|| std::env::var("CLEAVE_PROFILE").is_ok());
 
 /// Helper to apply high-fidelity validation checks to a string match.
 pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> bool {
@@ -395,7 +402,7 @@ pub(crate) fn eval_string<'a, 'b>(
     trait_not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'b>,
 ) -> ConditionResult {
-    let profile = std::env::var("CLEAVE_PROFILE").is_ok();
+    let profile = *PROFILE_TIMING_ENABLED;
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {
@@ -1012,7 +1019,7 @@ pub(crate) fn eval_raw<'a>(
         }
     }
 
-    let profile = std::env::var("CLEAVE_PROFILE").is_ok();
+    let profile = *PROFILE_TIMING_ENABLED;
     let t_start = if profile {
         Some(std::time::Instant::now())
     } else {
@@ -1047,24 +1054,23 @@ pub(crate) fn eval_raw<'a>(
 
         if use_bytes_regex {
             // FAST PATH: Use bytes::Regex on raw binary data (no UTF-8 conversion!)
-            // Get or compile bytes regex from bounded LRU cache
+            // Get or compile bytes regex from bounded LRU cache.
+            //
+            // Read via `peek` under a read-lock — `LruCache::get` needs &mut and was
+            // forcing every rayon worker to serialize through the cache's write lock
+            // even on cache hit. That single bottleneck accounted for ~25 % of total
+            // CPU as `parking_lot::lock_exclusive_slow` wait time on the slow dataset.
             let key = (pattern_str.to_string(), case_insensitive);
+            let cache = super::regex_cache_v2();
             let bytes_re: Option<super::CachedRegex> = {
-                let cache = super::regex_cache_v2();
-                // Try to get from cache first
-                let cached = {
-                    let mut guard = cache.write();
-                    guard.get(&key).cloned()
-                };
-                if let Some(re) = cached {
-                    Some(re)
+                let cached = cache.read().peek(&key).cloned();
+                if cached.is_some() {
+                    cached
                 } else {
-                    // Compile and insert
+                    // Compile outside the lock; write-lock only to insert.
                     match super::compile_regex_optimal(pattern_str, case_insensitive) {
                         Ok(re) => {
-                            let mut guard = cache.write();
-                            guard.put(key, re.clone());
-                            drop(guard);
+                            cache.write().put(key, re.clone());
                             Some(re)
                         }
                         Err(_) => None,

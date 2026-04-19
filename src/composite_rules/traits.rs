@@ -56,14 +56,25 @@ macro_rules! timed_eval {
         let result = $eval;
         let _elapsed = _start.elapsed();
 
+        // Prefer the read-lock `get` path: after the first insert per condition type
+        // (~20 keys across the whole run) every eval is a hit, and `entry()` would
+        // otherwise take a shard write lock on every call. The AtomicU64 counters
+        // are internally synchronized so a shared ref is all we need.
         let stats = stats_map();
-        let entry = stats
-            .entry($name)
-            .or_insert_with(|| (AtomicU64::new(0), AtomicU64::new(0)));
-        entry.0.fetch_add(1, Ordering::Relaxed);
-        entry
-            .1
-            .fetch_add(_elapsed.as_nanos() as u64, Ordering::Relaxed);
+        if let Some(entry) = stats.get(&$name) {
+            entry.0.fetch_add(1, Ordering::Relaxed);
+            entry
+                .1
+                .fetch_add(_elapsed.as_nanos() as u64, Ordering::Relaxed);
+        } else {
+            let entry = stats
+                .entry($name)
+                .or_insert_with(|| (AtomicU64::new(0), AtomicU64::new(0)));
+            entry.0.fetch_add(1, Ordering::Relaxed);
+            entry
+                .1
+                .fetch_add(_elapsed.as_nanos() as u64, Ordering::Relaxed);
+        }
 
         result
     }};

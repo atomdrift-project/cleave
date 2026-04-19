@@ -227,6 +227,7 @@ impl ElfAnalyzer {
                 // Process Radare2 results if available
                 let r2_strings_extracted = if let Some(Ok(batched)) = r2_inner {
                     tools_used.push("radare2".to_string());
+                    crate::radare2::push_rizin_warnings(&mut report, &batched);
 
                     // Compute metrics from batched data
                     let mut binary_metrics = self.radare2.compute_metrics_from_batched(
@@ -484,6 +485,7 @@ impl ElfAnalyzer {
                     ) {
                         Ok(batched) => {
                             tools_used.push("radare2".to_string());
+                            crate::radare2::push_rizin_warnings(&mut report, &batched);
                             let bm = self.radare2.compute_metrics_from_batched(
                                 &batched,
                                 data.len() as u64,

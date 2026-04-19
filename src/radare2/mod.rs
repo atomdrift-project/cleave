@@ -134,6 +134,37 @@ pub(crate) fn log_rizin_stats() {
     }
 }
 
+/// Result of a rizin subprocess invocation. Wraps `std::process::Output` with
+/// a flag indicating whether our 100 MB output cap was hit — that matters for
+/// callers who want to distinguish "pathological output overflow (we killed
+/// it)" from "rizin died on its own (likely RLIMIT_AS / RLIMIT_DATA or
+/// segfault)" when inspecting a signaled exit.
+struct RizinRun {
+    output: std::process::Output,
+    output_cap_hit: bool,
+}
+
+/// Mark that a reader thread hit the 100MB output cap and SIGKILL the rizin
+/// process group so both pipes close promptly. Called from the stdout/stderr
+/// reader threads on first overflow; subsequent calls are idempotent.
+fn mark_output_cap_hit(flag: &Arc<AtomicBool>, child_id: u32, stream: &'static str) {
+    if flag.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    warn!(
+        pid = child_id,
+        stream = stream,
+        cap_bytes = 100 * 1024 * 1024,
+        "rizin output cap exceeded; killing process group"
+    );
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(-(child_id as libc::pid_t), libc::SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = child_id;
+}
+
 /// Execute a rizin command with timeout protection.
 ///
 /// This prevents hung rizin processes from accumulating during archive analysis,
@@ -151,7 +182,7 @@ fn execute_rizin_with_timeout(
     args: &[&str],
     timeout: Duration,
     cancellation: Option<&Arc<AtomicBool>>,
-) -> Result<std::process::Output> {
+) -> Result<RizinRun> {
     use std::io::Read;
     use std::sync::mpsc;
 
@@ -219,26 +250,44 @@ fn execute_rizin_with_timeout(
     let (stdout_tx, stdout_rx) = mpsc::channel();
     let (stderr_tx, stderr_rx) = mpsc::channel();
 
+    // Capture PID early so reader threads can SIGKILL the process group on cap
+    // overflow. Without that, dropping the pipe handle on cap hit left rizin to
+    // die via SIGPIPE on its next write, and any grandchildren spawned by `aa`
+    // kept the *other* pipe's write-end open — the other reader thread would
+    // block forever in read_to_end. That was the hang.
+    let child_id = child.id();
+    let output_cap_hit = Arc::new(AtomicBool::new(false));
+
     // Spawn thread to read stdout (capped at 100MB to prevent OOM from
     // malicious/runaway subprocesses).
     const MAX_SUBPROCESS_OUTPUT: usize = 100 * 1024 * 1024;
+    let stdout_cap_flag = output_cap_hit.clone();
     let stdout_thread = std::thread::spawn(move || {
         let mut stdout = Vec::new();
         if let Some(mut handle) = stdout_handle {
-            let _ = (&mut handle)
+            let n = (&mut handle)
                 .take(MAX_SUBPROCESS_OUTPUT as u64)
-                .read_to_end(&mut stdout);
+                .read_to_end(&mut stdout)
+                .unwrap_or(0);
+            if n >= MAX_SUBPROCESS_OUTPUT {
+                mark_output_cap_hit(&stdout_cap_flag, child_id, "stdout");
+            }
         }
         let _ = stdout_tx.send(stdout);
     });
 
     // Spawn thread to read stderr (same cap)
+    let stderr_cap_flag = output_cap_hit.clone();
     let stderr_thread = std::thread::spawn(move || {
         let mut stderr = Vec::new();
         if let Some(mut handle) = stderr_handle {
-            let _ = (&mut handle)
+            let n = (&mut handle)
                 .take(MAX_SUBPROCESS_OUTPUT as u64)
-                .read_to_end(&mut stderr);
+                .read_to_end(&mut stderr)
+                .unwrap_or(0);
+            if n >= MAX_SUBPROCESS_OUTPUT {
+                mark_output_cap_hit(&stderr_cap_flag, child_id, "stderr");
+            }
         }
         let _ = stderr_tx.send(stderr);
     });
@@ -246,7 +295,6 @@ fn execute_rizin_with_timeout(
     // Wait for process completion with timeout.
     // Uses a dedicated thread for child.wait() + recv_timeout to avoid
     // the 100ms poll-sleep loop that wastes rayon worker thread time.
-    let child_id = child.id();
     tracing::info!(pid = child_id, command = %args_str, "Rizin process spawned");
     let (wait_tx, wait_rx) = mpsc::channel();
     let wait_thread = std::thread::spawn(move || {
@@ -297,14 +345,40 @@ fn execute_rizin_with_timeout(
         }
     };
 
+    // Bounded pipe drain: if a rizin grandchild escaped our process group and
+    // still holds a pipe's write-end, an unbounded thread.join()/recv() would
+    // block here forever. Abandon after a short wait — the detached reader
+    // thread will finish on its own when the grandchild eventually dies, and
+    // the OS cleans up after it.
+    const DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+    let drain = |rx: &mpsc::Receiver<Vec<u8>>, stream: &'static str| -> Vec<u8> {
+        match rx.recv_timeout(DRAIN_TIMEOUT) {
+            Ok(buf) => buf,
+            Err(_) => {
+                warn!(
+                    pid = child_id,
+                    stream = stream,
+                    timeout_ms = DRAIN_TIMEOUT.as_millis() as u64,
+                    "rizin pipe drain stalled — grandchild may still hold the \
+                     write-end; abandoning reader thread"
+                );
+                Vec::new()
+            }
+        }
+    };
+    // wait_thread / stdout_thread / stderr_thread are left detached. Joining
+    // any of them is unsafe here: in the Timeout/Disconnected branches below
+    // wait_thread is still blocked in child.wait(), and the reader threads
+    // are still blocked on read_to_end. They wake up after the SIGKILL fires.
+    let _ = wait_thread;
+    let _ = stdout_thread;
+    let _ = stderr_thread;
+
     match result {
         Ok(Ok(status)) => {
             let elapsed = start.elapsed();
-            let _ = wait_thread.join();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
-            let stdout = stdout_rx.recv().unwrap_or_default();
-            let stderr = stderr_rx.recv().unwrap_or_default();
+            let stdout = drain(&stdout_rx, "stdout");
+            let stderr = drain(&stderr_rx, "stderr");
             tracing::info!(
                 pid = child_id,
                 elapsed_ms = elapsed.as_millis(),
@@ -317,6 +391,7 @@ fn execute_rizin_with_timeout(
                 stdout,
                 stderr,
             };
+            let cap_hit = output_cap_hit.load(Ordering::Acquire);
 
             if status.success() {
                 RIZIN_SUCCESSES.fetch_add(1, Ordering::Relaxed);
@@ -331,22 +406,22 @@ fn execute_rizin_with_timeout(
                 warn!(
                     elapsed_ms = elapsed.as_millis(),
                     exit_code = ?status.code(),
+                    output_cap_hit = cap_hit,
                     stderr = %stderr_str,
                     "Rizin exited with error"
                 );
             }
 
-            Ok(output)
+            Ok(RizinRun {
+                output,
+                output_cap_hit: cap_hit,
+            })
         }
         Ok(Err(e)) => {
             RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
-            let _ = wait_thread.join();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
             Err(anyhow::anyhow!("Failed to wait for rizin process: {}", e))
         }
         Err(mpsc::RecvTimeoutError::Disconnected) => {
-            // Either cancelled or wait_thread crashed
             RIZIN_FAILURES.fetch_add(1, Ordering::Relaxed);
 
             let is_cancelled = cancellation.is_some_and(|c| c.load(Ordering::Acquire));
@@ -357,16 +432,9 @@ fn execute_rizin_with_timeout(
             }
 
             #[cfg(unix)]
-            {
-                // Kill the whole process group
-                let _ = unsafe { libc::kill(-(child_id as i32), libc::SIGKILL) };
+            unsafe {
+                libc::kill(-(child_id as libc::pid_t), libc::SIGKILL);
             }
-            #[cfg(not(unix))]
-            let _ = child_id;
-
-            let _ = wait_thread.join();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
 
             if is_cancelled {
                 anyhow::bail!("Rizin execution cancelled")
@@ -383,16 +451,9 @@ fn execute_rizin_with_timeout(
             );
 
             #[cfg(unix)]
-            {
-                // Kill the whole process group
-                let _ = unsafe { libc::kill(-(child_id as i32), libc::SIGKILL) };
+            unsafe {
+                libc::kill(-(child_id as libc::pid_t), libc::SIGKILL);
             }
-            #[cfg(not(unix))]
-            let _ = child_id;
-
-            let _ = wait_thread.join();
-            let _ = stdout_thread.join();
-            let _ = stderr_thread.join();
 
             log_rizin_stats();
             anyhow::bail!("Rizin process timed out after {}s", timeout.as_secs())
@@ -551,7 +612,7 @@ impl Radare2Analyzer {
         let file_path_str = file_path.to_string_lossy();
         let timeout = Duration::from_secs(RIZIN_DEFAULT_TIMEOUT_SECS);
 
-        let output = execute_rizin_with_timeout(
+        let run = execute_rizin_with_timeout(
             &[
                 "-NN",
                 "-q",
@@ -566,6 +627,7 @@ impl Radare2Analyzer {
             timeout,
             cancellation,
         )?;
+        let output = run.output;
 
         if !output.status.success() {
             return Ok((Vec::new(), Vec::new(), Vec::new()));
@@ -817,7 +879,7 @@ impl Radare2Analyzer {
                 .to_string_lossy()
         );
         crate::memory_tracker::set_current_phase(&phase_label);
-        let output = execute_rizin_with_timeout(
+        let run = execute_rizin_with_timeout(
             &[
                 "-NN",
                 "-q",
@@ -835,7 +897,7 @@ impl Radare2Analyzer {
         crate::memory_tracker::clear_current_phase();
 
         // Handle timeout as a tool limitation; callers may choose how to surface it.
-        let output = match output {
+        let run = match run {
             Ok(out) => out,
             Err(e) => {
                 let err_str = e.to_string();
@@ -856,34 +918,67 @@ impl Radare2Analyzer {
                 return Err(e);
             }
         };
+        let output = run.output;
+        let output_cap_hit = run.output_cap_hit;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            // Signal-based termination with no cancellation/timeout is the
-            // signature of the RLIMIT_AS/RLIMIT_DATA cap biting: rizin's libc
-            // either SIGSEGVs on a NULL malloc return, or the kernel's OOM
-            // killer sends SIGKILL. Either way, surface it as a memory event
-            // rather than a generic rizin failure.
+            // Classify how rizin died:
+            //   * output_cap_hit: our own SIGKILL after one of the reader
+            //     threads hit the 100 MB cap. Pathological output volume, not
+            //     memory exhaustion.
+            //   * SIGSEGV / SIGBUS: rizin's libc crashed — typically a NULL
+            //     return from malloc after RLIMIT_AS / RLIMIT_DATA bit.
+            //   * SIGKILL without our cap flag: either the OOM killer, or
+            //     another process in the group killed us. Treat as memory.
+            //   * SIGPIPE: legacy (pre-reader-SIGKILL) output cap overflow;
+            //     kept for safety against future pipe-close regressions.
+            //   * Other signals: generic failure, surface verbatim.
             #[cfg(unix)]
-            let signaled = {
+            let signal_num = {
                 use std::os::unix::process::ExitStatusExt;
-                output.status.signal().is_some()
+                output.status.signal()
             };
             #[cfg(not(unix))]
-            let signaled = false;
+            let signal_num: Option<i32> = None;
 
-            if signaled {
-                RIZIN_MEMORY_EXCEEDED.fetch_add(1, Ordering::Relaxed);
-                warn!(
-                    path = %file_path.display(),
-                    status = %output.status,
-                    stderr = %stderr,
-                    limit_gb = RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024,
-                    "rizin killed by signal — likely exceeded memory cap"
-                );
+            if let Some(sig) = signal_num {
+                let is_memory = !output_cap_hit
+                    && matches!(sig, libc::SIGSEGV | libc::SIGBUS | libc::SIGKILL);
+                let is_output_cap = output_cap_hit || sig == libc::SIGPIPE;
+
+                if is_output_cap {
+                    RIZIN_MEMORY_EXCEEDED.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        path = %file_path.display(),
+                        status = %output.status,
+                        signal = sig,
+                        stderr = %stderr,
+                        "rizin killed after exceeding 100 MB output cap — \
+                         pathological stdout/stderr volume"
+                    );
+                } else if is_memory {
+                    RIZIN_MEMORY_EXCEEDED.fetch_add(1, Ordering::Relaxed);
+                    warn!(
+                        path = %file_path.display(),
+                        status = %output.status,
+                        signal = sig,
+                        stderr = %stderr,
+                        limit_gb = RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024,
+                        "rizin killed by signal — likely exceeded memory cap"
+                    );
+                } else {
+                    warn!(
+                        path = %file_path.display(),
+                        status = %output.status,
+                        signal = sig,
+                        stderr = %stderr,
+                        "rizin killed by unexpected signal"
+                    );
+                }
                 return Ok(BatchedAnalysis {
                     strings_extracted: include_strings,
-                    memory_exceeded: true,
+                    memory_exceeded: is_memory || is_output_cap,
                     ..Default::default()
                 });
             }

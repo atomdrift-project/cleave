@@ -216,7 +216,25 @@ pub fn reload_capability_mapper() -> Result<(usize, usize), String> {
     Ok((trait_count, composite_count))
 }
 
-/// Get or initialize the global YARA engine
+/// Get or initialize the global YARA engine.
+///
+/// **Contract:** must be warmed at least once from a non-rayon thread before any
+/// rayon worker can reach this function. `cleave::prefetch_yara_engine` satisfies
+/// that contract by spawning a `std::thread`, and every cleave/litmus entry point
+/// calls it at startup.
+///
+/// Why the contract exists: `load_all_rules` uses rayon `par_iter` internally.
+/// If the first caller to win `get_or_init` is itself a rayon worker, peers call
+/// `yara_engine()` too and park on the `OnceLock`'s internal mutex — starving the
+/// very pool the winner's `par_iter` needs. Any task the winner steals while
+/// waiting can also re-enter `get_or_init` on the same thread and self-deadlock.
+/// Forcing first init onto a non-rayon thread avoids both failure modes without
+/// changing the lock primitive.
+///
+/// As a safety net, this function logs an error when the contract is violated
+/// (first call from a rayon worker). The call still proceeds so production hosts
+/// aren't killed by a missed init, but the error is loud enough to surface the
+/// regression in logs.
 pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
     let lock = if enable_third_party {
         &YARA_ENGINE_WITH_THIRD_PARTY
@@ -224,26 +242,28 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
         &YARA_ENGINE_BUILTIN_ONLY
     };
 
-    // OnceLock::get_or_init blocks all concurrent callers on a single internal Mutex until
-    // the first initializer completes. When multiple rayon threads reach analyze_bytes for the
-    // first time simultaneously, they all converge here. The winner compiles YARA rules (30-60s
-    // on first run without cache); every other thread is parked inside the stdlib OnceLock.
-    // This is *not* a deadlock — rayon's work-stealing still services other tasks — but all
-    // analysis threads are stalled until compilation finishes.
-    if lock.get().is_none() {
+    // Fast path: already initialized.
+    if let Some(engine) = lock.get() {
+        return engine.clone();
+    }
+
+    // Slow path: about to init. Surface contract violations so they don't turn
+    // into silent deadlocks.
+    if rayon::current_thread_index().is_some() {
+        tracing::error!(
+            enable_third_party,
+            "yara_engine() first call landed on a rayon worker — prefetch was not \
+             called or ran too late. This is likely to deadlock; call \
+             cleave::prefetch_shared_resources() from a non-rayon thread at startup."
+        );
+    } else {
         tracing::debug!(
             enable_third_party,
-            on_rayon_thread = rayon::current_thread_index().is_some(),
-            "YARA engine not yet initialized; this thread will block until compilation completes \
-             (30-60s on first run without cache). Other threads contending on OnceLock are parked."
+            "Initializing global YARA engine"
         );
     }
 
     lock.get_or_init(|| {
-        tracing::debug!(
-            "Initializing global YARA engine (third_party={})",
-            enable_third_party
-        );
         let mut engine = YaraEngine::new();
         engine.load_all_rules(enable_third_party);
         Arc::new(engine)

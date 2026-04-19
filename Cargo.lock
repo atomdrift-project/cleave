@@ -863,9 +863,9 @@ checksum = "c2459377285ad874054d797f3ccebf984978aa39129f6eafde5cdc8315b612f8"
 
 [[package]]
 name = "constant_time_eq"
-version = "0.4.3"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7dab3fe76c1571ecd5cfe878b61bce3fedf4adbde5d8a8653b2a7956ffd14628"
+checksum = "3d52eff69cd5e647efe296129160853a42795992097e8af39800e1060caeea9b"
 
 [[package]]
 name = "core-foundation-sys"
@@ -3934,6 +3934,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.1.8"
+source = "git+https://codeberg.org/atomdrift/stng.git#def9e683cee123c6a1a41df47a2ba10830c55e12"
 dependencies = [
  "aho-corasick",
  "anyhow",

@@ -720,6 +720,7 @@ dependencies = [
  "cleave-macros",
  "colored",
  "cpio",
+ "criterion",
  "crossbeam-channel",
  "cu-bincode",
  "dashmap",

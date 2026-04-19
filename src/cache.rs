@@ -367,9 +367,8 @@ pub(crate) fn re_cache_dir() -> Result<PathBuf> {
 /// Prune RE cache entries older than `max_age_secs`.
 ///
 /// The `re/` subdirectory has no automatic eviction and grows without bound as
-/// new unique binaries are analyzed. Call this periodically (e.g. server startup
-/// or scheduled task) to prevent unbounded disk growth.
-#[allow(dead_code)] // Called from server::run; binary crate can't see cross-crate usage
+/// new unique binaries are analyzed. Call this periodically (server startup,
+/// scan_directory entry, or scheduled task) to prevent unbounded disk growth.
 pub(crate) fn prune_re_cache(max_age_secs: u64) -> usize {
     let Ok(re_dir) = re_cache_dir() else {
         return 0;

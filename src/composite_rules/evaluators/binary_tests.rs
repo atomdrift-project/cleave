@@ -532,7 +532,15 @@ fn test_eval_import_combination_min_suspicious() {
     ];
 
     // Require 1 suspicious but have 0
-    let result = eval_import_combination(Some(&required), Some(&suspicious), Some(1), None, None, None, &ctx);
+    let result = eval_import_combination(
+        Some(&required),
+        Some(&suspicious),
+        Some(1),
+        None,
+        None,
+        None,
+        &ctx,
+    );
     assert!(!result.matched);
 }
 

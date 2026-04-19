@@ -42,6 +42,28 @@ use tracing::{debug, trace};
 // since scanners are thread-local and a separate pool doubled the thread count.
 // The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
+/// Filter-map `items` in parallel when we're the outermost rayon context,
+/// sequentially otherwise.
+///
+/// Archive expansion is nearly always reached from the scan's outer `par_bridge`
+/// (i.e. we're already running on a rayon worker), in which case nesting a
+/// second `par_iter` here just contends for the same threads and pays the
+/// work-stealing overhead without buying any real parallelism. In the rare
+/// top-level case (`cleave analyze single.jar` with no outer scan), we still
+/// parallelize internally.
+fn par_filter_map_if_outermost<T, U, F>(items: &[T], f: F) -> Vec<U>
+where
+    T: Sync,
+    U: Send,
+    F: Fn(&T) -> Option<U> + Sync + Send,
+{
+    if rayon::current_thread_index().is_some() {
+        items.iter().filter_map(f).collect()
+    } else {
+        items.par_iter().filter_map(f).collect()
+    }
+}
+
 /// Result of analyzing a single archive member, collected lock-free during par_iter
 /// and aggregated single-threaded afterwards.
 struct MemberAnalysisResult {
@@ -332,11 +354,15 @@ impl ArchiveAnalyzer {
                 if rayon::current_thread_index().is_some() {
                     // Batch mode: sequentialize to avoid pool starvation.
                     crate::memory_tracker::set_current_phase(&prelaunch_label);
-                    let opts = crate::analyzers::stng_analysis_opts(4);
+                    let opts = crate::analyzers::attach_stng_cancellation(
+                        crate::analyzers::stng_analysis_opts(4),
+                        self.cancelled.as_ref(),
+                    );
                     stng_result = stng::extract_strings_with_options(data, &opts);
                     crate::memory_tracker::clear_current_phase();
                     let _ = r2.extract_batched(
                         &r2_path,
+                        data.len() as u64,
                         true,
                         false,
                         false,
@@ -354,6 +380,7 @@ impl ArchiveAnalyzer {
                             );
                             let _ = r2.extract_batched(
                                 &r2_path,
+                                data.len() as u64,
                                 true,
                                 false,
                                 false,
@@ -363,7 +390,10 @@ impl ArchiveAnalyzer {
                             );
                         });
                         crate::memory_tracker::set_current_phase(&prelaunch_label);
-                        let opts = crate::analyzers::stng_analysis_opts(4);
+                        let opts = crate::analyzers::attach_stng_cancellation(
+                            crate::analyzers::stng_analysis_opts(4),
+                            self.cancelled.as_ref(),
+                        );
                         inner_stng_result = stng::extract_strings_with_options(data, &opts);
                         crate::memory_tracker::clear_current_phase();
                     });
@@ -371,8 +401,18 @@ impl ArchiveAnalyzer {
                 }
                 stng_strings = stng_result;
             } else {
+                // Rizin was skipped, which (per `archive_member_rizin_skip_reason`)
+                // means the member is not a native binary we want to analyse deeply:
+                // text/source/manifest files, vendored `.node` modules, etc. Pass
+                // `FormatHint::Text` via `stng_text_opts` so stng skips its XOR
+                // scan — `extract_incremental_xor_strings` was ~5% of CPU on the
+                // slow benchmark, almost entirely on these non-binary members where
+                // XOR-obfuscated payloads are vanishingly rare.
                 crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
-                let opts = crate::analyzers::stng_analysis_opts(4);
+                let opts = crate::analyzers::attach_stng_cancellation(
+                    crate::analyzers::stng_text_opts(4),
+                    self.cancelled.as_ref(),
+                );
                 stng_strings = stng::extract_strings_with_options(data, &opts);
                 crate::memory_tracker::clear_current_phase();
             }
@@ -668,9 +708,8 @@ impl ArchiveAnalyzer {
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(expected_count);
         let mut files_analyzed: usize = 0;
 
-        let member_results: Vec<MemberAnalysisResult> = classes_to_analyze
-            .par_iter()
-            .filter_map(|entry| {
+        let member_results: Vec<MemberAnalysisResult> =
+            par_filter_map_if_outermost(&classes_to_analyze, |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -748,8 +787,7 @@ impl ArchiveAnalyzer {
                     extracted_path: None,
                     report,
                 })
-            })
-            .collect();
+            });
 
         // Single-threaded aggregation — no lock contention
         for result in member_results {
@@ -859,9 +897,8 @@ impl ArchiveAnalyzer {
             "starting parallel archive member analysis",
         );
 
-        let non_class_results: Vec<MemberAnalysisResult> = non_class_files
-            .par_iter()
-            .filter_map(|entry| {
+        let non_class_results: Vec<MemberAnalysisResult> =
+            par_filter_map_if_outermost(&non_class_files, |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -949,8 +986,7 @@ impl ArchiveAnalyzer {
                     extracted_path: None,
                     report,
                 })
-            })
-            .collect();
+            });
 
         // Aggregate non-class results
         for result in non_class_results {
@@ -1133,9 +1169,8 @@ impl ArchiveAnalyzer {
             on_rayon_thread = rayon::current_thread_index().is_some(),
             "Starting parallel archive member analysis"
         );
-        let generic_results: Vec<MemberAnalysisResult> = files
-            .par_iter()
-            .filter_map(|entry| {
+        let generic_results: Vec<MemberAnalysisResult> =
+            par_filter_map_if_outermost(&files, |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -1226,8 +1261,7 @@ impl ArchiveAnalyzer {
                     extracted_path,
                     report,
                 })
-            })
-            .collect();
+            });
 
         // Single-threaded aggregation
         for result in generic_results {

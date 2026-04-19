@@ -36,7 +36,7 @@ use crate::cli;
 use crate::composite_rules;
 use crate::output;
 use crate::types;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::io::Write;
 use std::path::Path;
 
@@ -71,6 +71,11 @@ pub struct AnalyzeConfig<'a> {
     pub slow_rule_ms: u64,
     /// Whether output is being redirected to a file.
     pub output_to_file: bool,
+    /// Target file for `--output`. When `Some` and the target is a directory,
+    /// scan results are streamed directly into this file instead of being
+    /// spooled into memory; write_output in the dispatcher then becomes a
+    /// no-op for the empty return string.
+    pub output_path: Option<&'a str>,
     /// Maximum file size eligible for YARA scanning.
     pub max_scan_file_size: u64,
     /// Number of threads to use for directory scans.
@@ -122,29 +127,52 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
         scan_threads: config.scan_threads,
-        cancellation: None,
+        // Pick up the CLI's SIGINT/SIGTERM-driven cancellation flag so a
+        // long scan drains cleanly on Ctrl-C. In server mode the handler
+        // isn't installed and the OnceLock returns a fresh unset flag, so
+        // this is still a no-op for server-invoked analyses.
+        cancellation: Some(cleave::cancellation::global_flag()),
         phase: None,
     };
 
     // If target is a directory, process files recursively
     if path.is_dir() {
         let options_arc = std::sync::Arc::new(options);
-        let stream_stdout = !config.output_to_file;
-        let (results_tx, results_rx) = if stream_stdout {
-            (None, None)
-        } else {
-            let (tx, rx) = crossbeam_channel::unbounded::<String>();
-            (Some(tx), Some(rx))
-        };
         let format_val = *config.format;
         let min_crit = config.min_crit;
         let max_crit = config.max_crit;
         let min_file_crit = config.min_file_crit;
         let max_file_crit = config.max_file_crit;
 
-        cleave::scan_directory(path, &options_arc, move |event| match event {
+        // Sink: one of three destinations, all configured up front so the
+        // per-file callback stays cheap. Streaming to the output file used to
+        // spool every formatted chunk through an unbounded crossbeam channel
+        // and then join into a single String at the end — on a 1M-file scan
+        // that buffered ~1 GiB before the first byte hit disk. Open the file
+        // once and let the callback write to it under a mutex instead.
+        enum Sink {
+            Stdout,
+            File(std::sync::Mutex<std::io::BufWriter<std::fs::File>>),
+        }
+        let sink = match config.output_path {
+            Some(path) if config.output_to_file => {
+                let file = std::fs::File::create(path)
+                    .with_context(|| format!("Failed to open output file {}", path))?;
+                // 256 KiB buffer: big enough that per-file JSONL writes (~1–5 KiB)
+                // don't thrash the lock+flush path, small enough that process
+                // death loses at most one buffer's worth of already-formatted
+                // results.
+                Sink::File(std::sync::Mutex::new(std::io::BufWriter::with_capacity(
+                    256 * 1024,
+                    file,
+                )))
+            }
+            _ => Sink::Stdout,
+        };
+
+        cleave::scan_directory(path, &options_arc, |event| match event {
             cleave::ScanEvent::Start { total } => {
-                tracing::info!(total = total, "Starting directory scan");
+                tracing::info!(total = ?total, "Starting directory scan");
             }
             cleave::ScanEvent::File {
                 path: file_path,
@@ -164,10 +192,6 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                         ) else {
                             return;
                         };
-                        if stream_stdout && !res.is_empty() {
-                            print!("{}", res);
-                            let _ = std::io::stdout().flush();
-                        }
                         res
                     }
                     Err(e) => {
@@ -175,25 +199,41 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                         String::new()
                     }
                 };
-                if let Some(tx) = &results_tx {
-                    if !formatted.is_empty() {
-                        let _ = tx.send(formatted);
+                if formatted.is_empty() {
+                    return;
+                }
+                match &sink {
+                    Sink::Stdout => {
+                        print!("{}", formatted);
+                        let _ = std::io::stdout().flush();
+                    }
+                    Sink::File(writer) => {
+                        // A poisoned mutex means a prior callback panicked while
+                        // holding the lock mid-write — the buffer may be partial
+                        // but continuing to append is still the best we can do;
+                        // losing output is worse than losing strict JSONL framing.
+                        let mut w = writer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if let Err(e) = w.write_all(formatted.as_bytes()) {
+                            tracing::error!(error = %e, "failed to write streamed output chunk");
+                        }
                     }
                 }
             }
         })?;
 
-        if let Some(rx) = results_rx {
-            // scan_directory dropped the callback on return, which dropped the
-            // sender. recv() drains buffered messages and returns Err once the
-            // channel is empty and disconnected.
-            let mut out = String::new();
-            while let Ok(chunk) = rx.recv() {
-                out.push_str(&chunk);
-            }
-            return Ok(out);
+        // Flush the file buffer before returning so write_output sees a
+        // fully-written file. write_output is a no-op for our empty return.
+        // Scan has joined, so we own the Mutex exclusively; into_inner skips
+        // the lock entirely.
+        if let Sink::File(writer) = sink {
+            writer
+                .into_inner()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .flush()
+                .context("Failed to flush streamed output file")?;
         }
-        // Results already streamed to stdout in the callback.
         return Ok(String::new());
     }
 

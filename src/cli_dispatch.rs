@@ -16,6 +16,7 @@ struct AnalyzeDispatchContext<'a> {
     platforms: &'a [cleave::Platform],
     slow_rule_ms: u64,
     output_to_file: bool,
+    output_path: Option<&'a str>,
     max_memory_file_size: u64,
     max_scan_file_size: u64,
     scan_threads: usize,
@@ -36,6 +37,7 @@ impl<'a> AnalyzeDispatchContext<'a> {
         platforms: &'a [cleave::Platform],
         slow_rule_ms: u64,
         output_to_file: bool,
+        output_path: Option<&'a str>,
         max_memory_file_size: u64,
         max_scan_file_size: u64,
         scan_threads: usize,
@@ -55,6 +57,7 @@ impl<'a> AnalyzeDispatchContext<'a> {
             platforms,
             slow_rule_ms,
             output_to_file,
+            output_path,
             max_memory_file_size,
             max_scan_file_size,
             scan_threads,
@@ -123,6 +126,7 @@ fn analyze_targets(targets: &[String], ctx: &AnalyzeDispatchContext<'_>) -> Resu
             enable_full_validation: false,
             slow_rule_ms: ctx.slow_rule_ms,
             output_to_file: ctx.output_to_file,
+            output_path: ctx.output_path,
             max_scan_file_size: ctx.max_scan_file_size,
             scan_threads: ctx.scan_threads,
             min_crit: ctx.min_crit,
@@ -313,6 +317,7 @@ pub(crate) struct DispatchOptions<'a> {
     pub platforms: &'a [cleave::Platform],
     pub slow_rule_ms: u64,
     pub output_to_file: bool,
+    pub output_path: Option<&'a str>,
     pub max_memory_file_size: u64,
     pub max_scan_file_size: u64,
     pub scan_threads: usize,
@@ -335,6 +340,7 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
             opts.platforms,
             opts.slow_rule_ms,
             opts.output_to_file,
+            opts.output_path,
             opts.max_memory_file_size,
             opts.max_scan_file_size,
             opts.scan_threads,
@@ -494,8 +500,14 @@ pub(crate) fn write_output(
     format: cli::OutputFormat,
 ) -> Result<()> {
     if let Some(output_path) = output_path {
-        fs::write(&output_path, result)
-            .context(format!("Failed to write output to {}", output_path))?;
+        // An empty result in --output mode means the command already streamed
+        // its output to the file (directory scans open and write through a
+        // BufWriter inside analyze::run to avoid buffering the full report).
+        // Skip the write so we don't clobber the streamed file with "".
+        if !result.is_empty() {
+            fs::write(&output_path, result)
+                .context(format!("Failed to write output to {}", output_path))?;
+        }
         if format == cli::OutputFormat::Terminal {
             eprintln!("Results written to: {}", output_path);
         }

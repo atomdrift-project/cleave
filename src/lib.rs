@@ -23,6 +23,7 @@ extern crate self as cleave;
 
 mod analysis_cache;
 pub mod cache;
+pub mod cancellation;
 pub mod decoders;
 mod entropy;
 pub mod extractors;
@@ -338,7 +339,7 @@ fn extension_content_mismatch_criticality(expected: &str, actual: &str) -> types
         types::Criticality::Suspicious
     }
 }
-pub use composite_rules::evaluators::clear_thread_local_caches;
+pub use composite_rules::evaluators::{clear_regex_caches, clear_thread_local_caches};
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -701,14 +702,18 @@ impl Default for AnalysisOptions {
     }
 }
 
-/// Clear thread-local caches on the calling thread.
+/// Clear thread-local caches on the calling thread, plus the process-global
+/// regex caches.
 ///
-/// Frees UTF-8 conversion and YARA scanner caches accumulated during analysis.
-/// Rayon worker threads clear their own caches per-file, so no broadcast is needed.
+/// Rayon worker threads clear their own thread-local caches per-file, so no
+/// broadcast is needed. The regex caches are shared across all threads, so this
+/// is the one place we drop them — invoke under memory pressure (see
+/// `memory_tracker::start_periodic_logging`).
 pub fn clear_all_thread_caches() {
     clear_thread_local_caches();
+    clear_regex_caches();
     clear_condition_stats();
-    tracing::debug!("Cleared thread-local caches on calling thread");
+    tracing::debug!("Cleared thread-local caches and regex caches on calling thread");
 }
 
 /// Pre-warm the YARA engine on a background thread.
@@ -1000,22 +1005,20 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     precomputed_sha256: Option<String>,
     analysis_depth: u32,
 ) -> Result<AnalysisReport> {
-    struct ThreadLocalCacheClearGuard {
-        enabled: bool,
-    }
+    struct ThreadLocalCacheClearGuard;
 
     impl Drop for ThreadLocalCacheClearGuard {
         fn drop(&mut self) {
-            if self.enabled {
-                crate::composite_rules::evaluators::clear_thread_local_caches();
-            }
+            crate::composite_rules::evaluators::clear_thread_local_caches();
         }
     }
 
     let path = path.as_ref();
-    let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard {
-        enabled: analysis_depth == 0,
-    };
+    // Clear thread-local UTF-8 / scanner caches after every analysis frame,
+    // including nested payload decoding (analysis_depth > 0). Leaving entries
+    // in the LRU across depth levels let a deep decoding chain pin multiple
+    // multi-hundred-MB UTF-8 caches on a single worker thread.
+    let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
     let span = tracing::info_span!("analyze", path = %path.display());
     let _enter = span.enter();
 
@@ -1033,7 +1036,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             if path.is_dir() {
                 anyhow::bail!(
-                    "Path is a directory, use analyze_directory instead: {}",
+                    "Path is a directory, use scan_directory instead: {}",
                     path.display()
                 );
             }
@@ -1080,7 +1083,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
-        tracing::info!("Cache hit");
+        tracing::debug!("Cache hit");
         memory_tracker::log_after_file_processing(
             path.to_str().unwrap_or("unknown"),
             file_size,
@@ -1091,7 +1094,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
     // Secondary check: per-file cache (cross-context, shared with archive members)
     if let Some(fa) = analysis_cache::file_analysis_cache_lookup(&sha256_hex, options) {
-        tracing::info!("File cache hit (cross-context)");
+        tracing::debug!("File cache hit (cross-context)");
         let report = report_from_file_analysis(fa, path.display().to_string());
         memory_tracker::log_after_file_processing(
             path.to_str().unwrap_or("unknown"),
@@ -1125,13 +1128,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // binary noise and their contents will be analyzed separately.
     // For binary types, overlap stng with YARA scan (both need only file_data).
     let cancel_for_yara = options.cancellation.clone();
+    let cancel_for_stng = options.cancellation.as_ref();
     let ((stng_strings, stage_stng_ms), prefetched_yara) = if file_type.is_archive() {
         ((Vec::new(), 0u64), None)
     } else if let Some(ftypes) = binary_yara_ftypes {
         rayon::join(
             || {
                 let t = std::time::Instant::now();
-                let opts = analyzers::stng_analysis_opts(4);
+                let opts = analyzers::attach_stng_cancellation(
+                    analyzers::stng_analysis_opts(4),
+                    cancel_for_stng,
+                );
                 let s = stng::extract_strings_with_options(file_data, &opts);
                 (s, t.elapsed().as_millis() as u64)
             },
@@ -1149,7 +1156,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         )
     } else {
         let t = std::time::Instant::now();
-        let opts = analyzers::stng_analysis_opts(4);
+        let opts =
+            analyzers::attach_stng_cancellation(analyzers::stng_analysis_opts(4), cancel_for_stng);
         let s = stng::extract_strings_with_options(file_data, &opts);
         ((s, t.elapsed().as_millis() as u64), None)
     };
@@ -1388,7 +1396,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 analyzer.analyze_input(&input)
             } else {
                 // No dedicated analyzer — return a minimal report with basic metadata.
-                // This allows callers (analyze_file, analyze_directory with all_files=true)
+                // This allows callers (analyze_file, scan_directory with all_files=true)
                 // to handle files of any type without erroring.
                 let target = types::TargetInfo {
                     path: path.display().to_string(),
@@ -1765,8 +1773,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     .map(|(name, _)| name)
     .unwrap_or("none");
 
-    // Per-file stage timing summary
-    tracing::info!(
+    // Per-file stage timing summary — debug! because this fires for every
+    // file and serializes on the tracing writer mutex at info level. At 10M
+    // files × 24 workers, the mutex cost dominates the log itself.
+    tracing::debug!(
         total_ms,
         stng_ms = stage_stng_ms,
         structural_ms = stage_structural_ms,
@@ -1804,91 +1814,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     Ok(report)
 }
 
-/// Analyze multiple files in a directory.
-///
-/// Returns a vector of analysis reports, one for each analyzed file.
-pub fn analyze_directory<P: AsRef<Path>>(
-    path: P,
-    options: &AnalysisOptions,
-) -> Result<Vec<AnalysisReport>> {
-    use rayon::prelude::*;
-    use walkdir::WalkDir;
-
-    let path = path.as_ref();
-    if !path.is_dir() {
-        anyhow::bail!("Path is not a directory: {}", path.display());
-    }
-
-    let _disable_guards = AnalysisDisableGuards::from_options(options);
-
-    // Collect all files, filtering unknown types unless all_files is set
-    let all_files_flag = options.all_files;
-    let files: Vec<_> = WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let file_name = e.file_name().to_string_lossy();
-            !file_name.starts_with(".git")
-        })
-        .filter_map(std::result::Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            if all_files_flag {
-                return true;
-            }
-            let file_type = detect_file_type(e.path()).unwrap_or(FileType::Unknown);
-            analyzers::is_analyzable(e.path(), &file_type)
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
-
-    // Analyze in parallel — catch panics so one bad file doesn't kill the batch
-    let results: Vec<_> = files
-        .par_iter()
-        .map(|file_path| {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                analyze_file(file_path, options)
-            })) {
-                Ok(result) => result.map_err(|err| (file_path.clone(), err)),
-                Err(_panic) => {
-                    tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
-                    Err((file_path.clone(), anyhow::anyhow!("analysis panicked")))
-                }
-            }
-        })
-        .collect();
-
-    let mut reports = Vec::with_capacity(results.len());
-    let mut failures = Vec::new();
-    for result in results {
-        match result {
-            Ok(report) => reports.push(report),
-            Err((path, err)) => failures.push((path, err)),
-        }
-    }
-
-    if failures.is_empty() {
-        return Ok(reports);
-    }
-
-    let mut message = format!("directory analysis failed for {} file(s)", failures.len());
-    for (path, err) in failures.iter().take(5) {
-        message.push_str(&format!("\n- {}: {err:#}", path.display()));
-    }
-    if failures.len() > 5 {
-        message.push_str(&format!("\n- ... and {} more", failures.len() - 5));
-    }
-
-    anyhow::bail!(message)
-}
-
 /// An event emitted during [`scan_directory`].
 #[derive(Debug)]
 pub enum ScanEvent {
-    /// Emitted exactly once before analysis begins, with the total number of files to scan.
+    /// Emitted exactly once before analysis begins.
+    ///
+    /// `total` is `None` because the scan streams the directory walk: analysis
+    /// starts as soon as the first path is yielded, so the final count is not
+    /// known upfront. The final count is available on `ScanSummary.total`
+    /// returned from [`scan_directory`] once the scan completes.
     Start {
-        /// Total number of files that passed the type filter and will be analyzed.
-        total: usize,
+        /// Total number of files that will be analyzed, if known upfront.
+        total: Option<usize>,
     },
     /// Emitted for each file as its analysis completes. May arrive from any rayon worker thread.
     File {
@@ -1912,10 +1849,10 @@ pub struct ScanSummary {
 
 /// Scan a directory, invoking `callback` for each file as its analysis completes.
 ///
-/// Unlike [`analyze_directory`], results stream out of the parallel workers as they
-/// finish rather than being collected into a `Vec`. This makes it suitable for
-/// progress reporting, streaming output, and processing large directories without
-/// accumulating all results in memory.
+/// Results stream out of the parallel workers as they finish rather than being
+/// collected into a `Vec`. This makes it suitable for progress reporting,
+/// streaming output, and processing large directories without accumulating all
+/// results in memory — the only viable entry point at 10M-file scale.
 ///
 /// The callback first receives a [`ScanEvent::Start`] with the total file count,
 /// then a [`ScanEvent::File`] for every file attempted, including failures. The
@@ -1926,7 +1863,7 @@ pub struct ScanSummary {
 /// [`analyze_file`] in a loop.
 ///
 /// Hidden files and non-program file types are silently skipped unless
-/// `options.all_files` is set, matching the behavior of [`analyze_directory`].
+/// `options.all_files` is set.
 ///
 /// # Errors
 ///
@@ -1948,6 +1885,16 @@ where
     }
     let _disable_guards = AnalysisDisableGuards::from_options(options);
 
+    // Prune stale radare2 disk-cache entries in the background. The `re/` dir
+    // has no in-line eviction and grows unbounded across scans (each new SHA256
+    // adds a zstd-compressed blob). 30 days matches the server default.
+    std::thread::spawn(|| {
+        let removed = cache::prune_re_cache(30 * 24 * 3600);
+        if removed > 0 {
+            tracing::info!(removed, "Pruned stale RE cache entries");
+        }
+    });
+
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
     let (mapper_result, yara_engine) = rayon::join(
         || shared_resources::capability_mapper_with_options(options),
@@ -1964,51 +1911,19 @@ where
     let mapper = mapper_result?;
 
     let all_files_flag = options.all_files;
-    let mut walked: usize = 0;
-    let mut walk_errors: usize = 0;
-    let mut dirs_entered: usize = 0;
-    let files: Vec<_> = WalkDir::new(path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let dominated = e.file_name().to_string_lossy().starts_with(".git");
-            if dominated {
-                tracing::debug!(path = %e.path().display(), "Skipping dotgit directory");
-            }
-            !dominated
-        })
-        .filter_map(|entry| match entry {
-            Ok(e) => Some(e),
-            Err(e) => {
-                walk_errors += 1;
-                tracing::warn!(error = %e, "Failed to read directory entry");
-                None
-            }
-        })
-        .filter(|e| {
-            if e.file_type().is_dir() {
-                dirs_entered += 1;
-                return false;
-            }
-            if !e.file_type().is_file() {
-                tracing::debug!(path = %e.path().display(), "Skipping non-file entry");
-                return false;
-            }
-            walked += 1;
-            true
-        })
-        .map(|e| e.path().to_path_buf())
-        .collect();
 
-    tracing::info!(
-        walked = walked,
-        dirs = dirs_entered,
-        errors = walk_errors,
-        "Directory walk complete"
-    );
+    // Counters shared across the walk producer and analyzer consumers.
+    // The walk runs inside `par_bridge`, which serializes `next()` across
+    // worker threads, so these are touched from multiple threads (one at a
+    // time inside the bridge's mutex). Atomic fetch_add is still the right
+    // primitive — it's what the Drop-time summary and ScanSummary read.
+    let walked = AtomicUsize::new(0);
+    let walk_errors = AtomicUsize::new(0);
+    let dirs_entered = AtomicUsize::new(0);
 
-    let total = files.len();
-    callback(ScanEvent::Start { total });
+    // Total is not known until the walk finishes. Downstream progress UIs
+    // should listen for the final count on the returned ScanSummary.
+    callback(ScanEvent::Start { total: None });
 
     let analyzed = AtomicUsize::new(0);
     let skipped = AtomicUsize::new(0);
@@ -2042,14 +1957,68 @@ where
             }
         });
     let scan_pool = shared_resources::scan_pool(scan_threads);
+
+    // Build the walk iterator once. par_bridge() drives `next()` from worker
+    // threads behind an internal mutex — the walk proceeds lazily as workers
+    // pull, so we never materialize the full PathBuf list. Memory for pending
+    // paths stays bounded to the work-stealing deque depth instead of growing
+    // with total file count.
     let analyze_files = || {
-        files.par_iter().for_each(|file_path| {
+        use rayon::iter::ParallelBridge;
+
+        let walk = WalkDir::new(path)
+            .follow_links(false)
+            .into_iter()
+            .filter_entry(|e| {
+                let dotgit = e.file_name().to_string_lossy().starts_with(".git");
+                if dotgit {
+                    tracing::debug!(path = %e.path().display(), "Skipping dotgit directory");
+                }
+                !dotgit
+            })
+            .filter_map(|entry| match entry {
+                Ok(e) => Some(e),
+                Err(e) => {
+                    walk_errors.fetch_add(1, Ordering::Relaxed);
+                    tracing::warn!(error = %e, "Failed to read directory entry");
+                    None
+                }
+            })
+            .filter(|e| {
+                if e.file_type().is_dir() {
+                    dirs_entered.fetch_add(1, Ordering::Relaxed);
+                    return false;
+                }
+                if !e.file_type().is_file() {
+                    tracing::debug!(path = %e.path().display(), "Skipping non-file entry");
+                    return false;
+                }
+                walked.fetch_add(1, Ordering::Relaxed);
+                true
+            })
+            .map(|e| e.path().to_path_buf());
+
+        walk.par_bridge().for_each(|file_path| {
+        // Cancellation fast path: once SIGINT has flipped the flag, every
+        // remaining par_bridge slot returns instantly so the scan drains in
+        // work already in-flight rather than starting new files. Inner
+        // analyzers (rizin, YARA, tree-sitter) also observe the flag via
+        // options.cancellation for sub-file granularity.
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+        {
+            skipped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
         // Catch panics from any analyzer so one malformed file doesn't
         // poison the rayon thread pool and kill the entire scan.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
         if max_scan_size > 0 {
-            if let Ok(meta) = std::fs::metadata(file_path) {
+            if let Ok(meta) = std::fs::metadata(&file_path) {
                 if meta.len() > max_scan_size {
                     tracing::debug!(
                         path = %file_path.display(),
@@ -2066,20 +2035,20 @@ where
         // File-type filtering: read the file once and check type from loaded data.
         // Previously this was done during collection (reading every file twice).
         if !all_files_flag {
-            let Ok(file_data) = file_io::read_file_smart(file_path) else {
+            let Ok(file_data) = file_io::read_file_smart(&file_path) else {
                 tracing::debug!(path = %file_path.display(), "Skipping unreadable file");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             };
-            let ft = analyzers::detect_file_type_from_data(file_path, file_data.as_slice());
-            if !analyzers::is_analyzable(file_path, &ft) {
+            let ft = analyzers::detect_file_type_from_data(&file_path, file_data.as_slice());
+            if !analyzers::is_analyzable(&file_path, &ft) {
                 tracing::debug!(path = %file_path.display(), file_type = ?ft, "Skipping non-analyzable file");
                 skipped.fetch_add(1, Ordering::Relaxed);
                 return;
             }
             // Pass pre-loaded data to avoid a second read
             let result = analyze_file_with_resources(
-                file_path,
+                &file_path,
                 options,
                 &mapper,
                 yara_engine.as_ref(),
@@ -2105,7 +2074,7 @@ where
         }
 
         let result =
-            analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
+            analyze_file_with_resources(&file_path, options, &mapper, yara_engine.as_ref(), None);
         match &result {
             Ok(_) => {
                 analyzed.fetch_add(1, Ordering::Relaxed);
@@ -2136,11 +2105,14 @@ where
         None => analyze_files(),
     }
 
+    let total = walked.load(Ordering::Relaxed);
     let final_analyzed = analyzed.load(Ordering::Relaxed);
     let final_skipped = skipped.load(Ordering::Relaxed);
     let final_errors = errors.load(Ordering::Relaxed);
     tracing::info!(
-        total = total,
+        walked = total,
+        dirs = dirs_entered.load(Ordering::Relaxed),
+        walk_errors = walk_errors.load(Ordering::Relaxed),
         analyzed = final_analyzed,
         skipped = final_skipped,
         errors = final_errors,
@@ -2422,35 +2394,5 @@ mod tests {
             extension_content_mismatch_criticality("WOFF2 font", "hex-encoded data"),
             types::Criticality::Suspicious
         );
-    }
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_analyze_directory_reports_per_file_failures() {
-        use std::fs;
-
-        #[allow(clippy::expect_used)]
-        let temp_dir = tempfile::tempdir().expect("create temp dir");
-        let valid = temp_dir.path().join("valid.sh");
-        let malformed_zip = temp_dir.path().join("broken.zip");
-
-        #[allow(clippy::expect_used)]
-        fs::write(&valid, b"#!/bin/sh\necho ok\n").expect("write valid file");
-        #[allow(clippy::expect_used)]
-        fs::write(&malformed_zip, b"PK\x03\x04not-a-real-zip").expect("write malformed archive");
-
-        let options = AnalysisOptions {
-            disable_yara: true,
-            disable_radare2: true,
-            disable_upx: true,
-            ..Default::default()
-        };
-
-        let err = analyze_directory(temp_dir.path(), &options).expect_err(
-            "directory analysis should surface malformed-file failures instead of dropping them",
-        );
-        let message = format!("{err:#}");
-        assert!(message.contains("directory analysis failed for 1 file(s)"));
-        assert!(message.contains("broken.zip"));
     }
 }

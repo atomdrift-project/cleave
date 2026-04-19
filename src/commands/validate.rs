@@ -184,24 +184,56 @@ fn run_does_nothing_check() -> Result<()> {
         ..Default::default()
     };
 
-    let reports = cleave::analyze_directory(&dir, &options)?;
+    let analyzed = std::sync::atomic::AtomicUsize::new(0);
+    let offenders = std::sync::Mutex::new(Vec::<(u32, String)>::new());
+    let failures = std::sync::Mutex::new(Vec::<(std::path::PathBuf, anyhow::Error)>::new());
 
-    let mut analyzed = 0usize;
-    let mut offenders: Vec<(u32, String)> = Vec::new();
-    for mut report in reports {
-        report.finalize();
-        for file in &report.files {
-            analyzed += 1;
-            if file.score > DOES_NOTHING_MAX_SCORE {
-                offenders.push((file.score, file.path.clone()));
+    cleave::scan_directory(&dir, &options, |event| {
+        if let cleave::ScanEvent::File { path, result } = event {
+            match *result {
+                Ok(mut report) => {
+                    report.finalize();
+                    for file in &report.files {
+                        analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        if file.score > DOES_NOTHING_MAX_SCORE {
+                            #[allow(clippy::expect_used)]
+                            offenders
+                                .lock()
+                                .expect("offenders mutex poisoned")
+                                .push((file.score, file.path.clone()));
+                        }
+                    }
+                }
+                Err(err) => {
+                    #[allow(clippy::expect_used)]
+                    failures
+                        .lock()
+                        .expect("failures mutex poisoned")
+                        .push((path, err));
+                }
             }
         }
+    })?;
+
+    #[allow(clippy::expect_used)]
+    let failures = failures.into_inner().expect("failures mutex poisoned");
+    if !failures.is_empty() {
+        let mut message = format!("directory analysis failed for {} file(s)", failures.len());
+        for (path, err) in failures.iter().take(5) {
+            message.push_str(&format!("\n- {}: {err:#}", path.display()));
+        }
+        if failures.len() > 5 {
+            message.push_str(&format!("\n- ... and {} more", failures.len() - 5));
+        }
+        anyhow::bail!(message);
     }
 
+    let analyzed = analyzed.load(std::sync::atomic::Ordering::Relaxed);
+    #[allow(clippy::expect_used)]
+    let mut offenders = offenders.into_inner().expect("offenders mutex poisoned");
+
     if offenders.is_empty() {
-        eprintln!(
-            "✅ All {analyzed} does-nothing file(s) score <= {DOES_NOTHING_MAX_SCORE}."
-        );
+        eprintln!("✅ All {analyzed} does-nothing file(s) score <= {DOES_NOTHING_MAX_SCORE}.");
         return Ok(());
     }
 

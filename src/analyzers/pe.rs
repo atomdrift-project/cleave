@@ -729,6 +729,7 @@ impl PEAnalyzer {
                 if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
                     r2_result = Some(self.radare2.extract_batched(
                         analysis_path,
+                        original_data.len() as u64,
                         has_symbols,
                         goblin_ok,
                         needs_r2_strings,

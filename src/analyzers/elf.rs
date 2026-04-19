@@ -209,6 +209,7 @@ impl ElfAnalyzer {
                         }
                         Some(self.radare2.extract_batched(
                             analysis_path,
+                            data.len() as u64,
                             symbols_found,
                             true, // goblin_success
                             needs_r2_strings,
@@ -476,6 +477,7 @@ impl ElfAnalyzer {
                         stng_strings.is_none() && self.preextracted_strings.is_none();
                     match self.radare2.extract_batched(
                         analysis_path,
+                        data.len() as u64,
                         false, // has_symbols=false: nothing came back from goblin
                         false, // goblin_success=false
                         needs_r2_strings,

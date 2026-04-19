@@ -1061,14 +1061,14 @@ pub(crate) fn eval_raw<'a>(
             // even on cache hit. That single bottleneck accounted for ~25 % of total
             // CPU as `parking_lot::lock_exclusive_slow` wait time on the slow dataset.
             let key = (pattern_str.to_string(), case_insensitive);
-            let cache = super::regex_cache_v2();
-            let bytes_re: Option<super::CachedRegex> = {
+            let cache = super::bytes_regex_cache();
+            let bytes_re: Option<regex::bytes::Regex> = {
                 let cached = cache.read().peek(&key).cloned();
                 if cached.is_some() {
                     cached
                 } else {
                     // Compile outside the lock; write-lock only to insert.
-                    match super::compile_regex_optimal(pattern_str, case_insensitive) {
+                    match super::compile_bytes_regex(pattern_str, case_insensitive) {
                         Ok(re) => {
                             cache.write().put(key, re.clone());
                             Some(re)
@@ -1078,7 +1078,7 @@ pub(crate) fn eval_raw<'a>(
                 }
             };
 
-            if let Some(super::CachedRegex::Bytes(ref bytes_re)) = bytes_re {
+            if let Some(ref bytes_re) = bytes_re {
                 let mut first_match = None;
                 let mut first_offset = None;
                 for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {

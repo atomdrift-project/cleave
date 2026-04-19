@@ -456,7 +456,10 @@ impl UnifiedSourceAnalyzer {
         // recv() and can't process rayon work. stng on scripts is fast
         // (single-digit ms), so the parallelism gain was negligible.
         if !has_preextracted {
-            let opts = super::stng_analysis_opts(4);
+            // This is the tree-sitter / script path — tell stng it's text so it
+            // can skip the XOR scan (XOR-obfuscated source code is vanishingly
+            // rare and the scanner is pure noise on minified JS / HTML / JSON).
+            let opts = super::attach_stng_cancellation(super::stng_text_opts(4), cancellation);
             owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
         }
 
@@ -567,27 +570,29 @@ impl UnifiedSourceAnalyzer {
         // Use pre-extracted payloads if available to avoid redundant expensive I/O
         let owned_payload_stng;
         let owned_extracted_payloads;
-        let extracted_payloads: &[crate::types::ExtractedPayload] = if !preextracted_payloads
-            .is_empty()
-        {
-            preextracted_payloads
-        } else {
-            let payload_stng: &[stng::ExtractedString] = if !preextracted_stng.is_empty() {
-                // Pre-extracted strings have min_length=4; filter for the min_length=16 threshold
-                owned_payload_stng = preextracted_stng
+        let extracted_payloads: &[crate::types::ExtractedPayload] =
+            if !preextracted_payloads.is_empty() {
+                preextracted_payloads
+            } else {
+                // Payload extraction needs min_length=16 strings.  We already have
+                // a min_length=4 extraction in `stng_strings` above (either from
+                // the caller's pre-extraction, or freshly produced into
+                // `owned_stng`).  Filtering that existing vec by length is
+                // equivalent to a second full extraction at min_length=16 for
+                // every extractor stng runs — raw scan uses `min_length` as a
+                // hard threshold, decoders use their own MIN_*_LENGTH constants,
+                // and XOR uses `xor_min_length` independently.  One extraction
+                // saves 5-50 ms per file on scripts.
+                let payload_stng: Vec<stng::ExtractedString> = stng_strings
                     .iter()
                     .filter(|s| s.value.len() >= 16)
                     .cloned()
-                    .collect::<Vec<_>>();
-                &owned_payload_stng
-            } else {
-                let opts = stng::ExtractOptions::new(16).with_garbage_filter(true);
-                owned_payload_stng = stng::extract_strings_with_options(content.as_bytes(), &opts);
-                &owned_payload_stng
+                    .collect();
+                owned_payload_stng = payload_stng;
+                owned_extracted_payloads =
+                    crate::extractors::extract_encoded_payloads(&owned_payload_stng);
+                &owned_extracted_payloads
             };
-            owned_extracted_payloads = crate::extractors::extract_encoded_payloads(payload_stng);
-            &owned_extracted_payloads
-        };
 
         for (idx, payload) in extracted_payloads.iter().enumerate() {
             if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {

@@ -55,17 +55,6 @@ mod yara_tests;
 // Shared Utilities
 // =============================================================================
 
-/// Cached compiled regex - either string-based or bytes-based for performance.
-/// ASCII-only patterns use bytes::Regex to avoid UTF-8 conversion overhead.
-#[derive(Clone)]
-pub(crate) enum CachedRegex {
-    /// String-based regex for Unicode patterns (fallback for non-ASCII patterns)
-    #[allow(dead_code)]
-    String(Regex),
-    /// Bytes-based regex for ASCII-only patterns (much faster, no UTF-8 conversion)
-    Bytes(regex::bytes::Regex),
-}
-
 /// Maximum number of regex patterns to cache (sized for ~128K rules, not all use regex)
 const REGEX_CACHE_MAX_SIZE: usize = 16_384;
 
@@ -98,55 +87,29 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
     REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
-/// V2 bounded LRU cache for optimized regex (supports both string and bytes variants)
-static REGEX_CACHE_V2: OnceLock<RwLock<lru::LruCache<(String, bool), CachedRegex>>> =
+/// Bounded LRU cache for ASCII `regex::bytes::Regex` — matches directly against
+/// raw file bytes, skipping UTF-8 validation. Only ASCII callers populate it;
+/// callers gate on `can_use_byte_matching` before asking for compilation.
+static BYTES_REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>>> =
     OnceLock::new();
 
-/// Access the V2 regex cache (supports both string and bytes regex)
-pub(crate) fn regex_cache_v2() -> &'static RwLock<lru::LruCache<(String, bool), CachedRegex>> {
-    REGEX_CACHE_V2.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
+/// Access the bytes regex cache.
+pub(crate) fn bytes_regex_cache(
+) -> &'static RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>> {
+    BYTES_REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
-/// Compile regex choosing optimal variant (bytes for ASCII, string for Unicode).
-/// This is a critical optimization: ASCII patterns can use bytes::Regex which operates
-/// directly on bytes without UTF-8 validation, providing massive speedup.
-pub(crate) fn compile_regex_optimal(
+/// Compile an ASCII-only pattern into a `regex::bytes::Regex` for zero-UTF-8-validation
+/// matching against raw file bytes. Returns `Err` if the pattern uses Unicode features —
+/// callers must gate on `can_use_byte_matching` first.
+pub(crate) fn compile_bytes_regex(
     pattern: &str,
     case_insensitive: bool,
-) -> Result<CachedRegex, regex::Error> {
-    // Check if pattern is ASCII-only and doesn't use Unicode features
-    if pattern.is_ascii()
-        && !pattern.contains("\\u")
-        && !pattern.contains("\\p")
-        && !pattern.contains("\\P")
-    {
-        // ASCII-only pattern - use bytes regex for performance
-        let mut builder = regex::bytes::RegexBuilder::new(pattern);
-        builder.case_insensitive(case_insensitive);
-        Ok(CachedRegex::Bytes(builder.build()?))
-    } else {
-        // Unicode pattern - use string regex
-        let mut builder = regex::RegexBuilder::new(pattern);
-        builder.case_insensitive(case_insensitive);
-        Ok(CachedRegex::String(builder.build()?))
-    }
+) -> Result<regex::bytes::Regex, regex::Error> {
+    let mut builder = regex::bytes::RegexBuilder::new(pattern);
+    builder.case_insensitive(case_insensitive);
+    builder.build()
 }
-
-/// Log scanner cache statistics for debugging memory issues.
-///
-/// The lifetime-extended scanner cache was removed because it relied on
-/// transmuting `yara_x::Scanner` lifetimes across rule reloads. Keep this as a
-/// no-op helper so existing call sites do not need conditional compilation.
-#[allow(dead_code)]
-pub(crate) fn log_scanner_cache_stats() {
-    tracing::debug!("YARA scanner cache statistics unavailable (cache removed for soundness)");
-}
-
-/// Clear the scanner cache for this thread.
-///
-/// This is a no-op because the scanner cache was removed for soundness.
-#[allow(dead_code)] // Used by lib.rs via shared_resources; binary crate can't see the usage
-pub(crate) fn clear_scanner_cache() {}
 
 /// Create a Scanner for the given Rules.
 #[must_use]
@@ -226,6 +189,10 @@ pub(crate) fn get_utf8_cached(
 /// them between archive members forced every rayon worker to recompile the
 /// same queries on the next member, which was the dominant hotspot after the
 /// ImportCombination/UTF-8 experiments.
+///
+/// Does NOT touch the process-global regex caches — those are shared across all
+/// threads and clearing them here would invalidate other workers' entries. Use
+/// `clear_regex_caches()` from a single thread when memory pressure demands it.
 #[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
     UTF8_CACHE.with(|cache| {
@@ -233,6 +200,27 @@ pub fn clear_thread_local_caches() {
     });
     crate::ip_validator::clear_current_file_id();
     crate::yara_engine::clear_engine_scanner_cache();
+}
+
+/// Clear the process-global regex caches.
+///
+/// These caches are shared across all threads and can grow up to
+/// `REGEX_CACHE_MAX_SIZE` entries each (compiled `Regex` / `regex::bytes::Regex`
+/// values can run several MB apiece for complex patterns, putting the cap in the
+/// tens of GB range). Once populated by a diverse pattern set they stay at the
+/// cap indefinitely, which is the dominant steady-state leak for long-running
+/// workers.
+///
+/// Call this from a single thread under memory pressure — other workers will
+/// simply repopulate entries they still need on their next access.
+#[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
+pub fn clear_regex_caches() {
+    if let Some(cache) = REGEX_CACHE.get() {
+        cache.write().clear();
+    }
+    if let Some(cache) = BYTES_REGEX_CACHE.get() {
+        cache.write().clear();
+    }
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

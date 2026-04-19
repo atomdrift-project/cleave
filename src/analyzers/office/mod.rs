@@ -147,9 +147,13 @@ impl OfficeAnalyzer {
             let virtual_path_str = format!("{doc_name}!!vba/{}.vbs", module.name);
             let virtual_path = Path::new(&virtual_path_str);
 
+            // VBA source — text hint so stng skips the XOR scan.
             let strings = stng::extract_strings_with_options(
                 vba_bytes,
-                &crate::analyzers::stng_analysis_opts(4),
+                &crate::analyzers::attach_stng_cancellation(
+                    crate::analyzers::stng_text_opts(4),
+                    cancellation,
+                ),
             );
             let mut input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);

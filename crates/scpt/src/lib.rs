@@ -58,8 +58,6 @@ pub enum SymbolKind {
     Application,
     /// String literal
     StringLiteral,
-    /// Handler/function name
-    Handler,
 }
 
 /// A symbol extracted from a compiled AppleScript

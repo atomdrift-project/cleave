@@ -259,6 +259,15 @@ impl Drop for MemoryLoggerHandle {
     }
 }
 
+/// Interval between jemalloc purge+report ticks, in seconds.
+///
+/// Every 5 minutes the watchdog runs `arena.<all>.purge` and reports how many
+/// bytes jemalloc returned to the OS. This replaced the older per-tick RSS
+/// info log — the purge delta is a more actionable signal (it separates true
+/// allocation growth from retained-but-idle pages) and the cadence is long
+/// enough that the purge's own CPU cost is negligible.
+const PURGE_INTERVAL_SECS: u64 = 300;
+
 /// Start a periodic memory watchdog thread.
 /// Returns a handle that can be used to stop the thread gracefully.
 ///
@@ -267,10 +276,12 @@ impl Drop for MemoryLoggerHandle {
 /// `max_rss_bytes` so the watchdog and the per-request check enforce the
 /// same threshold.
 ///
-/// The watchdog monitors RSS every `interval` and enforces the memory cap:
+/// The watchdog monitors RSS every `interval` and:
 /// 1. Warning threshold crossed → log warning + full memory stats
 /// 2. Critical threshold crossed → attempt cache clear, log error + full stats
 /// 3. Critical threshold sustained for >30s → `process::exit(1)`
+/// 4. Every 5 minutes (`PURGE_INTERVAL_SECS`) → run jemalloc arena purge,
+///    log RSS before/after and the reclaimed delta.
 ///
 /// This is the primary enforcement mechanism. The per-request check in
 /// `server::handlers::check_memory_pressure` provides early 503 rejection,
@@ -282,9 +293,10 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
     let shutdown_clone = shutdown.clone();
 
     let handle = std::thread::spawn(move || {
-        let mut iteration = 0u64;
         let mut overloaded_since: Option<Instant> = None;
+        let mut last_purge = Instant::now();
         let warning = limit.saturating_sub(512 * 1024 * 1024);
+        let purge_interval = Duration::from_secs(PURGE_INTERVAL_SECS);
 
         while !shutdown_clone.load(std::sync::atomic::Ordering::Relaxed) {
             std::thread::sleep(interval);
@@ -293,23 +305,11 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
                 break;
             }
 
-            iteration += 1;
-
             let Some(rss) = current_rss() else {
                 continue;
             };
 
             let rss_mb = rss / 1024 / 1024;
-            let rss_gb = rss / 1024 / 1024 / 1024;
-
-            let phase = current_phase_snapshot();
-            info!(
-                rss_mb = rss_mb,
-                rss_gb = rss_gb,
-                iteration = iteration,
-                current_op = phase.as_deref().unwrap_or("idle"),
-                "Periodic memory check"
-            );
 
             if rss > limit {
                 // Try to reclaim memory before escalating
@@ -365,9 +365,26 @@ pub fn start_periodic_logging(interval: Duration, limit: u64) -> MemoryLoggerHan
                 overloaded_since = None;
             }
 
-            // Log full stats every 6 iterations (once per minute at 10s interval)
-            if iteration.is_multiple_of(6) {
-                log_all_memory_stats();
+            // Periodic jemalloc purge + report. Runs on wall clock regardless
+            // of RSS state so operators always have a recent baseline.
+            if last_purge.elapsed() >= purge_interval {
+                last_purge = Instant::now();
+                let phase = current_phase_snapshot();
+                match purge_jemalloc() {
+                    Some(stats) => info!(
+                        rss_mb = rss_mb,
+                        resident_before_mb = stats.resident_before / 1024 / 1024,
+                        resident_after_mb = stats.resident_after / 1024 / 1024,
+                        reclaimed_mb = stats.reclaimed / 1024 / 1024,
+                        current_op = phase.as_deref().unwrap_or("idle"),
+                        "jemalloc purge"
+                    ),
+                    None => info!(
+                        rss_mb = rss_mb,
+                        current_op = phase.as_deref().unwrap_or("idle"),
+                        "periodic memory check (jemalloc not active; purge skipped)"
+                    ),
+                }
             }
         }
     });
@@ -405,13 +422,13 @@ pub fn log_all_memory_stats() {
         );
     }
 
-    // Regex cache
+    // Bytes regex cache
     {
-        let cache = crate::composite_rules::evaluators::regex_cache_v2().read();
+        let cache = crate::composite_rules::evaluators::bytes_regex_cache().read();
         info!(
             entries = cache.len(),
             max = cache.cap().get(),
-            "Memory stats snapshot - regex_v2 cache"
+            "Memory stats snapshot - bytes regex cache"
         );
     }
 
@@ -479,6 +496,73 @@ pub fn jemalloc_stats() -> Option<JemallocStats> {
             metadata: stats::metadata::mib().ok()?.read().ok()? as u64,
             resident: stats::resident::mib().ok()?.read().ok()? as u64,
             retained: stats::retained::mib().ok()?.read().ok()? as u64,
+        })
+    }
+
+    #[cfg(not(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+    )))]
+    None
+}
+
+/// Result of a jemalloc arena purge: RSS before/after and the delta that
+/// jemalloc returned to the OS. Populated only when jemalloc is the allocator.
+#[derive(Debug, Clone, Copy)]
+pub struct JemallocPurgeStats {
+    /// Resident bytes reported by jemalloc before the purge ran.
+    pub resident_before: u64,
+    /// Resident bytes reported by jemalloc after the purge completed.
+    pub resident_after: u64,
+    /// `resident_before - resident_after`: bytes returned to the OS.
+    pub reclaimed: u64,
+}
+
+/// Force jemalloc to decay and purge dirty pages across all arenas.
+///
+/// On long-lived servers jemalloc tends to retain dirty pages in the
+/// "free-but-still-committed" state between bursts of work; `dirty_decay_ms=0`
+/// biases it to return pages fast, but decay is only driven by allocation
+/// activity, so a quiet period between bursts leaves pages resident. Calling
+/// `arena.<all>.purge` on a wall-clock timer keeps RSS honest.
+///
+/// Returns `None` when jemalloc is not the active allocator (macOS, FreeBSD,
+/// DragonFly, OpenBSD, or the `jemalloc` feature disabled).
+#[must_use]
+pub fn purge_jemalloc() -> Option<JemallocPurgeStats> {
+    #[cfg(all(
+        unix,
+        feature = "jemalloc",
+        not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
+    ))]
+    {
+        // MALLCTL_ARENAS_ALL is jemalloc's sentinel for "all arenas"; stable at
+        // 4096 across jemalloc 5.x (what tikv-jemalloc-sys wraps).
+        const MALLCTL_ARENAS_ALL: usize = 4096;
+
+        let before = jemalloc_stats()?.resident;
+
+        // `arena.<i>.purge` is a write-only command; `()` makes newlen=0 which
+        // jemalloc treats as a pure trigger. Errors are logged but not fatal —
+        // purge is a best-effort hygiene op, not correctness.
+        // SAFETY: mallctl is thread-safe; the key is a valid null-terminated string.
+        let purge_res = unsafe {
+            tikv_jemalloc_ctl::raw::write(
+                format!("arena.{MALLCTL_ARENAS_ALL}.purge\0").as_bytes(),
+                (),
+            )
+        };
+        if let Err(e) = purge_res {
+            warn!(error = ?e, "jemalloc purge failed");
+            return None;
+        }
+
+        let after = jemalloc_stats()?.resident;
+        Some(JemallocPurgeStats {
+            resident_before: before,
+            resident_after: after,
+            reclaimed: before.saturating_sub(after),
         })
     }
 

@@ -56,7 +56,6 @@ impl AppleScriptAnalyzer {
                     scpt::SymbolKind::AppleEvent => ("scpt_event", Some("AppleEvents")),
                     scpt::SymbolKind::FourCharCode => ("scpt_fourcc", Some("OSType")),
                     scpt::SymbolKind::Application => ("scpt_app", Some("Applications")),
-                    scpt::SymbolKind::Handler => ("scpt_handler", None),
                     scpt::SymbolKind::StringLiteral => continue, // Skip string literals for imports
                 };
 

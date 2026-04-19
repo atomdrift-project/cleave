@@ -19,9 +19,10 @@
 //!
 //! # Eviction
 //!
-//! When the cache exceeds 100,000 entries, the oldest 10% by last access time
-//! are evicted. This check runs probabilistically (1-in-100 stores) to avoid
-//! overhead on every write.
+//! When the cache exceeds its entry cap, eviction runs down to 90% of the cap
+//! (sorted by last-access time). The check samples 1-in-10 stores so overhead
+//! is bounded while still keeping the cache close to the configured ceiling
+//! on long-running scans (10M+ files over multiple days).
 
 use crate::cache::{cache_dir, cache_timestamp};
 use crate::types::AnalysisReport;
@@ -41,7 +42,20 @@ const MAX_REPORT_ENTRIES: i64 = 100_000;
 const MAX_FILE_ANALYSIS_ENTRIES: i64 = 500_000;
 
 /// Reciprocal probability of running eviction on each store (1-in-N).
+///
+/// With cache caps in the 100k-entry range and a few dozen concurrent writers,
+/// `interval = 100` keeps overshoot under ~2.5 % of cap (at most
+/// `threads * (interval-1)` entries between checks). The eviction itself is
+/// cheap — an indexed range scan — but the `SELECT COUNT(*)` that gates it is
+/// O(n) on the table; running it once per 100 stores instead of once per 10
+/// cuts that gate cost by 10× on the cache-store hot path.
 const EVICTION_CHECK_INTERVAL: u64 = 100;
+
+/// After eviction, target this fraction of the cap. Bringing the cache down to
+/// 90% avoids oscillation where each eviction only shaves 10% of *current*
+/// size (which, when current > cap, leaves us still above cap).
+const EVICTION_TARGET_NUMERATOR: i64 = 9;
+const EVICTION_TARGET_DENOMINATOR: i64 = 10;
 
 /// Global store counter for report cache eviction scheduling, shared across all threads.
 static REPORT_STORE_COUNT: AtomicU64 = AtomicU64::new(0);
@@ -193,7 +207,8 @@ fn report_cache_store_conn(
     );
 }
 
-/// Evict the oldest 10% of toplevel report cache entries if over `MAX_REPORT_ENTRIES`.
+/// Evict oldest entries from the toplevel report cache when over `MAX_REPORT_ENTRIES`.
+/// Deletes down to 90% of the cap so the cache doesn't re-trigger eviction immediately.
 /// Uses a global counter so eviction is distributed across threads without duplication.
 fn maybe_evict_report_cache(conn: &Connection) {
     let count = REPORT_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
@@ -208,7 +223,8 @@ fn maybe_evict_report_cache(conn: &Connection) {
         .unwrap_or(0);
 
     if total > MAX_REPORT_ENTRIES {
-        let to_delete = total / 10;
+        let target = MAX_REPORT_ENTRIES * EVICTION_TARGET_NUMERATOR / EVICTION_TARGET_DENOMINATOR;
+        let to_delete = total - target;
         if let Ok(n) = conn.execute(
             "DELETE FROM toplevel_report_cache WHERE rowid IN
              (SELECT rowid FROM toplevel_report_cache ORDER BY last_accessed ASC LIMIT ?1)",
@@ -386,7 +402,8 @@ fn file_analysis_cache_store_conn(
     );
 }
 
-/// Evict the oldest 10% of file analysis cache entries if over `MAX_FILE_ANALYSIS_ENTRIES`.
+/// Evict oldest entries from the file analysis cache when over `MAX_FILE_ANALYSIS_ENTRIES`.
+/// Deletes down to 90% of the cap so the cache doesn't re-trigger eviction immediately.
 fn maybe_evict_file_analysis_cache(conn: &Connection) {
     let count = FILE_ANALYSIS_STORE_COUNT.fetch_add(1, Ordering::Relaxed);
     if !count.is_multiple_of(EVICTION_CHECK_INTERVAL) {
@@ -400,7 +417,9 @@ fn maybe_evict_file_analysis_cache(conn: &Connection) {
         .unwrap_or(0);
 
     if total > MAX_FILE_ANALYSIS_ENTRIES {
-        let to_delete = total / 10;
+        let target =
+            MAX_FILE_ANALYSIS_ENTRIES * EVICTION_TARGET_NUMERATOR / EVICTION_TARGET_DENOMINATOR;
+        let to_delete = total - target;
         if let Ok(n) = conn.execute(
             "DELETE FROM file_analysis_cache WHERE rowid IN
              (SELECT rowid FROM file_analysis_cache ORDER BY last_accessed ASC LIMIT ?1)",

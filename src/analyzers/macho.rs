@@ -374,6 +374,7 @@ impl MachOAnalyzer {
             let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
             if let Ok(batched) = self.radare2.extract_batched(
                 analysis_path,
+                data.len() as u64,
                 has_symbols,
                 true, // goblin_success
                 needs_r2_strings,
@@ -1346,7 +1347,9 @@ impl MachOAnalyzer {
                         if !seen_imports.insert((symbol.clone(), None)) {
                             continue;
                         }
-                        report.imports.push(Import::new(name, None, import_source.clone()));
+                        report
+                            .imports
+                            .push(Import::new(name, None, import_source.clone()));
                         if let Some(cap) = self.capability_mapper.lookup(&symbol, "goblin") {
                             if !report.findings.iter().any(|c| c.id == cap.id) {
                                 report.findings.push(cap);
@@ -1465,6 +1468,7 @@ impl MachOAnalyzer {
             if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
                 match self.radare2.extract_batched(
                     analysis_path,
+                    data.len() as u64,
                     false, // has_symbols=false: nothing came back from goblin
                     false, // goblin_success=false
                     true,  // include_strings: no stng pre-extraction in this path

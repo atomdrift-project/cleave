@@ -829,8 +829,8 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
         })
     });
 
-    let (regex_v2_entries, regex_v2_max) = {
-        let cache = crate::composite_rules::evaluators::regex_cache_v2().read();
+    let (bytes_regex_entries, bytes_regex_max) = {
+        let cache = crate::composite_rules::evaluators::bytes_regex_cache().read();
         (cache.len(), cache.cap().get())
     };
 
@@ -855,8 +855,8 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
         "caches": {
             "analysis_sqlite_entries": cache_entries,
             "analysis_sqlite_max": 100_000,
-            "regex_v2_entries": regex_v2_entries,
-            "regex_v2_max": regex_v2_max,
+            "bytes_regex_entries": bytes_regex_entries,
+            "bytes_regex_max": bytes_regex_max,
             // YARA scanner caches are thread-local; cap is per-thread
             "yara_scanner_max_per_thread": 4,
         },

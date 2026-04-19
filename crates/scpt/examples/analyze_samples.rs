@@ -32,7 +32,6 @@ fn main() {
                         scpt::SymbolKind::FourCharCode => "4cc",
                         scpt::SymbolKind::Application => "app",
                         scpt::SymbolKind::StringLiteral => "str",
-                        scpt::SymbolKind::Handler => "handler",
                     };
                     println!("  {:8} {}", kind_str, sym.name);
 

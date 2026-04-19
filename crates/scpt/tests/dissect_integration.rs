@@ -16,7 +16,6 @@ fn extract_imports(data: &[u8]) -> Vec<(String, Option<String>, String)> {
                 SymbolKind::AppleEvent => ("scpt_event", Some("AppleEvents")),
                 SymbolKind::FourCharCode => ("scpt_fourcc", Some("OSType")),
                 SymbolKind::Application => ("scpt_app", Some("Applications")),
-                SymbolKind::Handler => ("scpt_handler", None),
                 SymbolKind::StringLiteral => continue,
             };
 

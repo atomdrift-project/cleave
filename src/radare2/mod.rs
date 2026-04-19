@@ -616,9 +616,11 @@ impl Radare2Analyzer {
     ///
     /// `include_strings`: when false, `izj` is skipped and callers are expected to rely on
     /// pre-extracted `stng` strings instead.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn extract_batched(
         &self,
         file_path: &Path,
+        file_size: u64,
         has_symbols: bool,
         goblin_success: bool,
         include_strings: bool,
@@ -658,10 +660,6 @@ impl Radare2Analyzer {
         //                                       than `aa`'s per-symbol crawl)
         const MAX_SIZE_FOR_FULL_ANALYSIS: u64 = 100 * 1024 * 1024; // 100MB
         const MAX_SIZE_FOR_PROLOGUE_SCAN: u64 = 15 * 1024 * 1024; // 15MB
-
-        let file_size = std::fs::metadata(effective_path)
-            .map(|m| m.len())
-            .unwrap_or(0);
 
         // Go detection: Go binaries embed a massive runtime symbol table and
         // `aa`'s per-symbol crawl degrades catastrophically (e.g. 5 min on a

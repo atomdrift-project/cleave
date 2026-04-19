@@ -83,11 +83,46 @@ use std::sync::Arc;
 /// extraction. XOR scanning is enabled so decoded strings are available for
 /// trait matching (string_value conditions); stng internally gates the scan
 /// on platform-signed/Go heuristics so unproductive scans are cheap.
+///
+/// Parallelism is left at stng's default (ambient rayon pool).  Rayon's
+/// work-stealing scheduler handles oversubscription correctly for `par_iter`;
+/// the only deadlock-prone primitive is `rayon::in_place_scope`, which stng
+/// does not use.  An earlier revision forced `with_parallelism(false)` when
+/// `rayon::current_thread_index().is_some()` — but `rayon::join(stng, yara)`
+/// at `lib.rs:1134` enrolls the calling thread into the pool, so the check
+/// returned `Some` even for single-file runs and regressed throughput by
+/// pinning stng to a 1-thread pool.
 #[must_use]
 pub fn stng_analysis_opts(min_length: usize) -> stng::ExtractOptions {
     stng::ExtractOptions::new(min_length)
         .with_garbage_filter(true)
         .with_xor(None)
+}
+
+/// Variant of [`stng_analysis_opts`] for text / script inputs.
+///
+/// Setting `FormatHint::Text` skips stng's XOR scan — a pure waste on source
+/// code, minified JS, HTML, JSON, etc. where XOR obfuscation is vanishingly
+/// rare but the scanner would still walk the full file.
+#[must_use]
+pub fn stng_text_opts(min_length: usize) -> stng::ExtractOptions {
+    stng_analysis_opts(min_length).with_format_hint(stng::FormatHint::Text)
+}
+
+/// Attach a cancellation flag to an [`stng::ExtractOptions`] if one is available.
+///
+/// stng honours the flag at phase boundaries (before XOR, between decoder
+/// passes) so a user-interrupted scan can stop mid-file instead of finishing
+/// every decoder on a multi-megabyte binary.
+#[must_use]
+pub fn attach_stng_cancellation(
+    opts: stng::ExtractOptions,
+    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> stng::ExtractOptions {
+    match cancel {
+        Some(c) => opts.with_cancellation(c.clone()),
+        None => opts,
+    }
 }
 
 /// Heuristic: does this byte slice look like a Go binary?

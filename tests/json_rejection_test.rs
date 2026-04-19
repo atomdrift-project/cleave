@@ -8,7 +8,26 @@
 
 use cleave::AnalysisOptions;
 use std::fs;
+use std::sync::Mutex;
 use tempfile::TempDir;
+
+/// Collect all successful reports from a streaming scan. Failures are ignored;
+/// the file-filter tests below only care about which files made it through.
+fn collect_reports(
+    path: &std::path::Path,
+    options: &AnalysisOptions,
+) -> Vec<cleave::AnalysisReport> {
+    let reports = Mutex::new(Vec::new());
+    cleave::scan_directory(path, options, |event| {
+        if let cleave::ScanEvent::File { result, .. } = event {
+            if let Ok(report) = *result {
+                reports.lock().unwrap().push(report);
+            }
+        }
+    })
+    .expect("Directory analysis failed");
+    reports.into_inner().unwrap()
+}
 
 #[test]
 fn test_random_json_files_skipped_in_directory_scan() {
@@ -48,8 +67,7 @@ fn test_random_json_files_skipped_in_directory_scan() {
         disable_yara: true, // Skip YARA - testing file filtering, not YARA rules
         ..Default::default()
     };
-    let reports =
-        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
+    let reports = collect_reports(base_path, &options);
 
     // Should only have one report (for package.json)
     // Random JSON files should not be analyzed
@@ -115,8 +133,7 @@ fn test_random_yaml_files_skipped() {
         disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
-    let reports =
-        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
+    let reports = collect_reports(base_path, &options);
 
     // Verify random YAML files were not analyzed
     let random_yaml_reports: Vec<_> = reports
@@ -177,8 +194,7 @@ fn test_random_toml_files_skipped() {
         disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
-    let reports =
-        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
+    let reports = collect_reports(base_path, &options);
 
     // Verify random TOML files were not analyzed
     let random_toml_reports: Vec<_> = reports
@@ -243,8 +259,7 @@ fn test_all_files_flag_processes_everything() {
         disable_yara: true, // Skip YARA - testing file filtering
         ..Default::default()
     };
-    let reports =
-        cleave::analyze_directory(base_path, &options).expect("Directory analysis failed");
+    let reports = collect_reports(base_path, &options);
 
     // With all_files=true, all JSON files should be present in reports
     let json_count = reports

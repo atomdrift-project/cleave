@@ -122,7 +122,9 @@ impl StringExtractor {
         r2_strings: Option<Vec<R2String>>,
     ) -> Vec<StringInfo> {
         let raw = self.extract_raw_smart(data, r2_strings);
-        self.convert_stng_strings(&raw)
+        // We own `raw` and don't need it after conversion — move each element
+        // instead of cloning.
+        self.convert_stng_strings_owned(raw)
     }
 
     /// Extract raw stng strings from binary data.
@@ -159,7 +161,13 @@ impl StringExtractor {
         stng::extract_strings_with_options(data, &opts)
     }
 
-    /// Convert pre-extracted stng strings to StringInfo (public API for reuse)
+    /// Convert pre-extracted stng strings to StringInfo (public API for reuse).
+    ///
+    /// Takes a borrowed slice and clones each element because the caller
+    /// still needs the raw `ExtractedString` values afterward.  Prefer
+    /// [`StringExtractor::convert_stng_strings_owned`] when the caller owns
+    /// the `Vec` and does not need the raw form — it moves each element's
+    /// `String` fields and avoids N per-string clones.
     #[allow(dead_code)] // Used by binary target, not visible to library
     pub(crate) fn convert_stng_strings(&self, stng_strings: &[ExtractedString]) -> Vec<StringInfo> {
         let mut strings = Vec::with_capacity(stng_strings.len().min(MAX_STRINGS_PER_FILE));
@@ -183,6 +191,41 @@ impl StringExtractor {
 
             total_bytes += value_len;
             strings.push(self.convert_extracted_string(es.clone()));
+        }
+        strings
+    }
+
+    /// Consuming variant of [`StringExtractor::convert_stng_strings`].
+    ///
+    /// Moves each `ExtractedString` into `convert_extracted_string`, so
+    /// `String` fields (`value`, `section`, `raw`, …) transfer without being
+    /// cloned.  Use this when the caller owns the `Vec` and will not touch
+    /// the raw strings afterward.
+    pub(crate) fn convert_stng_strings_owned(
+        &self,
+        stng_strings: Vec<ExtractedString>,
+    ) -> Vec<StringInfo> {
+        let mut strings = Vec::with_capacity(stng_strings.len().min(MAX_STRINGS_PER_FILE));
+        let mut total_bytes = 0;
+        self.truncated
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+
+        for es in stng_strings {
+            if strings.len() >= MAX_STRINGS_PER_FILE {
+                self.truncated
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                break;
+            }
+
+            let value_len = es.value.len();
+            if total_bytes + value_len > MAX_TOTAL_STRING_BYTES {
+                self.truncated
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                break;
+            }
+
+            total_bytes += value_len;
+            strings.push(self.convert_extracted_string(es));
         }
         strings
     }

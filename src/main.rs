@@ -35,6 +35,16 @@ fn main() -> Result<()> {
     }
 
     let is_server = matches!(args.command, Some(cli::Command::Serve { .. }));
+
+    // CLI scans run on rayon with no tokio runtime, so tokio::signal isn't
+    // available. Install a libc signal handler that flips a global
+    // cancellation flag on SIGINT/SIGTERM so long scans drain cleanly on
+    // Ctrl-C (second Ctrl-C forces exit). Skip for server mode — tokio
+    // installs its own handlers and would clobber ours.
+    if !is_server {
+        cleave::cancellation::install_signal_handlers();
+    }
+
     let format = args.format();
     // Only create a default log file in server mode — CLI runs at warn level
     // typically produce empty 0-byte log files that just accumulate.
@@ -80,6 +90,7 @@ fn main() -> Result<()> {
     let _memory_logger = start_memory_logger(args.verbose, effective_log_file.as_deref());
     cleave::memory_tracker::log_startup_diagnostics();
 
+    let output_path = args.output.clone();
     let dispatch_ctx = build_dispatch_context(&cli_dispatch::DispatchOptions {
         format: &format,
         disabled: &disabled,
@@ -88,6 +99,7 @@ fn main() -> Result<()> {
         platforms: &platforms,
         slow_rule_ms: args.slow_rule_ms,
         output_to_file: args.output.is_some(),
+        output_path: output_path.as_deref(),
         max_memory_file_size,
         max_scan_file_size,
         scan_threads: args.scan_threads.unwrap_or(0),
@@ -97,7 +109,6 @@ fn main() -> Result<()> {
         max_file_crit: args.max_file_crit,
         all_files: args.all_files,
     });
-    let output_path = args.output.clone();
 
     let Some(result) = dispatch_command(args, &dispatch_ctx)? else {
         return Ok(());

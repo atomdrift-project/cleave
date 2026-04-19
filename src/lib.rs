@@ -76,6 +76,7 @@ pub use types::diff::{DiffReport, FullDiffReport, ModifiedFileAnalysis};
 pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
+pub use types::FileAnalysis;
 pub use types::SampleExtractionConfig;
 
 // Re-export cache management functions

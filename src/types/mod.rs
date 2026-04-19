@@ -61,10 +61,11 @@ pub use compact::{compact_from_files, CompactReport};
 #[allow(unused_imports)]
 pub use core::{AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, TargetInfo};
 
+pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]
 pub(crate) use file_analysis::{
-    encode_archive_path, encode_decoded_path, FileAnalysis, FindingCounts, ReportSummary,
-    ARCHIVE_DELIMITER, ENCODING_DELIMITER,
+    encode_archive_path, encode_decoded_path, FindingCounts, ReportSummary, ARCHIVE_DELIMITER,
+    ENCODING_DELIMITER,
 };
 
 pub(crate) use traits_findings::{deduplicate_evidence, MAX_EVIDENCE_PER_TRAIT};

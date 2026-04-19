@@ -78,7 +78,12 @@ fn main() -> Result<()> {
     if !disabled.yara && !is_validate_command {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
-    if !matches!(args.command, Some(cli::Command::Version)) {
+    // `Version` prints its own banner; `Validate` emits a single summary line
+    // and suppresses the banner to stay terse on success.
+    if !matches!(
+        args.command,
+        Some(cli::Command::Version) | Some(cli::Command::Validate)
+    ) {
         print_version_banner(format);
     }
 

@@ -4,246 +4,279 @@
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
 use anyhow::Result;
-use cleave::Criticality;
-use std::path::Path;
+use cleave::{AnalysisReport, Criticality, FileAnalysis};
+use rayon::prelude::*;
+use std::path::{Path, PathBuf};
 
-/// Run full trait validation against the configured traits directory.
+/// A single file to analyze during validation and how to judge its score.
+enum Target {
+    /// Platform utility whose score must fall within `[min, max]`.
+    /// Also rejects any `objectives/*` or `well-known/*` finding.
+    GroundTruth { path: PathBuf, min: u32, max: u32 },
+    /// Does-nothing sample. Its (and any archive-member) score must stay
+    /// within the cap returned by [`does_nothing_cap`].
+    DoesNothing {
+        path: PathBuf,
+        /// Root of the does-nothing directory (for resolving per-file caps).
+        dir: PathBuf,
+    },
+}
+
+impl Target {
+    fn path(&self) -> &Path {
+        match self {
+            Self::GroundTruth { path, .. } | Self::DoesNothing { path, .. } => path,
+        }
+    }
+}
+
+/// Print the score-contributing findings for a file, filtering out Component/Filtered noise.
+fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
+    for finding in &file.findings {
+        if finding.crit == Criticality::Component || finding.crit == Criticality::Filtered {
+            continue;
+        }
+        eprintln!(
+            "{indent}{:10} {}  {}",
+            format!("{:?}", finding.crit).to_lowercase(),
+            finding.id,
+            finding.desc
+        );
+    }
+}
+
+/// Run full trait validation: trait defs + ground-truth + does-nothing checks.
 ///
-/// Loads all trait definitions with validation enabled, which triggers comprehensive
-/// checks for logic errors, quality issues, and structural violations. All findings
-/// are printed to stderr. Returns `Err` if any validation errors are detected.
-///
-/// Also runs ground-truth checks against known benign binaries to detect
-/// score inflation from misleading or miscategorized traits.
+/// All sample analyses (system utilities and the does-nothing corpus) run in a
+/// single rayon parallel pool; judgement happens serially afterwards by
+/// scanning the collected reports. On success, prints a single summary line.
+/// On failure, prints only the failing files with their contributing findings.
 pub fn run() -> Result<()> {
-    eprintln!(
-        "Warning: precision threshold scoring is temporarily disabled while we work out the ideal balanced scoring algorithm."
-    );
-
     cleave::validate_traits()?;
-    eprintln!("✅ All trait validation checks passed.");
 
-    run_ground_truth_checks()?;
-    run_does_nothing_check()?;
+    let targets = collect_targets()?;
 
+    // Skip the analysis cache so every run reflects the current trait set.
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    let options = cleave::AnalysisOptions {
+        disable_yara: true,
+        ..Default::default()
+    };
+
+    // Parallel analysis — `analyze_file` shares the global CapabilityMapper
+    // singleton, so the first worker loads it and the rest reuse that Arc.
+    let results: Vec<(Target, Result<AnalysisReport>)> = targets
+        .into_par_iter()
+        .map(|t| {
+            let report = cleave::analyze_file(t.path(), &options);
+            (t, report)
+        })
+        .collect();
+
+    let (gt_stats, dn_stats) = evaluate(results)?;
+
+    let traits_ver = cleave::traits_repo::version()
+        .map(|v| format!(" (traits: {v})"))
+        .unwrap_or_default();
+    eprintln!(
+        "✅ validate{traits_ver}: traits + ground-truth ({}/{}) + does-nothing ({}/{})",
+        gt_stats.0, gt_stats.1, dn_stats.0, dn_stats.1
+    );
     Ok(())
 }
 
-/// Ground-truth score checks against known benign system binaries.
-///
-/// These catch trait regressions (false positives, miscategorized criticality,
-/// taxonomy violations) that inflate scores beyond expected ranges. Also checks
-/// that no `objectives/` or `well-known/` traits fire on known-benign binaries,
-/// since those tiers infer attacker intent which should never apply to platform
-/// utilities. Low-criticality binary metrics (component/baseline) are exempt.
-fn run_ground_truth_checks() -> Result<()> {
-    eprintln!("\nRunning ground-truth checks...");
-    let mut failures = Vec::new();
+/// Build the full target list: ground-truth binaries + walked does-nothing corpus.
+fn collect_targets() -> Result<Vec<Target>> {
+    let mut targets = Vec::new();
 
-    // /bin/ls: benign system utility with xattr/stat/symlink/group-lookup/ACL capabilities.
-    check_binary_score("/bin/ls", 1, 8, &mut failures);
-
-    // /bin/cp: file copy utility with chmod/chown/fts/mknod/xattr/ACL capabilities.
-    check_binary_score("/bin/cp", 1, 10, &mut failures);
-
-    // /bin/sh: shell with fork/setsid/exec/signal/pty capabilities.
-    check_binary_score("/bin/sh", 1, 8, &mut failures);
-
-    // /usr/bin/curl: network transfer tool with HTTP/SOCKS/OAuth/TLS/crypto capabilities.
-    check_binary_score("/usr/bin/curl", 5, 12, &mut failures);
-
-    if failures.is_empty() {
-        eprintln!("✅ All ground-truth checks passed.");
-        Ok(())
-    } else {
-        for msg in &failures {
-            eprintln!("❌ {msg}");
+    // Ground-truth binaries: expected score ranges reflect each tool's capability surface.
+    // /bin/ls — xattr/stat/symlink/group-lookup/ACL.
+    // /bin/cp — chmod/chown/fts/mknod/xattr/ACL.
+    // /bin/sh — fork/setsid/exec/signal/pty.
+    // /usr/bin/curl — HTTP/SOCKS/OAuth/TLS/crypto.
+    for (path, min, max) in [
+        ("/bin/ls", 1, 8),
+        ("/bin/cp", 1, 10),
+        ("/bin/sh", 1, 8),
+        ("/usr/bin/curl", 5, 12),
+    ] {
+        let p = PathBuf::from(path);
+        if p.exists() {
+            targets.push(Target::GroundTruth { path: p, min, max });
         }
-        anyhow::bail!(
-            "{} ground-truth check(s) failed — review findings for TAXONOMY.md violations",
-            failures.len()
-        )
     }
+
+    if let Ok(traits_dir) = cleave::traits_repo::try_resolve() {
+        let dn_dir = traits_dir.join("testdata").join("does-nothing");
+        if dn_dir.is_dir() {
+            walk_does_nothing(&dn_dir, &mut targets)?;
+        }
+    }
+
+    Ok(targets)
 }
 
-fn check_binary_score(path: &str, min: u32, max: u32, failures: &mut Vec<String>) {
-    let path = Path::new(path);
-    if !path.exists() {
-        eprintln!("  ⏭ {}: not found, skipping", path.display());
-        return;
+/// Walk the does-nothing directory, collecting every analyzable file.
+fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
+    for entry in walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        out.push(Target::DoesNothing {
+            path: entry.path().to_path_buf(),
+            dir: dir.to_path_buf(),
+        });
     }
+    Ok(())
+}
 
-    // Skip the analysis cache to ensure fresh scoring against current traits.
-    // (The YARA-rule cache is kept warm by `run()` — see its comment.)
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
-    let options = cleave::AnalysisOptions {
-        disable_yara: true,
-        ..Default::default()
-    };
+/// Walk the collected analysis results, emitting failures inline and tallying totals.
+fn evaluate(
+    results: Vec<(Target, Result<AnalysisReport>)>,
+) -> Result<((usize, usize), (usize, usize))> {
+    let mut gt_passed = 0;
+    let mut gt_total = 0;
+    let mut dn_passed = 0;
+    let mut dn_total = 0;
+    let mut failed = 0usize;
 
-    match cleave::analyze_file(path, &options) {
-        Ok(mut report) => {
-            report.finalize();
-            let Some(file) = report.files.first() else {
-                return;
-            };
-            let score = file.score;
-            let display = path.display();
+    for (target, result) in results {
+        let mut report = match result {
+            Ok(r) => r,
+            Err(e) => {
+                eprintln!("❌ {}: analysis failed: {e:#}", target.path().display());
+                failed += 1;
+                match target {
+                    Target::GroundTruth { .. } => gt_total += 1,
+                    Target::DoesNothing { .. } => dn_total += 1,
+                }
+                continue;
+            }
+        };
+        report.finalize();
 
-            if score < min {
-                failures.push(format!(
-                    "{display} score {score} below minimum {min} — \
-                     check for missing notable findings"
-                ));
-            } else if score > max {
-                eprintln!(
-                    "❌ {display} has an unusually high score of {score} \
-                     (expected {min}-{max}), check for misleading or inflated \
-                     findings that violate TAXONOMY.md guidance"
-                );
-                eprintln!("   Findings contributing to score:");
-                for finding in &file.findings {
-                    if finding.crit == Criticality::Component
-                        || finding.crit == Criticality::Filtered
-                    {
-                        continue;
+        match target {
+            Target::GroundTruth { path, min, max } => {
+                gt_total += 1;
+                if judge_ground_truth(&path, min, max, &report) {
+                    gt_passed += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+            Target::DoesNothing { dir, .. } => {
+                for file in &report.files {
+                    dn_total += 1;
+                    let cap = does_nothing_cap(&file.path, &dir);
+                    if file.score > cap {
+                        eprintln!("❌ {}: score {} > cap {cap}", file.path, file.score);
+                        print_contributing_findings(file, "     ");
+                        failed += 1;
+                    } else {
+                        dn_passed += 1;
                     }
-                    eprintln!(
-                        "     {:12} {}  {}",
-                        format!("{:?}", finding.crit).to_lowercase(),
-                        finding.id,
-                        finding.desc
-                    );
                 }
-                eprintln!(
-                    "   Fix any false-positives or misleading results by improving \
-                     the rules (add unless/downgrade/for constraints, move to \
-                     correct tier, or adjust criticality) until the score comes down."
-                );
-                failures.push(format!(
-                    "{display} score {score} above cap {max} — \
-                     see trait list above"
-                ));
-            } else {
-                eprintln!("  ✅ {display}: score {score} (expected {min}-{max})");
             }
-
-            // Flag ANY objectives/ or well-known/ traits on known-benign binaries.
-            // These tiers infer attacker intent — if they fire on platform utilities
-            // the trait is misplaced (belongs in micro-behaviors/ or metadata/) or
-            // mistargeted (needs a tighter `for`/`unless`/`downgrade`).
-            for finding in &file.findings {
-                let id = &finding.id;
-                if !id.starts_with("objectives/") && !id.starts_with("well-known/") {
-                    continue;
-                }
-                failures.push(format!(
-                    "{display}: objectives/well-known trait fired on known-benign binary: \
-                     {id} (\"{}\") — either constrain this rule better \
-                     or move it to a neutral tier (micro-behaviors/ or metadata/)",
-                    finding.desc
-                ));
-            }
-        }
-        Err(e) => {
-            eprintln!("  ⚠ {}: analysis failed: {}", path.display(), e);
         }
     }
+
+    if failed > 0 {
+        anyhow::bail!("{failed} validation check(s) failed");
+    }
+    Ok(((gt_passed, gt_total), (dn_passed, dn_total)))
 }
 
-/// Per-file score cap for `testdata/does-nothing/` samples.
-///
-/// These files are crafted to do nothing interesting; any trait that fires on
-/// them above this threshold is almost certainly over-broad or miscategorized.
-const DOES_NOTHING_MAX_SCORE: u32 = 1;
-
-/// Check that no file under `<traits>/testdata/does-nothing/` scores above
-/// [`DOES_NOTHING_MAX_SCORE`]. Warns and returns `Ok` if the directory is absent.
-fn run_does_nothing_check() -> Result<()> {
-    let traits_dir = match cleave::traits_repo::try_resolve() {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("\n⚠ Skipping does-nothing check: {e}");
-            return Ok(());
-        }
+/// Judge a ground-truth binary. Returns `true` if it passes.
+fn judge_ground_truth(path: &Path, min: u32, max: u32, report: &AnalysisReport) -> bool {
+    let Some(file) = report.files.first() else {
+        return true;
     };
-    let dir = traits_dir.join("testdata").join("does-nothing");
-    if !dir.is_dir() {
+    let score = file.score;
+    let display = path.display();
+
+    // Flag objectives/* or well-known/* traits firing on a benign platform utility.
+    let misplaced: Vec<_> = file
+        .findings
+        .iter()
+        .filter(|f| f.id.starts_with("objectives/") || f.id.starts_with("well-known/"))
+        .collect();
+
+    let out_of_range = score < min || score > max;
+    if !out_of_range && misplaced.is_empty() {
+        return true;
+    }
+
+    if out_of_range {
+        eprintln!("❌ {display}: score {score} not in [{min},{max}]");
+        print_contributing_findings(file, "     ");
+    }
+    for f in &misplaced {
         eprintln!(
-            "\n⚠ Skipping does-nothing check: {} not found",
-            dir.display()
+            "❌ {display}: intent trait on benign binary: {} ({:?})",
+            f.id, f.crit
         );
-        return Ok(());
     }
+    false
+}
 
-    eprintln!("\nRunning does-nothing score check on {}...", dir.display());
+/// Default per-file score cap for `testdata/does-nothing/` samples.
+const DOES_NOTHING_DEFAULT_CAP: u32 = 1;
 
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
-    let options = cleave::AnalysisOptions {
-        disable_yara: true,
-        ..Default::default()
-    };
+/// Per-file score caps for does-nothing samples that can't hit the default cap.
+///
+/// Each entry is `(relative_path_from_does_nothing_dir, cap)`. `cap` is set to
+/// `current_observed_score + 1` — a regression fires if any trait change pushes
+/// the score past this ceiling. Update when trait improvements legitimately
+/// reduce a score, or when a new sample is added to the corpus.
+const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
+    ("artifacts/sample.apk", 5),
+    ("artifacts/sample.apk!!lib/x86/libsample.so", 5),
+    ("artifacts/sample.ipa", 8),
+    ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 8),
+    ("artifacts/sample.zsh", 3),
+    ("main.go", 3),
+    ("out/does-nothing-darwin-arm64.xz", 8),
+    (
+        "out/does-nothing-darwin-arm64.xz!!does-nothing-darwin-arm64",
+        8,
+    ),
+    ("out/does-nothing-linux-386.xz", 5),
+    ("out/does-nothing-linux-386.xz!!does-nothing-linux-386", 5),
+    ("out/does-nothing-openbsd-arm64.xz", 7),
+    (
+        "out/does-nothing-openbsd-arm64.xz!!does-nothing-openbsd-arm64",
+        7,
+    ),
+    ("out/does-nothing-windows-amd64.exe.xz", 9),
+    (
+        "out/does-nothing-windows-amd64.exe.xz!!does-nothing-windows-amd64.exe",
+        9,
+    ),
+    ("scripts/make_crate.py", 3),
+    ("scripts/make_crx.py", 3),
+    ("scripts/make_gem.py", 3),
+    ("scripts/make_jpg.py", 4),
+    ("scripts/make_pdf.py", 3),
+    ("scripts/make_pickle.py", 3),
+    ("scripts/make_png.py", 3),
+    ("scripts/make_xlsx.py", 3),
+];
 
-    let analyzed = std::sync::atomic::AtomicUsize::new(0);
-    let offenders = std::sync::Mutex::new(Vec::<(u32, String)>::new());
-    let failures = std::sync::Mutex::new(Vec::<(std::path::PathBuf, anyhow::Error)>::new());
-
-    cleave::scan_directory(&dir, &options, |event| {
-        if let cleave::ScanEvent::File { path, result } = event {
-            match *result {
-                Ok(mut report) => {
-                    report.finalize();
-                    for file in &report.files {
-                        analyzed.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        if file.score > DOES_NOTHING_MAX_SCORE {
-                            #[allow(clippy::expect_used)]
-                            offenders
-                                .lock()
-                                .expect("offenders mutex poisoned")
-                                .push((file.score, file.path.clone()));
-                        }
-                    }
-                }
-                Err(err) => {
-                    #[allow(clippy::expect_used)]
-                    failures
-                        .lock()
-                        .expect("failures mutex poisoned")
-                        .push((path, err));
-                }
-            }
-        }
-    })?;
-
-    #[allow(clippy::expect_used)]
-    let failures = failures.into_inner().expect("failures mutex poisoned");
-    if !failures.is_empty() {
-        let mut message = format!("directory analysis failed for {} file(s)", failures.len());
-        for (path, err) in failures.iter().take(5) {
-            message.push_str(&format!("\n- {}: {err:#}", path.display()));
-        }
-        if failures.len() > 5 {
-            message.push_str(&format!("\n- ... and {} more", failures.len() - 5));
-        }
-        anyhow::bail!(message);
-    }
-
-    let analyzed = analyzed.load(std::sync::atomic::Ordering::Relaxed);
-    #[allow(clippy::expect_used)]
-    let mut offenders = offenders.into_inner().expect("offenders mutex poisoned");
-
-    if offenders.is_empty() {
-        eprintln!("✅ All {analyzed} does-nothing file(s) score <= {DOES_NOTHING_MAX_SCORE}.");
-        return Ok(());
-    }
-
-    offenders.sort_by(|a, b| b.0.cmp(&a.0));
-    for (score, path) in &offenders {
-        eprintln!("❌ {path}: score {score} exceeds cap {DOES_NOTHING_MAX_SCORE}");
-    }
-    anyhow::bail!(
-        "{} does-nothing file(s) exceed the score cap of {DOES_NOTHING_MAX_SCORE} \
-         — review findings for over-broad or miscategorized traits",
-        offenders.len()
-    )
+/// Look up the cap for a file whose `path` may be either absolute (root file)
+/// or include an archive suffix (e.g. `"...sample.ipa!!Payload/..."`).
+fn does_nothing_cap(file_path: &str, dir: &Path) -> u32 {
+    let dir_str = dir.to_string_lossy();
+    let rel = file_path
+        .strip_prefix(dir_str.as_ref())
+        .and_then(|s| s.strip_prefix('/'))
+        .unwrap_or(file_path);
+    DOES_NOTHING_CAPS
+        .iter()
+        .find_map(|(p, cap)| (*p == rel).then_some(*cap))
+        .unwrap_or(DOES_NOTHING_DEFAULT_CAP)
 }

@@ -337,8 +337,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
 #[must_use]
 pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
     let fs = files.iter().map(convert_file).collect();
-    let tv = crate::traits_repo::version()
-        .map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
+    let tv =
+        crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport { v: "4", tv, fs }
 }
 

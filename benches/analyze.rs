@@ -19,60 +19,66 @@ fn load(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-/// Default options with YARA disabled for focused CPU profiling of the analysis core.
+/// Options with YARA disabled for focused CPU profiling of the analysis core.
 fn fast_options() -> cleave::AnalysisOptions {
     let mut opts = cleave::AnalysisOptions::default();
     opts.disable_yara = true;
     opts
 }
 
-/// Default options with YARA enabled for full-pipeline profiling.
+/// Options with YARA enabled for full-pipeline profiling.
 fn full_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions::default()
 }
 
+/// Representative binary samples used across multiple benchmark groups.
+const CORE_SAMPLES: &[(&str, &str)] = &[
+    ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+    (
+        "go_linux_amd64_2.3mb",
+        "tests/fixtures/lang_strings/go_linux_amd64",
+    ),
+    (
+        "go_darwin_arm64_2.4mb",
+        "tests/fixtures/lang_strings/go_darwin_arm64",
+    ),
+    (
+        "go_windows_2.5mb",
+        "tests/fixtures/lang_strings/go_windows_amd64.exe",
+    ),
+    (
+        "rust_native_525kb",
+        "tests/fixtures/lang_strings/rust_native",
+    ),
+    (
+        "script_kworker_23kb",
+        "tests/fixtures/malware/kworker_obfuscated_1",
+    ),
+    (
+        "python_xmrig_1kb",
+        "tests/fixtures/malware/ultralytics_xmrig.py",
+    ),
+    (
+        "java_suspicious_1.4kb",
+        "tests/fixtures/java/Suspicious.class",
+    ),
+    ("java_hello_427b", "tests/fixtures/java/HelloWorld.class"),
+];
+
 // ---------------------------------------------------------------------------
-// Core analysis pipeline (YARA disabled — profiles parsing + trait extraction)
+// Core analysis pipeline — uncached (YARA disabled)
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_bytes(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
     let mut g = c.benchmark_group("analyze_bytes");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(15));
 
-    let samples: &[(&str, &str)] = &[
-        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
-        (
-            "go_linux_amd64_2.3mb",
-            "tests/fixtures/lang_strings/go_linux_amd64",
-        ),
-        (
-            "go_darwin_arm64_2.4mb",
-            "tests/fixtures/lang_strings/go_darwin_arm64",
-        ),
-        (
-            "go_windows_2.5mb",
-            "tests/fixtures/lang_strings/go_windows_amd64.exe",
-        ),
-        (
-            "rust_native_525kb",
-            "tests/fixtures/lang_strings/rust_native",
-        ),
-        (
-            "script_kworker_23kb",
-            "tests/fixtures/malware/kworker_obfuscated_1",
-        ),
-        (
-            "python_xmrig_1kb",
-            "tests/fixtures/malware/ultralytics_xmrig.py",
-        ),
-        ("java_suspicious_1.4kb", "tests/fixtures/java/Suspicious.class"),
-        ("java_hello_427b", "tests/fixtures/java/HelloWorld.class"),
-    ];
-
     let opts = fast_options();
 
-    for (name, path) in samples {
+    for (name, path) in CORE_SAMPLES {
         let Some(data) = load(path) else { continue };
         let len = data.len() as u64;
 
@@ -88,10 +94,12 @@ fn bench_analyze_bytes(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Full pipeline including YARA scanning
+// Full pipeline including YARA scanning — uncached
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_full(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
     let mut g = c.benchmark_group("analyze_full");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(20));
@@ -130,11 +138,56 @@ fn bench_analyze_full(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// analyze_file (includes disk I/O + cache logic)
+// analyze_file — cached (measures cache-hit fast path after warmup)
 // ---------------------------------------------------------------------------
 
-fn bench_analyze_file(c: &mut Criterion) {
-    let mut g = c.benchmark_group("analyze_file");
+fn bench_analyze_file_cached(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "0");
+
+    let mut g = c.benchmark_group("analyze_file_cached");
+    g.sample_size(10);
+    g.measurement_time(Duration::from_secs(15));
+
+    let samples: &[(&str, &str)] = &[
+        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        (
+            "go_linux_amd64_2.3mb",
+            "tests/fixtures/lang_strings/go_linux_amd64",
+        ),
+        (
+            "script_kworker_23kb",
+            "tests/fixtures/malware/kworker_obfuscated_1",
+        ),
+    ];
+
+    let opts = fast_options();
+
+    for (name, path) in samples {
+        if !std::path::Path::new(path).exists() {
+            continue;
+        }
+        let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+
+        // Prime the cache with one analysis before measuring
+        let _ = cleave::analyze_file(path, &opts);
+
+        g.throughput(Throughput::Bytes(len));
+        g.bench_function(BenchmarkId::new("cached", name), |b| {
+            b.iter(|| cleave::analyze_file(black_box(path), black_box(&opts)));
+        });
+    }
+
+    g.finish();
+}
+
+// ---------------------------------------------------------------------------
+// analyze_file — uncached (measures full analysis including disk I/O)
+// ---------------------------------------------------------------------------
+
+fn bench_analyze_file_uncached(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
+    let mut g = c.benchmark_group("analyze_file_uncached");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(15));
 
@@ -159,7 +212,7 @@ fn bench_analyze_file(c: &mut Criterion) {
         let len = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
 
         g.throughput(Throughput::Bytes(len));
-        g.bench_function(BenchmarkId::new("no_yara", name), |b| {
+        g.bench_function(BenchmarkId::new("uncached", name), |b| {
             b.iter(|| cleave::analyze_file(black_box(path), black_box(&opts)));
         });
     }
@@ -172,6 +225,8 @@ fn bench_analyze_file(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_lnk(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
     let mut g = c.benchmark_group("analyze_lnk");
 
     let samples: &[(&str, &str)] = &[
@@ -210,6 +265,8 @@ fn bench_analyze_lnk(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_archive(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
     let mut g = c.benchmark_group("analyze_archive");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(15));
@@ -243,6 +300,8 @@ fn bench_analyze_archive(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_diff(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
     let mut g = c.benchmark_group("diff_files");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(15));
@@ -277,7 +336,8 @@ criterion_group!(
     benches,
     bench_analyze_bytes,
     bench_analyze_full,
-    bench_analyze_file,
+    bench_analyze_file_cached,
+    bench_analyze_file_uncached,
     bench_analyze_lnk,
     bench_analyze_archive,
     bench_diff,

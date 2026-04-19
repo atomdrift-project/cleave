@@ -25,6 +25,7 @@ use utils::{compute_added_removed, detect_renames};
 
 use crate::analyzers::{archive::ArchiveAnalyzer, detect_file_type, Analyzer};
 use crate::capabilities::CapabilityMapper;
+use std::sync::Arc;
 use crate::types::{
     AnalysisMetadata, AnalysisReport, DiffCounts, DiffReport, FileChanges, FileDiff,
     FileRenameInfo, Finding, FullDiffReport, MetricsDelta, ModifiedFileAnalysis,
@@ -41,15 +42,21 @@ use walkdir::WalkDir;
 pub struct DiffAnalyzer {
     baseline_path: PathBuf,
     target_path: PathBuf,
-    capability_mapper: CapabilityMapper,
+    capability_mapper: Arc<CapabilityMapper>,
 }
 impl DiffAnalyzer {
-    /// Create a new diff analyzer comparing baseline to target
+    /// Create a new diff analyzer comparing baseline to target.
+    ///
+    /// Uses the shared global `CapabilityMapper` singleton when available,
+    /// avoiding the ~800ms cost of loading and compiling trait definitions
+    /// on every call.
     pub fn new(baseline: impl AsRef<Path>, target: impl AsRef<Path>) -> Self {
+        let mapper = crate::shared_resources::capability_mapper()
+            .unwrap_or_else(|_| Arc::new(CapabilityMapper::new()));
         Self {
             baseline_path: baseline.as_ref().to_path_buf(),
             target_path: target.as_ref().to_path_buf(),
-            capability_mapper: CapabilityMapper::new(),
+            capability_mapper: mapper,
         }
     }
 
@@ -59,7 +66,7 @@ impl DiffAnalyzer {
         Self {
             baseline_path: baseline.as_ref().to_path_buf(),
             target_path: target.as_ref().to_path_buf(),
-            capability_mapper: CapabilityMapper::new_without_validation(),
+            capability_mapper: Arc::new(CapabilityMapper::new_without_validation()),
         }
     }
 
@@ -264,13 +271,13 @@ impl DiffAnalyzer {
 
         // Handle archives specially since they need ArchiveAnalyzer with depth config
         if file_type.is_archive() {
-            let analyzer =
-                ArchiveAnalyzer::new().with_capability_mapper(self.capability_mapper.clone());
+            let analyzer = ArchiveAnalyzer::new()
+                .with_capability_mapper_arc(self.capability_mapper.clone());
             return analyzer.analyze(path);
         }
 
         // Use the centralized factory for all other file types
-        if let Some(analyzer) = crate::analyzers::analyzer_for_file_type(
+        if let Some(analyzer) = crate::analyzers::analyzer_for_file_type_arc(
             &file_type,
             Some(self.capability_mapper.clone()),
         ) {

@@ -19,14 +19,22 @@ fn load(path: &str) -> Option<Vec<u8>> {
     std::fs::read(path).ok()
 }
 
-/// Options with YARA disabled for focused CPU profiling of the analysis core.
+/// Options with YARA and radare2 disabled for focused CPU profiling of the analysis core.
 fn fast_options() -> cleave::AnalysisOptions {
     let mut opts = cleave::AnalysisOptions::default();
     opts.disable_yara = true;
+    opts.disable_radare2 = true;
     opts
 }
 
-/// Options with YARA enabled for full-pipeline profiling.
+/// Options with radare2 disabled but YARA enabled.
+fn yara_options() -> cleave::AnalysisOptions {
+    let mut opts = cleave::AnalysisOptions::default();
+    opts.disable_radare2 = true;
+    opts
+}
+
+/// Full pipeline options (YARA + radare2 enabled).
 fn full_options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions::default()
 }
@@ -94,13 +102,13 @@ fn bench_analyze_bytes(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// Full pipeline including YARA scanning — uncached
+// With YARA scanning but no radare2 — uncached
 // ---------------------------------------------------------------------------
 
-fn bench_analyze_full(c: &mut Criterion) {
+fn bench_analyze_yara(c: &mut Criterion) {
     std::env::set_var("CLEAVE_SKIP_CACHE", "1");
 
-    let mut g = c.benchmark_group("analyze_full");
+    let mut g = c.benchmark_group("analyze_yara");
     g.sample_size(10);
     g.measurement_time(Duration::from_secs(20));
 
@@ -120,6 +128,42 @@ fn bench_analyze_full(c: &mut Criterion) {
         ),
     ];
 
+    let opts = yara_options();
+
+    for (name, path) in samples {
+        let Some(data) = load(path) else { continue };
+        let len = data.len() as u64;
+
+        g.throughput(Throughput::Bytes(len));
+        g.bench_with_input(BenchmarkId::new("yara_no_r2", name), &data, |b, data| {
+            b.iter(|| {
+                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
+            });
+        });
+    }
+
+    g.finish();
+}
+
+// ---------------------------------------------------------------------------
+// Full pipeline (YARA + radare2) — uncached
+// ---------------------------------------------------------------------------
+
+fn bench_analyze_full(c: &mut Criterion) {
+    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+
+    let mut g = c.benchmark_group("analyze_full");
+    g.sample_size(10);
+    g.measurement_time(Duration::from_secs(30));
+
+    let samples: &[(&str, &str)] = &[
+        ("pe_test_exe_2.5mb", "tests/fixtures/test.exe"),
+        (
+            "go_linux_amd64_2.3mb",
+            "tests/fixtures/lang_strings/go_linux_amd64",
+        ),
+    ];
+
     let opts = full_options();
 
     for (name, path) in samples {
@@ -127,7 +171,7 @@ fn bench_analyze_full(c: &mut Criterion) {
         let len = data.len() as u64;
 
         g.throughput(Throughput::Bytes(len));
-        g.bench_with_input(BenchmarkId::new("with_yara", name), &data, |b, data| {
+        g.bench_with_input(BenchmarkId::new("yara_and_r2", name), &data, |b, data| {
             b.iter(|| {
                 cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
             });
@@ -335,6 +379,7 @@ fn bench_diff(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_analyze_bytes,
+    bench_analyze_yara,
     bench_analyze_full,
     bench_analyze_file_cached,
     bench_analyze_file_uncached,

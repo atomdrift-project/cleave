@@ -35,6 +35,9 @@ const DEFAULT_CONF: f32 = 0.5;
 pub struct CompactReport {
     /// Schema version — always "4"
     pub v: &'static str,
+    /// Traits repo commit hash (first 5 chars)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tv: Option<String>,
     /// Files array
     pub fs: Vec<CompactFile>,
 }
@@ -334,7 +337,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
 #[must_use]
 pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
     let fs = files.iter().map(convert_file).collect();
-    CompactReport { v: "4", fs }
+    let tv = crate::traits_repo::version()
+        .map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
+    CompactReport { v: "4", tv, fs }
 }
 
 impl AnalysisReport {

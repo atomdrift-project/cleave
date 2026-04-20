@@ -439,7 +439,7 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 ///
 /// One line per finding, sorted by criticality (highest first).
 /// Evidence is truncated to 48 chars. Files with no findings are omitted.
-#[allow(dead_code)] // Used by binary target
+#[allow(dead_code, clippy::tabs_in_doc_comments)] // Used by binary target; tabs in example are intentional (tab-separated format)
 pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
     // Check if any file has findings worth showing before emitting the header.
     let has_visible_findings = report

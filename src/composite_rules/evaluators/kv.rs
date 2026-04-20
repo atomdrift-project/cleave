@@ -509,101 +509,32 @@ fn insert_pkginfo_value(map: &mut serde_json::Map<String, Value>, key: &str, val
 
 /// Parse LNK (Windows Shell Link) files into a JSON Value.
 ///
-/// Extracts target path, arguments, working directory, and other metadata.
-/// Also includes whitespace analysis for detecting obfuscation.
+/// Emits only the raw string / numeric fields the link structure actually
+/// contains — presence flags and argument whitespace statistics live under
+/// `metrics.lnk.*` and are queried via `type: metrics`, not `type: kv`.
 fn parse_lnk(content: &[u8]) -> Option<Value> {
     let lnk_data = crate::analyzers::lnk::extract_lnk_data(content)?;
 
     let mut map: serde_json::Map<String, Value> = serde_json::Map::new();
 
-    // Basic fields
     if let Some(ref path) = lnk_data.target_path {
         map.insert("target_path".to_string(), Value::String(path.clone()));
-
-        // Extract extension
-        if let Some(ext_pos) = path.rfind('.') {
-            let ext = &path[ext_pos + 1..];
-            map.insert("target_ext".to_string(), Value::String(ext.to_lowercase()));
-        }
     }
-
     if let Some(ref args) = lnk_data.arguments {
         map.insert("arguments".to_string(), Value::String(args.clone()));
     }
-
     if let Some(ref wd) = lnk_data.working_dir {
         map.insert("working_dir".to_string(), Value::String(wd.clone()));
     }
-
     if let Some(ref icon) = lnk_data.icon_location {
         map.insert("icon_location".to_string(), Value::String(icon.clone()));
     }
 
-    // Numeric fields
     map.insert(
         "show_command".to_string(),
         Value::Number(lnk_data.show_command.into()),
     );
     map.insert("hotkey".to_string(), Value::Number(lnk_data.hotkey.into()));
-
-    // Boolean flags
-    map.insert(
-        "has_link_target_id_list".to_string(),
-        Value::Bool(lnk_data.has_link_target_id_list),
-    );
-    map.insert(
-        "has_link_info".to_string(),
-        Value::Bool(lnk_data.has_link_info),
-    );
-    map.insert(
-        "has_arguments".to_string(),
-        Value::Bool(lnk_data.has_arguments),
-    );
-    map.insert(
-        "has_working_dir".to_string(),
-        Value::Bool(lnk_data.has_working_dir),
-    );
-    map.insert(
-        "has_icon_location".to_string(),
-        Value::Bool(lnk_data.has_icon_location),
-    );
-
-    // Whitespace analysis nested object
-    let mut ws_map: serde_json::Map<String, Value> = serde_json::Map::new();
-    ws_map.insert(
-        "leading_spaces".to_string(),
-        Value::Number(lnk_data.whitespace_analysis.leading_spaces.into()),
-    );
-    ws_map.insert(
-        "leading_tabs".to_string(),
-        Value::Number(lnk_data.whitespace_analysis.leading_tabs.into()),
-    );
-    ws_map.insert(
-        "leading".to_string(),
-        Value::Number(
-            (lnk_data.whitespace_analysis.leading_spaces
-                + lnk_data.whitespace_analysis.leading_tabs)
-                .into(),
-        ),
-    );
-    ws_map.insert(
-        "total".to_string(),
-        Value::Number(lnk_data.whitespace_analysis.total_whitespace.into()),
-    );
-    ws_map.insert(
-        "max_consecutive".to_string(),
-        Value::Number(
-            lnk_data
-                .whitespace_analysis
-                .max_consecutive_whitespace
-                .into(),
-        ),
-    );
-    ws_map.insert(
-        "excessive".to_string(),
-        Value::Bool(lnk_data.whitespace_analysis.has_excessive_padding),
-    );
-    map.insert("whitespace".to_string(), Value::Object(ws_map));
 
     Some(Value::Object(map))
 }
@@ -1103,6 +1034,32 @@ fn structured_format_from_file_type(
         crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
         _ => StructuredFormat::Unknown,
     }
+}
+
+/// Parse structured file content into a generic JSON value.
+///
+/// Uses filename/magic-byte detection to pick a format, then runs the matching
+/// parser. Returns the detected format alongside the parsed value so callers
+/// can distinguish parse failures from unsupported formats.
+#[must_use]
+pub(crate) fn parse_structured_content(
+    path: &Path,
+    content: &[u8],
+) -> Option<(StructuredFormat, Value)> {
+    let format = detect_format(path, content);
+    let value = match format {
+        StructuredFormat::Json => serde_json::from_slice(content).ok()?,
+        StructuredFormat::Yaml => serde_yaml::from_slice(content).ok()?,
+        StructuredFormat::Toml => std::str::from_utf8(content)
+            .ok()
+            .and_then(|s| toml::from_str(s).ok())?,
+        StructuredFormat::Plist => plist::from_bytes(content).ok()?,
+        StructuredFormat::PkgInfo => parse_pkginfo(content)?,
+        StructuredFormat::Lnk => parse_lnk(content)?,
+        StructuredFormat::SystemdService => parse_systemd_service(content)?,
+        StructuredFormat::Unknown => return None,
+    };
+    Some((format, value))
 }
 
 /// Evaluate a kv condition against file content using cached format detection and parsing.

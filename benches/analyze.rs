@@ -21,17 +21,19 @@ fn load(path: &str) -> Option<Vec<u8>> {
 
 /// Options with YARA and radare2 disabled for focused CPU profiling of the analysis core.
 fn fast_options() -> cleave::AnalysisOptions {
-    let mut opts = cleave::AnalysisOptions::default();
-    opts.disable_yara = true;
-    opts.disable_radare2 = true;
-    opts
+    cleave::AnalysisOptions {
+        disable_yara: true,
+        disable_radare2: true,
+        ..Default::default()
+    }
 }
 
 /// Options with radare2 disabled but YARA enabled.
 fn yara_options() -> cleave::AnalysisOptions {
-    let mut opts = cleave::AnalysisOptions::default();
-    opts.disable_radare2 = true;
-    opts
+    cleave::AnalysisOptions {
+        disable_radare2: true,
+        ..Default::default()
+    }
 }
 
 /// Full pipeline options (YARA + radare2 enabled).
@@ -92,9 +94,7 @@ fn bench_analyze_bytes(c: &mut Criterion) {
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("no_yara", name), &data, |b, data| {
-            b.iter(|| {
-                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
-            });
+            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
 
@@ -136,9 +136,7 @@ fn bench_analyze_yara(c: &mut Criterion) {
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("yara_no_r2", name), &data, |b, data| {
-            b.iter(|| {
-                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
-            });
+            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
 
@@ -172,9 +170,7 @@ fn bench_analyze_full(c: &mut Criterion) {
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("yara_and_r2", name), &data, |b, data| {
-            b.iter(|| {
-                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
-            });
+            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
 
@@ -280,10 +276,7 @@ fn bench_analyze_lnk(c: &mut Criterion) {
             "tests/fixtures/lnk/powershell_hidden.lnk",
         ),
         ("cmd_download", "tests/fixtures/lnk/cmd_download.lnk"),
-        (
-            "encoded_command",
-            "tests/fixtures/lnk/encoded_command.lnk",
-        ),
+        ("encoded_command", "tests/fixtures/lnk/encoded_command.lnk"),
         ("mshta_payload", "tests/fixtures/lnk/mshta_payload.lnk"),
     ];
 
@@ -295,9 +288,7 @@ fn bench_analyze_lnk(c: &mut Criterion) {
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("no_yara", name), &data, |b, data| {
-            b.iter(|| {
-                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
-            });
+            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
 
@@ -330,9 +321,7 @@ fn bench_analyze_archive(c: &mut Criterion) {
 
         g.throughput(Throughput::Bytes(len));
         g.bench_with_input(BenchmarkId::new("no_yara", name), &data, |b, data| {
-            b.iter(|| {
-                cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts))
-            });
+            b.iter(|| cleave::analyze_bytes(black_box(data), black_box(path), black_box(&opts)));
         });
     }
 

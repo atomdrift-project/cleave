@@ -15,6 +15,8 @@
 //! Each cargo integration test file runs as its own test binary, so the
 //! `OnceLock` statics are fresh for this process regardless of other tests.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -68,11 +70,7 @@ fn yara_init_does_not_deadlock_under_concurrent_rayon_load() {
         // Any analyze call triggers the same `yara_engine()` code path that
         // the deadlock hits in production. The payload is intentionally
         // trivial — we care about the init path, not the scan.
-        let _ = cleave::analyze_bytes(
-            b"warmup",
-            "warmup.bin",
-            &cleave::AnalysisOptions::default(),
-        );
+        let _ = cleave::analyze_bytes(b"warmup", "warmup.bin", &cleave::AnalysisOptions::default());
     });
     warmup.join().expect("warmup thread panicked");
 
@@ -90,11 +88,7 @@ fn yara_init_does_not_deadlock_under_concurrent_rayon_load() {
         (0..32).into_par_iter().for_each(|i| {
             let payload = format!("sample-{i}\n").into_bytes();
             let filename = format!("sample-{i}.bin");
-            let _ = cleave::analyze_bytes(
-                &payload,
-                &filename,
-                &cleave::AnalysisOptions::default(),
-            );
+            let _ = cleave::analyze_bytes(&payload, &filename, &cleave::AnalysisOptions::default());
         });
     });
 

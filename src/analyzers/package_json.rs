@@ -557,10 +557,7 @@ impl PackageJsonAnalyzer {
     /// 3. Regex fallback (extract key fields from hopelessly broken JSON)
     ///
     /// Returns (parsed package, byte offset of JSON end, optional malformed reason).
-    fn parse_package_json(
-        &self,
-        content: &str,
-    ) -> Result<(PackageJson, usize, Option<String>)> {
+    fn parse_package_json(&self, content: &str) -> Result<(PackageJson, usize, Option<String>)> {
         // Stage 1: strict serde_json.
         let de = serde_json::Deserializer::from_str(content);
         let mut stream = de.into_iter::<PackageJson>();
@@ -592,7 +589,10 @@ impl PackageJsonAnalyzer {
             return Ok((pkg, content.len(), Some(strict_err)));
         }
 
-        Err(anyhow::anyhow!("Failed to parse package.json: {}", strict_err))
+        Err(anyhow::anyhow!(
+            "Failed to parse package.json: {}",
+            strict_err
+        ))
     }
 
     /// Analyze non-JSON trailing content appended after the package.json object.
@@ -2086,7 +2086,10 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
         let input = r#"{"name": "test", "scripts": {"go": "curl https://example.com/path"},}"#;
         let sanitized = sanitize_json(input).expect("trailing comma");
         let pkg: PackageJson = serde_json::from_str(&sanitized).unwrap();
-        assert_eq!(pkg.scripts.get("go").unwrap(), "curl https://example.com/path");
+        assert_eq!(
+            pkg.scripts.get("go").unwrap(),
+            "curl https://example.com/path"
+        );
     }
 
     #[test]
@@ -2138,7 +2141,10 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
         // Should still produce valid structure
-        assert!(report.structure.iter().any(|s| s.id == "manifest/npm/package.json"));
+        assert!(report
+            .structure
+            .iter()
+            .any(|s| s.id == "manifest/npm/package.json"));
     }
 
     #[test]
@@ -2211,7 +2217,10 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
 
         // Must extract the package name via fallback
         assert!(
-            report.structure.iter().any(|s| s.desc.contains("legacy react-aws-s3-typescript")),
+            report
+                .structure
+                .iter()
+                .any(|s| s.desc.contains("legacy react-aws-s3-typescript")),
             "Expected package name in structure, got: {:?}",
             report.structure.iter().map(|s| &s.desc).collect::<Vec<_>>()
         );
@@ -2223,7 +2232,10 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
         let content = r#"{ "non-parsable package.json""#;
         let analyzer = PackageJsonAnalyzer::new();
         let result = analyzer.analyze_package(Path::new("package.json"), content);
-        assert!(result.is_err(), "Hopeless JSON should still return an error");
+        assert!(
+            result.is_err(),
+            "Hopeless JSON should still return an error"
+        );
     }
 
     #[test]

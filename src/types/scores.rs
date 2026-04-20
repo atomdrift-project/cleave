@@ -13,6 +13,7 @@ use super::language_metrics::{
     PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
     ShellMetrics,
 };
+use super::lnk_metrics::LnkMetrics;
 use super::png_metrics::PngMetrics;
 use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
@@ -126,6 +127,11 @@ pub struct Metrics {
     /// PNG-specific metrics (compression ratio, bit depth, alpha entropy)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png: Option<PngMetrics>,
+
+    // === Document/shortcut metrics ===
+    /// LNK-specific metrics (presence flags and argument whitespace analysis)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lnk: Option<LnkMetrics>,
 
     // === Composite scores ===
     /// Composite obfuscation score with component breakdown

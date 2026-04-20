@@ -338,6 +338,17 @@ pub enum Command {
         layer: Option<String>,
     },
 
+    /// Dump key/value pairs from structured files (manifests, systemd units, LNK, plist)
+    Kv {
+        /// Target file (package.json, Cargo.toml, manifest.json, *.plist, *.lnk, *.service, etc.)
+        #[arg(required = true)]
+        target: String,
+
+        /// Optional path filter (e.g., "scripts.postinstall" or "content_scripts[*].matches")
+        #[arg(short, long)]
+        path: Option<String>,
+    },
+
     /// Debug rule evaluation - trace through how rules match or fail
     TestRules {
         /// Target file to analyze

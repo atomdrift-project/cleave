@@ -208,10 +208,7 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
              cleave::prefetch_shared_resources() from a non-rayon thread at startup."
         );
     } else {
-        tracing::debug!(
-            enable_third_party,
-            "Initializing global YARA engine"
-        );
+        tracing::debug!(enable_third_party, "Initializing global YARA engine");
     }
 
     lock.get_or_init(|| {

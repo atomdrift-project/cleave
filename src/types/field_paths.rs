@@ -143,6 +143,12 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         paths.insert(format!("jpeg.{}", field));
     }
 
+    // Document/shortcut metrics
+    use super::lnk_metrics::LnkMetrics;
+    for field in LnkMetrics::valid_field_paths() {
+        paths.insert(format!("lnk.{}", field));
+    }
+
     // Composite scores
     for field in ObfuscationScore::valid_field_paths() {
         paths.insert(format!("obfuscation.{}", field));

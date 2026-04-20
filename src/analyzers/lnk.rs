@@ -5,7 +5,8 @@
 //! excessive whitespace padding (ZDI-CAN-25373).
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, TargetInfo};
+use crate::strings::StringExtractor;
+use crate::types::{lnk_metrics::LnkMetrics, AnalysisReport, Metrics, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -192,6 +193,7 @@ fn analyze_whitespace(arguments: Option<&str>) -> WhitespaceAnalysis {
 #[derive(Debug)]
 pub(crate) struct LnkAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
+    string_extractor: StringExtractor,
 }
 
 impl LnkAnalyzer {
@@ -200,6 +202,7 @@ impl LnkAnalyzer {
     pub(crate) fn new() -> Self {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
+            string_extractor: StringExtractor::new(),
         }
     }
 
@@ -217,7 +220,12 @@ impl LnkAnalyzer {
         self
     }
 
-    fn analyze_lnk(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
+    fn analyze_lnk(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        stng_strings: Option<&[stng::ExtractedString]>,
+    ) -> AnalysisReport {
         // Calculate hash
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -282,9 +290,32 @@ impl LnkAnalyzer {
                     fragments: None,
                 });
             }
-            // LNK data is parsed directly by the KV evaluator from raw bytes
-            // when evaluating traits, so no need to store it in the report
-            drop(lnk_data);
+
+            // Populate derived LNK metrics. The kv evaluator still reparses the
+            // raw bytes for target_path/arguments/working_dir/icon_location
+            // queries; presence flags and argument whitespace stats now live
+            // under metrics.lnk.*.
+            let lnk_metrics = LnkMetrics {
+                has_link_target_id_list: lnk_data.has_link_target_id_list,
+                has_link_info: lnk_data.has_link_info,
+                has_arguments: lnk_data.has_arguments,
+                has_working_dir: lnk_data.has_working_dir,
+                has_icon_location: lnk_data.has_icon_location,
+                args_leading_spaces: lnk_data.whitespace_analysis.leading_spaces as u32,
+                args_leading_tabs: lnk_data.whitespace_analysis.leading_tabs as u32,
+                args_whitespace_total: lnk_data.whitespace_analysis.total_whitespace as u32,
+                args_max_whitespace_run: lnk_data.whitespace_analysis.max_consecutive_whitespace
+                    as u32,
+                args_excessive_whitespace: lnk_data.whitespace_analysis.has_excessive_padding,
+            };
+            let metrics = report.metrics.get_or_insert_with(Metrics::default);
+            metrics.lnk = Some(lnk_metrics);
+        }
+
+        if let Some(strings) = stng_strings {
+            report
+                .strings
+                .extend(self.string_extractor.convert_stng_strings(strings));
         }
 
         // Evaluate YAML traits against the file content
@@ -303,12 +334,12 @@ impl Default for LnkAnalyzer {
 
 impl Analyzer for LnkAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        Ok(self.analyze_lnk(input.path, input.data))
+        Ok(self.analyze_lnk(input.path, input.data, Some(input.strings)))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        Ok(self.analyze_lnk(file_path, &data))
+        Ok(self.analyze_lnk(file_path, &data, None))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

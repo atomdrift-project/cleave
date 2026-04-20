@@ -62,7 +62,9 @@ fn main() -> Result<()> {
 
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
     // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
+    // startup-only: SIGUSR1 backtrace thread failure is unrecoverable
     #[cfg(unix)]
+    #[allow(clippy::expect_used)]
     std::thread::Builder::new()
         .name("sigusr1".into())
         .spawn(|| {
@@ -85,8 +87,15 @@ fn main() -> Result<()> {
                 );
                 let lldb = Command::new("lldb")
                     .args([
-                        "--batch", "-p", &pid, "-o", "thread backtrace all", "-o", "detach",
-                        "-o", "quit",
+                        "--batch",
+                        "-p",
+                        &pid,
+                        "-o",
+                        "thread backtrace all",
+                        "-o",
+                        "detach",
+                        "-o",
+                        "quit",
                     ])
                     .stdout(Stdio::inherit())
                     .stderr(Stdio::inherit())
@@ -94,8 +103,16 @@ fn main() -> Result<()> {
                 if !matches!(lldb, Ok(s) if s.success()) {
                     let _ = Command::new("gdb")
                         .args([
-                            "-batch", "-nx", "-p", &pid, "-ex", "thread apply all bt", "-ex",
-                            "detach", "-ex", "quit",
+                            "-batch",
+                            "-nx",
+                            "-p",
+                            &pid,
+                            "-ex",
+                            "thread apply all bt",
+                            "-ex",
+                            "detach",
+                            "-ex",
+                            "quit",
                         ])
                         .stdout(Stdio::inherit())
                         .stderr(Stdio::inherit())

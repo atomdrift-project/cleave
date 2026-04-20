@@ -924,7 +924,11 @@ impl Radare2Analyzer {
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stderr_log = if stderr.len() > 4096 {
-                format!("... [truncated {} bytes] {}", stderr.len() - 4096, &stderr[stderr.len() - 4096..])
+                format!(
+                    "... [truncated {} bytes] {}",
+                    stderr.len() - 4096,
+                    &stderr[stderr.len() - 4096..]
+                )
             } else {
                 stderr.to_string()
             };
@@ -949,8 +953,8 @@ impl Radare2Analyzer {
             let signal_num: Option<i32> = None;
 
             if let Some(sig) = signal_num {
-                let is_memory = !output_cap_hit
-                    && matches!(sig, libc::SIGSEGV | libc::SIGBUS | libc::SIGKILL);
+                let is_memory =
+                    !output_cap_hit && matches!(sig, libc::SIGSEGV | libc::SIGBUS | libc::SIGKILL);
                 let is_output_cap = output_cap_hit || sig == libc::SIGPIPE;
 
                 if is_output_cap {
@@ -989,7 +993,11 @@ impl Radare2Analyzer {
                 });
             }
             warn!(status = %output.status, stderr = %stderr_log, "radare2 exited with error");
-            anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr_log);
+            anyhow::bail!(
+                "radare2 failed with status {}: {}",
+                output.status,
+                stderr_log
+            );
         }
 
         let output_str = String::from_utf8_lossy(&output.stdout);

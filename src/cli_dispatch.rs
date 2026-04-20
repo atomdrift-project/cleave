@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
 use cleave::cli;
 use cleave::commands::{
-    analyze_command, diff_command, expand_paths, extract_metrics_command, extract_sections_command,
-    extract_strings_command, extract_symbols_command, iter_files_command, test_match, test_rules,
-    validate_command, AnalyzeConfig, IterFilesConfig,
+    analyze_command, diff_command, expand_paths, extract_kv_command, extract_metrics_command,
+    extract_sections_command, extract_strings_command, extract_symbols_command, iter_files_command,
+    test_match, test_rules, validate_command, AnalyzeConfig, IterFilesConfig,
 };
 use std::fs;
 
@@ -387,6 +387,9 @@ pub(crate) fn dispatch_command(
         }
         Some(cli::Command::Metrics { target, layer }) => {
             extract_metrics_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
+        }
+        Some(cli::Command::Kv { target, path }) => {
+            extract_kv_command(&target, path.as_deref(), ctx.format)?
         }
         Some(cli::Command::TestRules { target, rules }) => {
             run_test_rules_command(&target, &rules, ctx.disabled, ctx.analyze.platforms)?

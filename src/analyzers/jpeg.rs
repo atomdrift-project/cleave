@@ -11,6 +11,7 @@
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
+use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, BinaryMetrics, ImageMetrics, JpegMetrics, Metrics, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
@@ -21,6 +22,7 @@ use std::sync::Arc;
 #[derive(Debug)]
 pub(crate) struct JpegAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
+    string_extractor: StringExtractor,
 }
 
 impl JpegAnalyzer {
@@ -28,6 +30,7 @@ impl JpegAnalyzer {
     pub(crate) fn new() -> Self {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
+            string_extractor: StringExtractor::new(),
         }
     }
 
@@ -43,7 +46,12 @@ impl JpegAnalyzer {
         self
     }
 
-    fn analyze_jpeg(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
+    fn analyze_jpeg(
+        &self,
+        file_path: &Path,
+        data: &[u8],
+        stng_strings: Option<&[stng::ExtractedString]>,
+    ) -> AnalysisReport {
         let mut hasher = Sha256::new();
         hasher.update(data);
         let sha256 = format!("{:x}", hasher.finalize());
@@ -72,6 +80,10 @@ impl JpegAnalyzer {
             });
         }
 
+        if let Some(strings) = stng_strings {
+            report.strings = self.string_extractor.convert_stng_strings(strings);
+        }
+
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
 
@@ -87,12 +99,12 @@ impl Default for JpegAnalyzer {
 
 impl Analyzer for JpegAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        Ok(self.analyze_jpeg(input.path, input.data))
+        Ok(self.analyze_jpeg(input.path, input.data, Some(input.strings)))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        Ok(self.analyze_jpeg(file_path, &data))
+        Ok(self.analyze_jpeg(file_path, &data, None))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

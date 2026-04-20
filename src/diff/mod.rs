@@ -25,7 +25,6 @@ use utils::{compute_added_removed, detect_renames};
 
 use crate::analyzers::{archive::ArchiveAnalyzer, detect_file_type, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use std::sync::Arc;
 use crate::types::{
     AnalysisMetadata, AnalysisReport, DiffCounts, DiffReport, FileChanges, FileDiff,
     FileRenameInfo, Finding, FullDiffReport, MetricsDelta, ModifiedFileAnalysis,
@@ -35,6 +34,7 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use walkdir::WalkDir;
 
 /// Diff analyzer for detecting supply chain attacks (xz-utils scenario)
@@ -271,8 +271,8 @@ impl DiffAnalyzer {
 
         // Handle archives specially since they need ArchiveAnalyzer with depth config
         if file_type.is_archive() {
-            let analyzer = ArchiveAnalyzer::new()
-                .with_capability_mapper_arc(self.capability_mapper.clone());
+            let analyzer =
+                ArchiveAnalyzer::new().with_capability_mapper_arc(self.capability_mapper.clone());
             return analyzer.analyze(path);
         }
 

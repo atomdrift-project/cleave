@@ -17,6 +17,7 @@ use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
+pub mod kv;
 pub mod metrics;
 pub mod sections;
 pub mod strings;

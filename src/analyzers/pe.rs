@@ -843,11 +843,11 @@ impl PEAnalyzer {
             if has_inflated {
                 report.findings.push(
                     Finding::structural(
-                        "objectives/anti-static/pe-tampering/inflated-section-headers".to_string(),
+                        "metadata/binary/anomaly::inflated-section-headers".to_string(),
                         "PE section headers declare sizes beyond end of file".to_string(),
                         0.9,
                     )
-                    .with_criticality(Criticality::Suspicious),
+                    .with_criticality(Criticality::Notable),
                 );
             }
         }

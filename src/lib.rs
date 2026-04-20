@@ -832,15 +832,16 @@ pub fn clear_all_thread_caches() {
     tracing::debug!("Cleared thread-local caches and regex caches on calling thread");
 }
 
-/// Pre-warm the YARA engine on a background thread.
+/// Pre-warm the YARA engine on a non-rayon thread.
 ///
-/// Call this as early as possible after startup so YARA compilation overlaps with
-/// other setup work. The background thread races the first real scan; if YARA is
-/// already loaded by the time analysis begins, the analysis thread returns immediately.
+/// This blocks until initialization completes. That is intentional: the global
+/// YARA engine must not be first initialized from a rayon worker because rule
+/// loading itself uses rayon internally.
 pub fn prefetch_yara_engine(enable_third_party: bool) {
-    std::thread::spawn(move || {
-        shared_resources::yara_engine(enable_third_party);
-    });
+    let handle = std::thread::spawn(move || shared_resources::yara_engine(enable_third_party));
+    if handle.join().is_err() {
+        tracing::warn!("YARA engine prefetch thread panicked");
+    }
 }
 
 /// Pre-warm the capability mapper on a background thread.
@@ -860,7 +861,9 @@ pub fn prefetch_capability_mapper() {
 ///
 /// Call this once at process startup (e.g. at the top of a worker or server
 /// main) so the first incoming request does not pay the multi-second cold-start
-/// cost. Safe to call multiple times; subsequent calls are cheap.
+/// cost. YARA initialization completes before this returns so subsequent rayon
+/// scans cannot win the first-init race. Safe to call multiple times; subsequent
+/// calls are cheap.
 pub fn prefetch_shared_resources(enable_third_party: bool) {
     prefetch_yara_engine(enable_third_party);
     prefetch_capability_mapper();

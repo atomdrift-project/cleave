@@ -13,7 +13,7 @@
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
 use crate::malecule_bridge;
-use crate::types::{AnalysisReport, Criticality, Finding};
+use crate::types::{AnalysisReport, Criticality, FileAnalysis, Finding};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
@@ -428,42 +428,41 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 ///
 /// Output format:
 /// ```text
-/// # H=hostile S=suspicious N=notable B=baseline
-/// # score: 142
-/// --- path/to/file.exe (elf, 1.2MB, score 142)
-/// H command-and-control/c2-beacon hardcoded_ip_callback
-/// S crypto/custom-encryption XOR_0x5a_loop
-/// N net/socket connect
+/// # tiny-v2 fields are tab-separated
+/// # @ path type size score
+/// # H|S|N|B|C|F id desc evidence
+/// @	path/to/file.exe	elf	1.2MB	142
+/// H	command-and-control/c2-beacon	C2 beacon pattern	hardcoded_ip_callback
+/// S	crypto/custom-encryption	Custom encryption loop	XOR_0x5a_loop
+/// N	net/socket	Network socket usage	connect
 /// ```
 ///
 /// One line per finding, sorted by criticality (highest first).
-/// Evidence is truncated to 32 chars. Files with no findings above
-/// baseline are omitted.
+/// Evidence is truncated to 48 chars. Files with no findings are omitted.
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
-    // Check if any file has findings worth showing before emitting the header
-    let has_visible_findings = report.files.iter().any(|file| {
-        file.findings
-            .iter()
-            .any(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
-    });
+    // Check if any file has findings worth showing before emitting the header.
+    let has_visible_findings = report
+        .files
+        .iter()
+        .any(|file| file.findings.iter().any(|f| tiny_should_show(f, file)));
     if !has_visible_findings {
         return String::new();
     }
 
     let mut out = String::with_capacity(4096);
-    out.push_str("# H=hostile S=suspicious N=notable B=baseline\n");
+    out.push_str(
+        "# tiny-v2: tab-separated; @ path type size score; H/S/N/B/C/F id desc evidence\n",
+    );
     if let Some(summary) = &report.summary {
-        out.push_str(&format!("# score: {}\n", summary.score));
+        out.push_str(&format!("# score\t{}\n", summary.score));
     }
 
     for file in &report.files {
-        // Collect findings at or above Notable level
-        let mut findings: Vec<&Finding> = file
-            .findings
-            .iter()
-            .filter(|f| f.crit >= Criticality::Notable && f.conf >= 0.5)
-            .collect();
+        // Include baseline and matched composites, but keep component findings
+        // only when a matched composite references them. Deduplicate by trait ID
+        // and merge a small evidence set to keep LLM context compact.
+        let mut findings = tiny_findings(file);
 
         if findings.is_empty() {
             continue;
@@ -472,50 +471,149 @@ pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
         // Sort by criticality descending, then by id for stability
         findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
-        // File header: --- path (type, size, score N)
+        // File header: @ <path> <type> <size> <score>
         let size = format_size(file.size);
-        out.push_str("--- ");
-        out.push_str(&file.path);
-        out.push_str(" (");
-        out.push_str(&file.file_type);
-        if !size.is_empty() {
-            out.push_str(", ");
-            out.push_str(&size);
-        }
-        out.push_str(&format!(", score {}", file.score));
-        out.push_str(")\n");
+        out.push_str("@\t");
+        out.push_str(&tiny_field(&file.path));
+        out.push('\t');
+        out.push_str(&tiny_field(&file.file_type));
+        out.push('\t');
+        out.push_str(&size);
+        out.push('\t');
+        out.push_str(&file.score.to_string());
+        out.push('\n');
 
         for f in &findings {
             let letter = match f.crit {
                 Criticality::Hostile => 'H',
                 Criticality::Suspicious => 'S',
                 Criticality::Notable => 'N',
-                _ => 'B',
+                Criticality::Baseline => 'B',
+                Criticality::Component => 'C',
+                Criticality::Filtered => 'F',
             };
             out.push(letter);
-            out.push(' ');
-            out.push_str(&f.id);
-
-            // Pick first evidence value, truncated to 32 chars
-            if let Some(ev) = f.evidence.first() {
-                let val = ev.value.trim();
-                if !val.is_empty() {
-                    out.push(' ');
-                    if val.len() <= 32 {
-                        out.push_str(val);
-                    } else {
-                        // Truncate at char boundary
-                        let truncated: String = val.chars().take(29).collect();
-                        out.push_str(&truncated);
-                        out.push_str("...");
-                    }
-                }
-            }
+            out.push('\t');
+            out.push_str(&tiny_field(&f.id));
+            out.push('\t');
+            out.push_str(&tiny_field(&terse_description(&f.desc)));
+            out.push('\t');
+            out.push_str(&f.evidence);
             out.push('\n');
         }
     }
 
     out
+}
+
+fn tiny_field(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+#[derive(Clone)]
+struct TinyFinding {
+    id: String,
+    desc: String,
+    crit: Criticality,
+    evidence: String,
+}
+
+fn tiny_findings(file: &FileAnalysis) -> Vec<TinyFinding> {
+    let mut by_id: HashMap<&str, TinyFinding> = HashMap::new();
+    let mut order: Vec<&str> = Vec::new();
+
+    for finding in file.findings.iter().filter(|f| tiny_should_show(f, file)) {
+        if let Some(existing) = by_id.get_mut(finding.id.as_str()) {
+            if finding.crit > existing.crit {
+                existing.crit = finding.crit;
+            }
+            existing.evidence = tiny_merged_evidence(&existing.evidence, finding);
+            continue;
+        }
+
+        order.push(finding.id.as_str());
+        by_id.insert(
+            finding.id.as_str(),
+            TinyFinding {
+                id: finding.id.clone(),
+                desc: finding.desc.clone(),
+                crit: finding.crit,
+                evidence: tiny_evidence(finding),
+            },
+        );
+    }
+
+    order
+        .into_iter()
+        .filter_map(|id| by_id.remove(id))
+        .collect()
+}
+
+fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
+    if finding.id.starts_with("metadata/internal/symbols::") {
+        return false;
+    }
+
+    if finding.crit != Criticality::Component {
+        return true;
+    }
+
+    file.findings
+        .iter()
+        .any(|f| f.trait_refs.iter().any(|id| id == &finding.id))
+}
+
+fn tiny_evidence(finding: &Finding) -> String {
+    let mut seen = HashSet::new();
+    finding
+        .evidence
+        .iter()
+        .filter_map(|ev| {
+            let value = tiny_field(ev.value.trim());
+            if value.is_empty() {
+                return None;
+            }
+            let value = truncate_tiny_field(&value, 48);
+            seen.insert(value.clone()).then_some(value)
+        })
+        .take(3)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn tiny_merged_evidence(existing: &str, finding: &Finding) -> String {
+    let mut values: Vec<String> = existing
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+    let mut seen: HashSet<String> = values.iter().cloned().collect();
+
+    for value in tiny_evidence(finding)
+        .split(',')
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+    {
+        if seen.insert(value.clone()) {
+            values.push(value);
+        }
+        if values.len() >= 3 {
+            break;
+        }
+    }
+
+    values.join(",")
+}
+
+fn truncate_tiny_field(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut truncated: String = value.chars().take(keep).collect();
+    truncated.push_str("...");
+    truncated
 }
 
 /// Format byte size as human-readable string (compact)
@@ -1161,5 +1259,134 @@ mod tests {
         let report = create_test_report(capabilities, vec![]);
         let output = format_terminal(&report);
         assert!(output.contains("execution/shell") || output.contains("MICRO-BEHAVIORS"));
+    }
+
+    #[test]
+    fn test_format_tiny_includes_description_as_tsv_field() {
+        let findings = vec![Finding {
+            kind: FindingKind::Capability,
+            trait_refs: vec![],
+            id: "micro-behaviors/process/create/shell::bash".to_string(),
+            desc: "Execute shell commands".to_string(),
+            conf: 0.9,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            evidence: vec![Evidence {
+                method: "symbol".to_string(),
+                source: "test".to_string(),
+                value: "bash\nwith\twhitespace".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+            match_count: 1,
+            source_file: None,
+        }];
+        let report = create_test_report(findings, vec![]);
+
+        let output = format_tiny(&report);
+
+        assert!(output.contains("# tiny-v2"));
+        assert!(output.contains("@\t/test/sample.bin\tELF\t12KB\t"));
+        assert!(output.contains(
+            "N\tmicro-behaviors/process/create/shell::bash\tExecute shell commands\tbash with whitespace"
+        ));
+    }
+
+    #[test]
+    fn test_format_tiny_includes_baseline_and_composite_findings() {
+        let findings = vec![
+            Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "micro-behaviors/fs/read::open".to_string(),
+                desc: "Open file for reading".to_string(),
+                conf: 0.8,
+                crit: Criticality::Baseline,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            },
+            Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "micro-behaviors/fs/read::open".to_string(),
+                desc: "Open file for reading".to_string(),
+                conf: 0.8,
+                crit: Criticality::Baseline,
+                mbc: None,
+                attack: None,
+                evidence: vec![Evidence {
+                    method: "symbol".to_string(),
+                    source: "test".to_string(),
+                    value: "fopen".to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+                match_count: 0,
+                source_file: None,
+            },
+            Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "objectives/execution/loader::fragment".to_string(),
+                desc: "Loader fragment".to_string(),
+                conf: 0.7,
+                crit: Criticality::Component,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            },
+            Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "objectives/execution/loader::unused-fragment".to_string(),
+                desc: "Unused loader fragment".to_string(),
+                conf: 0.7,
+                crit: Criticality::Component,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            },
+            Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![
+                    "micro-behaviors/fs/read::open".to_string(),
+                    "objectives/execution/loader::fragment".to_string(),
+                ],
+                id: "objectives/execution/loader::matched-composite".to_string(),
+                desc: "Matched composite loader".to_string(),
+                conf: 0.95,
+                crit: Criticality::Suspicious,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            },
+        ];
+        let report = create_test_report(findings, vec![]);
+
+        let output = format_tiny(&report);
+
+        assert!(output.contains("B\tmicro-behaviors/fs/read::open\tOpen file for reading\t"));
+        assert_eq!(
+            output
+                .matches("B\tmicro-behaviors/fs/read::open\tOpen file for reading\t")
+                .count(),
+            1
+        );
+        assert!(output.contains("B\tmicro-behaviors/fs/read::open\tOpen file for reading\tfopen"));
+        assert!(output.contains("C\tobjectives/execution/loader::fragment\tLoader fragment\t"));
+        assert!(!output.contains("objectives/execution/loader::unused-fragment"));
+        assert!(output.contains(
+            "S\tobjectives/execution/loader::matched-composite\tMatched composite loader\t"
+        ));
     }
 }

@@ -201,13 +201,34 @@ impl ElfAnalyzer {
                     stng_strings.is_none() && self.preextracted_strings.is_none();
 
                 // Overlap rizin (subprocess-bound) with goblin structural work
-                // (CPU-bound) via a 2-way `rayon::join`. See pe.rs for rationale.
-                let (r2_inner, _) = rayon::join(
-                    || {
-                        if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
-                            return None;
-                        }
-                        Some(self.radare2.extract_batched(
+                // (CPU-bound) only for off-pool callers. Inside archive-member
+                // `par_iter`, a nested `rayon::join` can starve the pool if each
+                // worker blocks in the rizin arm while its goblin sibling task is
+                // still queued.
+                let on_rayon_worker = rayon::current_thread_index().is_some();
+                let mut goblin_ms = 0u128;
+                let mut rizin_ms = 0u128;
+                if on_rayon_worker && allow_rizin {
+                    tracing::warn!(
+                        path = %analysis_path.display(),
+                        size_bytes = data.len(),
+                        symbols_found,
+                        needs_r2_strings,
+                        rayon_thread = ?rayon::current_thread_index(),
+                        "ELF archive member reached rizin on a rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
+                    );
+                }
+                let r2_inner = if on_rayon_worker {
+                    let goblin_start = std::time::Instant::now();
+                    self.analyze_structure(&elf, data, &mut report);
+                    self.analyze_dynamic_symbols(&elf, data, &mut report);
+                    self.analyze_sections(&elf, data, &mut report);
+                    goblin_ms = goblin_start.elapsed().as_millis();
+                    if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
+                        None
+                    } else {
+                        let rizin_start = std::time::Instant::now();
+                        let out = Some(self.radare2.extract_batched(
                             analysis_path,
                             data.len() as u64,
                             symbols_found,
@@ -216,13 +237,52 @@ impl ElfAnalyzer {
                             precomputed_sha256,
                             self.cancellation.as_ref(),
                             Some(data),
-                        ))
-                    },
-                    || {
-                        self.analyze_structure(&elf, data, &mut report);
-                        self.analyze_dynamic_symbols(&elf, data, &mut report);
-                        self.analyze_sections(&elf, data, &mut report);
-                    },
+                        ));
+                        rizin_ms = rizin_start.elapsed().as_millis();
+                        out
+                    }
+                } else {
+                    let (r2_inner, _) = rayon::join(
+                        || {
+                            if !allow_rizin
+                                || self.is_cancelled()
+                                || !Radare2Analyzer::is_available()
+                            {
+                                return None;
+                            }
+                            let rizin_start = std::time::Instant::now();
+                            let out = Some(self.radare2.extract_batched(
+                                analysis_path,
+                                data.len() as u64,
+                                symbols_found,
+                                true, // goblin_success
+                                needs_r2_strings,
+                                precomputed_sha256,
+                                self.cancellation.as_ref(),
+                                Some(data),
+                            ));
+                            rizin_ms = rizin_start.elapsed().as_millis();
+                            out
+                        },
+                        || {
+                            let goblin_start = std::time::Instant::now();
+                            self.analyze_structure(&elf, data, &mut report);
+                            self.analyze_dynamic_symbols(&elf, data, &mut report);
+                            self.analyze_sections(&elf, data, &mut report);
+                            goblin_ms = goblin_start.elapsed().as_millis();
+                        },
+                    );
+                    r2_inner
+                };
+                tracing::info!(
+                    path = %analysis_path.display(),
+                    on_rayon_worker,
+                    rayon_thread = ?rayon::current_thread_index(),
+                    allow_rizin,
+                    symbols_found,
+                    scope_goblin_ms = goblin_ms as u64,
+                    scope_rizin_ms = rizin_ms as u64,
+                    "ELF structural phase timings",
                 );
 
                 // Process Radare2 results if available

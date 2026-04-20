@@ -718,41 +718,101 @@ impl PEAnalyzer {
 
         let scope_start = std::time::Instant::now();
         // Overlap rizin (subprocess-bound) with goblin structural work (CPU-bound)
-        // via a single 2-way `rayon::join`. This is shallow enough not to trigger
-        // the pool-starvation pattern that deeper nested scopes cause while still
-        // hiding the rizin subprocess wait behind the goblin parse — roughly
-        // halving per-file latency when rizin is active. The goblin sub-steps run
-        // sequentially inside their arm because goblin parsing is already fast
-        // and splitting it further only adds stealing overhead.
-        rayon::join(
-            || {
-                if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
-                    r2_result = Some(self.radare2.extract_batched(
-                        analysis_path,
-                        original_data.len() as u64,
-                        has_symbols,
-                        goblin_ok,
-                        needs_r2_strings,
-                        precomputed_sha256,
-                        self.cancellation.as_ref(),
-                        Some(original_data),
-                    ));
-                }
-            },
-            || {
-                if let Some(pe) = pe {
-                    goblin_report_parts.0 = self.get_structure(pe);
-                    goblin_report_parts.1 = self.get_imports(pe);
-                    goblin_report_parts.2 = self.get_exports(pe, pe_data);
-                    goblin_report_parts.3 = self.get_sections(pe, pe_data);
-                }
-            },
-        );
+        // for off-pool callers, but never from inside an existing rayon worker.
+        //
+        // Archive member analysis fans out with `par_iter`; if each worker then
+        // enters a nested `rayon::join` and chooses the rizin arm first, that
+        // worker blocks in a subprocess wait while the goblin sibling task sits
+        // queued. Once enough workers do that, the pool starves permanently.
+        let on_rayon_worker = rayon::current_thread_index().is_some();
+        let mut goblin_ms = 0u128;
+        let mut rizin_ms = 0u128;
+        if on_rayon_worker && allow_rizin {
+            tracing::warn!(
+                path = %logical_path.display(),
+                analysis_path = %analysis_path.display(),
+                size_bytes = original_data.len(),
+                has_symbols,
+                needs_r2_strings,
+                rayon_thread = ?rayon::current_thread_index(),
+                "PE archive member reached rizin on a rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
+            );
+        }
+        if on_rayon_worker {
+            if let Some(pe) = pe {
+                let goblin_start = std::time::Instant::now();
+                goblin_report_parts.0 = self.get_structure(pe);
+                goblin_report_parts.1 = self.get_imports(pe);
+                goblin_report_parts.2 = self.get_exports(pe, pe_data);
+                goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                goblin_ms = goblin_start.elapsed().as_millis();
+            }
+            if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                let rizin_start = std::time::Instant::now();
+                r2_result = Some(self.radare2.extract_batched(
+                    analysis_path,
+                    original_data.len() as u64,
+                    has_symbols,
+                    goblin_ok,
+                    needs_r2_strings,
+                    precomputed_sha256,
+                    self.cancellation.as_ref(),
+                    Some(original_data),
+                ));
+                rizin_ms = rizin_start.elapsed().as_millis();
+            }
+        } else {
+            rayon::join(
+                || {
+                    if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+                        let rizin_start = std::time::Instant::now();
+                        r2_result = Some(self.radare2.extract_batched(
+                            analysis_path,
+                            original_data.len() as u64,
+                            has_symbols,
+                            goblin_ok,
+                            needs_r2_strings,
+                            precomputed_sha256,
+                            self.cancellation.as_ref(),
+                            Some(original_data),
+                        ));
+                        rizin_ms = rizin_start.elapsed().as_millis();
+                    }
+                },
+                || {
+                    if let Some(pe) = pe {
+                        let goblin_start = std::time::Instant::now();
+                        goblin_report_parts.0 = self.get_structure(pe);
+                        goblin_report_parts.1 = self.get_imports(pe);
+                        goblin_report_parts.2 = self.get_exports(pe, pe_data);
+                        goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                        goblin_ms = goblin_start.elapsed().as_millis();
+                    }
+                },
+            );
+        }
         let scope_ms = scope_start.elapsed().as_millis();
+        if allow_rizin || goblin_ms > 0 {
+            tracing::info!(
+                path = %logical_path.display(),
+                analysis_path = %analysis_path.display(),
+                on_rayon_worker,
+                rayon_thread = ?rayon::current_thread_index(),
+                scope_ms = scope_ms as u64,
+                goblin_ms = goblin_ms as u64,
+                rizin_ms = rizin_ms as u64,
+                allow_rizin,
+                has_symbols,
+                "PE structural phase timings",
+            );
+        }
         if scope_ms > 10000 {
             tracing::warn!(
                 path = %logical_path.display(),
                 elapsed_ms = scope_ms,
+                goblin_ms = goblin_ms as u64,
+                rizin_ms = rizin_ms as u64,
+                on_rayon_worker,
                 "PE structural analysis completed slowly",
             );
         }

@@ -208,7 +208,9 @@ impl super::CapabilityMapper {
             }
         }
 
-        report.findings.extend(new_findings);
+        for finding in new_findings {
+            report.push_finding_capped(finding);
+        }
     }
 
     /// Detect the ecosystem for an import based on file type and source.

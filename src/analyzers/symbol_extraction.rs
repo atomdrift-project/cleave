@@ -78,7 +78,7 @@ pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut A
         }
         FileType::Lua => (tree_sitter_lua::LANGUAGE.into(), extract_lua_import),
         FileType::Go => (tree_sitter_go::LANGUAGE.into(), extract_go_import),
-        FileType::Perl => (tree_sitter_perl::LANGUAGE.into(), extract_perl_import),
+        FileType::Perl => (ts_parser_perl::LANGUAGE.into(), extract_perl_import),
         _ => return, // Other languages don't have import extraction yet
     };
 

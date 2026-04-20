@@ -29,6 +29,21 @@ use cli_bootstrap::{
 use cli_dispatch::{build_dispatch_context, dispatch_command, write_output};
 
 fn main() -> Result<()> {
+    // Block SIGUSR1 process-wide before spawning any threads so they all inherit
+    // the blocked mask; the dedicated sigusr1 thread below consumes it via sigwait.
+    #[cfg(unix)]
+    unsafe {
+        let mut mask: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut mask);
+        libc::sigaddset(&mut mask, libc::SIGUSR1);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+    }
+    // Allow a forked debugger to ptrace us under yama.ptrace_scope=1.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        libc::prctl(libc::PR_SET_PTRACER, libc::PR_SET_PTRACER_ANY, 0, 0, 0);
+    }
+
     let args = cli::Args::parse();
     if args.verbose {
         std::env::set_var("CLEAVE_VERBOSE", "1");
@@ -46,28 +61,50 @@ fn main() -> Result<()> {
     }
 
     // Dump all thread backtraces on SIGUSR1 (Linux equivalent of BSD SIGINFO / Ctrl-T).
+    // Attaches lldb/gdb to ourselves so every thread is reported with symbols.
     #[cfg(unix)]
-    {
-        use std::io::Write;
-        std::thread::Builder::new()
-            .name("sigusr1".into())
-            .spawn(|| {
-                let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
-                unsafe {
-                    libc::sigemptyset(&mut mask);
-                    libc::sigaddset(&mut mask, libc::SIGUSR1);
-                    libc::pthread_sigmask(libc::SIG_BLOCK, &mask, std::ptr::null_mut());
+    std::thread::Builder::new()
+        .name("sigusr1".into())
+        .spawn(|| {
+            use std::io::Write;
+            use std::process::{Command, Stdio};
+            let mut mask: libc::sigset_t = unsafe { std::mem::zeroed() };
+            unsafe {
+                libc::sigemptyset(&mut mask);
+                libc::sigaddset(&mut mask, libc::SIGUSR1);
+            }
+            loop {
+                let mut sig: libc::c_int = 0;
+                if unsafe { libc::sigwait(&mask, &mut sig) } != 0 {
+                    continue;
                 }
-                loop {
-                    let mut sig: libc::c_int = 0;
-                    if unsafe { libc::sigwait(&mask, &mut sig) } == 0 {
-                        let bt = std::backtrace::Backtrace::force_capture();
-                        let _ = writeln!(std::io::stderr(), "\n--- SIGUSR1 backtrace ---\n{bt}\n--- end backtrace ---");
-                    }
+                let pid = std::process::id().to_string();
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "\n--- SIGUSR1 all-thread backtrace (pid {pid}) ---"
+                );
+                let lldb = Command::new("lldb")
+                    .args([
+                        "--batch", "-p", &pid, "-o", "thread backtrace all", "-o", "detach",
+                        "-o", "quit",
+                    ])
+                    .stdout(Stdio::inherit())
+                    .stderr(Stdio::inherit())
+                    .status();
+                if !matches!(lldb, Ok(s) if s.success()) {
+                    let _ = Command::new("gdb")
+                        .args([
+                            "-batch", "-nx", "-p", &pid, "-ex", "thread apply all bt", "-ex",
+                            "detach", "-ex", "quit",
+                        ])
+                        .stdout(Stdio::inherit())
+                        .stderr(Stdio::inherit())
+                        .status();
                 }
-            })
-            .expect("failed to spawn sigusr1 thread");
-    }
+                let _ = writeln!(std::io::stderr(), "--- end backtrace ---\n");
+            }
+        })
+        .expect("failed to spawn sigusr1 thread");
 
     let format = args.format();
     // Only create a default log file in server mode — CLI runs at warn level
@@ -131,7 +168,6 @@ fn main() -> Result<()> {
         output_path: output_path.as_deref(),
         max_memory_file_size,
         max_scan_file_size,
-        scan_threads: args.scan_threads.unwrap_or(0),
         min_crit: args.min_crit,
         max_crit: args.max_crit,
         min_file_crit: args.min_file_crit,

@@ -45,12 +45,11 @@ use tracing::{debug, trace};
 /// Filter-map `items` in parallel when we're the outermost rayon context,
 /// sequentially otherwise.
 ///
-/// Archive expansion is nearly always reached from the scan's outer `par_bridge`
-/// (i.e. we're already running on a rayon worker), in which case nesting a
-/// second `par_iter` here just contends for the same threads and pays the
-/// work-stealing overhead without buying any real parallelism. In the rare
-/// top-level case (`cleave analyze single.jar` with no outer scan), we still
-/// parallelize internally.
+/// Archive expansion is nearly always reached from an outer rayon context
+/// (`cleave scan` walks files with `par_bridge`, litmus worker installs each
+/// analysis on a dedicated thread budget), in which case nesting a second
+/// `par_iter` here just contends for the same threads. The outermost case
+/// (`cleave analyze single.jar` with no outer scope) still fans out.
 fn par_filter_map_if_outermost<T, U, F>(items: &[T], f: F) -> Vec<U>
 where
     T: Sync,
@@ -84,6 +83,32 @@ const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 500;
 
 /// Warn when a single archive member analysis exceeds this threshold.
 const SLOW_ARCHIVE_MEMBER_ANALYSIS_MS: u128 = 30_000;
+
+/// Emit a progress log every N members or every T seconds, whichever comes
+/// first. The atomic ensures only one thread emits per window, so the log is
+/// safe to call from a `par_iter` body. Returns `true` if a log should fire.
+fn should_log_progress(
+    done: usize,
+    total: usize,
+    elapsed_ms: u64,
+    last_log_ms: &AtomicU64,
+) -> bool {
+    const EVERY_N_MEMBERS: usize = 10;
+    const EVERY_T_MS: u64 = 10_000;
+    if done == total || done.is_multiple_of(EVERY_N_MEMBERS) {
+        last_log_ms.store(elapsed_ms, Ordering::Relaxed);
+        return true;
+    }
+    let last = last_log_ms.load(Ordering::Relaxed);
+    if elapsed_ms.saturating_sub(last) >= EVERY_T_MS
+        && last_log_ms
+            .compare_exchange(last, elapsed_ms, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+    {
+        return true;
+    }
+    false
+}
 
 struct ThreadLocalCacheClearGuard;
 
@@ -708,6 +733,13 @@ impl ArchiveAnalyzer {
         let mut collected_files = Vec::<FileAnalysis>::with_capacity(expected_count);
         let mut files_analyzed: usize = 0;
 
+        let members_done = std::sync::atomic::AtomicUsize::new(0);
+        let last_progress_ms = AtomicU64::new(0);
+        let jar_display = self
+            .archive_path_prefix
+            .as_deref()
+            .unwrap_or(report.target.path.as_str());
+
         let member_results: Vec<MemberAnalysisResult> =
             par_filter_map_if_outermost(&classes_to_analyze, |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
@@ -777,6 +809,17 @@ impl ArchiveAnalyzer {
                         elapsed_ms = member_elapsed.as_millis() as u64,
                         rayon_thread = ?rayon::current_thread_index(),
                         "Slow archive member analysis (JAR)",
+                    );
+                }
+
+                let done = members_done.fetch_add(1, Ordering::Relaxed) + 1;
+                let elapsed_ms = start.elapsed().as_millis() as u64;
+                if should_log_progress(done, expected_count, elapsed_ms, &last_progress_ms) {
+                    tracing::info!(
+                        archive = jar_display,
+                        progress = %format!("{done}/{expected_count}"),
+                        total_elapsed_ms = elapsed_ms,
+                        "jar member analysis progress",
                     );
                 }
 
@@ -888,6 +931,7 @@ impl ArchiveAnalyzer {
 
         let member_count = non_class_files.len();
         let members_done = std::sync::atomic::AtomicUsize::new(0);
+        let last_progress_ms = AtomicU64::new(0);
         let analysis_start = std::time::Instant::now();
 
         let archive_display: &str = self
@@ -975,13 +1019,16 @@ impl ArchiveAnalyzer {
                         rayon_thread = rayon::current_thread_index().unwrap_or(usize::MAX),
                         "slow archive member analysis",
                     );
-                } else if done.is_multiple_of(50) || done == member_count {
-                    tracing::info!(
-                        archive = archive_display,
-                        progress = %format!("{done}/{member_count}"),
-                        total_elapsed_ms = analysis_start.elapsed().as_millis() as u64,
-                        "archive member analysis progress",
-                    );
+                } else {
+                    let elapsed_ms = analysis_start.elapsed().as_millis() as u64;
+                    if should_log_progress(done, member_count, elapsed_ms, &last_progress_ms) {
+                        tracing::info!(
+                            archive = archive_display,
+                            progress = %format!("{done}/{member_count}"),
+                            total_elapsed_ms = elapsed_ms,
+                            "archive member analysis progress",
+                        );
+                    }
                 }
 
                 Some(MemberAnalysisResult {

@@ -3298,7 +3298,7 @@ fn validate_ast_query(query: &str, language: Option<&str>) -> Result<()> {
         Some("php") => tree_sitter_php::LANGUAGE_PHP.into(),
         Some("csharp") | Some("c#") => tree_sitter_c_sharp::LANGUAGE.into(),
         Some("lua") => tree_sitter_lua::LANGUAGE.into(),
-        Some("perl") => tree_sitter_perl::LANGUAGE.into(),
+        Some("perl") => ts_parser_perl::LANGUAGE.into(),
         Some("powershell") | Some("ps1") => tree_sitter_powershell::LANGUAGE.into(),
         Some("swift") => tree_sitter_swift::LANGUAGE.into(),
         Some("objc") | Some("objective-c") => tree_sitter_objc::LANGUAGE.into(),

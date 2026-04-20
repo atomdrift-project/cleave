@@ -78,8 +78,6 @@ pub struct AnalyzeConfig<'a> {
     pub output_path: Option<&'a str>,
     /// Maximum file size eligible for YARA scanning.
     pub max_scan_file_size: u64,
-    /// Number of threads to use for directory scans.
-    pub scan_threads: usize,
     /// Minimum finding criticality to emit.
     pub min_crit: Option<types::Criticality>,
     /// Maximum finding criticality to emit.
@@ -126,7 +124,6 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
         sample_extraction: sample_lib,
         slow_rule_ms: config.slow_rule_ms,
         max_scan_file_size: config.max_scan_file_size,
-        scan_threads: config.scan_threads,
         // Pick up the CLI's SIGINT/SIGTERM-driven cancellation flag so a
         // long scan drains cleanly on Ctrl-C. In server mode the handler
         // isn't installed and the OnceLock returns a fresh unset flag, so

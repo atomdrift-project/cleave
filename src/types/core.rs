@@ -220,7 +220,34 @@ impl AnalysisReport {
     /// Add a finding
     pub fn add_finding(&mut self, finding: Finding) {
         if !self.findings.iter().any(|f| f.id == finding.id) {
+            self.push_finding_capped(finding);
+        }
+    }
+
+    /// Push a finding to the report, enforcing a hard limit of 8192 findings.
+    ///
+    /// If the limit is reached, the finding is discarded and a final warning
+    /// finding is appended (once) to indicate the report was truncated.
+    pub fn push_finding_capped(&mut self, finding: Finding) {
+        const MAX_FINDINGS: usize = 8192;
+
+        if self.findings.len() < MAX_FINDINGS {
             self.findings.push(finding);
+            return;
+        }
+
+        if self.findings.len() == MAX_FINDINGS {
+            let mut truncate_finding = Finding::new(
+                "metadata/analysis/findings-limit-exceeded".to_string(),
+                crate::types::FindingKind::Indicator,
+                format!(
+                    "Analysis produced more than {MAX_FINDINGS} findings; \
+                     truncated to prevent downstream performance degradation"
+                ),
+                1.0,
+            );
+            truncate_finding.crit = crate::types::Criticality::Notable;
+            self.findings.push(truncate_finding);
         }
     }
 

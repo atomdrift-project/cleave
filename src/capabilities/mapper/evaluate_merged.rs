@@ -260,7 +260,7 @@ impl super::CapabilityMapper {
         for finding in independent_findings {
             if !seen.contains(finding.id.as_str()) {
                 seen.insert(finding.id.clone());
-                report.findings.push(finding);
+                report.push_finding_capped(finding);
             }
         }
         let _d_eval1 = t_eval1.elapsed();
@@ -292,7 +292,7 @@ impl super::CapabilityMapper {
             for finding in dependent_findings {
                 if !seen.contains(finding.id.as_str()) {
                     seen.insert(finding.id.clone());
-                    report.findings.push(finding);
+                    report.push_finding_capped(finding);
                     added_any = true;
                 }
             }
@@ -330,7 +330,7 @@ impl super::CapabilityMapper {
         for finding in composite_findings {
             if !seen.contains(finding.id.as_str()) {
                 seen.insert(finding.id.clone());
-                report.findings.push(finding);
+                report.push_finding_capped(finding);
             }
         }
         let _d_comp = t_comp.elapsed();

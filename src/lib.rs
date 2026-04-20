@@ -570,11 +570,6 @@ pub struct AnalysisOptions {
     /// Maximum file size (bytes) to scan during directory analysis.
     /// Files larger than this are skipped. 0 means no limit.
     pub max_scan_file_size: u64,
-    /// Thread count for parallel directory scanning (0 = auto).
-    /// Each thread holds an in-flight analysis (~0.5-1.5 GB of RAM), so this
-    /// directly controls peak memory during directory scans.
-    /// Default: min(8, num_cpus) for CLI; num_cpus for server mode.
-    pub scan_threads: usize,
     /// Per-request cancellation flag. When set to true by the caller (e.g. server on timeout),
     /// archive analysis will stop processing new members early.
     /// Not included in the analysis cache key.
@@ -817,7 +812,6 @@ impl Default for AnalysisOptions {
             sample_extraction: None,
             slow_rule_ms: capabilities::CapabilityMapper::DEFAULT_SLOW_RULE_MS,
             max_scan_file_size: 600 * 1024 * 1024, // 600 MB default
-            scan_threads: 0,                       // 0 = auto (min(8, num_cpus) for CLI)
             cancellation: None,
             phase: None,
         }
@@ -1144,12 +1138,21 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let span = tracing::info_span!("analyze", path = %path.display());
     let _enter = span.enter();
 
+    // Report fine-grained progress through the phase tracker so a stuck
+    // analysis says something more useful than `cleave:init` for ten minutes.
+    let set_phase = |p: &str| {
+        if let Some(ref tracker) = options.phase {
+            tracker.set(p);
+        }
+    };
+
     // Log BEFORE processing to ensure we capture what file causes OOM crashes
     tracing::debug!("Starting analysis");
 
     // Read file once — reuse pre-loaded data if available (e.g. from analyze_bytes
     // or the fast-path cache check). When data is preloaded the path may be synthetic
     // and not exist on disk, so skip the filesystem checks.
+    set_phase("cleave:read");
     let file_data_wrapper = match preloaded {
         Some(data) => data,
         None => {
@@ -1168,6 +1171,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let file_data = file_data_wrapper.as_slice();
 
     // Detect file type from already-loaded data (no extra read)
+    set_phase("cleave:detect");
     tracing::debug!("Detecting file type for: {}", path.display());
     let file_type = analyzers::detect_file_type_from_data(path, file_data);
     tracing::debug!(
@@ -1202,6 +1206,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     ip_validator::set_current_file_id(file_id);
 
     // Check analysis cache before running the full pipeline
+    set_phase("cleave:cache_lookup");
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
@@ -1249,6 +1254,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Skip extraction for archive files themselves as they are expected to contain
     // binary noise and their contents will be analyzed separately.
     // For binary types, overlap stng with YARA scan (both need only file_data).
+    set_phase(if binary_yara_ftypes.is_some() {
+        "cleave:stng+yara"
+    } else {
+        "cleave:stng"
+    });
     let cancel_for_yara = options.cancellation.clone();
     let cancel_for_stng = options.cancellation.as_ref();
     let ((stng_strings, stage_stng_ms), prefetched_yara) = if file_type.is_archive() {
@@ -1321,12 +1331,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Route to appropriate analyzer.
     // Binary analyzers (MachO, Elf, Pe) use parallel YARA for performance.
     // All other analyzers use analyze_input() for unified data flow.
-    let phase = options.phase.clone();
-    let set_phase = |p: &str| {
-        if let Some(ref tracker) = phase {
-            tracker.set(p);
-        }
-    };
     let structural_start = std::time::Instant::now();
     let mut report = match file_type {
         FileType::MachO => {
@@ -2053,33 +2057,6 @@ where
 
     let max_scan_size = options.max_scan_file_size;
 
-    // Dedicated thread pool for directory scanning. Each thread holds an in-flight
-    // analysis (~0.5-1.5 GB), so this directly controls peak memory.
-    // Priority: CLEAVE_SCAN_THREADS env > options.scan_threads > cpus * 3/2.
-    //
-    // Empirical 5-run averages on a 16-core machine (200MB cold-cache bench):
-    //   n=12 (cpus*3/4): median 72.0s, σ 8.3
-    //   n=16 (cpus):     median 66.4s, σ 4.3
-    //   n=24 (cpus*3/2): median 64.6s, σ 3.0  ← best + lowest variance
-    //
-    // Workers spend ~⅓ of their wall time blocked on the rizin subprocess.
-    // 1.5× oversubscription keeps cores busy during those blocks without
-    // inflating memory pressure. Inner rayon contention is no longer a
-    // concern because Option-A flattening + rayon::join for rizin‖goblin
-    // keeps per-file CPU work modest.
-    let scan_threads = std::env::var("CLEAVE_SCAN_THREADS")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .filter(|&n| n > 0)
-        .unwrap_or_else(|| {
-            if options.scan_threads > 0 {
-                options.scan_threads
-            } else {
-                (rayon::current_num_threads() * 3 / 2).max(4)
-            }
-        });
-    let scan_pool = shared_resources::scan_pool(scan_threads);
-
     // Build the walk iterator once. par_bridge() drives `next()` from worker
     // threads behind an internal mutex — the walk proceeds lazily as workers
     // pull, so we never materialize the full PathBuf list. Memory for pending
@@ -2222,10 +2199,7 @@ where
     })
     };
 
-    match scan_pool {
-        Some(pool) => pool.install(analyze_files),
-        None => analyze_files(),
-    }
+    analyze_files();
 
     let total = walked.load(Ordering::Relaxed);
     let final_analyzed = analyzed.load(Ordering::Relaxed);

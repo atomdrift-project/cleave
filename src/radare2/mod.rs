@@ -548,7 +548,7 @@ pub(crate) fn push_rizin_warnings(
             0.6,
         );
         finding.crit = crate::types::Criticality::Suspicious;
-        report.findings.push(finding);
+        report.push_finding_capped(finding);
     }
     if batched.timed_out {
         let mut finding = crate::types::Finding::new(
@@ -558,7 +558,7 @@ pub(crate) fn push_rizin_warnings(
             0.4,
         );
         finding.crit = crate::types::Criticality::Component;
-        report.findings.push(finding);
+        report.push_finding_capped(finding);
     }
 }
 
@@ -923,6 +923,12 @@ impl Radare2Analyzer {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
+            let stderr_log = if stderr.len() > 4096 {
+                format!("... [truncated {} bytes] {}", stderr.len() - 4096, &stderr[stderr.len() - 4096..])
+            } else {
+                stderr.to_string()
+            };
+
             // Classify how rizin died:
             //   * output_cap_hit: our own SIGKILL after one of the reader
             //     threads hit the 100 MB cap. Pathological output volume, not
@@ -953,7 +959,7 @@ impl Radare2Analyzer {
                         path = %file_path.display(),
                         status = %output.status,
                         signal = sig,
-                        stderr = %stderr,
+                        stderr = %stderr_log,
                         "rizin killed after exceeding 100 MB output cap — \
                          pathological stdout/stderr volume"
                     );
@@ -963,7 +969,7 @@ impl Radare2Analyzer {
                         path = %file_path.display(),
                         status = %output.status,
                         signal = sig,
-                        stderr = %stderr,
+                        stderr = %stderr_log,
                         limit_gb = RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024,
                         "rizin killed by signal — likely exceeded memory cap"
                     );
@@ -972,7 +978,7 @@ impl Radare2Analyzer {
                         path = %file_path.display(),
                         status = %output.status,
                         signal = sig,
-                        stderr = %stderr,
+                        stderr = %stderr_log,
                         "rizin killed by unexpected signal"
                     );
                 }
@@ -982,8 +988,8 @@ impl Radare2Analyzer {
                     ..Default::default()
                 });
             }
-            warn!(status = %output.status, stderr = %stderr, "radare2 exited with error");
-            anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr);
+            warn!(status = %output.status, stderr = %stderr_log, "radare2 exited with error");
+            anyhow::bail!("radare2 failed with status {}: {}", output.status, stderr_log);
         }
 
         let output_str = String::from_utf8_lossy(&output.stdout);

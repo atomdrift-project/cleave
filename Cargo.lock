@@ -791,7 +791,6 @@ dependencies = [
  "tree-sitter-javascript",
  "tree-sitter-lua",
  "tree-sitter-objc",
- "tree-sitter-perl",
  "tree-sitter-php",
  "tree-sitter-powershell",
  "tree-sitter-python",
@@ -801,6 +800,7 @@ dependencies = [
  "tree-sitter-swift",
  "tree-sitter-typescript",
  "tree-sitter-zig",
+ "ts-parser-perl",
  "unrar",
  "walkdir",
  "xz2",
@@ -3935,7 +3935,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.1.8"
-source = "git+https://codeberg.org/atomdrift/stng.git#34aab7559182a64291a58fd5d08c57164895903f"
+source = "git+https://codeberg.org/atomdrift/stng.git#81c8a64ced9ed200bc900030dc8623a799d058a9"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -4566,17 +4566,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tree-sitter-perl"
-version = "1.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e79d4ae71b42e595c24c354b59905ade8162bd400ebc53ab916ea8aec54da92d"
-dependencies = [
- "cc",
- "tree-sitter",
- "tree-sitter-language",
-]
-
-[[package]]
 name = "tree-sitter-php"
 version = "0.24.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4661,6 +4650,16 @@ name = "tree-sitter-zig"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ab11fc124851b0db4dd5e55983bbd9631192e93238389dcd44521715e5d53e28"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "ts-parser-perl"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "414cb3e098cb9be31093f9e2ec3485877444ea70ebd5ac19df46753dbd712cfd"
 dependencies = [
  "cc",
  "tree-sitter-language",

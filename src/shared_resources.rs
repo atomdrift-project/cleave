@@ -23,55 +23,6 @@ static YARA_ENGINE_WITH_THIRD_PARTY: OnceLock<Arc<YaraEngine>> = OnceLock::new()
 /// Global lazy-loaded YARA engine (without third-party rules)
 static YARA_ENGINE_BUILTIN_ONLY: OnceLock<Arc<YaraEngine>> = OnceLock::new();
 
-/// Cached dedicated rayon pool for directory scanning.
-///
-/// Each scan worker holds an in-flight analysis (~0.5-1.5 GB), so we keep this
-/// pool separate from the global compute pool. Sized once on first use — the
-/// thread count is fixed for the lifetime of the process. Subsequent callers
-/// requesting a different count get the cached pool (logged once as a warning).
-static SCAN_POOL: OnceLock<Option<Arc<rayon::ThreadPool>>> = OnceLock::new();
-
-/// Return the shared scan-directory thread pool, or `None` if the pool could
-/// not be built (caller should fall back to the global pool).
-///
-/// The first call fixes the thread count; later calls with a different
-/// `num_threads` log a warning and reuse the original pool.
-pub(crate) fn scan_pool(num_threads: usize) -> Option<Arc<rayon::ThreadPool>> {
-    let pool = SCAN_POOL.get_or_init(|| {
-        match rayon::ThreadPoolBuilder::new()
-            .num_threads(num_threads)
-            .thread_name(|i| format!("cleave-scan-{i}"))
-            .build()
-        {
-            Ok(p) => {
-                tracing::info!(num_threads, "Directory scan thread pool initialized");
-                Some(Arc::new(p))
-            }
-            Err(error) => {
-                tracing::warn!(
-                    num_threads,
-                    %error,
-                    "Failed to build dedicated scan thread pool; falling back to global rayon pool"
-                );
-                None
-            }
-        }
-    });
-    if let Some(ref p) = pool {
-        if p.current_num_threads() != num_threads {
-            static WARNED: std::sync::Once = std::sync::Once::new();
-            WARNED.call_once(|| {
-                tracing::warn!(
-                    requested = num_threads,
-                    actual = p.current_num_threads(),
-                    "Scan thread count differs from cached pool; reusing existing pool"
-                );
-            });
-        }
-    }
-    pool.clone()
-}
-
 /// Create a CapabilityMapper configured from analysis options.
 ///
 /// Returns the cached global singleton when options match defaults.

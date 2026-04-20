@@ -271,7 +271,15 @@ pub(crate) fn configure_rayon_thread_pool() {
     {
         builder = builder.num_threads(threads);
     }
-    builder.build_global().ok();
+    // build_global fails if a pool is already installed (e.g. by a parent
+    // binary like litmus). That's the desired behaviour — we only configure
+    // the pool when cleave owns it.
+    let installed = builder.build_global().is_ok();
+    tracing::info!(
+        installed_by_cleave = installed,
+        threads = rayon::current_num_threads(),
+        "rayon pool ready"
+    );
 }
 
 pub(crate) fn print_version_banner(format: cli::OutputFormat) {

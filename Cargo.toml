@@ -118,7 +118,7 @@ tree-sitter-java = "0.23"
 tree-sitter-ruby = "0.23"
 tree-sitter-c = "0.24"
 tree-sitter-php = "0.24"
-tree-sitter-perl = "1.1"
+ts-parser-perl = "1.0.1"
 tree-sitter-lua = "0.4"
 tree-sitter-c-sharp = "0.23"
 tree-sitter-powershell = "0.25"
@@ -278,3 +278,4 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
+

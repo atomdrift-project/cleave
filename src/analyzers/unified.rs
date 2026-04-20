@@ -181,7 +181,7 @@ pub(crate) fn config_for_file_type(
             name: "perl",
             file_type: "perl",
             description: "Perl script",
-            language: tree_sitter_perl::LANGUAGE.into(),
+            language: ts_parser_perl::LANGUAGE.into(),
             call_node_types: &["function_call", "method_call"],
             function_node_types: &["subroutine_declaration", "method_declaration"],
             function_name_field: "name",

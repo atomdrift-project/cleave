@@ -397,11 +397,13 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Rtf,
                     RuleFileType::Html,
                     RuleFileType::Markdown,
+                    RuleFileType::Text,
                     RuleFileType::OleDoc,
                     RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
-                "data" | "ipa" => vec![RuleFileType::Ipa],
+                "data" => vec![RuleFileType::Ipa, RuleFileType::Text],
+                "ipa" => vec![RuleFileType::Ipa],
                 "archives" => vec![
                     RuleFileType::Archive,
                     RuleFileType::Zip,
@@ -437,6 +439,8 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "vbs" | "vbe" | "wsf" | "wsc" | "vbscript" => vec![RuleFileType::Vbs],
                 "html" | "htm" => vec![RuleFileType::Html],
                 "markdown" | "md" => vec![RuleFileType::Markdown],
+                "makefile" | "make" | "mk" | "mak" => vec![RuleFileType::Makefile],
+                "text" | "txt" | "b64" | "base64" => vec![RuleFileType::Text],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],

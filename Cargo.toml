@@ -128,6 +128,7 @@ tree-sitter-groovy = "0.1"
 tree-sitter-scala = "0.24"
 tree-sitter-zig = "1.1"
 tree-sitter-elixir = "0.3"
+tree-sitter-make = "1.1.1"
 
 # Serialization
 plist = "1.8"
@@ -278,4 +279,3 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
-

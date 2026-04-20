@@ -88,6 +88,8 @@ impl GenericAnalyzer {
             FileType::Plist => "plist",
             FileType::Html => "html",
             FileType::Markdown => "markdown",
+            FileType::Makefile => "makefile",
+            FileType::Text => "text",
             FileType::Pdf => "pdf",
             _ => "unknown",
         }

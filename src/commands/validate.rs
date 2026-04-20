@@ -246,6 +246,7 @@ const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
     ("artifacts/sample.apk!!lib/x86/libsample.so", 5),
     ("artifacts/sample.ipa", 8),
     ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 8),
+    ("artifacts/sample.mk", 1),
     ("artifacts/sample.zsh", 3),
     ("main.go", 3),
     ("out/does-nothing-darwin-arm64.xz", 8),

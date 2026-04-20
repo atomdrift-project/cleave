@@ -224,6 +224,7 @@ pub(crate) fn eval_ast<'a>(
         FileType::Scala => Some(tree_sitter_scala::LANGUAGE),
         FileType::Zig => Some(tree_sitter_zig::LANGUAGE),
         FileType::Elixir => Some(tree_sitter_elixir::LANGUAGE),
+        FileType::Makefile => Some(tree_sitter_make::LANGUAGE),
         _ => None,
     };
 
@@ -433,6 +434,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         FileType::Scala => tree_sitter_scala::LANGUAGE.into(),
         FileType::Zig => tree_sitter_zig::LANGUAGE.into(),
         FileType::Elixir => tree_sitter_elixir::LANGUAGE.into(),
+        FileType::Makefile => tree_sitter_make::LANGUAGE.into(),
         _ => return ConditionResult::no_match(),
     };
 

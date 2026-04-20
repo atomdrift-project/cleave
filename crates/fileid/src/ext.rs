@@ -153,6 +153,9 @@ fn detect_from_filename(path: &Path) -> Option<FileType> {
     if name.eq_ignore_ascii_case("action.yml") || name.eq_ignore_ascii_case("action.yaml") {
         return Some(FileType::GithubActions);
     }
+    if name.starts_with("Makefile") || name.starts_with("GNUmakefile") {
+        return Some(FileType::Makefile);
+    }
 
     None
 }
@@ -228,6 +231,8 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "zst" => Some(FileType::Zst),
         "html" | "htm" => Some(FileType::Html),
         "md" | "markdown" => Some(FileType::Markdown),
+        "mk" | "mak" => Some(FileType::Makefile),
+        "txt" | "text" | "b64" | "base64" => Some(FileType::Text),
         _ => None,
     }
 }

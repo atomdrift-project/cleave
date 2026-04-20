@@ -237,6 +237,10 @@ pub(crate) enum FileType {
     Html,
     /// Markdown file
     Markdown,
+    /// Makefile / GNU Make build file
+    Makefile,
+    /// Plain text data
+    Text,
     /// npm package.json manifest
     PackageJson,
     /// Chrome extension manifest.json
@@ -338,6 +342,8 @@ impl FileType {
                 | FileType::Vbs
                 | FileType::Html
                 | FileType::Markdown
+                | FileType::Makefile
+                | FileType::Text
         )
     }
 
@@ -366,6 +372,7 @@ impl FileType {
                 | FileType::Scala
                 | FileType::Zig
                 | FileType::Elixir
+                | FileType::Makefile
         )
     }
 
@@ -388,6 +395,7 @@ impl FileType {
                     | FileType::ComposerJson
                     | FileType::PkgInfo
                     | FileType::Plist
+                    | FileType::Text
             )
     }
 
@@ -458,6 +466,8 @@ impl FileType {
             FileType::Vbs,
             FileType::Html,
             FileType::Markdown,
+            FileType::Makefile,
+            FileType::Text,
             // Manifest/config formats
             FileType::PackageJson,
             FileType::ChromeManifest,
@@ -536,6 +546,8 @@ impl FileType {
             "vbs" | "vbscript" => FileType::Vbs,
             "html" | "htm" => FileType::Html,
             "markdown" | "md" => FileType::Markdown,
+            "makefile" | "make" | "mk" | "mak" => FileType::Makefile,
+            "text" | "txt" | "b64" | "base64" => FileType::Text,
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,

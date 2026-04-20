@@ -614,6 +614,8 @@ pub enum DetectFileType {
     Go,
     /// Shell script
     Shell,
+    /// Makefile / GNU Make build file
+    Makefile,
     /// systemd service unit file
     #[value(
         name = "systemd",

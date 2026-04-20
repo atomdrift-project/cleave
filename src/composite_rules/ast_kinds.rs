@@ -27,6 +27,7 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::CSharp => vec!["invocation_expression"],
             FileType::Php => vec!["function_call_expression", "member_call_expression"],
             FileType::Shell => vec!["command"],
+            FileType::Makefile => vec!["recipe"],
             FileType::Lua | FileType::Perl => vec!["function_call"],
             FileType::PowerShell => vec!["command_expression", "invocation_expression"],
             FileType::Groovy => vec!["method_call"],
@@ -58,6 +59,7 @@ pub(crate) fn map_kind_to_node_types(kind: &str, file_type: FileType) -> Vec<&'s
             FileType::Groovy => vec!["method_definition"],
             FileType::Zig => vec!["fn_decl"],
             FileType::Elixir => vec!["call"], // def/defp are function calls in Elixir AST
+            FileType::Makefile => vec!["rule"],
             _ => vec![],
         },
 

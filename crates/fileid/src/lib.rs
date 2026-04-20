@@ -168,8 +168,12 @@ pub enum FileType {
     Html,
     /// Markdown document (.md, .markdown)
     Markdown,
+    /// Makefile / GNU Make build file
+    Makefile,
     /// OpenDocument Format (.odt, .ods, .odp, .odg) — ZIP-based office documents
     Odf,
+    /// Plain text data (.txt, .text, or printable text with no stronger type)
+    Text,
     /// File type could not be determined
     Unknown,
 }
@@ -1040,6 +1044,14 @@ mod tests {
         assert_ext("notes.markdown", FileType::Markdown);
     }
 
+    #[test]
+    fn makefile_path_only_detection() {
+        assert_detect("Makefile", b"all:\n\techo hi\n", FileType::Makefile);
+        assert_detect("Makefile.debug", b"all:\n\techo hi\n", FileType::Makefile);
+        assert_detect("rules.mk", b"all:\n\techo hi\n", FileType::Makefile);
+        assert!(detect(Path::new("buildfile"), b"all:\n\techo hi\n").is_none());
+    }
+
     // ── Skip / non-match ─────────────────────────────────────────────
 
     #[test]
@@ -1058,8 +1070,8 @@ mod tests {
     }
 
     #[test]
-    fn txt_not_misclassified() {
-        assert!(detect(Path::new("notes.txt"), b"some text here").is_none());
+    fn txt_detects_as_text() {
+        assert_detect("notes.txt", b"some text here", FileType::Text);
     }
 
     // ── API: detect_content / detect_path ────────────────────────────

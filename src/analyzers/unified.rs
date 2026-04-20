@@ -298,6 +298,17 @@ pub(crate) fn config_for_file_type(
             string_node_types: &["string", "charlist"],
             comment_style: CommentStyle::Hash,
         }),
+        FileType::Makefile => Some(LanguageConfig {
+            name: "makefile",
+            file_type: "makefile",
+            description: "Makefile build script",
+            language: tree_sitter_make::LANGUAGE.into(),
+            call_node_types: &["recipe"],
+            function_node_types: &["rule"],
+            function_name_field: "target",
+            string_node_types: &["string"],
+            comment_style: CommentStyle::Hash,
+        }),
         _ => None,
     }
 }

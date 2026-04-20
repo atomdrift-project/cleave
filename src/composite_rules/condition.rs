@@ -3306,6 +3306,7 @@ fn validate_ast_query(query: &str, language: Option<&str>) -> Result<()> {
         Some("scala") => tree_sitter_scala::LANGUAGE.into(),
         Some("zig") => tree_sitter_zig::LANGUAGE.into(),
         Some("elixir") => tree_sitter_elixir::LANGUAGE.into(),
+        Some("makefile") | Some("make") => tree_sitter_make::LANGUAGE.into(),
         Some(other) => {
             return Err(anyhow::anyhow!(
                 "unsupported language for ast query: {}",

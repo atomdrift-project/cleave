@@ -226,7 +226,8 @@ pub fn analyzer_for_file_type(
         | FileType::Plist
         | FileType::SystemdService
         | FileType::Html
-        | FileType::Markdown => Some(Box::new(
+        | FileType::Markdown
+        | FileType::Text => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
 
@@ -331,7 +332,8 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Plist
         | FileType::SystemdService
         | FileType::Html
-        | FileType::Markdown => Some(Box::new(
+        | FileType::Markdown
+        | FileType::Text => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
 
@@ -557,6 +559,8 @@ impl FileTypeExt for FileType {
             FileType::Pdf => vec!["pdf"],
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],
+            FileType::Makefile => vec!["makefile", "make", "mk"],
+            FileType::Text => vec!["txt", "text"],
             _ => vec![],
         }
     }
@@ -599,7 +603,15 @@ mod tests {
         );
         assert_eq!(
             detect_file_type_from_path(Path::new("notes.txt")),
-            FileType::Unknown
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("Makefile")),
+            FileType::Makefile
+        );
+        assert_eq!(
+            detect_file_type_from_path(Path::new("rules.mk")),
+            FileType::Makefile
         );
     }
 

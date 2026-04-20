@@ -207,6 +207,8 @@ pub fn run(
         FileType::Elixir => composite_rules::FileType::Elixir,
         FileType::Html => composite_rules::FileType::Html,
         FileType::Markdown => composite_rules::FileType::Markdown,
+        FileType::Makefile => composite_rules::FileType::Makefile,
+        FileType::Text => composite_rules::FileType::Text,
         FileType::PackageJson => composite_rules::FileType::PackageJson,
         FileType::ChromeManifest => composite_rules::FileType::ChromeManifest,
         FileType::VsixManifest => composite_rules::FileType::VsixManifest,

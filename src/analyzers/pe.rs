@@ -728,14 +728,14 @@ impl PEAnalyzer {
         let mut goblin_ms = 0u128;
         let mut rizin_ms = 0u128;
         if on_rayon_worker && allow_rizin {
-            tracing::warn!(
+            tracing::debug!(
                 path = %logical_path.display(),
                 analysis_path = %analysis_path.display(),
                 size_bytes = original_data.len(),
                 has_symbols,
                 needs_r2_strings,
                 rayon_thread = ?rayon::current_thread_index(),
-                "PE archive member reached rizin on a rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
+                "PE analysis on rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
             );
         }
         if on_rayon_worker {

@@ -209,13 +209,13 @@ impl ElfAnalyzer {
                 let mut goblin_ms = 0u128;
                 let mut rizin_ms = 0u128;
                 if on_rayon_worker && allow_rizin {
-                    tracing::warn!(
+                    tracing::debug!(
                         path = %analysis_path.display(),
                         size_bytes = data.len(),
                         symbols_found,
                         needs_r2_strings,
                         rayon_thread = ?rayon::current_thread_index(),
-                        "ELF archive member reached rizin on a rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
+                        "ELF analysis on rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
                     );
                 }
                 let r2_inner = if on_rayon_worker {

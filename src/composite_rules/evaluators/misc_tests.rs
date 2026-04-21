@@ -7,7 +7,7 @@ use super::*;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::composite_rules::types::{FileType, Platform};
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Finding, FindingKind, StructuralFeature, TargetInfo,
+    AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo,
 };
 
 fn eval_basename<'a>(
@@ -64,83 +64,6 @@ fn create_test_finding(id: &str) -> Finding {
         match_count: 0,
         source_file: None,
     }
-}
-
-// =============================================================================
-// eval_structure tests
-// =============================================================================
-
-#[test]
-fn test_eval_structure_exact_match() {
-    let mut report = create_test_report("/test/binary");
-    report.structure.push(StructuralFeature {
-        id: "pe/headers/dos".to_string(),
-        desc: "DOS header".to_string(),
-        evidence: vec![Evidence {
-            method: "structure".to_string(),
-            source: "binary".to_string(),
-            value: "DOS header found".to_string(),
-            location: Some("0x0".to_string()),
-            ..Default::default()
-        }],
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data, None);
-
-    let result = eval_structure("pe/headers/dos", None, &ctx);
-    assert!(result.matched);
-    assert!(!result.evidence.is_empty());
-}
-
-#[test]
-fn test_eval_structure_prefix_match() {
-    let mut report = create_test_report("/test/binary");
-    report.structure.push(StructuralFeature {
-        id: "pe/headers/rich".to_string(),
-        desc: "Rich header".to_string(),
-        evidence: vec![],
-    });
-    report.structure.push(StructuralFeature {
-        id: "pe/headers/dos".to_string(),
-        desc: "DOS header".to_string(),
-        evidence: vec![],
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data, None);
-
-    // Prefix should match both
-    let result = eval_structure("pe/headers", None, &ctx);
-    assert!(result.matched);
-}
-
-#[test]
-fn test_eval_structure_min_sections() {
-    let mut report = create_test_report("/test/binary");
-    for i in 0..5 {
-        report.structure.push(StructuralFeature {
-            id: format!("elf/section/{}", i),
-            desc: format!("Section {}", i),
-            evidence: vec![],
-        });
-    }
-    let data = vec![];
-    let ctx = create_test_context(&report, &data, None);
-
-    let result = eval_structure("elf/section", Some(3), &ctx);
-    assert!(result.matched);
-
-    let result = eval_structure("elf/section", Some(10), &ctx);
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_structure_no_match() {
-    let report = create_test_report("/test/binary");
-    let data = vec![];
-    let ctx = create_test_context(&report, &data, None);
-
-    let result = eval_structure("pe/headers/dos", None, &ctx);
-    assert!(!result.matched);
 }
 
 // =============================================================================

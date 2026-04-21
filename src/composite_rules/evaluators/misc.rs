@@ -11,52 +11,6 @@ use crate::composite_rules::condition::StringValidator;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
-/// Evaluate structure condition
-#[must_use]
-pub(crate) fn eval_structure<'a>(
-    feature: &str,
-    min_sections: Option<usize>,
-    ctx: &EvaluationContext<'a>,
-) -> ConditionResult {
-    let mut count = 0;
-    let mut evidence = Vec::new();
-
-    for structural_feature in &ctx.report.structure {
-        if structural_feature.id == feature
-            || structural_feature.id.starts_with(&format!("{}/", feature))
-        {
-            count += 1;
-            if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                let remaining = MAX_EVIDENCE_PER_TRAIT - evidence.len();
-                evidence.extend(structural_feature.evidence.iter().take(remaining).cloned());
-            }
-        }
-    }
-
-    let matched = if let Some(min) = min_sections {
-        count >= min
-    } else {
-        count > 0
-    };
-
-    // Calculate precision: base 1.0 + 0.5 for feature + 0.5 for min_sections
-    let mut precision = 1.0f32;
-    precision += 0.5; // feature is always present
-    if min_sections.is_some() {
-        precision += 0.5;
-    }
-
-    let match_count = evidence.len();
-    ConditionResult {
-        matched,
-        evidence,
-        match_count,
-        warnings: Vec::new(),
-        precision,
-        matched_trait_ids: Vec::new(),
-    }
-}
-
 /// Evaluate trait reference condition - check if a trait has already been matched
 ///
 /// Reference formats:

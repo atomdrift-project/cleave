@@ -377,11 +377,6 @@ enum ConditionTagged {
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
     },
-    Structure {
-        feature: String,
-        #[serde(default)]
-        min_sections: Option<usize>,
-    },
     Trait {
         id: String,
     },
@@ -795,13 +790,6 @@ impl From<ConditionDeser> for Condition {
                     compiled_regex: None,
                     compiled_finder: None,
                 },
-                ConditionTagged::Structure {
-                    feature,
-                    min_sections,
-                } => Condition::Structure {
-                    feature,
-                    min_sections,
-                },
                 ConditionTagged::Trait { id } => Condition::Trait { id },
                 ConditionTagged::Ast {
                     kind,
@@ -1109,13 +1097,6 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-            },
-            Condition::Structure {
-                feature,
-                min_sections,
-            } => ConditionTagged::Structure {
-                feature,
-                min_sections,
             },
             Condition::Trait { id } => ConditionTagged::Trait { id },
             Condition::Ast {
@@ -1519,15 +1500,6 @@ pub(crate) enum Condition {
         compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
-    /// Match a structural feature
-    Structure {
-        /// Feature identifier (e.g., "binary/stripped", "entropy/high", "binary/format/elf")
-        feature: String,
-        /// Minimum number of matching sections required
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min_sections: Option<usize>,
-    },
-
     /// Reference a previously-defined trait by ID
     Trait {
         /// The ID of the trait to reference
@@ -1926,9 +1898,7 @@ impl Condition {
 
         match self {
             // Section analysis is binary-only
-            Condition::SectionRatio { .. }
-            | Condition::Section { .. }
-            | Condition::Structure { .. } => is_binary,
+            Condition::SectionRatio { .. } | Condition::Section { .. } => is_binary,
 
             // AST-backed searches require source code support
             Condition::Ast { .. } | Condition::StringLiteral { .. } => {
@@ -1948,7 +1918,6 @@ impl Condition {
             Condition::StringValue { .. } => "string_value",
             Condition::Text { .. } => "text",
             Condition::StringLiteral { .. } => "string_literal",
-            Condition::Structure { .. } => "structure",
             Condition::Trait { .. } => "trait",
             Condition::Ast { .. } => "ast",
             Condition::Yara { .. } => "yara",

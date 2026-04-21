@@ -459,13 +459,6 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= RAW_MATCH_MULTIPLIER;
         }
-        Condition::Structure {
-            feature,
-            min_sections,
-        } => {
-            score += score_string_value(feature);
-            score += score_presence(min_sections.as_ref());
-        }
         Condition::Trait { id } => {
             score += score_string_value(id);
         }

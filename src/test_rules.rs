@@ -601,7 +601,6 @@ impl<'a> RuleDebugger<'a> {
                 field, min, max, ..
             } => self.debug_metrics_condition(field, *min, *max),
             Condition::Yara { source, .. } => self.debug_yara_inline_condition(source),
-            Condition::Structure { feature, .. } => self.debug_structure_condition(feature),
             Condition::Raw {
                 regex,
                 substr,
@@ -1472,26 +1471,6 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    fn debug_structure_condition(&self, feature: &str) -> ConditionDebugResult {
-        let desc = format!("structure: {}", feature);
-
-        let matched = self.report.structure.iter().any(|s| s.id == feature);
-
-        let mut result = ConditionDebugResult::new(desc, matched);
-
-        result.details.push(format!(
-            "Structures in file: {}",
-            self.report.structure.len()
-        ));
-        if self.report.structure.len() <= 20 {
-            for s in &self.report.structure {
-                result.details.push(format!("  {}", s.id));
-            }
-        }
-
-        result
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn debug_raw_condition(
         &self,
@@ -2139,7 +2118,6 @@ fn describe_condition(condition: &Condition) -> String {
             format!("metrics: {} [{:?}, {:?}]", field, min, max)
         }
         Condition::Yara { .. } => "yara[inline]".to_string(),
-        Condition::Structure { feature, .. } => format!("structure: {}", feature),
         Condition::Raw {
             exact,
             substr,

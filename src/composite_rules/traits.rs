@@ -9,8 +9,8 @@ use super::condition::{
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     eval_ast, eval_basename, eval_encoded, eval_hex, eval_metrics, eval_raw, eval_section,
-    eval_section_ratio, eval_string, eval_string_literal, eval_structure, eval_symbol,
-    eval_syscall, eval_text, eval_trait, eval_yara_inline, ContentLocationParams,
+    eval_section_ratio, eval_string, eval_string_literal, eval_symbol, eval_syscall, eval_text,
+    eval_trait, eval_yara_inline, ContentLocationParams,
 };
 use super::types::{
     default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
@@ -1302,10 +1302,6 @@ impl TraitDefinition {
                     eval_string_literal(&params, self.not.as_ref(), ctx)
                 )
             }
-            Condition::Structure {
-                feature,
-                min_sections,
-            } => timed_eval!("structure", eval_structure(feature, *min_sections, ctx)),
             Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
             Condition::Ast {
                 kind,
@@ -2403,10 +2399,6 @@ impl CompositeTrait {
                 };
                 eval_string_literal(&params, self.not.as_ref(), ctx)
             }
-            Condition::Structure {
-                feature,
-                min_sections,
-            } => self.eval_structure(feature, *min_sections, ctx),
             Condition::Trait { id } => eval_trait(id, ctx),
             Condition::Ast {
                 kind,
@@ -2675,16 +2667,6 @@ impl CompositeTrait {
             not,
             ctx,
         )
-    }
-
-    /// Evaluate structure condition
-    fn eval_structure<'a>(
-        &self,
-        feature: &str,
-        min_sections: Option<usize>,
-        ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
-        eval_structure(feature, min_sections, ctx)
     }
 
     /// Check if evidence satisfies proximity constraints.

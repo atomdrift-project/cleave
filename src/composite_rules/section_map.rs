@@ -343,16 +343,23 @@ fn resolve_offset_end(offset: i64, base_start: u64, base_end: u64) -> Option<u64
 }
 
 /// Returns true if the section name looks like a generic name that should be fuzzy matched.
+/// Accepts both dotted (`.text`) and un-dotted (`text`) forms — the un-dotted form is
+/// common in hand-authored rules and maps to the same set of platform-specific sections.
 fn is_fuzzy_name(name: &str) -> bool {
-    matches!(name, ".text" | ".data" | ".rdata" | ".rodata")
+    matches!(
+        name,
+        ".text" | ".data" | ".rdata" | ".rodata" | "text" | "data" | "rdata" | "rodata"
+    )
 }
 
 /// Returns a list of platform-specific section names for a generic name.
 fn fuzzy_section_patterns(name: &str) -> &'static [&'static str] {
     match name {
-        ".text" => &[".text", "__TEXT,__text"],
-        ".data" => &[".data", "__DATA,__data"],
-        ".rdata" | ".rodata" => &[".rdata", ".rodata", "__TEXT,__const", "__DATA,__const"],
+        ".text" | "text" => &[".text", "__TEXT,__text"],
+        ".data" | "data" => &[".data", "__DATA,__data"],
+        ".rdata" | "rdata" | ".rodata" | "rodata" => {
+            &[".rdata", ".rodata", "__TEXT,__const", "__DATA,__const"]
+        }
         _ => &[],
     }
 }

@@ -116,37 +116,91 @@ impl super::CapabilityMapper {
             }
         }
 
-        // Pass 2: Final evaluation of rules with negative conditions (exclusions)
-        // These are only checked AFTER all positive indicators have reached a stable state.
-        let mut ctx = EvaluationContext::new(
-            report,
-            binary_data,
-            file_type,
-            &self.platforms,
-            if all_findings.is_empty() {
-                None
-            } else {
-                Some(&all_findings)
-            },
-            cached_ast,
-        )
-        .with_section_map(section_map);
-        if let Some(results) = inline_yara {
-            ctx = ctx.with_inline_yara(results);
-        }
-        if let Some(ranges) = arch_ranges {
-            ctx = ctx.with_arch_ranges(ranges);
-        }
+        // Pass 2: Iteratively evaluate negative rules and re-run positive rules until fixed point.
+        //
+        // Negative rules (those with `unless:`) are deferred from Pass 1 so their exclusions see
+        // the complete positive set. But once a negative rule fires, a downstream positive rule
+        // may depend on it — so after each negative pass we re-run positive rules, and vice
+        // versa, until no new findings appear.
+        for _ in 0..MAX_ITERATIONS {
+            let mut ctx = EvaluationContext::new(
+                report,
+                binary_data,
+                file_type,
+                &self.platforms,
+                if all_findings.is_empty() {
+                    None
+                } else {
+                    Some(&all_findings)
+                },
+                cached_ast,
+            )
+            .with_section_map(section_map);
+            if let Some(results) = inline_yara {
+                ctx = ctx.with_inline_yara(results);
+            }
+            if let Some(ranges) = arch_ranges {
+                ctx = ctx.with_arch_ranges(ranges);
+            }
 
-        let negative_findings: Vec<Finding> = negative_rules
-            .iter()
-            .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
-            .filter_map(|rule| rule.evaluate(&ctx))
-            .filter(|f| !seen_ids.contains(&f.id))
-            .collect();
+            let negative_findings: Vec<Finding> = negative_rules
+                .iter()
+                .filter(|rule| !seen_ids.contains(&rule.id))
+                .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                .filter_map(|rule| rule.evaluate(&ctx))
+                .filter(|f| !seen_ids.contains(&f.id))
+                .collect();
 
-        for finding in negative_findings {
-            all_findings.push(finding);
+            if negative_findings.is_empty() {
+                break;
+            }
+            drop(ctx);
+            for finding in negative_findings {
+                seen_ids.insert(finding.id.clone());
+                if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                    matched_bits.insert(idx);
+                }
+                all_findings.push(finding);
+            }
+
+            // Re-run positive rules to a fixed point against the enriched findings
+            for _ in 0..MAX_ITERATIONS {
+                let mut ctx = EvaluationContext::new(
+                    report,
+                    binary_data,
+                    file_type,
+                    &self.platforms,
+                    Some(&all_findings),
+                    cached_ast,
+                )
+                .with_section_map(section_map);
+                if let Some(results) = inline_yara {
+                    ctx = ctx.with_inline_yara(results);
+                }
+                if let Some(ranges) = arch_ranges {
+                    ctx = ctx.with_arch_ranges(ranges);
+                }
+
+                let new_findings: Vec<Finding> = positive_rules
+                    .iter()
+                    .filter(|rule| !seen_ids.contains(&rule.id))
+                    .filter(|rule| matched_bits.contains_all(&rule.required_trait_indices))
+                    .filter_map(|rule| rule.evaluate(&ctx))
+                    .filter(|f| !seen_ids.contains(&f.id))
+                    .collect();
+
+                if new_findings.is_empty() {
+                    break;
+                }
+                drop(ctx);
+                for finding in new_findings {
+                    seen_ids.insert(finding.id.clone());
+                    if let Some(&idx) = self.trait_id_map.get(&finding.id) {
+                        matched_bits.insert(idx);
+                    }
+                    all_findings.push(finding);
+                }
+            }
         }
 
         // Pass 3: Re-evaluate downgrades for all findings now that the full context is available.

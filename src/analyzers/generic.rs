@@ -449,7 +449,7 @@ impl GenericAnalyzer {
             // can threshold on `binary.overall_entropy` to flag encrypted payloads.
             // Use the raw bytes when available — a lossy UTF-8 round trip collapses
             // non-printable bytes to U+FFFD and tanks the entropy score.
-            let bytes = original_bytes.unwrap_or_else(|| content.as_bytes());
+            let bytes = original_bytes.unwrap_or(content.as_bytes());
             Some(crate::types::BinaryMetrics {
                 file_size: bytes.len() as u64,
                 overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,

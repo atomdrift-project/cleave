@@ -546,7 +546,9 @@ fn provide_error_guidance(
         guidance.push_str("   • structure  - Match structural features\n");
         guidance.push_str("   • exports_count, string_count - Count checks\n");
         guidance.push_str("   • section_ratio, section - Section analysis\n");
-        guidance.push_str("   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n");
+        guidance.push_str(
+            "   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n",
+        );
 
         // Check for common mistakes in context
         if context.contains("type: word") {

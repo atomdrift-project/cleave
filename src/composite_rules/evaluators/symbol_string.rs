@@ -178,10 +178,8 @@ pub(crate) fn eval_symbol<'a>(
             if forwards_only && export.forward_to.is_none() {
                 continue;
             }
-            let candidates: [Option<&str>; 2] = [
-                Some(export.symbol.as_str()),
-                export.forward_to.as_deref(),
-            ];
+            let candidates: [Option<&str>; 2] =
+                [Some(export.symbol.as_str()), export.forward_to.as_deref()];
             let mut hit_value: Option<&str> = None;
             for candidate in candidates.into_iter().flatten() {
                 if symbol_matches_condition(

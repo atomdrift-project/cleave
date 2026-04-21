@@ -249,7 +249,9 @@ pub struct SupplyChainScore {
 /// Get a metric value by field path (e.g., "binary.string_count", "text.total_lines")
 /// Returns None if the metric doesn't exist or the field path is invalid
 ///
-/// Uses serde_json for dynamic field access instead of hardcoded match statements
+/// Uses serde_json for dynamic field access instead of hardcoded match statements.
+/// A leaf missing from the serialized JSON due to `skip_serializing_if` is treated as 0.0
+/// when its parent container exists (common for numeric fields with `is_zero` skips).
 #[must_use]
 pub(crate) fn get_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
     // Convert metrics to JSON value for dynamic access
@@ -258,17 +260,20 @@ pub(crate) fn get_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
     // Split field path into components (e.g., "binary.string_count" -> ["binary", "string_count"])
     let parts: Vec<&str> = field.split('.').collect();
 
-    // Navigate through the JSON structure
+    // Navigate through all but the last component — parent path must exist.
+    let (last, parents) = parts.split_last()?;
     let mut current = &value;
-    for part in parts {
+    for part in parents {
         current = current.get(part)?;
     }
 
-    // Convert to f64 based on JSON type
-    match current {
-        serde_json::Value::Number(n) => n.as_f64(),
-        serde_json::Value::Bool(b) => Some(if *b { 1.0 } else { 0.0 }),
-        _ => None,
+    // Leaf lookup: a missing leaf under an existing object parent means the numeric
+    // field was skipped by `skip_serializing_if = "is_zero_*"` — treat it as 0.0.
+    match current.get(last) {
+        Some(serde_json::Value::Number(n)) => n.as_f64(),
+        Some(serde_json::Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
+        None if current.is_object() => Some(0.0),
+        Some(_) | None => None,
     }
 }
 

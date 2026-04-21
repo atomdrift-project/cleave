@@ -97,7 +97,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "export".to_string(),
                         source: export.source.clone(),
-                    forward_to: export.forward_to.clone(),
+                        forward_to: export.forward_to.clone(),
                     });
                 }
                 for func in &report.functions {
@@ -193,7 +193,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "export".to_string(),
                         source: export.source,
-                    forward_to: export.forward_to.clone(),
+                        forward_to: export.forward_to.clone(),
                     });
                 }
 

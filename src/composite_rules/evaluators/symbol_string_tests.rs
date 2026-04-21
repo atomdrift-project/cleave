@@ -18,7 +18,16 @@ fn eval_symbol<'a>(
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    eval_symbol_with_kind(exact, substr, pattern, platforms, None, compiled_regex, not, ctx)
+    eval_symbol_with_kind(
+        exact,
+        substr,
+        pattern,
+        platforms,
+        None,
+        compiled_regex,
+        not,
+        ctx,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2414,7 +2423,9 @@ fn test_eval_string_offset_range_filters() {
 
 fn report_with_import_export_function() -> AnalysisReport {
     let mut report = create_test_report();
-    report.imports.push(Import::new("LoadLibraryA", None, "goblin"));
+    report
+        .imports
+        .push(Import::new("LoadLibraryA", None, "goblin"));
     report.exports.push(Export::new(
         "MyExport",
         Some("0x1234".to_string()),

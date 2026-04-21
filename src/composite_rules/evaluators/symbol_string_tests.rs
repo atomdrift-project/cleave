@@ -692,39 +692,9 @@ fn test_eval_string_literal_matches_only_ast_strings() {
     assert_eq!(result.evidence[0].source, "ast");
 }
 
-#[test]
-fn test_eval_string_in_imports() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "CreateProcess".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let params = StringParams {
-        exact: None,
-        substr: Some(&"CreateProcess".to_string()),
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        compiled_regex: None,
-        compiled_finder: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        arch_clamp: None,
-    };
-
-    let result = eval_text(&params, None, &ctx, None);
-
-    assert!(result.matched);
-    assert_eq!(result.evidence[0].method, "import_symbol");
-}
+// Note: Legacy `eval_string` fused string-extractor lookup with import-symbol
+// matching. `eval_text` only searches extracted strings — import matching now
+// lives in `type: symbol`. The pre-migration test for that behavior was removed.
 
 /// Helper to create an empty report (no strings extracted)
 // =============================================================================
@@ -1669,80 +1639,9 @@ fn test_eval_raw_external_ip_keeps_external() {
 
 // =============================================================================
 // A6: Location constraints skip imports/exports
+// (legacy eval_string fused imports with string search; eval_text searches
+// only extracted strings, so this test no longer applies)
 // =============================================================================
-
-#[test]
-fn test_eval_string_offset_skips_imports() {
-    // An import named "connect" should NOT match a string condition with offset constraint.
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "connect".to_string(),
-        library: None,
-        source: "libc".to_string(),
-    });
-    // Add a string at the target offset so we know the offset logic itself works
-    report.strings.push(StringInfo {
-        value: "connect".to_string(),
-        offset: Some(0x1000),
-        encoding: "utf8".to_string(),
-        string_type: None,
-        section: None,
-        encoding_chain: Vec::new(),
-        fragments: None,
-    });
-    let data = vec![0u8; 0x2000];
-    let ctx = create_test_context(&report, &data);
-
-    // With offset constraint: should match the string but NOT the import
-    let exact = "connect".to_string();
-    let params_with_offset = StringParams {
-        exact: Some(&exact),
-        substr: None,
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        compiled_regex: None,
-        compiled_finder: None,
-        section: None,
-        offset: Some(0x1000),
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        arch_clamp: None,
-    };
-    let result = eval_text(&params_with_offset, None, &ctx, None);
-    assert!(result.matched, "String at offset 0x1000 should match");
-    assert_eq!(
-        result.match_count, 1,
-        "Only the string should match, not the import"
-    );
-    assert_eq!(result.evidence[0].source, "string_extractor");
-
-    // Without offset constraint: should match both string AND import
-    let params_no_offset = StringParams {
-        exact: Some(&exact),
-        substr: None,
-        regex: None,
-        word: None,
-        case_insensitive: false,
-        is_check: None,
-        compiled_regex: None,
-        compiled_finder: None,
-        section: None,
-        offset: None,
-        offset_range: None,
-        section_offset: None,
-        section_offset_range: None,
-        arch_clamp: None,
-    };
-    let result = eval_text(&params_no_offset, None, &ctx, None);
-    assert!(result.matched);
-    assert!(
-        result.match_count >= 2,
-        "Without offset constraint, both string and import should match"
-    );
-}
 
 // =============================================================================
 // Gap #4: word: boundary matching in eval_string

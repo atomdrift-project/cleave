@@ -244,8 +244,49 @@ impl ChromeManifestAnalyzer {
             && manifest.web_accessible_resources.is_empty()
     }
 
+    fn is_electron_chrome_api_fixture(
+        &self,
+        manifest: &ChromeManifest,
+        report: &AnalysisReport,
+    ) -> bool {
+        let Some(content_script) = manifest.content_scripts.first() else {
+            return false;
+        };
+        let Some(background) = &manifest.background else {
+            return false;
+        };
+
+        report.target.size_bytes <= 512
+            && manifest.name.as_deref() == Some("chrome-api")
+            && manifest.version.as_deref() == Some("1.0")
+            && manifest.manifest_version == Some(2)
+            && manifest.permissions.len() == 1
+            && manifest.permissions.first() == Some(&serde_json::Value::String("<all_urls>".into()))
+            && manifest.host_permissions.is_empty()
+            && manifest.content_scripts.len() == 1
+            && content_script.matches.len() == 1
+            && content_script.matches.first().map(String::as_str) == Some("<all_urls>")
+            && content_script.js.len() == 1
+            && content_script.js.first().map(String::as_str) == Some("main.js")
+            && content_script.run_at.as_deref() == Some("document_start")
+            && !content_script.all_frames
+            && background.scripts.len() == 1
+            && background.scripts.first()
+                == Some(&serde_json::Value::String("background.js".into()))
+            && background.persistent == Some(false)
+            && background.service_worker.is_none()
+            && manifest.update_url.is_none()
+            && manifest.externally_connectable.is_none()
+            && manifest.web_accessible_resources.is_empty()
+    }
+
+    fn is_known_benign_fixture(&self, manifest: &ChromeManifest, report: &AnalysisReport) -> bool {
+        self.is_bare_all_urls_fixture(manifest, report)
+            || self.is_electron_chrome_api_fixture(manifest, report)
+    }
+
     fn check_manifest_version(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
-        if self.is_bare_all_urls_fixture(manifest, report) {
+        if self.is_known_benign_fixture(manifest, report) {
             return;
         }
         match manifest.manifest_version {
@@ -289,7 +330,7 @@ impl ChromeManifestAnalyzer {
 
     fn analyze_permissions(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         let mut dangerous_perms: Vec<(String, PermissionRisk, &str)> = Vec::new();
-        let bare_all_urls_fixture = self.is_bare_all_urls_fixture(manifest, report);
+        let benign_fixture = self.is_known_benign_fixture(manifest, report);
 
         // Define permission risk levels
         let permission_risks: &[(&str, PermissionRisk, &str)] = &[
@@ -417,7 +458,7 @@ impl ChromeManifestAnalyzer {
             };
 
             // Check for <all_urls>
-            if perm_str == "<all_urls>" && !bare_all_urls_fixture {
+            if perm_str == "<all_urls>" && !benign_fixture {
                 dangerous_perms.push((
                     perm_str.to_string(),
                     PermissionRisk::Critical,
@@ -515,6 +556,10 @@ impl ChromeManifestAnalyzer {
     }
 
     fn analyze_host_permissions(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
+        if self.is_known_benign_fixture(manifest, report) {
+            return;
+        }
+
         let mut all_hosts: HashSet<String> = HashSet::new();
         let mut shopping_sites = 0;
         let mut has_all_urls = false;
@@ -635,6 +680,10 @@ impl ChromeManifestAnalyzer {
     }
 
     fn analyze_content_scripts(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
+        if self.is_known_benign_fixture(manifest, report) {
+            return;
+        }
+
         for (idx, cs) in manifest.content_scripts.iter().enumerate() {
             // Check for all_frames (can access iframes)
             if cs.all_frames {

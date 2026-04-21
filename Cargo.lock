@@ -3936,7 +3936,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.1.8"
-source = "git+https://codeberg.org/atomdrift/stng.git#52b284fb873efb656efe05e452b248a5e7b692db"
+source = "git+https://codeberg.org/atomdrift/stng.git#2cb602adcaa337927688aa489be6f7d898b63b6d"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5443,9 +5443,9 @@ checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"
-version = "1.0.1"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09dac053f1cd375980747450bfc7250c264eaae0583872e845c0c7cd578872b5"
+checksum = "2ee1708bef14716a11bae175f579062d4554d95be2c6829f518df847b7b3fdd0"
 dependencies = [
  "memchr",
 ]

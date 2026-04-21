@@ -92,6 +92,7 @@ impl GenericAnalyzer {
             FileType::Text => "text",
             FileType::Data => "data",
             FileType::Pdf => "pdf",
+            FileType::PythonBytecode => "python-bytecode",
             _ => "unknown",
         }
     }
@@ -541,5 +542,19 @@ test.c $(distdir)/runsuite.c | GZIP=$(GZIP_ENV) gzip -c >`echo "$(distdir)" | sh
             .findings
             .iter()
             .any(|f| f.id == "metadata/lang/embedded::shell"));
+    }
+
+    #[test]
+    fn test_generic_python_bytecode_reports_detected_type() {
+        let analyzer = GenericAnalyzer::new(FileType::PythonBytecode);
+        let input = AnalysisInput::new(
+            std::path::Path::new("module.pyc"),
+            &[0xCB, 0x0D, 0x0D, 0x0A, 0, 0, 0, 0],
+            FileType::PythonBytecode,
+        );
+
+        let report = analyzer.analyze_input(&input).expect("analyze pyc");
+
+        assert_eq!(report.target.file_type, "python-bytecode");
     }
 }

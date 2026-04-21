@@ -485,6 +485,7 @@ impl FileTypeExt for FileType {
             FileType::TarXz => "tar.xz".to_string(),
             FileType::TarZst => "tar.zst".to_string(),
             FileType::SevenZ => "7z".to_string(),
+            FileType::PythonBytecode => "python-bytecode".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }
     }
@@ -750,6 +751,10 @@ mod tests {
     #[test]
     fn bridge_report_file_type_uses_systemd_alias() {
         assert_eq!(FileType::SystemdService.report_file_type(), "systemd");
+        assert_eq!(
+            FileType::PythonBytecode.report_file_type(),
+            "python-bytecode"
+        );
         assert_eq!(FileType::Elf.report_file_type(), "elf");
     }
 }

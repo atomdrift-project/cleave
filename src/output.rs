@@ -964,23 +964,6 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         }
     }
 
-    // If no files had findings, show a simple message
-    if output.is_empty() {
-        let first_file = report.files.first();
-        let path = first_file
-            .map(|f| f.path.as_str())
-            .unwrap_or(&report.target.path);
-        let file_type = first_file
-            .map(|f| f.file_type.as_str())
-            .unwrap_or(&report.target.file_type);
-        output.push_str(&format!(
-            "{}  {}\n",
-            path.bright_white(),
-            display_file_type(file_type).bright_black()
-        ));
-        output.push_str("No findings\n");
-    }
-
     output
 }
 
@@ -1247,9 +1230,7 @@ mod tests {
     fn test_format_terminal_empty_report() {
         let report = create_test_report(vec![], vec![]);
         let output = format_terminal(&report);
-        assert!(output.contains("/test/sample.bin"));
-        assert!(output.contains("detected: ELF"));
-        assert!(output.contains("No findings"));
+        assert!(output.is_empty());
     }
 
     #[test]

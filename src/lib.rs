@@ -149,6 +149,13 @@ fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
         && decoded.contains(": m")
 }
 
+fn is_generated_python_codec_unicode_escape(report: &types::AnalysisReport) -> bool {
+    report.target.file_type == "python"
+        && report.strings.iter().any(|s| {
+            s.value.contains("Python Character Mapping Codec") && s.value.contains("gencodec.py")
+        })
+}
+
 fn should_skip_unknown_xor_payload_for_source(
     file_type: &FileType,
     payload: &types::ExtractedPayload,
@@ -1612,6 +1619,8 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 || payload.preview.contains("must be escaped")
                 || payload.preview.contains("control character U+")
                 || is_benign_unicode_escape_payload(&payload)
+                || (payload.detected_type == FileType::Unknown
+                    && is_generated_python_codec_unicode_escape(&report))
             {
                 tracing::debug!(
                     "Skipping benign unicode-escape payload: {}",
@@ -1700,11 +1709,30 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
 
         // Add finding for the encoded payload
-        let crit = match payload.detected_type {
-            FileType::Python | FileType::Shell | FileType::Elf | FileType::MachO | FileType::Pe => {
-                types::Criticality::Suspicious
+        let is_unknown_unicode_escape = payload.detected_type == FileType::Unknown
+            && payload
+                .encoding_chain
+                .iter()
+                .any(|encoding| encoding == "unicode-escape");
+        let crit = if is_unknown_unicode_escape {
+            types::Criticality::Baseline
+        } else {
+            match payload.detected_type {
+                FileType::Python
+                | FileType::Shell
+                | FileType::Elf
+                | FileType::MachO
+                | FileType::Pe => types::Criticality::Suspicious,
+                _ => types::Criticality::Notable,
             }
-            _ => types::Criticality::Notable,
+        };
+        let desc = if is_unknown_unicode_escape {
+            "Decoded unicode-escape content".to_string()
+        } else {
+            format!(
+                "Encoded payload detected: {}",
+                payload.encoding_chain.join(" → ")
+            )
         };
 
         report.findings.push(types::Finding {
@@ -1713,10 +1741,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 payload.encoding_chain.join("-")
             ),
             kind: types::FindingKind::Structural,
-            desc: format!(
-                "Encoded payload detected: {}",
-                payload.encoding_chain.join(" → ")
-            ),
+            desc,
             conf: 0.9,
             crit,
             mbc: None,

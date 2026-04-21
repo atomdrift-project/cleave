@@ -117,9 +117,14 @@ pub(crate) fn eval_section<'a>(
     readable: Option<bool>,
     writable: Option<bool>,
     executable: Option<bool>,
+    compare_to: Option<&String>,
+    ratio_min: Option<f64>,
+    ratio_max: Option<f64>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let mut evidence = Vec::new();
+    let mut matched_total_size: u64 = 0;
+    let mut matched_section_names: Vec<String> = Vec::new();
 
     for section in &ctx.report.sections {
         // Apply case sensitivity transformation
@@ -209,6 +214,8 @@ pub(crate) fn eval_section<'a>(
         let matched = name_matched && size_ok && entropy_ok && permissions_ok;
 
         if matched {
+            matched_total_size = matched_total_size.saturating_add(section.size);
+            matched_section_names.push(section.name.clone());
             let mut details = vec![];
             if length_min.is_some() || length_max.is_some() {
                 details.push(format!("size: {}", section.size));
@@ -285,9 +292,64 @@ pub(crate) fn eval_section<'a>(
         precision *= 0.5;
     }
 
+    // Size-ratio check: (sum of matched section sizes) / (denominator).
+    // Denominator is the full file size when compare_to is None or "total",
+    // otherwise the sum of sections whose name matches the compare_to pattern.
+    let ratio_ok = if ratio_min.is_some() || ratio_max.is_some() {
+        let denom: u64 = match compare_to.map(String::as_str) {
+            None | Some("total") => ctx.report.target.size_bytes,
+            Some(pattern) => match build_regex(pattern, false) {
+                Ok(re) => ctx
+                    .report
+                    .sections
+                    .iter()
+                    .filter(|s| re.is_match(&s.name))
+                    .map(|s| s.size)
+                    .sum(),
+                Err(_) => 0,
+            },
+        };
+
+        if denom == 0 {
+            false
+        } else {
+            let ratio = matched_total_size as f64 / denom as f64;
+            let min_ok = ratio_min.is_none_or(|m| ratio >= m);
+            let max_ok = ratio_max.is_none_or(|m| ratio <= m);
+            let ok = min_ok && max_ok;
+            if ok {
+                precision += 1.0; // meaningful specificity bump for ratio check
+                if ratio_min.is_some() {
+                    precision += 0.5;
+                }
+                if ratio_max.is_some() {
+                    precision += 0.5;
+                }
+                let denom_desc = compare_to.map_or("total", String::as_str);
+                evidence.push(Evidence {
+                    method: "section_ratio".to_string(),
+                    source: "binary".to_string(),
+                    value: format!(
+                        "{} = {:.1}% of {} ({} / {} bytes)",
+                        matched_section_names.join("+"),
+                        ratio * 100.0,
+                        denom_desc,
+                        matched_total_size,
+                        denom,
+                    ),
+                    location: None,
+                    ..Default::default()
+                });
+            }
+            ok
+        }
+    } else {
+        true
+    };
+
     let match_count = evidence.len();
     ConditionResult {
-        matched: match_count > 0,
+        matched: match_count > 0 && ratio_ok,
         evidence,
         match_count,
         warnings: Vec::new(),

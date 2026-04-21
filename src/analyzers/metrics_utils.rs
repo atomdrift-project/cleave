@@ -359,6 +359,10 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         let mut code_size: u64 = 0;
         let mut total_size: u64 = 0;
         let mut max_section_size: u64 = 0;
+        // Per-family size accumulators for the *_to_file_ratio metrics.
+        let mut text_size: u64 = 0;
+        let mut data_size: u64 = 0;
+        let mut rsrc_size: u64 = 0;
 
         for section in &report.sections {
             total_size += section.size;
@@ -373,6 +377,13 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             // Reuse logic from entropy section
             let section_name = section.name.rsplit('.').next().unwrap_or(&section.name);
             let section_name_clean = section_name.trim_start_matches("__");
+
+            match section_name_clean {
+                "text" => text_size += section.size,
+                "data" => data_size += section.size,
+                "rsrc" if file_type == "pe" => rsrc_size += section.size,
+                _ => {}
+            }
             let is_exec_perm = section
                 .permissions
                 .as_ref()
@@ -416,7 +427,11 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
 
         binary.avg_section_size = total_size as f32 / report.sections.len() as f32;
         if binary.file_size > 0 {
-            binary.largest_section_ratio = max_section_size as f32 / binary.file_size as f32;
+            let file_size_f32 = binary.file_size as f32;
+            binary.largest_section_ratio = max_section_size as f32 / file_size_f32;
+            binary.text_to_file_ratio = text_size as f32 / file_size_f32;
+            binary.data_to_file_ratio = data_size as f32 / file_size_f32;
+            binary.rsrc_to_file_ratio = rsrc_size as f32 / file_size_f32;
         }
     }
 

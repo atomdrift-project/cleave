@@ -2275,6 +2275,9 @@ fn evaluate_condition_simple(
             readable,
             writable,
             executable,
+            compare_to,
+            ratio_min,
+            ratio_max,
         } => eval_section(
             exact.as_ref(),
             substr.as_ref(),
@@ -2288,6 +2291,9 @@ fn evaluate_condition_simple(
             *readable,
             *writable,
             *executable,
+            compare_to.as_ref(),
+            *ratio_min,
+            *ratio_max,
             ctx,
         ),
         Condition::Syscall { name, number, arch } => {

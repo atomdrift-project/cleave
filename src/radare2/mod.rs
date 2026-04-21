@@ -1103,6 +1103,10 @@ impl Radare2Analyzer {
         let mut largest_size: u64 = 0;
         let mut section_name_chars: Vec<char> = Vec::new();
         let mut code_size: u64 = 0;
+        // Per-family size accumulators for the *_to_file_ratio metrics.
+        let mut text_size: u64 = 0;
+        let mut data_size: u64 = 0;
+        let mut rsrc_size: u64 = 0;
 
         for section in &batched.sections {
             // Cap section size at file_size — tampered PEs can declare sizes beyond EOF
@@ -1121,6 +1125,17 @@ impl Radare2Analyzer {
                 &section.name,
             ) {
                 metrics.nonstandard_section_name_count += 1;
+            }
+
+            // Per-family ratio accumulators. Matches the fuzzy-section naming used
+            // elsewhere: `.text`, `__TEXT,__text`, `__text` all count as "text".
+            let fam_name = section.name.rsplit('.').next().unwrap_or(&section.name);
+            let fam_clean = fam_name.trim_start_matches("__");
+            match fam_clean {
+                "text" => text_size += section_size,
+                "data" => data_size += section_size,
+                "rsrc" if file_type == "pe" => rsrc_size += section_size,
+                _ => {}
             }
 
             if let Some(ref perm) = section.perm {
@@ -1175,13 +1190,19 @@ impl Radare2Analyzer {
         if total_size > 0 {
             metrics.largest_section_ratio = largest_size as f32 / total_size as f32;
         }
+        if file_size > 0 {
+            let fs = file_size as f32;
+            metrics.text_to_file_ratio = text_size as f32 / fs;
+            metrics.data_to_file_ratio = data_size as f32 / fs;
+            metrics.rsrc_to_file_ratio = rsrc_size as f32 / fs;
+        }
 
         // Size metrics (file_size already set from parameter)
         metrics.code_size = code_size;
         if total_size > 0 {
-            let data_size = total_size.saturating_sub(code_size);
-            if data_size > 0 {
-                metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
+            let nondata_size = total_size.saturating_sub(code_size);
+            if nondata_size > 0 {
+                metrics.code_to_data_ratio = code_size as f32 / nondata_size as f32;
             }
         }
 

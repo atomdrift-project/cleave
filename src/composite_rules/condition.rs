@@ -522,6 +522,18 @@ enum ConditionTagged {
         /// Require section to have execute permission (works across PE/ELF/Mach-O)
         #[serde(skip_serializing_if = "Option::is_none")]
         executable: Option<bool>,
+        /// Denominator for a section-size ratio check. Defaults to `"total"` (full
+        /// file size). When set to a section name pattern, the ratio is computed
+        /// against the sum of matching sections. Only evaluated when `ratio_min`
+        /// or `ratio_max` is set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compare_to: Option<String>,
+        /// Minimum section-size ratio (matched sections / denominator).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ratio_min: Option<f64>,
+        /// Maximum section-size ratio (matched sections / denominator).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ratio_max: Option<f64>,
     },
 
     /// Match patterns in encoded/decoded strings (unified replacement for base64/xor)
@@ -832,6 +844,9 @@ impl From<ConditionDeser> for Condition {
                     readable,
                     writable,
                     executable,
+                    compare_to,
+                    ratio_min,
+                    ratio_max,
                 } => Condition::Section {
                     exact,
                     substr,
@@ -845,6 +860,9 @@ impl From<ConditionDeser> for Condition {
                     readable,
                     writable,
                     executable,
+                    compare_to,
+                    ratio_min,
+                    ratio_max,
                 },
                 ConditionTagged::Encoded {
                     encoding,
@@ -1109,6 +1127,9 @@ impl From<Condition> for ConditionTagged {
                 readable,
                 writable,
                 executable,
+                compare_to,
+                ratio_min,
+                ratio_max,
             } => ConditionTagged::Section {
                 exact,
                 substr,
@@ -1122,6 +1143,9 @@ impl From<Condition> for ConditionTagged {
                 readable,
                 writable,
                 executable,
+                compare_to,
+                ratio_min,
+                ratio_max,
             },
             Condition::Encoded {
                 encoding,
@@ -1601,6 +1625,18 @@ pub(crate) enum Condition {
         /// Require section to have execute permission (works across PE/ELF/Mach-O)
         #[serde(skip_serializing_if = "Option::is_none")]
         executable: Option<bool>,
+        /// Denominator for a section-size ratio check. Defaults to `"total"` (full
+        /// file size). When set to a section name pattern, the ratio is computed
+        /// against the sum of matching sections. Only evaluated when `ratio_min`
+        /// or `ratio_max` is set.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        compare_to: Option<String>,
+        /// Minimum section-size ratio (matched sections / denominator).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ratio_min: Option<f64>,
+        /// Maximum section-size ratio (matched sections / denominator).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ratio_max: Option<f64>,
     },
 
     /// Match patterns in encoded/decoded strings (unified replacement for base64/xor)

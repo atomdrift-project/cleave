@@ -158,6 +158,20 @@ pub struct BinaryMetrics {
     /// Largest section ratio to file size
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub largest_section_ratio: f32,
+    /// Ratio of executable / code section bytes to the full file size.
+    /// Covers `.text` on PE/ELF, `__TEXT,__text` on Mach-O.
+    /// Low values on non-packed binaries indicate compressed or hidden code.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub text_to_file_ratio: f32,
+    /// Ratio of writable data section bytes to the full file size.
+    /// Covers `.data` on PE/ELF, `__DATA,__data` on Mach-O.
+    /// High values are a strong packer/obfuscator signal.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub data_to_file_ratio: f32,
+    /// Ratio of resource section bytes to the full file size.
+    /// PE `.rsrc` only; 0 elsewhere. High values indicate resource carriers.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub rsrc_to_file_ratio: f32,
     /// Segment count (Mach-O) or program headers (ELF)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub segment_count: u32,

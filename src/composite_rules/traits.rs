@@ -1387,6 +1387,9 @@ impl TraitDefinition {
                 readable,
                 writable,
                 executable,
+                compare_to,
+                ratio_min,
+                ratio_max,
             } => timed_eval!(
                 "section",
                 eval_section(
@@ -1402,6 +1405,9 @@ impl TraitDefinition {
                     *readable,
                     *writable,
                     *executable,
+                    compare_to.as_ref(),
+                    *ratio_min,
+                    *ratio_max,
                     ctx,
                 )
             ),
@@ -2449,6 +2455,9 @@ impl CompositeTrait {
                 readable,
                 writable,
                 executable,
+                compare_to,
+                ratio_min,
+                ratio_max,
             } => timed_eval!(
                 "section",
                 eval_section(
@@ -2464,6 +2473,9 @@ impl CompositeTrait {
                     *readable,
                     *writable,
                     *executable,
+                    compare_to.as_ref(),
+                    *ratio_min,
+                    *ratio_max,
                     ctx,
                 )
             ),

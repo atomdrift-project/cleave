@@ -197,6 +197,9 @@ fn test_eval_section_regex() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -231,6 +234,9 @@ fn test_eval_section_contains() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -264,6 +270,9 @@ fn test_eval_section_no_match() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(!result.matched);
@@ -305,6 +314,9 @@ fn test_eval_section_multiple_matches() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -347,6 +359,9 @@ fn test_eval_section_exact() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -381,6 +396,9 @@ fn test_eval_section_case_insensitive() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -566,6 +584,9 @@ fn test_eval_section_entropy_min() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -610,6 +631,9 @@ fn test_eval_section_entropy_max() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -662,6 +686,9 @@ fn test_eval_section_combined_constraints() {
         None, // readable
         None, // writable
         None, // executable
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -848,6 +875,9 @@ fn test_eval_section_length_min() {
         None,
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -884,6 +914,9 @@ fn test_eval_section_length_min_no_match() {
         None,
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(!result.matched);
@@ -925,6 +958,9 @@ fn test_eval_section_length_max() {
         None,
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -977,6 +1013,9 @@ fn test_eval_section_length_range() {
         None,
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -1021,6 +1060,9 @@ fn test_eval_section_length_with_name_pattern() {
         None,
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(result.matched);
@@ -1138,6 +1180,9 @@ fn test_eval_section_executable_flag() {
         None,       // readable
         None,       // writable
         Some(true), // executable = true
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(
@@ -1161,6 +1206,9 @@ fn test_eval_section_executable_flag() {
         None,       // readable
         None,       // writable
         Some(true), // executable = true
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     // Only .text should match, not .data
@@ -1195,6 +1243,9 @@ fn test_eval_section_permission_no_match() {
         Some(true), // readable = true
         None,
         None,
+        None, // compare_to
+        None, // ratio_min
+        None, // ratio_max
         &ctx,
     );
     assert!(

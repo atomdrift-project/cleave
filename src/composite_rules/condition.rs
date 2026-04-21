@@ -226,6 +226,25 @@ pub enum StringValidator {
     BitcoinAddr,
 }
 
+/// Symbol category filter for `type: symbol` conditions.
+///
+/// When a rule sets `kind:`, only symbols of that category are matched. The
+/// default (field omitted) behaviour preserves the pre-existing semantic of
+/// matching across imports, exports, and internal functions.
+///
+/// `Forward` restricts matching to PE exports whose `forward_to` target is
+/// set (re-exports). The pattern is tested against both the export name and
+/// the forward target (`KERNEL32.LoadLibraryA`), so rules can filter either
+/// the visible symbol or the ultimate resolvee.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum SymbolKind {
+    Import,
+    Export,
+    Forward,
+    Function,
+}
+
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -242,6 +261,11 @@ enum ConditionTagged {
         /// High-fidelity validator (e.g., is: external_ip)
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
+        /// Restrict match to a specific symbol category (imports, exports,
+        /// forwarded exports, or internal functions).  When absent, match
+        /// across all categories — preserving the pre-`kind` semantic.
+        #[serde(default)]
+        kind: Option<SymbolKind>,
     },
     #[serde(rename = "string_value")]
     StringValue {
@@ -416,16 +440,6 @@ enum ConditionTagged {
         min: Option<f64>,
         #[serde(default)]
         max: Option<f64>,
-    },
-    ImportCombination {
-        #[serde(default)]
-        required: Option<Vec<String>>,
-        #[serde(default)]
-        suspicious: Option<Vec<String>>,
-        #[serde(default)]
-        min_suspicious: Option<usize>,
-        #[serde(default)]
-        max_total: Option<usize>,
     },
     #[serde(rename = "string_value_count", alias = "string_count")]
     StringValueCount {
@@ -694,12 +708,14 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     platforms,
                     is_check,
+                    kind,
                 } => Condition::Symbol {
                     exact,
                     substr,
                     regex,
                     platforms,
                     is_check,
+                    kind,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -842,19 +858,6 @@ impl From<ConditionDeser> for Condition {
                     compare_to,
                     min,
                     max,
-                },
-                ConditionTagged::ImportCombination {
-                    required,
-                    suspicious,
-                    min_suspicious,
-                    max_total,
-                } => Condition::ImportCombination {
-                    required,
-                    suspicious,
-                    min_suspicious,
-                    max_total,
-                    compiled_required: None,
-                    compiled_suspicious: None,
                 },
                 ConditionTagged::StringValueCount {
                     min,
@@ -1033,6 +1036,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 platforms,
                 is_check,
+                kind,
                 compiled_regex: _,
                 compiled_finder: _,
             } => ConditionTagged::Symbol {
@@ -1041,6 +1045,7 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 platforms,
                 is_check,
+                kind,
             },
             Condition::StringValue {
                 exact,
@@ -1181,19 +1186,6 @@ impl From<Condition> for ConditionTagged {
                 compare_to,
                 min,
                 max,
-            },
-            Condition::ImportCombination {
-                required,
-                suspicious,
-                min_suspicious,
-                max_total,
-                compiled_required: _,
-                compiled_suspicious: _,
-            } => ConditionTagged::ImportCombination {
-                required,
-                suspicious,
-                min_suspicious,
-                max_total,
             },
             Condition::StringValueCount {
                 min,
@@ -1370,7 +1362,7 @@ impl From<Condition> for ConditionTagged {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(from = "ConditionDeser", into = "ConditionTagged")]
 pub(crate) enum Condition {
-    /// Match a symbol (import/export)
+    /// Match a symbol (import/export/function/forward)
     Symbol {
         /// Full symbol name match (entire symbol must equal this)
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1387,6 +1379,10 @@ pub(crate) enum Condition {
         /// Optional high-fidelity validation check
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
+        /// Restrict match to a specific symbol category. `None` matches
+        /// across imports, exports, and internal functions.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        kind: Option<SymbolKind>,
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
@@ -1689,29 +1685,6 @@ pub(crate) enum Condition {
         /// Maximum ratio (0.0-1.0)
         #[serde(skip_serializing_if = "Option::is_none")]
         max: Option<f64>,
-    },
-
-    /// Check import patterns (required + suspicious combination)
-    /// For detecting malware import fingerprints
-    ImportCombination {
-        /// All of these imports must be present
-        #[serde(skip_serializing_if = "Option::is_none")]
-        required: Option<Vec<String>>,
-        /// Count matches from this suspicious list
-        #[serde(skip_serializing_if = "Option::is_none")]
-        suspicious: Option<Vec<String>>,
-        /// Minimum number of suspicious imports required
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min_suspicious: Option<usize>,
-        /// Maximum total import count (low count = suspicious)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max_total: Option<usize>,
-        /// Pre-compiled RegexSet for `required` patterns (populated by precompile)
-        #[serde(skip)]
-        compiled_required: Option<regex::RegexSet>,
-        /// Pre-compiled RegexSet for `suspicious` patterns (populated by precompile)
-        #[serde(skip)]
-        compiled_suspicious: Option<regex::RegexSet>,
     },
 
     /// Check extracted string value count
@@ -2055,7 +2028,6 @@ impl Condition {
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
             Condition::SectionRatio { .. } => "section_ratio",
-            Condition::ImportCombination { .. } => "import_combination",
             Condition::StringValueCount { .. } => "string_value_count",
             Condition::Metrics { .. } => "metrics",
             Condition::Hex { .. } => "hex",
@@ -3202,30 +3174,6 @@ impl Condition {
                             )
                         })?
                 });
-            }
-            Condition::ImportCombination {
-                required,
-                suspicious,
-                compiled_required,
-                compiled_suspicious,
-                ..
-            } => {
-                if let Some(patterns) = required {
-                    *compiled_required = Some(regex::RegexSet::new(patterns).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile import_combination.required RegexSet: {}",
-                            e
-                        )
-                    })?);
-                }
-                if let Some(patterns) = suspicious {
-                    *compiled_suspicious = Some(regex::RegexSet::new(patterns).map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile import_combination.suspicious RegexSet: {}",
-                            e
-                        )
-                    })?);
-                }
             }
             _ => {}
         }

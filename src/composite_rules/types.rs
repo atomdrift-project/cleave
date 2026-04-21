@@ -241,6 +241,8 @@ pub(crate) enum FileType {
     Makefile,
     /// Plain text data
     Text,
+    /// Opaque binary data (.dat, .bin, .payload, .raw)
+    Data,
     /// npm package.json manifest
     PackageJson,
     /// Chrome extension manifest.json
@@ -468,6 +470,7 @@ impl FileType {
             FileType::Markdown,
             FileType::Makefile,
             FileType::Text,
+            FileType::Data,
             // Manifest/config formats
             FileType::PackageJson,
             FileType::ChromeManifest,
@@ -548,6 +551,7 @@ impl FileType {
             "markdown" | "md" => FileType::Markdown,
             "makefile" | "make" | "mk" | "mak" => FileType::Makefile,
             "text" | "txt" | "b64" | "base64" => FileType::Text,
+            "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,

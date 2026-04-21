@@ -9,7 +9,7 @@
 use super::{
     resolve_effective_range, resolve_effective_range_opt, symbol_matches, ContentLocationParams,
 };
-use crate::composite_rules::condition::{NotException, StringValidator};
+use crate::composite_rules::condition::{NotException, StringValidator, SymbolKind};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
 use crate::ip_validator::contains_external_ip_cached;
@@ -49,9 +49,15 @@ fn offset_in_range(offset: Option<u64>, range: Option<(u64, u64)>) -> bool {
 
 // Helper functions moved to mod.rs
 
-/// Evaluate symbol condition - matches symbols in imports/exports.
+/// Evaluate symbol condition - matches symbols in imports/exports/functions.
+///
+/// When `kind` is set, only that category is searched. When `kind` is
+/// `SymbolKind::Forward`, matching is restricted to exports that carry a
+/// `forward_to` target, and the pattern is tested against both the export
+/// name *and* the forward target (`KERNEL32.LoadLibraryA`).
 // Each parameter encodes a distinct matching mode (exact, substr, pattern, platform guard,
-// validator, pre-compiled regex/finder, negation exceptions) — no meaningful grouping exists.
+// validator, category filter, pre-compiled regex/finder, negation exceptions) — no
+// meaningful grouping exists.
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub(crate) fn eval_symbol<'a>(
@@ -60,6 +66,7 @@ pub(crate) fn eval_symbol<'a>(
     pattern: Option<&String>,
     platforms: Option<&Vec<Platform>>,
     is_check: Option<StringValidator>,
+    kind: Option<SymbolKind>,
     compiled_regex: Option<&regex::Regex>,
     compiled_finder: Option<&memchr::memmem::Finder<'static>>,
     not: Option<&Vec<NotException>>,
@@ -81,8 +88,9 @@ pub(crate) fn eval_symbol<'a>(
     let mut match_count: usize = 0;
 
     // FAST PATH 0: Use pre-computed evidence from indexed matching if available.
-    // Safe when no exclusion filters or is: validators are present.
-    if not.is_none() && is_check.is_none() {
+    // Safe only when no exclusion filters, validators, or category filters narrow
+    // what the index resolved — the index is built from unrestricted lookups.
+    if not.is_none() && is_check.is_none() && kind.is_none() {
         if let Some(trait_idx) = ctx.current_trait_idx {
             if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
                 if !cached.is_empty() {
@@ -120,61 +128,98 @@ pub(crate) fn eval_symbol<'a>(
         None
     };
 
-    // Search in imports
-    for import in &ctx.report.imports {
-        if symbol_matches_condition(
-            &import.symbol,
-            norm_exact_ref,
-            norm_substr_ref,
-            pattern,
-            compiled_regex,
-            effective_finder,
-        ) {
-            // Check if this symbol should be excluded by not: or is: filters
-            let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
-                .unwrap_or(false);
-            let excluded_by_is = !validate_match(&import.symbol, is_check);
+    // Decide which symbol categories to walk.  `None` preserves the historical
+    // behaviour of matching across all of imports/exports/functions.
+    let want_imports = matches!(kind, None | Some(SymbolKind::Import));
+    let want_exports = matches!(
+        kind,
+        None | Some(SymbolKind::Export) | Some(SymbolKind::Forward)
+    );
+    let forwards_only = matches!(kind, Some(SymbolKind::Forward));
+    let want_functions = matches!(kind, None | Some(SymbolKind::Function));
 
-            if !excluded_by_not && !excluded_by_is {
-                match_count += 1;
-                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    evidence.push(Evidence {
-                        method: "symbol".to_string(),
-                        source: import.source.clone(),
-                        value: import.symbol.clone(),
-                        location: Some("import".to_string()),
-                        ..Default::default()
-                    });
+    // Search in imports
+    if want_imports {
+        for import in &ctx.report.imports {
+            if symbol_matches_condition(
+                &import.symbol,
+                norm_exact_ref,
+                norm_substr_ref,
+                pattern,
+                compiled_regex,
+                effective_finder,
+            ) {
+                // Check if this symbol should be excluded by not: or is: filters
+                let excluded_by_not = not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
+                    .unwrap_or(false);
+                let excluded_by_is = !validate_match(&import.symbol, is_check);
+
+                if !excluded_by_not && !excluded_by_is {
+                    match_count += 1;
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        evidence.push(Evidence {
+                            method: "symbol".to_string(),
+                            source: import.source.clone(),
+                            value: import.symbol.clone(),
+                            location: Some("import".to_string()),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }
     }
 
-    // Search in exports
-    for export in &ctx.report.exports {
-        if symbol_matches_condition(
-            &export.symbol,
-            norm_exact_ref,
-            norm_substr_ref,
-            pattern,
-            compiled_regex,
-            effective_finder,
-        ) {
-            // Check if this symbol should be excluded by not: or is: filters
+    // Search in exports. `Forward` narrows the walk to re-exports only and
+    // allows the pattern to match either side of the `export → target` edge.
+    if want_exports {
+        for export in &ctx.report.exports {
+            if forwards_only && export.forward_to.is_none() {
+                continue;
+            }
+            let candidates: [Option<&str>; 2] = [
+                Some(export.symbol.as_str()),
+                export.forward_to.as_deref(),
+            ];
+            let mut hit_value: Option<&str> = None;
+            for candidate in candidates.into_iter().flatten() {
+                if symbol_matches_condition(
+                    candidate,
+                    norm_exact_ref,
+                    norm_substr_ref,
+                    pattern,
+                    compiled_regex,
+                    effective_finder,
+                ) {
+                    hit_value = Some(candidate);
+                    break;
+                }
+            }
+            let Some(hit) = hit_value else {
+                continue;
+            };
+
             let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&export.symbol)))
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(hit)))
                 .unwrap_or(false);
-            let excluded_by_is = !validate_match(&export.symbol, is_check);
+            let excluded_by_is = !validate_match(hit, is_check);
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    // Evidence carries the export name so operators can trace
+                    // back to the row; the forward target (if any) is shown in
+                    // the location column.
+                    let location = match export.forward_to.as_deref() {
+                        Some(target) => Some(format!("forward → {target}")),
+                        None => export.offset.clone(),
+                    };
                     evidence.push(Evidence {
                         method: "symbol".to_string(),
                         source: export.source.clone(),
                         value: export.symbol.clone(),
-                        location: export.offset.clone(),
+                        location,
                         ..Default::default()
                     });
                 }
@@ -183,30 +228,32 @@ pub(crate) fn eval_symbol<'a>(
     }
 
     // Search in internal functions (important for statically linked Go binaries)
-    for func in &ctx.report.functions {
-        if symbol_matches_condition(
-            &func.name,
-            norm_exact_ref,
-            norm_substr_ref,
-            pattern,
-            compiled_regex,
-            effective_finder,
-        ) {
-            // Check if this symbol should be excluded by not: filters
-            let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
-                .unwrap_or(false);
+    if want_functions {
+        for func in &ctx.report.functions {
+            if symbol_matches_condition(
+                &func.name,
+                norm_exact_ref,
+                norm_substr_ref,
+                pattern,
+                compiled_regex,
+                effective_finder,
+            ) {
+                // Check if this symbol should be excluded by not: filters
+                let excluded_by_not = not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&func.name)))
+                    .unwrap_or(false);
 
-            if !excluded_by_not {
-                match_count += 1;
-                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    evidence.push(Evidence {
-                        method: "symbol".to_string(),
-                        source: func.source.clone(),
-                        value: func.name.clone(),
-                        location: func.offset.clone(),
-                        ..Default::default()
-                    });
+                if !excluded_by_not {
+                    match_count += 1;
+                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        evidence.push(Evidence {
+                            method: "symbol".to_string(),
+                            source: func.source.clone(),
+                            value: func.name.clone(),
+                            location: func.offset.clone(),
+                            ..Default::default()
+                        });
+                    }
                 }
             }
         }

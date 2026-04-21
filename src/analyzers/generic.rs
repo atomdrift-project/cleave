@@ -90,6 +90,7 @@ impl GenericAnalyzer {
             FileType::Markdown => "markdown",
             FileType::Makefile => "makefile",
             FileType::Text => "text",
+            FileType::Data => "data",
             FileType::Pdf => "pdf",
             _ => "unknown",
         }
@@ -230,13 +231,34 @@ impl GenericAnalyzer {
                             .collect()
                     });
 
+                    // Preserve stng's decoded-string encoding so `type: encoded,
+                    // encoding: xor` rules can match XOR/base64/hex/etc. content.
+                    let encoding_chain = match es.method {
+                        stng::StringMethod::XorDecode | stng::StringMethod::XorStackPair => {
+                            vec!["xor".to_string()]
+                        }
+                        stng::StringMethod::Base64Decode => vec!["base64".to_string()],
+                        stng::StringMethod::Base64ObfuscatedDecode => {
+                            vec!["base64-obf".to_string()]
+                        }
+                        stng::StringMethod::HexDecode => vec!["hex".to_string()],
+                        stng::StringMethod::UrlDecode => vec!["url".to_string()],
+                        stng::StringMethod::UnicodeEscapeDecode => {
+                            vec!["unicode-escape".to_string()]
+                        }
+                        stng::StringMethod::Base32Decode => vec!["base32".to_string()],
+                        stng::StringMethod::Base85Decode => vec!["base85".to_string()],
+                        stng::StringMethod::ScriptDecode => vec!["script".to_string()],
+                        _ => Vec::new(),
+                    };
+
                     report.strings.push(crate::types::binary::StringInfo {
                         value: es.value.clone(),
                         offset: Some(es.data_offset),
                         string_type: es.kind,
                         encoding: "utf-8".to_string(),
                         section: es.section.clone(),
-                        encoding_chain: Vec::new(),
+                        encoding_chain,
                         fragments,
                     });
                 }
@@ -280,7 +302,7 @@ impl GenericAnalyzer {
 
         // Compute basic metrics
         let t_metrics = std::time::Instant::now();
-        report.metrics = Some(self.compute_metrics(content));
+        report.metrics = Some(self.compute_metrics(content, original_bytes));
         tracing::debug!(
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
@@ -420,10 +442,25 @@ impl GenericAnalyzer {
         }
     }
 
-    fn compute_metrics(&self, content: &str) -> Metrics {
+    fn compute_metrics(&self, content: &str, original_bytes: Option<&[u8]>) -> Metrics {
         let text = crate::analyzers::text_metrics::analyze_text(content);
+        let binary = if matches!(self.file_type, FileType::Data) {
+            // Data files are opaque blobs; populate byte-level entropy so rules
+            // can threshold on `binary.overall_entropy` to flag encrypted payloads.
+            // Use the raw bytes when available — a lossy UTF-8 round trip collapses
+            // non-printable bytes to U+FFFD and tanks the entropy score.
+            let bytes = original_bytes.unwrap_or_else(|| content.as_bytes());
+            Some(crate::types::BinaryMetrics {
+                file_size: bytes.len() as u64,
+                overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,
+                ..Default::default()
+            })
+        } else {
+            None
+        };
         Metrics {
             text: Some(text),
+            binary,
             ..Default::default()
         }
     }

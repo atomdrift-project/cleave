@@ -525,27 +525,6 @@ fn score_condition(condition: &Condition) -> f32 {
             score += score_presence(min.as_ref());
             score += score_presence(max.as_ref());
         }
-        Condition::ImportCombination {
-            required,
-            suspicious,
-            min_suspicious,
-            max_total,
-            compiled_required: _,
-            compiled_suspicious: _,
-        } => {
-            if let Some(values) = required {
-                for value in values {
-                    score += score_string_value(value);
-                }
-            }
-            if let Some(values) = suspicious {
-                for value in values {
-                    score += score_string_value(value);
-                }
-            }
-            score += score_presence(min_suspicious.as_ref());
-            score += score_presence(max_total.as_ref());
-        }
         Condition::StringValueCount {
             min,
             max,

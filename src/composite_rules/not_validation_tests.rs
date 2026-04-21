@@ -495,6 +495,7 @@ mod validation_tests {
             regex: None,
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -517,6 +518,7 @@ mod validation_tests {
             regex: None,
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -537,6 +539,7 @@ mod validation_tests {
             regex: None,
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -560,6 +563,7 @@ mod validation_tests {
             regex: Some("c.?rl".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -580,6 +584,7 @@ mod validation_tests {
             regex: Some("c.?rl".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1677,6 +1682,7 @@ mod llm_validation_tests {
             regex: Some(r"\bsetsid\b".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1697,6 +1703,7 @@ mod llm_validation_tests {
             regex: Some(r"\b(fork|exec)\b".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1715,6 +1722,7 @@ mod llm_validation_tests {
             regex: Some("some function".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1732,6 +1740,7 @@ mod llm_validation_tests {
             regex: Some(r"foo\sbar".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1749,6 +1758,7 @@ mod llm_validation_tests {
             regex: Some(r"dlopen|dlsym".to_string()),
             platforms: None,
             is_check: None,
+            kind: None,
             compiled_regex: None,
             compiled_finder: None,
         };

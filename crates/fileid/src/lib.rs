@@ -174,6 +174,10 @@ pub enum FileType {
     Odf,
     /// Plain text data (.txt, .text, or printable text with no stronger type)
     Text,
+    /// Opaque binary data (.dat, .bin, .payload, .raw) — commonly carries
+    /// encrypted/XOR'd malware payloads. Routed through the generic analyzer
+    /// so string extraction, entropy, and encoded-payload detection still fire.
+    Data,
     /// File type could not be determined
     Unknown,
 }

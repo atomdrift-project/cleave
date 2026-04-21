@@ -132,6 +132,50 @@ fn entry_section_name(pe: &PE<'_>) -> Option<String> {
     })
 }
 
+/// Canonical list of Microsoft-shipped DLLs commonly abused as sideload
+/// forward targets.  Matching is case-insensitive and ignores any `.dll`
+/// suffix (goblin returns forwards with or without it depending on the
+/// binary).
+fn is_system_dll(name: &str) -> bool {
+    // Goblin returns forwards with or without the `.dll` suffix depending on
+    // the source binary; strip a trailing `.dll` before matching.
+    let stem = name.strip_suffix(".dll").unwrap_or(name);
+    let stem = stem.strip_suffix(".DLL").unwrap_or(stem);
+    matches!(
+        stem.to_ascii_lowercase().as_str(),
+        "kernel32"
+            | "kernelbase"
+            | "ntdll"
+            | "user32"
+            | "advapi32"
+            | "gdi32"
+            | "shell32"
+            | "shlwapi"
+            | "ole32"
+            | "oleaut32"
+            | "comctl32"
+            | "comdlg32"
+            | "ws2_32"
+            | "wininet"
+            | "winhttp"
+            | "crypt32"
+            | "version"
+            | "msvcrt"
+            | "rpcrt4"
+            | "secur32"
+            | "iphlpapi"
+            | "dnsapi"
+            | "netapi32"
+            | "mswsock"
+            | "psapi"
+            | "userenv"
+            | "winmm"
+            | "uxtheme"
+            | "setupapi"
+            | "imm32"
+    )
+}
+
 fn is_standard_entry_section(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -304,11 +348,32 @@ impl PEAnalyzer {
         let mut exports = Vec::new();
         for export in &pe.exports {
             if let Some(name) = export.name {
-                exports.push(Export::new(
-                    name,
-                    Some(format!("{:#x}", export.rva)),
-                    "goblin",
-                ));
+                match &export.reexport {
+                    Some(goblin::pe::export::Reexport::DLLName {
+                        export: target,
+                        lib,
+                    }) => {
+                        exports.push(Export::forwarded(
+                            name,
+                            format!("{}.{}", lib, target),
+                            "goblin",
+                        ));
+                    }
+                    Some(goblin::pe::export::Reexport::DLLOrdinal { ordinal, lib }) => {
+                        exports.push(Export::forwarded(
+                            name,
+                            format!("{}.#{}", lib, ordinal),
+                            "goblin",
+                        ));
+                    }
+                    None => {
+                        exports.push(Export::new(
+                            name,
+                            Some(format!("{:#x}", export.rva)),
+                            "goblin",
+                        ));
+                    }
+                }
             }
         }
 
@@ -1726,14 +1791,35 @@ impl PEAnalyzer {
                 || import_names.contains("virtualprotectex")
                 || import_names.contains("ntprotectvirtualmemory"));
 
-        // Export forwarders (exports with "." in name indicating forwarding)
+        // Export forwarders — use goblin's parsed `reexport` field so the count
+        // reflects real PE forward entries (RVA into the export directory)
+        // rather than a name-heuristic.
+        let mut total_exports: u32 = 0;
+        let mut forwarded: u32 = 0;
+        let mut forwards_to_system: u32 = 0;
         for export in &pe.exports {
-            if let Some(name) = export.name {
-                if name.contains('.') {
-                    metrics.export_forwarders += 1;
+            if export.name.is_none() {
+                continue;
+            }
+            total_exports += 1;
+            match &export.reexport {
+                Some(goblin::pe::export::Reexport::DLLName { lib, .. })
+                | Some(goblin::pe::export::Reexport::DLLOrdinal { lib, .. }) => {
+                    forwarded += 1;
+                    if is_system_dll(lib) {
+                        forwards_to_system += 1;
+                    }
                 }
+                None => {}
             }
         }
+        metrics.export_forwarders = forwarded;
+        metrics.forwards_to_system_dll_count = forwards_to_system;
+        metrics.forward_ratio = if total_exports > 0 {
+            forwarded as f32 / total_exports as f32
+        } else {
+            0.0
+        };
 
         // Section alignment check
         if let Some(opt_header) = &pe.header.optional_header {

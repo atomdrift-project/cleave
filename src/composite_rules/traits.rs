@@ -3,11 +3,13 @@
 //! This module contains TraitDefinition (atomic traits) and CompositeTrait
 //! (boolean combinations of conditions).
 
-use super::condition::{Condition, NotException, NotExceptionStructured, StringValidator};
+use super::condition::{
+    Condition, NotException, NotExceptionStructured, StringValidator, SymbolKind,
+};
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    eval_ast, eval_basename, eval_encoded, eval_exports_count, eval_hex, eval_import_combination,
-    eval_metrics, eval_raw, eval_section, eval_section_ratio, eval_string, eval_string_count,
+    eval_ast, eval_basename, eval_encoded, eval_exports_count, eval_hex, eval_metrics, eval_raw,
+    eval_section, eval_section_ratio, eval_string, eval_string_count,
     eval_string_literal, eval_structure, eval_symbol, eval_syscall, eval_text, eval_trait,
     eval_yara_inline, ContentLocationParams,
 };
@@ -1172,6 +1174,7 @@ impl TraitDefinition {
                 regex,
                 platforms,
                 is_check,
+                kind,
                 compiled_regex,
                 compiled_finder,
             } => timed_eval!(
@@ -1182,6 +1185,7 @@ impl TraitDefinition {
                     regex.as_ref(),
                     platforms.as_ref(),
                     *is_check,
+                    *kind,
                     compiled_regex.as_ref(),
                     compiled_finder.as_ref(),
                     self.not.as_ref(),
@@ -1353,25 +1357,6 @@ impl TraitDefinition {
             } => timed_eval!(
                 "section_ratio",
                 eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
-            Condition::ImportCombination {
-                required,
-                suspicious,
-                min_suspicious,
-                max_total,
-                compiled_required,
-                compiled_suspicious,
-            } => timed_eval!(
-                "import_combo",
-                eval_import_combination(
-                    required.as_ref(),
-                    suspicious.as_ref(),
-                    *min_suspicious,
-                    *max_total,
-                    compiled_required.as_ref(),
-                    compiled_suspicious.as_ref(),
-                    ctx,
-                )
             ),
             Condition::StringValueCount {
                 min,
@@ -2319,6 +2304,7 @@ impl CompositeTrait {
                 regex,
                 platforms,
                 is_check,
+                kind,
                 compiled_regex,
                 compiled_finder,
             } => self.eval_symbol(
@@ -2327,6 +2313,7 @@ impl CompositeTrait {
                 regex.as_ref(),
                 platforms.as_ref(),
                 *is_check,
+                *kind,
                 compiled_regex.as_ref(),
                 compiled_finder.as_ref(),
                 self.not.as_ref(),
@@ -2489,25 +2476,6 @@ impl CompositeTrait {
             } => timed_eval!(
                 "section_ratio",
                 eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
-            Condition::ImportCombination {
-                required,
-                suspicious,
-                min_suspicious,
-                max_total,
-                compiled_required,
-                compiled_suspicious,
-            } => timed_eval!(
-                "import_combo",
-                eval_import_combination(
-                    required.as_ref(),
-                    suspicious.as_ref(),
-                    *min_suspicious,
-                    *max_total,
-                    compiled_required.as_ref(),
-                    compiled_suspicious.as_ref(),
-                    ctx,
-                )
             ),
             Condition::StringValueCount {
                 min,
@@ -2716,6 +2684,7 @@ impl CompositeTrait {
         pattern: Option<&String>,
         platforms: Option<&Vec<Platform>>,
         is_check: Option<StringValidator>,
+        kind: Option<SymbolKind>,
         compiled_regex: Option<&regex::Regex>,
         compiled_finder: Option<&memchr::memmem::Finder<'static>>,
         not: Option<&Vec<NotException>>,
@@ -2739,6 +2708,7 @@ impl CompositeTrait {
             pattern,
             None,
             is_check,
+            kind,
             compiled_regex,
             compiled_finder,
             not,

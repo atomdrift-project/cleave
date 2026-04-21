@@ -188,7 +188,7 @@ pub(crate) fn get_utf8_cached(
 /// entries are keyed by `(FileType, query_str)` and never become stale — wiping
 /// them between archive members forced every rayon worker to recompile the
 /// same queries on the next member, which was the dominant hotspot after the
-/// ImportCombination/UTF-8 experiments.
+/// symbol-batch/UTF-8 experiments.
 ///
 /// Does NOT touch the process-global regex caches — those are shared across all
 /// threads and clearing them here would invalidate other workers' entries. Use

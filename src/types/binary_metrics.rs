@@ -835,9 +835,23 @@ pub struct PeMetrics {
     pub suspicious_import_combo: bool,
 
     // === Exports ===
-    /// Export forwarders
+    /// Number of exports that are forwards (the export entry points into the
+    /// export directory and names another `DLL.function` rather than a body
+    /// in this binary). Proxy sideload DLLs approach a 1:1 forward-to-export
+    /// ratio.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub export_forwarders: u32,
+    /// Number of forwarded exports whose target DLL is a well-known
+    /// Microsoft-shipped system library (kernel32, ntdll, user32, etc.).
+    /// A high value combined with a near-unity forward_ratio is the
+    /// archetypal proxy-sideload fingerprint.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub forwards_to_system_dll_count: u32,
+    /// Ratio of forwarded exports to total named exports (0.0 — 1.0).
+    /// Values near 1.0 on a non-system DLL indicate a stub binary whose
+    /// public surface is almost entirely re-exports of another DLL.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub forward_ratio: f32,
 
     // === Resources ===
     /// Resource count

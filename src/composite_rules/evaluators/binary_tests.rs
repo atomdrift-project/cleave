@@ -6,7 +6,7 @@
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::types::FileType;
-use crate::types::{AnalysisReport, Export, Import, Section, SyscallInfo, TargetInfo};
+use crate::types::{AnalysisReport, Export, Section, SyscallInfo, TargetInfo};
 
 fn create_test_report() -> AnalysisReport {
     let target = TargetInfo {
@@ -34,11 +34,13 @@ fn test_eval_exports_count_min() {
         symbol: "init".to_string(),
         offset: Some("0x1000".to_string()),
         source: "elf".to_string(),
+        forward_to: None,
     });
     report.exports.push(Export {
         symbol: "main".to_string(),
         offset: Some("0x2000".to_string()),
         source: "elf".to_string(),
+        forward_to: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -58,6 +60,7 @@ fn test_eval_exports_count_max() {
             symbol: format!("export_{}", i),
             offset: Some(format!("0x{:x}", i * 0x1000)),
             source: "elf".to_string(),
+            forward_to: None,
         });
     }
     let data = vec![];
@@ -434,137 +437,6 @@ fn test_eval_section_case_insensitive() {
     assert_eq!(result.evidence[0].value, ".TEXT");
 }
 
-// =============================================================================
-// eval_import_combination tests
-// =============================================================================
-
-#[test]
-fn test_eval_import_combination_required_only() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "VirtualAlloc".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    report.imports.push(Import {
-        symbol: "WriteProcessMemory".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let required = vec!["VirtualAlloc".to_string(), "WriteProcessMemory".to_string()];
-
-    let result = eval_import_combination(Some(&required), None, None, None, None, None, &ctx);
-    assert!(result.matched);
-}
-
-#[test]
-fn test_eval_import_combination_required_missing() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "VirtualAlloc".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let required = vec![
-        "VirtualAlloc".to_string(),
-        "WriteProcessMemory".to_string(), // Missing!
-    ];
-
-    let result = eval_import_combination(Some(&required), None, None, None, None, None, &ctx);
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_import_combination_suspicious() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "VirtualAlloc".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    report.imports.push(Import {
-        symbol: "CreateRemoteThread".to_string(),
-        library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let required = vec!["VirtualAlloc".to_string()];
-    let suspicious = vec![
-        "CreateRemoteThread".to_string(),
-        "NtUnmapViewOfSection".to_string(),
-    ];
-
-    let result = eval_import_combination(
-        Some(&required),
-        Some(&suspicious),
-        Some(1), // At least 1 suspicious
-        None,
-        None,
-        None,
-        &ctx,
-    );
-    assert!(result.matched);
-}
-
-#[test]
-fn test_eval_import_combination_min_suspicious() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "VirtualAlloc".to_string(),
-        library: None,
-        source: "pe".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let required = vec!["VirtualAlloc".to_string()];
-    let suspicious = vec![
-        "CreateRemoteThread".to_string(),
-        "NtUnmapViewOfSection".to_string(),
-    ];
-
-    // Require 1 suspicious but have 0
-    let result = eval_import_combination(
-        Some(&required),
-        Some(&suspicious),
-        Some(1),
-        None,
-        None,
-        None,
-        &ctx,
-    );
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_import_combination_max_total() {
-    let mut report = create_test_report();
-    for i in 0..20 {
-        report.imports.push(Import {
-            symbol: format!("func_{}", i),
-            library: None,
-            source: "lib".to_string(),
-        });
-    }
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // Max 10 imports but we have 20
-    let result = eval_import_combination(None, None, None, Some(10), None, None, &ctx);
-    assert!(!result.matched);
-
-    // Max 30 imports
-    let result = eval_import_combination(None, None, None, Some(30), None, None, &ctx);
-    assert!(result.matched);
-}
 
 // =============================================================================
 // eval_syscall tests
@@ -938,55 +810,6 @@ fn test_eval_section_precision_scoring() {
         &ctx,
     );
     assert_eq!(result4.precision, 2.0); // 1.0 (substr) + 0.5 (entropy_min) + 0.5 (entropy_max)
-}
-
-// =============================================================================
-// B7+B18: import_combination fixes
-// =============================================================================
-
-#[test]
-fn test_import_combination_empty_constraints_no_match() {
-    let report = create_test_report();
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // No required, no suspicious, no max — should NOT match
-    let result = eval_import_combination(None, None, None, None, None, None, &ctx);
-    assert!(!result.matched, "Empty import_combination should not match");
-}
-
-#[test]
-fn test_import_combination_suspicious_no_double_count() {
-    let mut report = create_test_report();
-    report.imports.push(Import {
-        symbol: "VirtualAlloc".to_string(),
-        library: None,
-        source: "kernel32".to_string(),
-    });
-    report.imports.push(Import {
-        symbol: "CreateFile".to_string(),
-        library: None,
-        source: "kernel32".to_string(),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // Two patterns that both match "VirtualAlloc"
-    let suspicious = vec!["Virtual.*".to_string(), ".*Alloc".to_string()];
-    let result = eval_import_combination(None, Some(&suspicious), Some(1), None, None, None, &ctx);
-    assert!(result.matched);
-    // VirtualAlloc matches both patterns but should be counted only once
-    // CreateFile matches neither
-    let suspicious_evidence: Vec<_> = result
-        .evidence
-        .iter()
-        .filter(|e| e.source == "suspicious")
-        .collect();
-    assert_eq!(
-        suspicious_evidence.len(),
-        1,
-        "VirtualAlloc should be counted once despite matching two patterns"
-    );
 }
 
 #[test]

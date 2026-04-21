@@ -35,7 +35,7 @@ pub(crate) struct SectionInfo {
     pub(crate) permissions: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub(crate) struct SymbolInfo {
     pub(crate) name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +45,9 @@ pub(crate) struct SymbolInfo {
     pub(crate) symbol_type: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     pub(crate) source: String,
+    /// For forwarded PE exports, the `DLL.symbol` target the loader follows.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) forward_to: Option<String>,
 }
 
 // ============================================================================

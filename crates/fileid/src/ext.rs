@@ -233,6 +233,9 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "md" | "markdown" => Some(FileType::Markdown),
         "mk" | "mak" => Some(FileType::Makefile),
         "txt" | "text" | "b64" | "base64" => Some(FileType::Text),
+        // Opaque binary "data" extensions that commonly carry encrypted/XOR'd payloads
+        // (PlugX's Canon.dat, Cobalt Strike profiles, shellcode drops).
+        "dat" | "bin" | "payload" | "raw" => Some(FileType::Data),
         _ => None,
     }
 }

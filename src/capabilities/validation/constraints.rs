@@ -1025,7 +1025,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::Ooxml,
     ];
     let images: &[FileType] = &[FileType::Jpeg, FileType::Png];
-    let data: &[FileType] = &[FileType::Ipa, FileType::Text];
+    let data: &[FileType] = &[FileType::Ipa, FileType::Text, FileType::Data];
     let archives: &[FileType] = &[
         FileType::Archive,
         FileType::Zip,

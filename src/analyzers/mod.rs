@@ -227,7 +227,8 @@ pub fn analyzer_for_file_type(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown
-        | FileType::Text => Some(Box::new(
+        | FileType::Text
+        | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
 
@@ -333,7 +334,8 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::SystemdService
         | FileType::Html
         | FileType::Markdown
-        | FileType::Text => Some(Box::new(
+        | FileType::Text
+        | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
 
@@ -561,6 +563,7 @@ impl FileTypeExt for FileType {
             FileType::Markdown => vec!["md", "markdown"],
             FileType::Makefile => vec!["makefile", "make", "mk"],
             FileType::Text => vec!["txt", "text"],
+            FileType::Data => vec!["dat", "bin", "payload", "raw"],
             _ => vec![],
         }
     }
@@ -654,9 +657,24 @@ mod tests {
 
     #[test]
     fn bridge_unknown() {
+        // Unknown extension with no magic match falls through to Unknown.
+        assert_eq!(
+            detect_file_type_from_data(Path::new("d.xyz"), &[0, 0, 0, 0]),
+            FileType::Unknown
+        );
+    }
+
+    #[test]
+    fn bridge_data_extension() {
+        // Opaque binary extensions (.bin/.dat/.payload/.raw) map to Data so
+        // the generic analyzer runs string extraction and data-file rules.
         assert_eq!(
             detect_file_type_from_data(Path::new("d.bin"), &[0, 0, 0, 0]),
-            FileType::Unknown
+            FileType::Data
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new("Canon.dat"), &[0, 0, 0, 0]),
+            FileType::Data
         );
     }
 

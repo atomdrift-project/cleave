@@ -4,7 +4,7 @@
 //! Tests for symbol and string-based condition evaluators.
 
 use super::*;
-use crate::composite_rules::condition::NotException;
+use crate::composite_rules::condition::{NotException, SymbolKind};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::{FileType, Platform};
 use crate::types::{AnalysisReport, Export, Function, Import, StringInfo, StringType, TargetInfo};
@@ -18,12 +18,27 @@ fn eval_symbol<'a>(
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
+    eval_symbol_with_kind(exact, substr, pattern, platforms, None, compiled_regex, not, ctx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn eval_symbol_with_kind<'a>(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    pattern: Option<&String>,
+    platforms: Option<&Vec<Platform>>,
+    kind: Option<SymbolKind>,
+    compiled_regex: Option<&regex::Regex>,
+    not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
     super::eval_symbol(
         exact,
         substr,
         pattern,
         platforms,
         None,
+        kind,
         compiled_regex,
         None, // compiled_finder: tests don't precompile
         not,
@@ -341,6 +356,7 @@ fn test_eval_symbol_in_exports() {
         symbol: "my_exported_function".to_string(),
         offset: Some("0x1000".to_string()),
         source: "elf".to_string(),
+        forward_to: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -2390,4 +2406,207 @@ fn test_eval_string_offset_range_filters() {
         result2.match_count, 1,
         "Only string at offset 5000 should match"
     );
+}
+
+// =============================================================================
+// eval_symbol `kind:` filter tests
+// =============================================================================
+
+fn report_with_import_export_function() -> AnalysisReport {
+    let mut report = create_test_report();
+    report.imports.push(Import::new("LoadLibraryA", None, "goblin"));
+    report.exports.push(Export::new(
+        "MyExport",
+        Some("0x1234".to_string()),
+        "goblin",
+    ));
+    report.functions.push(Function {
+        name: "internal_func".to_string(),
+        offset: None,
+        size: None,
+        complexity: None,
+        calls: vec![],
+        source: "goblin".to_string(),
+        control_flow: None,
+        instruction_analysis: None,
+        register_usage: None,
+        constants: vec![],
+        properties: None,
+        signature: None,
+        nesting: None,
+        call_patterns: None,
+    });
+    report
+}
+
+#[test]
+fn kind_import_only_matches_imports() {
+    let report = report_with_import_export_function();
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Without a kind filter the pattern hits across all three categories.
+    let all = eval_symbol_with_kind(
+        None,
+        Some(&"Library".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(all.matched);
+    assert_eq!(all.match_count, 1);
+
+    // kind: import narrows to imports only.
+    let imports = eval_symbol_with_kind(
+        None,
+        Some(&"Library".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Import),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(imports.matched);
+    assert_eq!(imports.match_count, 1);
+    assert_eq!(imports.evidence[0].value, "LoadLibraryA");
+
+    // kind: export skips imports entirely — no match.
+    let exports = eval_symbol_with_kind(
+        None,
+        Some(&"Library".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Export),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(!exports.matched);
+}
+
+#[test]
+fn kind_function_only_matches_functions() {
+    let report = report_with_import_export_function();
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let result = eval_symbol_with_kind(
+        None,
+        Some(&"internal".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Function),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].value, "internal_func");
+
+    // A function name with kind: import should not match.
+    let as_import = eval_symbol_with_kind(
+        None,
+        Some(&"internal".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Import),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(!as_import.matched);
+}
+
+#[test]
+fn kind_forward_matches_forwarded_exports_by_name_or_target() {
+    let mut report = create_test_report();
+    // Forwarded export: name=GetFileAttributesA → target=KERNEL32.GetFileAttributesA
+    report.exports.push(Export::forwarded(
+        "GetFileAttributesA",
+        "KERNEL32.GetFileAttributesA",
+        "goblin",
+    ));
+    // Non-forwarded export with a similar-looking name must NOT be counted.
+    report.exports.push(Export::new(
+        "GetLangID",
+        Some("0x1010".to_string()),
+        "goblin",
+    ));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    // Matching by export name.
+    let by_name = eval_symbol_with_kind(
+        None,
+        Some(&"GetFileAttributes".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Forward),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(by_name.matched);
+    assert_eq!(by_name.match_count, 1);
+
+    // Matching by forward target (DLL prefix).
+    let by_target = eval_symbol_with_kind(
+        None,
+        Some(&"KERNEL32".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Forward),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(by_target.matched);
+    assert_eq!(by_target.match_count, 1);
+    // Evidence carries the export name; the forward target lives in the
+    // location column so rule output stays readable.
+    assert_eq!(by_target.evidence[0].value, "GetFileAttributesA");
+    assert_eq!(
+        by_target.evidence[0].location.as_deref(),
+        Some("forward → KERNEL32.GetFileAttributesA")
+    );
+
+    // kind: forward must ignore the non-forwarded export even if the pattern matches.
+    let miss = eval_symbol_with_kind(
+        None,
+        Some(&"GetLangID".to_string()),
+        None,
+        None,
+        Some(SymbolKind::Forward),
+        None,
+        None,
+        &ctx,
+    );
+    assert!(!miss.matched);
+}
+
+#[test]
+fn kind_none_preserves_legacy_semantics() {
+    // No `kind:` means the pattern hits the first category that has it;
+    // backwards-compat guard so every rule authored before `kind:` landed keeps
+    // firing unchanged.
+    let report = report_with_import_export_function();
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let result = eval_symbol_with_kind(
+        None,
+        Some(&"MyExport".to_string()),
+        None,
+        None,
+        None,
+        None,
+        None,
+        &ctx,
+    );
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].value, "MyExport");
 }

@@ -295,6 +295,11 @@ pub struct Export {
     /// Tool that discovered this export (goblin, radare2, etc.)
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
+    /// Forwarded target for re-exports (`"KERNEL32.LoadLibraryA"` or
+    /// `"NTDLL.#123"`). None for normal exports whose RVA points into the
+    /// DLL's own code/data.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub forward_to: Option<String>,
 }
 
 impl Export {
@@ -308,6 +313,21 @@ impl Export {
             symbol: normalize_symbol(&symbol.into()),
             offset,
             source: source.into(),
+            forward_to: None,
+        }
+    }
+
+    /// Create a forwarded Export (`export → lib.target`).
+    pub fn forwarded(
+        symbol: impl Into<String>,
+        forward_to: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Self {
+        Self {
+            symbol: normalize_symbol(&symbol.into()),
+            offset: None,
+            source: source.into(),
+            forward_to: Some(forward_to.into()),
         }
     }
 }

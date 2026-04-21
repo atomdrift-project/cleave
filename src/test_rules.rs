@@ -666,19 +666,6 @@ impl<'a> RuleDebugger<'a> {
                 min,
                 max,
             } => self.debug_section_ratio_condition(section, compare_to, *min, *max),
-            Condition::ImportCombination {
-                required,
-                suspicious,
-                min_suspicious,
-                max_total,
-                compiled_required: _,
-                compiled_suspicious: _,
-            } => self.debug_import_combination_condition(
-                required.as_ref(),
-                suspicious.as_ref(),
-                *min_suspicious,
-                *max_total,
-            ),
             _ => {
                 // Generic fallback for other condition types
                 let desc = describe_condition(condition);
@@ -2044,93 +2031,6 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    fn debug_import_combination_condition(
-        &self,
-        required: Option<&Vec<String>>,
-        suspicious: Option<&Vec<String>>,
-        min_suspicious: Option<usize>,
-        max_total: Option<usize>,
-    ) -> ConditionDebugResult {
-        let desc = format!(
-            "import_combination: required={}, suspicious={}, min_suspicious={:?}, max_total={:?}",
-            required.map(std::vec::Vec::len).unwrap_or(0),
-            suspicious.map(std::vec::Vec::len).unwrap_or(0),
-            min_suspicious,
-            max_total
-        );
-
-        let imports: Vec<&str> = self
-            .report
-            .imports
-            .iter()
-            .map(|i| i.symbol.as_str())
-            .collect();
-        let total_imports = imports.len();
-
-        // Check required imports
-        let required_ok = required
-            .map(|req| req.iter().all(|r| imports.iter().any(|i| i.contains(r))))
-            .unwrap_or(true);
-
-        // Count suspicious imports
-        let suspicious_count = suspicious
-            .map(|susp| {
-                susp.iter()
-                    .filter(|s| imports.iter().any(|i| i.contains(*s)))
-                    .count()
-            })
-            .unwrap_or(0);
-
-        let suspicious_ok = min_suspicious.is_none_or(|min| suspicious_count >= min);
-        let total_ok = max_total.is_none_or(|max| total_imports <= max);
-
-        let matched = required_ok && suspicious_ok && total_ok;
-
-        let mut result = ConditionDebugResult::new(desc, matched);
-
-        result
-            .details
-            .push(format!("Total imports: {}", total_imports));
-
-        if let Some(req) = required {
-            let found: Vec<&String> = req
-                .iter()
-                .filter(|r| imports.iter().any(|i| i.contains(*r)))
-                .collect();
-            result.details.push(format!(
-                "Required imports found: {}/{}",
-                found.len(),
-                req.len()
-            ));
-            if found.len() < req.len() {
-                let missing: Vec<&String> = req
-                    .iter()
-                    .filter(|r| !imports.iter().any(|i| i.contains(*r)))
-                    .collect();
-                for m in missing.iter().take(5) {
-                    result.details.push(format!("  Missing: {}", m));
-                }
-            }
-        }
-
-        if let Some(susp) = suspicious {
-            let found: Vec<&String> = susp
-                .iter()
-                .filter(|s| imports.iter().any(|i| i.contains(*s)))
-                .collect();
-            result.details.push(format!(
-                "Suspicious imports found: {}/{}",
-                found.len(),
-                susp.len()
-            ));
-            for f in found.iter().take(5) {
-                result.details.push(format!("  Found: {}", f));
-            }
-        }
-
-        result
-    }
-
     // Helper to find trait definition by ID
     fn find_trait_definition(&self, id: &str) -> Option<&crate::composite_rules::TraitDefinition> {
         self.mapper.find_trait(id)
@@ -2315,19 +2215,6 @@ fn describe_condition(condition: &Condition) -> String {
                 compare_to,
                 min.unwrap_or(0.0),
                 max.unwrap_or(1.0)
-            )
-        }
-        Condition::ImportCombination {
-            required,
-            suspicious,
-            min_suspicious,
-            ..
-        } => {
-            format!(
-                "import_combination: req={}, susp={}, min={}",
-                required.as_ref().map(std::vec::Vec::len).unwrap_or(0),
-                suspicious.as_ref().map(std::vec::Vec::len).unwrap_or(0),
-                min_suspicious.unwrap_or(0)
             )
         }
         _ => format!("{:?}", condition).chars().take(50).collect(),

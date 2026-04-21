@@ -35,6 +35,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
             library: import.library.clone(),
             symbol_type: "import".to_string(),
             source: import.source.clone(),
+            forward_to: None,
         });
     }
 
@@ -45,6 +46,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
             library: None,
             symbol_type: "export".to_string(),
             source: export.source.clone(),
+            forward_to: export.forward_to.clone(),
         });
     }
 
@@ -55,6 +57,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
             library: None,
             symbol_type: "function".to_string(),
             source: func.source.clone(),
+            forward_to: None,
         });
     }
 
@@ -84,6 +87,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: import.library.clone(),
                         symbol_type: "import".to_string(),
                         source: import.source.clone(),
+                        forward_to: None,
                     });
                 }
                 for export in &report.exports {
@@ -93,6 +97,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "export".to_string(),
                         source: export.source.clone(),
+                    forward_to: export.forward_to.clone(),
                     });
                 }
                 for func in &report.functions {
@@ -102,6 +107,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "function".to_string(),
                         source: func.source.clone(),
+                        forward_to: None,
                     });
                 }
 
@@ -120,6 +126,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                                 library: imp.lib_name,
                                 symbol_type: "import".to_string(),
                                 source: "rizin".to_string(),
+                                forward_to: None,
                             });
                         }
                         for exp in r2_exports {
@@ -129,6 +136,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                                 library: None,
                                 symbol_type: "export".to_string(),
                                 source: "rizin".to_string(),
+                                forward_to: None,
                             });
                         }
                         for sym in r2_symbols {
@@ -146,6 +154,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                                     library: None,
                                     symbol_type: sym_type.to_lowercase(),
                                     source: "rizin".to_string(),
+                                    forward_to: None,
                                 });
                             }
                         }
@@ -172,6 +181,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: import.library,
                         symbol_type: "import".to_string(),
                         source: import.source,
+                        forward_to: None,
                     });
                 }
 
@@ -183,6 +193,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "export".to_string(),
                         source: export.source,
+                    forward_to: export.forward_to.clone(),
                     });
                 }
 
@@ -194,6 +205,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                         library: None,
                         symbol_type: "function".to_string(),
                         source: func.source,
+                        forward_to: None,
                     });
                 }
             }
@@ -251,7 +263,15 @@ fn format_symbols_output(
             ));
 
             for sym in &symbols {
-                let addr = sym.address.as_deref().unwrap_or("-");
+                // Forwarded exports have no RVA; show `→ DLL.target` in the
+                // address column so the loader target is visible at a glance.
+                let forward_display;
+                let addr = if let Some(target) = sym.forward_to.as_deref() {
+                    forward_display = format!("→ {target}");
+                    forward_display.as_str()
+                } else {
+                    sym.address.as_deref().unwrap_or("-")
+                };
                 let lib = sym.library.as_deref().unwrap_or("-");
                 output.push_str(&format!(
                     "{:<18} {:<12} {:<20} {}\n",

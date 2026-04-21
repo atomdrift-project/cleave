@@ -354,6 +354,7 @@ fn test_export_creation() {
         symbol: "my_function".to_string(),
         offset: Some("0x1500".to_string()),
         source: "goblin".to_string(),
+        forward_to: None,
     };
 
     assert_eq!(export.symbol, "my_function");

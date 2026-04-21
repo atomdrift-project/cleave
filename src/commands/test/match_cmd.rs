@@ -209,6 +209,7 @@ pub fn run(
         FileType::Markdown => composite_rules::FileType::Markdown,
         FileType::Makefile => composite_rules::FileType::Makefile,
         FileType::Text => composite_rules::FileType::Text,
+        FileType::Data => composite_rules::FileType::Data,
         FileType::PackageJson => composite_rules::FileType::PackageJson,
         FileType::ChromeManifest => composite_rules::FileType::ChromeManifest,
         FileType::VsixManifest => composite_rules::FileType::VsixManifest,

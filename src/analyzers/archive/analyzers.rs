@@ -619,30 +619,32 @@ impl ArchiveAnalyzer {
             self.yara_engine
         {
             let yara_start = std::time::Instant::now();
-            let yara_results: Vec<_> = class_files
-                .par_iter()
-                .filter_map(|entry| {
-                    if self.is_cancelled() {
-                        return None;
+            // Serialize when already inside a rayon context so nested-depth
+            // stays ≤ 1 (outer archive-member walk is already at depth 1).
+            // Running a second `par_iter` here when nested commits sibling
+            // slot-pool workers to JAR YARA scans and can starve the outer
+            // reaper on small pools.
+            let yara_results = par_filter_map_if_outermost(&class_files, |entry| {
+                if self.is_cancelled() {
+                    return None;
+                }
+                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    yara_engine.scan_file(entry.path())
+                })) {
+                    Ok(Ok(matches)) if !matches.is_empty() => {
+                        Some((entry.path().to_path_buf(), matches))
                     }
-                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        yara_engine.scan_file(entry.path())
-                    })) {
-                        Ok(Ok(matches)) if !matches.is_empty() => {
-                            Some((entry.path().to_path_buf(), matches))
-                        }
-                        Ok(Err(e)) => {
-                            debug!("YARA scan failed for {}: {}", entry.path().display(), e);
-                            None
-                        }
-                        Err(_panic) => {
-                            tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
-                            None
-                        }
-                        _ => None,
+                    Ok(Err(e)) => {
+                        debug!("YARA scan failed for {}: {}", entry.path().display(), e);
+                        None
                     }
-                })
-                .collect();
+                    Err(_panic) => {
+                        tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
+                        None
+                    }
+                    _ => None,
+                }
+            });
             debug!(
                 "YARA scan completed in {:.2}s",
                 yara_start.elapsed().as_secs_f64()

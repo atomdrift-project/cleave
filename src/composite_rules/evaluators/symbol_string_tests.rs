@@ -421,7 +421,7 @@ fn test_eval_symbol_in_functions() {
 }
 
 // =============================================================================
-// eval_string tests
+// eval_text tests (formerly eval_string)
 // =============================================================================
 
 #[test]
@@ -456,7 +456,7 @@ fn test_eval_string_exact_match() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "/bin/sh");
@@ -494,7 +494,7 @@ fn test_eval_string_substr_match() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
 }
@@ -533,7 +533,7 @@ fn test_eval_string_regex_match() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
 }
@@ -570,7 +570,7 @@ fn test_eval_string_case_insensitive() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
 }
@@ -608,7 +608,7 @@ fn test_eval_string_not_exception() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, Some(&not_exceptions), &ctx);
+    let result = eval_text(&params, Some(&not_exceptions), &ctx, None);
 
     // Should not match due to not exception
     assert!(!result.matched);
@@ -720,7 +720,7 @@ fn test_eval_string_in_imports() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched);
     assert_eq!(result.evidence[0].method, "import_symbol");
@@ -1362,7 +1362,7 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
     assert!(result.matched);
     // Evidence is capped at 16 (MAX_EVIDENCE_PER_TRAIT)
     assert_eq!(result.evidence.len(), 16);
@@ -1595,7 +1595,7 @@ fn test_eval_string_external_ip_filters_private() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
 
     assert!(result.matched, "Should match string with external IP");
     // Only the external IP string should be counted
@@ -1711,7 +1711,7 @@ fn test_eval_string_offset_skips_imports() {
         section_offset_range: None,
         arch_clamp: None,
     };
-    let result = eval_string(&params_with_offset, None, &ctx);
+    let result = eval_text(&params_with_offset, None, &ctx, None);
     assert!(result.matched, "String at offset 0x1000 should match");
     assert_eq!(
         result.match_count, 1,
@@ -1736,7 +1736,7 @@ fn test_eval_string_offset_skips_imports() {
         section_offset_range: None,
         arch_clamp: None,
     };
-    let result = eval_string(&params_no_offset, None, &ctx);
+    let result = eval_text(&params_no_offset, None, &ctx, None);
     assert!(result.matched);
     assert!(
         result.match_count >= 2,
@@ -1793,7 +1793,7 @@ fn test_eval_string_word_boundary() {
         arch_clamp: None,
     };
 
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
     assert!(result.matched);
     assert_eq!(
         result.match_count, 1,
@@ -2001,7 +2001,7 @@ fn test_eval_string_section_offset_with_section_map() {
         section_offset_range: Some((0, Some(0x200))),
         arch_clamp: None,
     };
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
     assert!(
         result.matched,
         "MAGIC at .text+0x100 should be in range [0, 0x200)"
@@ -2026,7 +2026,7 @@ fn test_eval_string_section_offset_with_section_map() {
         section_offset_range: Some((0, Some(0x100))),
         arch_clamp: None,
     };
-    let result2 = eval_string(&params2, None, &ctx);
+    let result2 = eval_text(&params2, None, &ctx, None);
     assert!(
         result2.matched,
         "OTHER at .data+0x50 should be in range [0, 0x100)"
@@ -2049,7 +2049,7 @@ fn test_eval_string_section_offset_with_section_map() {
         section_offset_range: Some((0, Some(0x1000))),
         arch_clamp: None,
     };
-    let result3 = eval_string(&params3, None, &ctx);
+    let result3 = eval_text(&params3, None, &ctx, None);
     assert!(
         !result3.matched,
         "OTHER should not be found in .text section"
@@ -2184,7 +2184,7 @@ fn test_eval_string_offset_range_filters() {
         section_offset_range: None,
         arch_clamp: None,
     };
-    let result = eval_string(&params, None, &ctx);
+    let result = eval_text(&params, None, &ctx, None);
     assert!(result.matched);
     assert_eq!(
         result.match_count, 1,
@@ -2208,7 +2208,7 @@ fn test_eval_string_offset_range_filters() {
         section_offset_range: None,
         arch_clamp: None,
     };
-    let result2 = eval_string(&params2, None, &ctx);
+    let result2 = eval_text(&params2, None, &ctx, None);
     assert!(result2.matched);
     assert_eq!(
         result2.match_count, 1,

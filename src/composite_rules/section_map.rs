@@ -152,15 +152,6 @@ impl SectionMap {
         !self.sections.is_empty()
     }
 
-    /// Returns the name of the section containing the given offset, if any.
-    #[must_use]
-    pub(crate) fn section_for_offset(&self, offset: u64) -> Option<&str> {
-        self.sections
-            .iter()
-            .find(|s| offset >= s.start && offset < s.end)
-            .map(|s| s.name.as_str())
-    }
-
     /// Returns a list of all section names in this map.
     #[must_use]
     pub(crate) fn section_names(&self) -> Vec<&str> {

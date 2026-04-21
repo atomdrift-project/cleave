@@ -72,18 +72,14 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                 }
                 // Don't count the closing bracket
             }
-            '*' | '+' | '?' if !in_bracket => {
-                // Quantifiers reduce the count for the previous character
-                // * and ? make previous optional (reduce by 1), + keeps at least 1
-                if ch == '*' || ch == '?' {
-                    count = count.saturating_sub(1);
-                }
+            '*' | '?' if !in_bracket => {
+                // Quantifiers * and ? make the previous character optional; + keeps at least 1.
+                count = count.saturating_sub(1);
             }
-            '(' | ')' | '|' | '^' | '$' | '.' if !in_bracket => {
-                // Metacharacters that don't add literal content (except '.' which matches anything)
-                if ch == '.' {
-                    // '.' matches any char, but we don't count it as a specific literal
-                }
+            '+' | '(' | ')' | '|' | '^' | '$' | '.' if !in_bracket => {
+                // '+' keeps at least 1 of the previous — no adjustment to count.
+                // Other metacharacters don't contribute literal content.
+                // '.' matches any char but isn't counted as a specific literal.
             }
             '{' if !in_bracket => {
                 // Quantifier like {n,m} - skip until closing }
@@ -400,12 +396,9 @@ fn regex_is_effectively_literal(pattern: &str) -> bool {
     let mut chars = pattern.chars().peekable();
     while let Some(ch) = chars.next() {
         match ch {
-            '\\' => {
-                // Consume the escaped character — it's a literal
-                if chars.next().is_none() {
-                    return false; // trailing backslash
-                }
-            }
+            // `\<x>` escapes a literal; a trailing backslash is malformed.
+            '\\' if chars.next().is_none() => return false,
+            '\\' => continue,
             '.' | '*' | '+' | '?' | '[' | ']' | '(' | ')' | '{' | '}' | '|' | '^' | '$' => {
                 return false;
             }

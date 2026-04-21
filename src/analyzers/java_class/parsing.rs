@@ -166,10 +166,8 @@ impl super::JavaClassAnalyzer {
 
         for entry in &constant_pool {
             match entry {
-                ConstantPoolEntry::Utf8(s) => {
-                    if self.is_interesting_string(s) {
-                        strings.insert(s.clone());
-                    }
+                ConstantPoolEntry::Utf8(s) if self.is_interesting_string(s) => {
+                    strings.insert(s.clone());
                 }
                 ConstantPoolEntry::Class(idx) => {
                     if let Some(ConstantPoolEntry::Utf8(name)) = constant_pool.get(*idx as usize) {

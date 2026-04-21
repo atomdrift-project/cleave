@@ -55,25 +55,19 @@ pub fn platforms_from_name_and_os(rule_name: &str, os_meta: Option<&str>) -> Vec
                         platforms.push(platform);
                     }
                 }
-                "windows" | "win32" | "win64" | "win" => {
-                    if !platforms.contains(&Platform::Windows) {
-                        platforms.push(Platform::Windows);
-                    }
+                "windows" | "win32" | "win64" | "win"
+                    if !platforms.contains(&Platform::Windows) =>
+                {
+                    platforms.push(Platform::Windows);
                 }
-                "macos" | "osx" | "darwin" | "mac" => {
-                    if !platforms.contains(&Platform::MacOS) {
-                        platforms.push(Platform::MacOS);
-                    }
+                "macos" | "osx" | "darwin" | "mac" if !platforms.contains(&Platform::MacOS) => {
+                    platforms.push(Platform::MacOS);
                 }
-                "android" => {
-                    if !platforms.contains(&Platform::Android) {
-                        platforms.push(Platform::Android);
-                    }
+                "android" if !platforms.contains(&Platform::Android) => {
+                    platforms.push(Platform::Android);
                 }
-                "ios" => {
-                    if !platforms.contains(&Platform::Ios) {
-                        platforms.push(Platform::Ios);
-                    }
+                "ios" if !platforms.contains(&Platform::Ios) => {
+                    platforms.push(Platform::Ios);
                 }
                 "all" => return vec![], // "all" means no constraint
                 _ => {}
@@ -167,20 +161,14 @@ pub(crate) fn archs_from_arch_context(arch_context: &str) -> Vec<Arch> {
                     archs.push(Arch::X86_64);
                 }
             }
-            "x64" | "amd64" | "x86_64" | "x86-64" => {
-                if !archs.contains(&Arch::X86_64) {
-                    archs.push(Arch::X86_64);
-                }
+            "x64" | "amd64" | "x86_64" | "x86-64" if !archs.contains(&Arch::X86_64) => {
+                archs.push(Arch::X86_64);
             }
-            "arm64" | "aarch64" => {
-                if !archs.contains(&Arch::Aarch64) {
-                    archs.push(Arch::Aarch64);
-                }
+            "arm64" | "aarch64" if !archs.contains(&Arch::Aarch64) => {
+                archs.push(Arch::Aarch64);
             }
-            "arm" | "arm32" => {
-                if !archs.contains(&Arch::Arm) {
-                    archs.push(Arch::Arm);
-                }
+            "arm" | "arm32" if !archs.contains(&Arch::Arm) => {
+                archs.push(Arch::Arm);
             }
             _ => {} // Unknown token: treat as unconstrained
         }

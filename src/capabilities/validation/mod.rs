@@ -47,7 +47,7 @@ pub(super) mod shared {
     pub(super) struct PatternLocation {
         pub(super) trait_id: String,
         pub(super) file_path: String,
-        pub(super) condition_type: String, // "string_value", "symbol", "raw"
+        pub(super) condition_type: String, // "text", "symbol", "raw"
         pub(super) match_type: String,     // "exact", "substr", "word", "regex"
         pub(super) original_value: String, // Original pattern before normalization
         pub(super) for_types: HashSet<String>,

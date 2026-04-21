@@ -621,10 +621,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Nupkg => has_windows,
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
-                // Mach-O runs on macOS/iOS; unix is the superset that includes macOS
-                RuleFileType::Macho => has_apple || has_unix,
-                // Shell runs on all unix-like systems (unix covers Linux and macOS)
-                RuleFileType::Shell => has_unix || has_apple,
+                // Mach-O runs on macOS/iOS (unix is the superset that includes macOS);
+                // Shell runs on all unix-like systems (unix covers Linux and macOS).
+                RuleFileType::Macho | RuleFileType::Shell => has_apple || has_unix,
                 // AppleScript/Swift/ObjC are macOS/iOS-specific languages, not generic unix
                 RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
                     has_apple

@@ -380,32 +380,26 @@ fn count_escapes(bytes: &[u8]) -> (u32, u32, u32) {
     while i < len {
         if bytes[i] == b'\\' && i + 1 < len {
             match bytes[i + 1] {
-                b'x' => {
-                    // \xNN - hex escape
-                    if i + 3 < len
-                        && bytes[i + 2].is_ascii_hexdigit()
-                        && bytes[i + 3].is_ascii_hexdigit()
-                    {
-                        hex_count += 1;
-                        i += 4;
-                        continue;
-                    }
+                // \xNN - hex escape
+                b'x' if i + 3 < len
+                    && bytes[i + 2].is_ascii_hexdigit()
+                    && bytes[i + 3].is_ascii_hexdigit() =>
+                {
+                    hex_count += 1;
+                    i += 4;
+                    continue;
                 }
-                b'u' => {
-                    // \uNNNN or \u{...}
-                    if i + 5 < len {
-                        unicode_count += 1;
-                        i += 2;
-                        continue;
-                    }
+                // \uNNNN or \u{...}
+                b'u' if i + 5 < len => {
+                    unicode_count += 1;
+                    i += 2;
+                    continue;
                 }
-                b'U' => {
-                    // \UNNNNNNNN
-                    if i + 9 < len {
-                        unicode_count += 1;
-                        i += 2;
-                        continue;
-                    }
+                // \UNNNNNNNN
+                b'U' if i + 9 < len => {
+                    unicode_count += 1;
+                    i += 2;
+                    continue;
                 }
                 b'0'..=b'7' => {
                     // Octal escape \NNN

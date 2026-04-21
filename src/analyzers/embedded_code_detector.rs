@@ -124,10 +124,8 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
             }
             return Some(FileType::Php);
         }
-        Some(StringType::ShellCmd) => {
-            if is_real_shell(value) {
-                return Some(FileType::Shell);
-            }
+        Some(StringType::ShellCmd) if is_real_shell(value) => {
+            return Some(FileType::Shell);
         }
         _ => {}
     }
@@ -185,10 +183,8 @@ fn detect_language_inner(string_info: &StringInfo, is_encoded: bool) -> Option<F
             }
             return Some(FileType::Php);
         }
-        Some(StringType::ShellCmd) => {
-            if is_real_shell(value) {
-                return Some(FileType::Shell);
-            }
+        Some(StringType::ShellCmd) if is_real_shell(value) => {
+            return Some(FileType::Shell);
         }
         _ => {}
     }

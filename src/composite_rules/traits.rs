@@ -505,37 +505,31 @@ impl TraitDefinition {
                 // For symbol substr, validate not: exceptions contain the search substr
                 for exc in not_exceptions {
                     match exc {
-                        NotException::Shorthand(exc_str) => {
-                            if !exc_str.contains(search_substr) {
-                                return Some(format!(
-                                    "not: exception '{}' does not contain the search substr '{}' - symbols matching the substr won't contain this exception, so it will never be applied",
-                                    exc_str, search_substr
-                                ));
-                            }
+                        NotException::Shorthand(exc_str) if !exc_str.contains(search_substr) => {
+                            return Some(format!(
+                                "not: exception '{}' does not contain the search substr '{}' - symbols matching the substr won't contain this exception, so it will never be applied",
+                                exc_str, search_substr
+                            ));
                         }
                         NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        }) => {
-                            if !exc_str.contains(search_substr) {
-                                return Some(format!(
-                                    "not: exception (exact) '{}' does not contain the search substr '{}' - symbols matching the substr won't match this exception, so it will never be applied",
-                                    exc_str, search_substr
-                                ));
-                            }
+                        }) if !exc_str.contains(search_substr) => {
+                            return Some(format!(
+                                "not: exception (exact) '{}' does not contain the search substr '{}' - symbols matching the substr won't match this exception, so it will never be applied",
+                                exc_str, search_substr
+                            ));
                         }
                         NotException::Structured(NotExceptionStructured {
                             substr: Some(exc_substr),
                             ..
-                        }) => {
-                            if !exc_substr.contains(search_substr)
-                                && !search_substr.contains(exc_substr)
-                            {
-                                return Some(format!(
-                                    "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same symbols, so the exception will never be applied",
-                                    exc_substr, search_substr
-                                ));
-                            }
+                        }) if !exc_substr.contains(search_substr)
+                            && !search_substr.contains(exc_substr) =>
+                        {
+                            return Some(format!(
+                                "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same symbols, so the exception will never be applied",
+                                exc_substr, search_substr
+                            ));
                         }
                         _ => {}
                     }
@@ -549,25 +543,23 @@ impl TraitDefinition {
                 for exc in not_exceptions {
                     match exc {
                         // Validate shorthand (substr) exceptions - check if the substr matches the regex
-                        NotException::Shorthand(exc_str) => {
-                            if !pattern_could_match(pattern, exc_str) {
-                                return Some(format!(
-                                    "not: exception '{}' does not match the search regex '{}' - symbols matching the regex won't contain this exception, so it will never be applied",
-                                    exc_str, pattern
-                                ));
-                            }
+                        NotException::Shorthand(exc_str)
+                            if !pattern_could_match(pattern, exc_str) =>
+                        {
+                            return Some(format!(
+                                "not: exception '{}' does not match the search regex '{}' - symbols matching the regex won't contain this exception, so it will never be applied",
+                                exc_str, pattern
+                            ));
                         }
                         // Validate exact exceptions - check if the exact string matches the regex
                         NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        }) => {
-                            if !pattern_could_match(pattern, exc_str) {
-                                return Some(format!(
-                                    "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
-                                    exc_str, pattern
-                                ));
-                            }
+                        }) if !pattern_could_match(pattern, exc_str) => {
+                            return Some(format!(
+                                "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
+                                exc_str, pattern
+                            ));
                         }
                         // For substr and regex exceptions, validation is complex - allow them
                         _ => {}
@@ -622,49 +614,37 @@ impl TraitDefinition {
                 for exc in not_exceptions {
                     match exc {
                         // For shorthand (substr match in not:), check if the exception contains the search substr
-                        NotException::Shorthand(exc_str) => {
-                            if !contains_substr(exc_str, search_substr, case_insensitive) {
-                                return Some(format!(
-                                    "not: exception '{}' does not contain the search substr '{}' - strings matching the substr won't contain this exception, so it will never be applied",
-                                    exc_str, search_substr
-                                ));
-                            }
+                        NotException::Shorthand(exc_str)
+                            if !contains_substr(exc_str, search_substr, case_insensitive) =>
+                        {
+                            return Some(format!(
+                                "not: exception '{}' does not contain the search substr '{}' - strings matching the substr won't contain this exception, so it will never be applied",
+                                exc_str, search_substr
+                            ));
                         }
+                        // Exception is exact match - it should contain the search substr.
                         NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        }) => {
-                            // Exception is exact match - it should contain the search substr
-                            if !contains_substr(exc_str, search_substr, case_insensitive) {
-                                return Some(format!(
-                                    "not: exception (exact) '{}' does not contain the search substr '{}' - strings matching the substr won't match this exception, so it will never be applied",
-                                    exc_str, search_substr
-                                ));
-                            }
+                        }) if !contains_substr(exc_str, search_substr, case_insensitive) => {
+                            return Some(format!(
+                                "not: exception (exact) '{}' does not contain the search substr '{}' - strings matching the substr won't match this exception, so it will never be applied",
+                                exc_str, search_substr
+                            ));
                         }
+                        // Exception is substr - it should contain the search substr or vice versa.
                         NotException::Structured(NotExceptionStructured {
                             substr: Some(exc_substr),
                             ..
-                        }) => {
-                            // Exception is substr - it should contain the search substr or vice versa
-                            // Either the exception contains the search, or the search contains the exception
-                            if !contains_substr(exc_substr, search_substr, case_insensitive)
-                                && !contains_substr(search_substr, exc_substr, case_insensitive)
-                            {
-                                return Some(format!(
-                                    "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same strings, so the exception will never be applied",
-                                    exc_substr, search_substr
-                                ));
-                            }
+                        }) if !contains_substr(exc_substr, search_substr, case_insensitive)
+                            && !contains_substr(search_substr, exc_substr, case_insensitive) =>
+                        {
+                            return Some(format!(
+                                "not: exception (substr) '{}' has no overlap with search substr '{}' - they won't match the same strings, so the exception will never be applied",
+                                exc_substr, search_substr
+                            ));
                         }
-                        NotException::Structured(NotExceptionStructured {
-                            regex: Some(_exc_regex),
-                            ..
-                        }) => {
-                            // For regex exceptions with substr search, we can't easily validate
-                            // The regex might match strings containing the substr
-                            // We'll allow this without validation
-                        }
+                        // Regex exceptions with substr searches can't be validated cheaply.
                         _ => {}
                     }
                 }
@@ -695,28 +675,26 @@ impl TraitDefinition {
             } => {
                 for exc in not_exceptions {
                     match exc {
-                        // Validate shorthand (substr) exceptions - check if the substr matches the regex
-                        NotException::Shorthand(exc_str) => {
-                            if !pattern_could_match(pattern, exc_str) {
-                                return Some(format!(
-                                    "not: exception '{}' does not match the search regex '{}' - strings matching the regex won't contain this exception, so it will never be applied",
-                                    exc_str, pattern
-                                ));
-                            }
+                        // Validate shorthand (substr) exceptions — check if the substr matches the regex
+                        NotException::Shorthand(exc_str)
+                            if !pattern_could_match(pattern, exc_str) =>
+                        {
+                            return Some(format!(
+                                "not: exception '{}' does not match the search regex '{}' - strings matching the regex won't contain this exception, so it will never be applied",
+                                exc_str, pattern
+                            ));
                         }
-                        // Validate exact exceptions - check if the exact string matches the regex
+                        // Validate exact exceptions — check if the exact string matches the regex
                         NotException::Structured(NotExceptionStructured {
                             exact: Some(exc_str),
                             ..
-                        }) => {
-                            if !pattern_could_match(pattern, exc_str) {
-                                return Some(format!(
-                                    "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
-                                    exc_str, pattern
-                                ));
-                            }
+                        }) if !pattern_could_match(pattern, exc_str) => {
+                            return Some(format!(
+                                "not: exception (exact) '{}' does not match the search regex '{}' - it will never be applied",
+                                exc_str, pattern
+                            ));
                         }
-                        // For substr and regex exceptions, validation is complex - allow them
+                        // For substr and regex exceptions, validation is complex — allow them.
                         _ => {}
                     }
                 }

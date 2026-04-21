@@ -113,8 +113,6 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
         "string_literal"
     } else if context.contains("type: text") {
         "text"
-    } else if context.contains("type: string_value") {
-        "string_value"
     } else if context.contains("type: symbol") {
         "symbol"
     } else if context.contains("type: hex") {
@@ -144,7 +142,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "per_kb_min",
             "per_kb_max",
         ],
-        "text" | "string_value" | "string_literal" => &[
+        "text" | "string_literal" => &[
             "type",
             "exact",
             "substr",
@@ -227,7 +225,6 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "language",
             "case_insensitive",
         ],
-        "section_ratio" => &["type", "section", "compare_to", "min", "max"],
         "kv" => &["type", "key", "value", "operator"],
         _ => return None,
     };
@@ -254,8 +251,6 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             // Check if this field is invalid for the condition type
             if !valid_fields.contains(&field_name) {
                 return Some(match field_name {
-                    "min_ratio" if condition_type == "section_ratio" => "min_ratio".to_string(),
-                    "max_ratio" if condition_type == "section_ratio" => "max_ratio".to_string(),
                     "needs" => "needs".to_string(),
                     "pattern" if condition_type != "hex" && condition_type != "ast" => {
                         "pattern".to_string()
@@ -317,9 +312,8 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
     {
         let line = line.trim_start();
         if line.starts_with("type:") {
-            let invalid_string_type = line.starts_with("type: string")
-                && !line.starts_with("type: string_value")
-                && !line.starts_with("type: string_literal");
+            let invalid_string_type =
+                line.starts_with("type: string") && !line.starts_with("type: string_literal");
             // Check if this is an invalid type
             if line.contains("type: word")
                 || invalid_string_type
@@ -445,8 +439,6 @@ fn provide_error_guidance(
                 Some("string_literal")
             } else if context.contains("type: text") {
                 Some("text")
-            } else if context.contains("type: string_value") {
-                Some("string_value")
             } else if context.contains("type: symbol") {
                 Some("symbol")
             } else if context.contains("type: hex") {
@@ -463,19 +455,6 @@ fn provide_error_guidance(
 
             // Provide specific guidance based on field and condition type
             match (field.as_str(), condition_type) {
-                ("min_ratio" | "max_ratio", Some("section_ratio")) => {
-                    guidance.push_str(&format!(
-                        "\n   Field '{}' is not valid for 'type: section_ratio'.\n",
-                        field
-                    ));
-                    guidance.push_str(
-                        "   💡 Use 'min' and 'max' instead of 'min_ratio' and 'max_ratio'.\n",
-                    );
-                    guidance.push_str(
-                        "   💡 Other section rules already use 'min' and 'max' the same way.\n",
-                    );
-                    found_hallucination = true;
-                }
                 ("needs", _) => {
                     guidance.push_str(&format!(
                         "\n   Field '{}' is not valid in atomic trait conditions.\n",
@@ -518,7 +497,7 @@ fn provide_error_guidance(
             || context.contains("per_kb_max:"))
     {
         guidance.push_str("\n   Count/density fields are not valid for 'type: kv'.\n");
-        guidance.push_str("   💡 These fields only work with 'type: text', 'type: string_literal', 'type: string_value' (deprecated), 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
+        guidance.push_str("   💡 These fields only work with 'type: text', 'type: string_literal', 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
         guidance.push_str("   💡 KV searches query structured data and return boolean results, not frequency counts.\n");
         found_hallucination = true;
     }
@@ -534,9 +513,6 @@ fn provide_error_guidance(
         guidance
             .push_str("   • text       - Match human-readable text (binary strings or raw text)\n");
         guidance.push_str("   • string_literal - Match AST-backed string literals only\n");
-        guidance.push_str(
-            "   • string_value - Deprecated compatibility alias (prefer text or string_literal)\n",
-        );
         guidance.push_str("   • raw        - Match raw file content (across boundaries)\n");
         guidance.push_str("   • hex        - Match hex patterns with wildcards\n");
         guidance.push_str("   • encoded    - Match encoded content (base64, hex, etc.)\n");
@@ -544,8 +520,7 @@ fn provide_error_guidance(
         guidance.push_str("   • ast        - Match AST patterns (requires tree-sitter)\n");
         guidance.push_str("   • yara       - Match YARA rule results\n");
         guidance.push_str("   • syscall    - Match system calls\n");
-        guidance.push_str("   • structure  - Match structural features\n");
-        guidance.push_str("   • section_ratio, section - Section analysis\n");
+        guidance.push_str("   • section    - Section analysis (includes ratio checks via compare_to + ratio_min/max)\n");
         guidance.push_str(
             "   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n",
         );
@@ -557,14 +532,33 @@ fn provide_error_guidance(
             );
         } else if context.contains("type: string_value") {
             guidance.push_str(
-                "\n   💡 `type: string_value` is deprecated but still supported at runtime. Use 'type: text' for general text/code search, or 'type: string_literal' for AST-backed literal-only search.\n",
+                "\n   💡 `type: string_value` was removed. Use 'type: text' for general text search, or 'type: string_literal' for AST-backed literal-only search.\n",
             );
-        } else if context.contains("type: string")
-            && !context.contains("type: string_literal")
-            && !context.contains("type: string_value")
-        {
+        } else if context.contains("type: string") && !context.contains("type: string_literal") {
             guidance.push_str(
                 "\n   💡 `type: string` was removed. Use 'type: text' for general text search, or 'type: string_literal' for AST-backed literal-only search.\n",
+            );
+        } else if context.contains("type: section_ratio") {
+            guidance.push_str(
+                "\n   💡 `type: section_ratio` was folded into `type: section`. Use `compare_to:` + `ratio_min:`/`ratio_max:` on a section condition.\n",
+            );
+        } else if context.contains("type: exports_count") {
+            guidance.push_str(
+                "\n   💡 `type: exports_count` was removed. Use `type: metrics, field: binary.export_count`.\n",
+            );
+        } else if context.contains("type: string_count")
+            || context.contains("type: string_value_count")
+        {
+            guidance.push_str(
+                "\n   💡 `type: string_count` was removed. Use `type: metrics, field: binary.string_count`, or count regex matches via `count_min`/`count_max` on a trait with a `type: text` condition.\n",
+            );
+        } else if context.contains("type: structure") {
+            guidance.push_str(
+                "\n   💡 `type: structure` was removed. Express file-format and architecture gates via the trait-level `for:` and `arch:` filters, or a `type: metrics` check against the relevant header field (e.g. `field: elf.e_machine`).\n",
+            );
+        } else if context.contains("type: import_combination") {
+            guidance.push_str(
+                "\n   💡 `type: import_combination` was removed. Use `type: symbol` with `kind: import` and regex/substr filters; chain multiple atoms through a composite rule's `all:`/`any:`/`needs:`.\n",
             );
         } else if context.contains("type: function") {
             guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");

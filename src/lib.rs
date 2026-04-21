@@ -703,7 +703,7 @@ fn snapshot_active_phases() -> Vec<PhaseSnapshot> {
             }
         }
     }
-    out.sort_by(|a, b| b.3.cmp(&a.3));
+    out.sort_by_key(|entry| std::cmp::Reverse(entry.3));
     out
 }
 

@@ -1666,10 +1666,8 @@ impl YaraEngine {
 
             match key.as_str() {
                 "description" => description = value_str,
-                "risk" => {
-                    if !is_third_party {
-                        crit = value_str;
-                    }
+                "risk" if !is_third_party => {
+                    crit = value_str;
                 }
                 "capability" => {
                     capability_flag = value_str.to_lowercase() == "true" || value_str == "1";

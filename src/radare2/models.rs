@@ -66,7 +66,7 @@ impl From<R2Function> for Function {
                 basic_blocks: nbbs,
                 edges,
                 cyclomatic_complexity: r2_func.complexity.unwrap_or(1),
-                max_block_size: if nbbs > 0 { ninstr / nbbs } else { 0 },
+                max_block_size: ninstr.checked_div(nbbs).unwrap_or(0),
                 avg_block_size: if nbbs > 0 {
                     ninstr as f32 / nbbs as f32
                 } else {

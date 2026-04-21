@@ -1069,10 +1069,11 @@ pub(crate) fn check_same_string_different_types(
         let patterns = extract_patterns(trait_def);
 
         for (normalized, location) in patterns {
-            // Only check string, symbol, and raw types
+            // Only check text, symbol, and raw types (extract_patterns produces
+            // those condition_type labels today; string_value is long gone).
             if !matches!(
                 location.condition_type.as_str(),
-                "string_value" | "symbol" | "raw"
+                "text" | "symbol" | "raw"
             ) {
                 continue;
             }
@@ -1310,29 +1311,28 @@ pub(crate) fn check_case_insensitive_overlaps(
 
         // Extract patterns from conditions that support case_insensitive.
         // Text is intentionally excluded — same rationale as extract_patterns.
-        match &trait_def.r#if {
-            Condition::Raw {
-                exact,
-                substr,
-                word,
-                regex,
-                case_insensitive,
-                ..
-            } => {
-                if let Some(v) = exact {
-                    add_case_pattern("raw", "exact", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = substr {
-                    add_case_pattern("raw", "substr", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = word {
-                    add_case_pattern("raw", "word", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = regex {
-                    add_case_pattern("raw", "regex", v.clone(), *case_insensitive);
-                }
+        if let Condition::Raw {
+            exact,
+            substr,
+            word,
+            regex,
+            case_insensitive,
+            ..
+        } = &trait_def.r#if
+        {
+            if let Some(v) = exact {
+                add_case_pattern("raw", "exact", v.clone(), *case_insensitive);
             }
-            _ => {} // Symbol doesn't have case_insensitive; others not relevant for this check
+            if let Some(v) = substr {
+                add_case_pattern("raw", "substr", v.clone(), *case_insensitive);
+            }
+            if let Some(v) = word {
+                add_case_pattern("raw", "word", v.clone(), *case_insensitive);
+            }
+            if let Some(v) = regex {
+                add_case_pattern("raw", "regex", v.clone(), *case_insensitive);
+            }
+            // Symbol doesn't have case_insensitive; others aren't relevant.
         }
     }
 

@@ -778,7 +778,7 @@ pub(crate) fn find_oversized_trait_directories(
         .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
         .collect();
 
-    violations.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by count descending
+    violations.sort_by_key(|v| std::cmp::Reverse(v.1)); // Sort by count descending
     violations
 }
 

@@ -1109,11 +1109,9 @@ impl ElfAnalyzer {
                     DT_RUNPATH => metrics.runpath_set = true,
                     DT_TEXTREL => metrics.textrel_present = true,
                     DT_GNU_HASH => metrics.gnu_hash_present = true,
-                    DT_BIND_NOW => {
-                        // DT_BIND_NOW + GNU_RELRO = Full RELRO
-                        if metrics.relro.is_some() {
-                            metrics.relro = Some("full".to_string());
-                        }
+                    // DT_BIND_NOW + GNU_RELRO = Full RELRO
+                    DT_BIND_NOW if metrics.relro.is_some() => {
+                        metrics.relro = Some("full".to_string());
                     }
                     DT_INIT_ARRAYSZ => init_arraysz = dyn_entry.d_val,
                     DT_FINI_ARRAYSZ => fini_arraysz = dyn_entry.d_val,
@@ -1140,11 +1138,9 @@ impl ElfAnalyzer {
             }
 
             match ph.p_type {
-                PT_GNU_RELRO => {
-                    // GNU_RELRO present (partial unless DT_BIND_NOW also set)
-                    if metrics.relro.is_none() {
-                        metrics.relro = Some("partial".to_string());
-                    }
+                // GNU_RELRO present (partial unless DT_BIND_NOW also set)
+                PT_GNU_RELRO if metrics.relro.is_none() => {
+                    metrics.relro = Some("partial".to_string());
                 }
                 PT_GNU_STACK => {
                     // Check if stack is executable

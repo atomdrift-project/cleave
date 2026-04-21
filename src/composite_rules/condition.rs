@@ -3004,7 +3004,7 @@ mod location_constraint_tests {
 
     #[test]
     fn test_validate_location_no_constraints() {
-        let result = validate_location_constraints(&None, None, None, None, None, "string_value");
+        let result = validate_location_constraints(&None, None, None, None, None, "text");
         assert!(result.is_ok());
     }
 
@@ -3016,7 +3016,7 @@ mod location_constraint_tests {
             None,
             None,
             None,
-            "string_value",
+            "text",
         );
         assert!(result.is_ok());
     }
@@ -3024,7 +3024,7 @@ mod location_constraint_tests {
     #[test]
     fn test_validate_location_offset_only() {
         let result =
-            validate_location_constraints(&None, Some(0x1000), None, None, None, "string_value");
+            validate_location_constraints(&None, Some(0x1000), None, None, None, "text");
         assert!(result.is_ok());
     }
 
@@ -3036,7 +3036,7 @@ mod location_constraint_tests {
             Some((0, Some(0x1000))),
             None,
             None,
-            "string_value",
+            "text",
         );
         assert!(result.is_ok());
     }
@@ -3049,7 +3049,7 @@ mod location_constraint_tests {
             Some((0, Some(0x1000))),
             None,
             None,
-            "string_value",
+            "text",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("offset"));
@@ -3099,7 +3099,7 @@ mod location_constraint_tests {
             None,
             Some(0x100),
             Some((0, Some(0x200))),
-            "string_value",
+            "text",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("section_offset"));
@@ -3114,7 +3114,7 @@ mod location_constraint_tests {
             Some((0x1000, Some(0x100))), // 0x1000 > 0x100
             None,
             None,
-            "string_value",
+            "text",
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("start"));
@@ -3137,7 +3137,7 @@ mod location_constraint_tests {
             Some((0x1000, None)),
             None,
             None,
-            "string_value",
+            "text",
         );
         assert!(result.is_ok());
     }

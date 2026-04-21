@@ -187,10 +187,7 @@ fn is_system_dll(name: &str) -> bool {
 fn scan_asn1_attribute(data: &[u8], oid: &[u8], max_results: usize) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     let mut search_pos = 0;
-    while let Some(pos) = data[search_pos..]
-        .windows(oid.len())
-        .position(|w| w == oid)
-    {
+    while let Some(pos) = data[search_pos..].windows(oid.len()).position(|w| w == oid) {
         let abs_pos = search_pos + pos;
         search_pos = abs_pos + oid.len();
         let type_pos = abs_pos + oid.len();
@@ -1981,7 +1978,11 @@ impl PEAnalyzer {
             && forward_targets.len() == 1
             && is_version_variant(
                 &self_basename_stem(logical_path),
-                forward_targets.iter().next().map(String::as_str).unwrap_or(""),
+                forward_targets
+                    .iter()
+                    .next()
+                    .map(String::as_str)
+                    .unwrap_or(""),
             );
 
         // Section alignment check

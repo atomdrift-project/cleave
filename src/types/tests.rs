@@ -341,6 +341,7 @@ fn test_import_creation() {
         symbol: "printf".to_string(),
         library: Some("libc.so.6".to_string()),
         source: "goblin".to_string(),
+        offset: None,
     };
 
     assert_eq!(import.symbol, "printf");

@@ -47,9 +47,14 @@ fn test_analyze_nonexistent_file() {
         .stderr(predicate::str::contains("does not exist"));
 }
 
-/// Test analyze command with a simple shell script
+/// Test analyze command with a simple shell script.
+///
+/// Uses `--json` because terminal output suppresses files with no
+/// findings (a trivial one-liner with `cleave_SKIP_TRAITS=1` produces
+/// none). JSON output always includes the file path, so the test
+/// stays a true CLI smoke test and doesn't depend on the installed
+/// rule set firing anything.
 #[test]
-
 fn test_analyze_shell_script() {
     let temp_dir = TempDir::new().unwrap();
     let script_path = temp_dir.path().join("test.sh");
@@ -57,7 +62,7 @@ fn test_analyze_shell_script() {
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
     isolated_cleave_cmd()
-        .args(["analyze", script_path.to_str().unwrap()])
+        .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.sh"));
@@ -155,8 +160,9 @@ fn test_analyze_multiple_files() {
     fs::write(&script1, "#!/bin/bash\necho 'test1'\n").unwrap();
     fs::write(&script2, "#!/bin/bash\necho 'test2'\n").unwrap();
 
+    // See `test_analyze_shell_script` for rationale on `--json`.
     isolated_cleave_cmd()
-        .args(["analyze", temp_dir.path().to_str().unwrap()])
+        .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test1.sh"))
@@ -258,8 +264,10 @@ fn test_analyze_python_file() {
 
     fs::write(&py_file, "print('hello')\n").unwrap();
 
+    // JSON output always lists the file; terminal output would skip it
+    // when no findings fire (which is the case with SKIP_TRAITS).
     isolated_cleave_cmd()
-        .args(["analyze", py_file.to_str().unwrap()])
+        .args(["--json", "analyze", py_file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.py"));
@@ -267,15 +275,15 @@ fn test_analyze_python_file() {
 
 /// Test analyze with JavaScript file
 #[test]
-
 fn test_analyze_javascript_file() {
     let temp_dir = TempDir::new().unwrap();
     let js_file = temp_dir.path().join("test.js");
 
     fs::write(&js_file, "console.log('hello');\n").unwrap();
 
+    // See `test_analyze_shell_script` for rationale on `--json`.
     isolated_cleave_cmd()
-        .args(["analyze", js_file.to_str().unwrap()])
+        .args(["--json", "analyze", js_file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("test.js"));

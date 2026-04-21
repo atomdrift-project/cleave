@@ -26,12 +26,14 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
         symbol: "socket".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     report.imports.push(Import {
         symbol: "connect".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     // Add some test strings
@@ -116,18 +118,16 @@ fn test_all() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![
-            Condition::Symbol {
-                exact: None,
-                substr: None,
-                regex: Some("socket".to_string()),
-                platforms: None,
-                is_check: None,
-                kind: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-        ]),
+        all: Some(vec![Condition::Symbol {
+            exact: None,
+            substr: None,
+            regex: Some("socket".to_string()),
+            platforms: None,
+            is_check: None,
+            kind: None,
+            compiled_regex: None,
+            compiled_finder: None,
+        }]),
         any: None,
 
         unless: None,
@@ -1232,11 +1232,13 @@ fn test_symbol_exact_vs_substr() {
         symbol: "read".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "readlink".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -2491,11 +2493,13 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         symbol: "send".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "recv".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -3912,6 +3916,7 @@ fn test_composite_downgrade_all_match() {
         symbol: "socket".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
 
     // Provide findings that satisfy both the rule's `all` and the downgrade's `all`
@@ -4008,6 +4013,7 @@ fn test_composite_downgrade_none_blocks() {
         symbol: "socket".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
 
     // Provide a finding that matches the downgrade.none condition — should block downgrade

@@ -63,6 +63,7 @@ impl AppleScriptAnalyzer {
                     symbol: symbol.name,
                     library: library.map(String::from),
                     source: source.to_string(),
+                    offset: None,
                 });
             }
 
@@ -73,6 +74,7 @@ impl AppleScriptAnalyzer {
                     symbol: format!("{}.{}", event.class_code, event.event_code),
                     library: Some("AppleEvents".to_string()),
                     source: "scpt_event".to_string(),
+                    offset: None,
                 });
 
                 // Also add the description for easier rule matching
@@ -81,6 +83,7 @@ impl AppleScriptAnalyzer {
                         symbol: event.desc.to_string(),
                         library: Some("AppleScript".to_string()),
                         source: "scpt_command".to_string(),
+                        offset: None,
                     });
                 }
             }

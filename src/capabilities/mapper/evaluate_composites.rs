@@ -786,8 +786,28 @@ traits:
     }
 
     #[test]
+    #[allow(clippy::expect_used)]
     fn test_evaluate_basename_traits_matches_entry_path_regex() {
-        let mapper = super::super::CapabilityMapper::new();
+        // Rule mirrors `macos-temp-staging-path` from
+        // objectives/supply-chain/metadata-anomaly/archive. Inlined so the
+        // test does not depend on the installed trait set (which lives in
+        // a separate repo that can drift or carry parse errors).
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/archive::macos-temp-staging-path"
+    desc: "Archive preserves macOS temp staging path"
+    crit: suspicious
+    conf: 0.96
+    if:
+      type: basename
+      regex: 'var/folders/[a-z]{2}/[A-Za-z0-9_]+/T/tmp[a-z0-9]+/.{1,80}/package/'
+"#;
+        let file = write_test_traits(yaml);
+        let mapper = super::super::CapabilityMapper::from_yaml(file.path())
+            .expect("load staging-path mapper");
 
         let entry_names = vec![String::from(
             "var/folders/rs/52vst_5924nc0zz5ccww9tl80000gp/T/tmpn885gmk9/snore-log/package/lib/private/prepare-writer.js",

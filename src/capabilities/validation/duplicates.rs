@@ -1071,10 +1071,7 @@ pub(crate) fn check_same_string_different_types(
         for (normalized, location) in patterns {
             // Only check text, symbol, and raw types (extract_patterns produces
             // those condition_type labels today; string_value is long gone).
-            if !matches!(
-                location.condition_type.as_str(),
-                "text" | "symbol" | "raw"
-            ) {
+            if !matches!(location.condition_type.as_str(), "text" | "symbol" | "raw") {
                 continue;
             }
 
@@ -2366,7 +2363,7 @@ pub(crate) fn find_alternation_merge_candidates(
 
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            | Condition::Raw { regex: Some(r), .. } => Some(r.clone()),
+            Condition::Raw { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
         };
 

@@ -453,7 +453,7 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
     });
 
     match condition {
-        | Condition::StringLiteral {
+        Condition::StringLiteral {
             substr: Some(s), ..
         } => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
@@ -462,14 +462,14 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
                 None
             }
         }
-        | Condition::StringLiteral { exact: Some(s), .. } => {
+        Condition::StringLiteral { exact: Some(s), .. } => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
                 Some((s.as_str(), "exact"))
             } else {
                 None
             }
         }
-        | Condition::StringLiteral { regex: Some(s), .. } => {
+        Condition::StringLiteral { regex: Some(s), .. } => {
             if regex_code_re.is_match(s) {
                 Some((s.as_str(), "regex"))
             } else {
@@ -655,4 +655,3 @@ pub(crate) fn find_raw_should_use_string_value(
 ) {
     find_raw_should_use_text(traits, warnings);
 }
-

@@ -6,9 +6,7 @@
 use super::*;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::composite_rules::types::{FileType, Platform};
-use crate::types::{
-    AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo,
-};
+use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 
 fn eval_basename<'a>(
     exact: Option<&String>,

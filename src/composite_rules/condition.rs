@@ -3023,21 +3023,14 @@ mod location_constraint_tests {
 
     #[test]
     fn test_validate_location_offset_only() {
-        let result =
-            validate_location_constraints(&None, Some(0x1000), None, None, None, "text");
+        let result = validate_location_constraints(&None, Some(0x1000), None, None, None, "text");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_validate_location_offset_range_only() {
-        let result = validate_location_constraints(
-            &None,
-            None,
-            Some((0, Some(0x1000))),
-            None,
-            None,
-            "text",
-        );
+        let result =
+            validate_location_constraints(&None, None, Some((0, Some(0x1000))), None, None, "text");
         assert!(result.is_ok());
     }
 
@@ -3131,14 +3124,8 @@ mod location_constraint_tests {
     #[test]
     fn test_validate_location_open_ended_range() {
         // Open-ended range (start, None) is allowed
-        let result = validate_location_constraints(
-            &None,
-            None,
-            Some((0x1000, None)),
-            None,
-            None,
-            "text",
-        );
+        let result =
+            validate_location_constraints(&None, None, Some((0x1000, None)), None, None, "text");
         assert!(result.is_ok());
     }
 

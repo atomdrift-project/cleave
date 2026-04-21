@@ -1071,9 +1071,9 @@ fn test_eval_section_executable_flag() {
         None,       // readable
         None,       // writable
         Some(true), // executable = true
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        None,       // compare_to
+        None,       // ratio_min
+        None,       // ratio_max
         &ctx,
     );
     assert!(
@@ -1097,9 +1097,9 @@ fn test_eval_section_executable_flag() {
         None,       // readable
         None,       // writable
         Some(true), // executable = true
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        None,       // compare_to
+        None,       // ratio_min
+        None,       // ratio_max
         &ctx,
     );
     // Only .text should match, not .data

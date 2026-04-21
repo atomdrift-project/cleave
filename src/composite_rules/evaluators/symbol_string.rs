@@ -36,6 +36,18 @@ use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
 const MAX_MATCHES_TO_PROCESS: usize = 10_000;
 
+/// Parse a hex-prefixed byte offset string like `"0x1234"`. Accepts
+/// decimal too for robustness. Returns `None` on malformed input so the
+/// caller can safely fall through to evidence without offsets.
+#[inline]
+fn parse_hex_offset(s: &str) -> Option<u64> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse().ok()
+    }
+}
+
 /// Check if an offset falls within an effective range.
 /// Returns true if no range is specified (no constraint) or if offset is within range.
 #[inline]
@@ -158,11 +170,25 @@ pub(crate) fn eval_symbol<'a>(
                 if !excluded_by_not && !excluded_by_is {
                     match_count += 1;
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                        // Call-site imports (tree-sitter extraction) carry a
+                        // byte offset like "0x1234"; keep that as the location
+                        // and populate `offsets` so proximity constraints
+                        // (near_bytes/near_lines) can resolve a real position.
+                        // Compiled-binary imports have no offset — fall back
+                        // to the semantic label "import".
+                        let (location, offsets) = match import.offset.as_deref() {
+                            Some(off) => (
+                                Some(off.to_string()),
+                                parse_hex_offset(off).map_or_else(Vec::new, |o| vec![o]),
+                            ),
+                            None => (Some("import".to_string()), Vec::new()),
+                        };
                         evidence.push(Evidence {
                             method: "symbol".to_string(),
                             source: import.source.clone(),
                             value: import.symbol.clone(),
-                            location: Some("import".to_string()),
+                            location,
+                            offsets,
                             ..Default::default()
                         });
                     }
@@ -1464,4 +1490,3 @@ pub(crate) fn eval_encoded<'a>(
         matched_trait_ids: Vec::new(),
     }
 }
-

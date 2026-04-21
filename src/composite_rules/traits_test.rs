@@ -90,6 +90,7 @@ fn test_size_min_constraint_pass() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -119,6 +120,7 @@ fn test_size_min_constraint_fail() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -148,6 +150,7 @@ fn test_size_max_constraint_pass() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -177,6 +180,7 @@ fn test_size_max_constraint_fail() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -207,6 +211,7 @@ fn test_size_range_constraint() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -238,16 +243,19 @@ fn test_count_min_constraint_pass() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func3".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -277,11 +285,13 @@ fn test_count_min_constraint_fail() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -311,11 +321,13 @@ fn test_count_max_constraint_pass() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -345,16 +357,19 @@ fn test_count_max_constraint_fail() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func3".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -387,16 +402,19 @@ fn test_per_kb_min_constraint_pass() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func3".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -427,11 +445,13 @@ fn test_per_kb_min_constraint_fail() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -466,6 +486,7 @@ fn test_per_kb_max_constraint_pass() {
             symbol: format!("func{}", i),
             library: None,
             source: "test".to_string(),
+            offset: None,
         });
     }
 
@@ -498,6 +519,7 @@ fn test_per_kb_max_constraint_fail() {
             symbol: format!("func{}", i),
             library: None,
             source: "test".to_string(),
+            offset: None,
         });
     }
 
@@ -532,6 +554,7 @@ fn test_per_kb_max_zero_byte_file_with_matches_fails() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -600,6 +623,7 @@ fn test_platform_filter_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -631,6 +655,7 @@ fn test_platform_filter_no_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -665,6 +690,7 @@ fn test_platform_all_matches_everything() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -699,6 +725,7 @@ fn test_arch_filter_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -729,6 +756,7 @@ fn test_arch_filter_no_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -763,6 +791,7 @@ fn test_arch_all_matches_any_file_arch() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -796,6 +825,7 @@ fn test_arch_file_all_matches_any_trait_arch() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -868,6 +898,7 @@ fn test_arch_multi_arch_file() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -928,6 +959,7 @@ fn test_file_type_filter_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -959,6 +991,7 @@ fn test_file_type_filter_no_match() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let mut ctx = create_test_context(report, vec![]);
@@ -1001,16 +1034,19 @@ fn test_all_constraints_combined() {
         symbol: "func1".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func2".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "func3".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -1044,6 +1080,7 @@ fn test_finding_contains_evidence() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);
@@ -1079,6 +1116,7 @@ fn test_finding_has_correct_criticality() {
         symbol: "test".to_string(),
         library: None,
         source: "test".to_string(),
+        offset: None,
     });
 
     let ctx = create_test_context(report, vec![]);

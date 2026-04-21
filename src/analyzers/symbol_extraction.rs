@@ -55,6 +55,7 @@ pub(crate) fn extract_imports_from_tree(
                 symbol: module,
                 library: None,
                 source: "import".to_string(),
+                offset: None,
             });
         }
     }
@@ -119,6 +120,7 @@ pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut A
                 symbol: module,
                 library: None,
                 source: "import".to_string(), // Distinguish from function calls ("ast")
+                offset: None,
             });
         }
     }
@@ -370,27 +372,42 @@ fn extract_string_content<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Op
 /// NOTE: This is primarily for capability matching, not module imports.
 /// Use extract_imports() for actual module imports like require/import.
 /// Extract symbols from a pre-parsed tree (avoids re-parsing)
+///
+/// Each call site emits its own `Import` entry tagged with the node's
+/// byte offset, so composite rules with `near_bytes`/`near_lines`
+/// proximity constraints can cluster multiple calls (e.g. `exec` +
+/// `base64.b64decode` + `zlib.decompress` in a single decoder stub).
+/// Entries are capped per-symbol to bound report size on pathological
+/// inputs.
 pub(crate) fn extract_symbols_from_tree(
     tree: &tree_sitter::Tree,
     source: &str,
     call_types: &[&str],
     report: &mut AnalysisReport,
 ) {
-    let mut symbols = std::collections::HashSet::new();
+    let mut call_sites: Vec<(String, u64)> = Vec::new();
     let mut cursor = tree.walk();
-    extract_calls(&mut cursor, source.as_bytes(), call_types, &mut symbols);
+    extract_calls(&mut cursor, source.as_bytes(), call_types, &mut call_sites);
 
-    // Add unique symbols to imports
-    for symbol in symbols {
-        // Skip very short symbols (likely false positives)
+    // Cap per-symbol offsets so minified or deeply repetitive files
+    // don't explode the imports vector. 32 is enough for proximity
+    // (any window that needs more hits than that is pathological).
+    const MAX_OFFSETS_PER_SYMBOL: usize = 32;
+    let mut per_symbol_count: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+
+    for (symbol, offset) in call_sites {
         if symbol.len() < 2 {
             continue;
         }
-        report.imports.push(Import {
-            symbol,
-            library: None,
-            source: "ast".to_string(),
-        });
+        let count = per_symbol_count.entry(symbol.clone()).or_insert(0);
+        if *count >= MAX_OFFSETS_PER_SYMBOL {
+            continue;
+        }
+        *count += 1;
+        report
+            .imports
+            .push(Import::with_offset(symbol, None, "ast", offset));
     }
 }
 
@@ -415,12 +432,13 @@ pub(crate) fn extract_symbols(
     extract_symbols_from_tree(&tree, source, call_types, report);
 }
 
-/// Walk AST iteratively to find function calls (avoids stack overflow on deep nesting)
+/// Walk AST iteratively to find function calls (avoids stack overflow on deep nesting).
+/// Emits `(symbol, byte_offset)` pairs in source order, one per call site.
 fn extract_calls<'a>(
     cursor: &mut tree_sitter::TreeCursor<'a>,
     source: &[u8],
     call_types: &[&str],
-    symbols: &mut std::collections::HashSet<String>,
+    call_sites: &mut Vec<(String, u64)>,
 ) {
     // Use iterative traversal with explicit depth tracking to avoid stack overflow
     // on maliciously crafted or minified files with extreme nesting
@@ -437,7 +455,7 @@ fn extract_calls<'a>(
                     .trim_start_matches('_')
                     .trim_start_matches('$');
                 if !clean_name.is_empty() && clean_name.len() < 100 {
-                    symbols.insert(clean_name.to_string());
+                    call_sites.push((clean_name.to_string(), node.start_byte() as u64));
                 }
             }
         }

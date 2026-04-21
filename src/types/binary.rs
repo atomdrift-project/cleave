@@ -257,7 +257,7 @@ pub(crate) fn normalize_symbol(symbol: &str) -> String {
 }
 
 /// An imported symbol (function or variable from an external library)
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Import {
     /// Normalized symbol name (leading underscores stripped)
     pub symbol: String,
@@ -267,6 +267,12 @@ pub struct Import {
     /// Tool that discovered this import (goblin, radare2, etc.)
     #[serde(skip_serializing_if = "String::is_empty", default)]
     pub source: String,
+    /// File offset of the call site for scripting-language imports (hex
+    /// string like `"0x1234"`). `None` for compiled-binary imports, which
+    /// have no single meaningful offset. Populated by AST extraction so
+    /// composite rules can apply `near_bytes`/`near_lines` proximity.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub offset: Option<String>,
 }
 
 impl Import {
@@ -280,6 +286,23 @@ impl Import {
             symbol: normalize_symbol(&symbol.into()),
             library,
             source: source.into(),
+            offset: None,
+        }
+    }
+
+    /// Create a new Import with a call-site byte offset attached.
+    #[must_use]
+    pub fn with_offset(
+        symbol: impl Into<String>,
+        library: Option<String>,
+        source: impl Into<String>,
+        byte_offset: u64,
+    ) -> Self {
+        Self {
+            symbol: normalize_symbol(&symbol.into()),
+            library,
+            source: source.into(),
+            offset: Some(format!("0x{byte_offset:x}")),
         }
     }
 }

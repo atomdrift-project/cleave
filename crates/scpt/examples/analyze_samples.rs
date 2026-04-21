@@ -51,10 +51,8 @@ fn main() {
                         scpt::SymbolKind::Application => {
                             all_apps.insert(sym.name.clone());
                         }
-                        scpt::SymbolKind::StringLiteral => {
-                            if sym.name.len() > 5 {
-                                all_strings.insert(sym.name.clone());
-                            }
+                        scpt::SymbolKind::StringLiteral if sym.name.len() > 5 => {
+                            all_strings.insert(sym.name.clone());
                         }
                         _ => {}
                     }

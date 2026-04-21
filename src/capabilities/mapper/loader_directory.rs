@@ -1199,9 +1199,7 @@ impl super::CapabilityMapper {
 
             // Detect string_literal patterns that should use text
             let step_start = std::time::Instant::now();
-            tracing::trace!(
-                "Step 1h4/15: Detecting literal-only text mismatches"
-            );
+            tracing::trace!("Step 1h4/15: Detecting literal-only text mismatches");
             find_string_literal_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
 

@@ -1381,8 +1381,7 @@ fn test_precision_direct_conditions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1435,8 +1434,7 @@ fn test_precision_file_type_filter() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf, RuleFileType::Pe], // File type filter
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1533,8 +1531,7 @@ fn test_precision_recursive_expansion() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1709,8 +1706,7 @@ fn test_precision_caching() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1774,8 +1770,7 @@ fn test_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1805,8 +1800,7 @@ fn test_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -1910,8 +1904,7 @@ fn test_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -2099,8 +2092,7 @@ fn test_precision_mixed_conditions() {
             compiled_regex: None,
             compiled_finder: None,
         }]),
-        any: Some(vec![
-        ]),
+        any: Some(vec![]),
         needs: None,
         near_lines: None,
         near_bytes: None,
@@ -2167,8 +2159,7 @@ fn test_precision_deep_nesting() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-        ]),
+        all: Some(vec![]),
         any: None,
         needs: None,
         near_lines: None,
@@ -2196,11 +2187,9 @@ fn test_precision_deep_nesting() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-            Condition::Trait {
-                id: "test/level1".to_string(),
-            },
-        ]),
+        all: Some(vec![Condition::Trait {
+            id: "test/level1".to_string(),
+        }]),
         any: None,
         needs: None,
         near_lines: None,
@@ -2228,11 +2217,9 @@ fn test_precision_deep_nesting() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![
-            Condition::Trait {
-                id: "test/level2".to_string(),
-            },
-        ]),
+        all: Some(vec![Condition::Trait {
+            id: "test/level2".to_string(),
+        }]),
         any: None,
         needs: None,
         near_lines: None,
@@ -2754,11 +2741,13 @@ fn test_generate_import_findings_basic() {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "os.system".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2798,6 +2787,7 @@ fn test_generate_import_findings_with_library() {
         symbol: "printf".to_string(),
         library: Some("libc.so.6".to_string()),
         source: "goblin".to_string(),
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2845,11 +2835,13 @@ fn test_generate_import_findings_dedup() {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2877,6 +2869,7 @@ fn test_generate_import_findings_script_function_calls() {
         symbol: "net/http".to_string(),
         library: None,
         source: "import".to_string(),
+        offset: None,
     });
 
     // Function call (method invocation)
@@ -2884,6 +2877,7 @@ fn test_generate_import_findings_script_function_calls() {
         symbol: "system".to_string(),
         library: None,
         source: "ast".to_string(),
+        offset: None,
     });
 
     // Another function call
@@ -2891,6 +2885,7 @@ fn test_generate_import_findings_script_function_calls() {
         symbol: "open".to_string(),
         library: None,
         source: "ast".to_string(),
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2933,6 +2928,7 @@ fn test_generate_import_findings_npm_package() {
         symbol: "axios".to_string(),
         library: Some("^1.6.0".to_string()),
         source: "npm".to_string(),
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2958,12 +2954,14 @@ fn test_generate_import_findings_empty_symbol_skipped() {
         symbol: "".to_string(),
         library: None,
         source: "ast".to_string(),
+        offset: None,
     });
     // Symbol that normalizes to empty should also be skipped
     report.imports.push(Import {
         symbol: "@@".to_string(),
         library: None,
         source: "ast".to_string(),
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -3002,6 +3000,7 @@ fn test_generate_import_findings_preserves_existing() {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -3049,6 +3048,7 @@ fn test_generate_import_findings_skips_existing_import_finding() {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -3073,6 +3073,7 @@ fn test_generate_import_findings_evidence_structure() {
         symbol: "NSLog".to_string(),
         library: Some("Foundation".to_string()),
         source: "goblin".to_string(),
+        offset: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -3733,11 +3734,9 @@ fn test_composite_precision_calibration_band() {
                 id: "test/atomic-b".to_string(),
             },
         ]),
-        any: Some(vec![
-            Condition::Trait {
-                id: "test/atomic-c".to_string(),
-            },
-        ]),
+        any: Some(vec![Condition::Trait {
+            id: "test/atomic-c".to_string(),
+        }]),
         needs: Some(1),
         near_lines: None,
         near_bytes: None,

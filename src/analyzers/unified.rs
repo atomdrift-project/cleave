@@ -864,19 +864,17 @@ impl UnifiedSourceAnalyzer {
                         || path_lower.contains("\\tests\\")
                         || path_lower.contains(".test.")
                         || path_lower.contains(".spec.");
-                    let (crit, conf) = if is_known_benign_bundle
-                        || is_unicode_library
-                        || is_test_fixture
-                    {
-                        // Libraries that intentionally ship adversarial Unicode
-                        // samples or fake-data corpora should not surface a
-                        // human-review finding from this generic heuristic.
-                        (crate::types::Criticality::Baseline, 0.4)
-                    } else if text.invisible_chars >= 60 {
-                        (crate::types::Criticality::Suspicious, 0.95)
-                    } else {
-                        (crate::types::Criticality::Notable, 0.7)
-                    };
+                    let (crit, conf) =
+                        if is_known_benign_bundle || is_unicode_library || is_test_fixture {
+                            // Libraries that intentionally ship adversarial Unicode
+                            // samples or fake-data corpora should not surface a
+                            // human-review finding from this generic heuristic.
+                            (crate::types::Criticality::Baseline, 0.4)
+                        } else if text.invisible_chars >= 60 {
+                            (crate::types::Criticality::Suspicious, 0.95)
+                        } else {
+                            (crate::types::Criticality::Notable, 0.7)
+                        };
                     report.add_finding(
                         crate::types::Finding::indicator(
                             "objectives/anti-static/obfuscate/steganography/invisible-unicode"

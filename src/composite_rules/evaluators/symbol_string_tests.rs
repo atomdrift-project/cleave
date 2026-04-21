@@ -139,6 +139,7 @@ fn test_eval_symbol_exact_match() {
         symbol: "socket".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -227,6 +228,7 @@ fn test_eval_symbol_substr_match() {
         symbol: "CreateRemoteThread".to_string(),
         library: Some("kernel32.dll".to_string()),
         source: "pe".to_string(),
+        offset: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -252,11 +254,13 @@ fn test_eval_symbol_regex_match() {
         symbol: "connect".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     report.imports.push(Import {
         symbol: "accept".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -276,6 +280,7 @@ fn test_eval_symbol_no_match() {
         symbol: "malloc".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -301,6 +306,7 @@ fn test_eval_symbol_platform_filtering() {
         symbol: "socket".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     let data = vec![];
     let mut ctx = create_test_context(&report, &data);
@@ -340,6 +346,7 @@ fn test_eval_symbol_platform_all() {
         symbol: "socket".to_string(),
         library: None,
         source: "libc".to_string(),
+        offset: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -851,7 +858,6 @@ fn test_eval_raw_invalid_utf8() {
 
     assert!(!result.matched);
 }
-
 
 // ==================== eval_encoded Tests ====================
 

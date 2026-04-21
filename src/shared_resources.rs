@@ -297,7 +297,7 @@ traits:
     desc: "Basic test trait"
     crit: baseline
     if:
-      type: string_value
+      type: text
       substr: "test_pattern"
 "#,
         )

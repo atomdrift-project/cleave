@@ -358,13 +358,6 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
 
     for t in trait_definitions {
         let has_pattern = match &t.r#if {
-            Condition::StringValue {
-                exact,
-                substr,
-                regex,
-                word,
-                ..
-            }
             | Condition::Raw {
                 exact,
                 substr,
@@ -608,7 +601,7 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
 /// For hex patterns, `??` full wildcards and `[N]` gaps don't count toward length,
 /// but nibble wildcards like `4?` or `?F` do (they still constrain one nibble).
 ///
-/// `type: string_value` patterns are excluded — string extraction already provides
+/// `type: text` patterns are excluded — string extraction already provides
 /// boundary context that reduces noise.
 ///
 /// Returns: `Vec<(trait_id, pattern_value, pattern_type)>`
@@ -864,7 +857,6 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
     for t in trait_definitions {
         let invalid = match &t.r#if {
             // String/Raw/Encoded: not requires regex
-            Condition::StringValue { regex, not, .. }
             | Condition::Raw { regex, not, .. }
             | Condition::Encoded { regex, not, .. } => not.is_some() && regex.is_none(),
             // Hex: not is always valid (patterns are inherently ambiguous).

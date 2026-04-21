@@ -427,7 +427,15 @@ impl super::CapabilityMapper {
                 let is_simple_exact_string = trait_def.downgrade.is_none()
                     && matches!(
                         &trait_def.r#if,
-                        Condition::StringValue { exact: Some(_), .. }
+                        Condition::Text {
+                            exact: Some(_),
+                            section: None,
+                            offset: None,
+                            offset_range: None,
+                            section_offset: None,
+                            section_offset_range: None,
+                            ..
+                        }
                     )
                     && trait_def.count_min.unwrap_or(1) == 1
                     && trait_def.count_max.is_none()
@@ -459,7 +467,7 @@ impl super::CapabilityMapper {
                 let is_simple_substr_string = trait_def.downgrade.is_none()
                     && matches!(
                         &trait_def.r#if,
-                        Condition::StringValue {
+                        Condition::Text {
                             substr: Some(_),
                             section: None,
                             offset: None,

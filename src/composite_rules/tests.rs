@@ -127,23 +127,6 @@ fn test_all() {
                 compiled_regex: None,
                 compiled_finder: None,
             },
-            Condition::StringValue {
-                exact: Some("/bin/sh".to_string()),
-                substr: None,
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                is_check: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
 
@@ -246,7 +229,7 @@ fn test_string_exact_condition() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::StringValue {
+        all: Some(vec![Condition::Text {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -377,7 +360,7 @@ fn test_not_directive_shorthand() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -454,7 +437,7 @@ fn test_not_directive_exact() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -537,7 +520,7 @@ fn test_not_directive_regex() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -731,7 +714,7 @@ fn test_downgrade_to_notable() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -1033,7 +1016,7 @@ fn test_all_three_directives_combined() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"[a-z]+\.com".to_string()),
@@ -1123,7 +1106,7 @@ fn test_string_exact_match_requires_full_equality() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1201,7 +1184,7 @@ fn test_string_substr_matches_substrings() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: Some("hello".to_string()),
             regex: None,
@@ -1372,7 +1355,7 @@ fn test_string_case_insensitive_exact() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("hello".to_string()),
             substr: None,
             regex: None,
@@ -1445,7 +1428,7 @@ fn test_string_word_boundary_match() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: None,
@@ -1531,7 +1514,7 @@ fn test_string_regex_match() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"\d+\.\d+\.\d+\.\d+".to_string()),
@@ -2097,20 +2080,20 @@ fn test_composite_unless_multiple_conditions_any_matches() {
                 is_check: None,
                 compiled_regex: None,
             },
-            Condition::StringValue {
+            Condition::Text {
                 exact: None,
-                substr: None,
-                regex: Some(r"X\.Org".to_string()),
+                substr: Some("X.Org Foundation".to_string()),
+                regex: None,
                 word: None,
                 case_insensitive: false,
                 is_check: None,
+                not: None,
+                platforms: None,
                 section: None,
                 offset: None,
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-                not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -3571,7 +3554,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -3600,7 +3583,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         unless: None,
         downgrade: Some(DowngradeConditions {
             // all: passes (string matches)
-            all: Some(vec![Condition::StringValue {
+            all: Some(vec![Condition::Text {
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -3666,7 +3649,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("suspicious_call".to_string()),
             substr: None,
             regex: None,
@@ -3694,7 +3677,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         not: None,
         unless: None,
         downgrade: Some(DowngradeConditions {
-            all: Some(vec![Condition::StringValue {
+            all: Some(vec![Condition::Text {
                 exact: Some("/bin/sh".to_string()),
                 substr: None,
                 regex: None,
@@ -3762,7 +3745,7 @@ fn test_downgrade_needs_threshold_not_met() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,
@@ -3864,7 +3847,7 @@ fn test_downgrade_needs_threshold_met() {
         arch: vec![Arch::All],
         r#for: vec![FileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             exact: Some("/bin/sh".to_string()),
             substr: None,
             regex: None,

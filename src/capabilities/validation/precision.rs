@@ -318,42 +318,6 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= SYMBOL_MATCH_MULTIPLIER;
         }
-        Condition::StringValue {
-            exact,
-            substr,
-            regex,
-            word,
-            case_insensitive,
-            is_check,
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            ..
-        } => {
-            score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
-            score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
-            score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
-            score += word.as_deref().map(score_word_value).unwrap_or(0.0);
-            // count_min, count_max, per_kb_min, per_kb_max now scored at trait level
-            if is_check.is_some() {
-                score += IS_CHECK_BONUS;
-            }
-            score += regex.as_deref().map(regex_structural_bonus).unwrap_or(0.0);
-            score += section.as_deref().map(score_string_value).unwrap_or(0.0);
-            score += score_presence(offset.as_ref());
-            score += score_presence(offset_range.as_ref());
-            score += score_presence(section_offset.as_ref());
-            score += score_presence(section_offset_range.as_ref());
-            if section.is_some() {
-                score += SECTION_FILTER_BONUS;
-            }
-            if *case_insensitive {
-                score *= CASE_INSENSITIVE_MULTIPLIER;
-            }
-            score *= STRING_VALUE_MATCH_MULTIPLIER;
-        }
         Condition::Text {
             exact,
             substr,

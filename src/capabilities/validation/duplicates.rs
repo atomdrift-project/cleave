@@ -421,30 +421,10 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ));
         };
 
-    // Extract patterns from String, Symbol, and Raw conditions
+    // Extract patterns from Symbol and Raw conditions. Text is intentionally
+    // excluded — cross-file text-pattern overlap is expected (e.g. different
+    // rules keying off the same family string on different tiers).
     match &trait_def.r#if {
-        Condition::StringValue {
-            exact,
-            substr,
-            word,
-            regex,
-            section,
-            ..
-        } => {
-            let sec = section.clone();
-            if let Some(v) = exact {
-                add_pattern("string_value", "exact", v.clone(), sec.clone());
-            }
-            if let Some(v) = substr {
-                add_pattern("string_value", "substr", v.clone(), sec.clone());
-            }
-            if let Some(v) = word {
-                add_pattern("string_value", "word", v.clone(), sec.clone());
-            }
-            if let Some(v) = regex {
-                add_pattern("string_value", "regex", v.clone(), sec.clone());
-            }
-        }
         Condition::Symbol {
             exact,
             substr,
@@ -1328,29 +1308,9 @@ pub(crate) fn check_case_insensitive_overlaps(
                 });
             };
 
-        // Extract patterns from conditions that support case_insensitive
+        // Extract patterns from conditions that support case_insensitive.
+        // Text is intentionally excluded — same rationale as extract_patterns.
         match &trait_def.r#if {
-            Condition::StringValue {
-                exact,
-                substr,
-                word,
-                regex,
-                case_insensitive,
-                ..
-            } => {
-                if let Some(v) = exact {
-                    add_case_pattern("string_value", "exact", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = substr {
-                    add_case_pattern("string_value", "substr", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = word {
-                    add_case_pattern("string_value", "word", v.clone(), *case_insensitive);
-                }
-                if let Some(v) = regex {
-                    add_case_pattern("string_value", "regex", v.clone(), *case_insensitive);
-                }
-            }
             Condition::Raw {
                 exact,
                 substr,
@@ -1587,7 +1547,6 @@ pub(crate) fn check_regex_contains_literal(
         };
 
         match &trait_def.r#if {
-            Condition::StringValue { regex: Some(r), .. } => add_regex("string_value", r.clone()),
             Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
             _ => {}
@@ -1620,22 +1579,6 @@ pub(crate) fn check_regex_contains_literal(
         };
 
         match &trait_def.r#if {
-            Condition::StringValue {
-                exact,
-                substr,
-                word,
-                ..
-            } => {
-                if let Some(e) = exact {
-                    add_literal("string_value", "exact", e.clone());
-                }
-                if let Some(s) = substr {
-                    add_literal("string_value", "substr", s.clone());
-                }
-                if let Some(w) = word {
-                    add_literal("string_value", "word", w.clone());
-                }
-            }
             Condition::Symbol { exact, substr, .. } => {
                 if let Some(e) = exact {
                     add_literal("symbol", "exact", e.clone());
@@ -1888,11 +1831,6 @@ pub(crate) fn check_regex_alternative_subsets(
         };
 
         match &trait_def.r#if {
-            Condition::StringValue {
-                regex: Some(r),
-                case_insensitive,
-                ..
-            } => add_regex("string_value", r.clone(), *case_insensitive),
             Condition::Symbol { regex: Some(r), .. } => {
                 // Symbol doesn't have case_insensitive flag, always case-sensitive
                 add_regex("symbol", r.clone(), false);
@@ -2083,8 +2021,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     for t in trait_definitions {
         match &t.r#if {
-            Condition::StringValue { exact: Some(s), .. }
-            | Condition::Symbol { exact: Some(s), .. } => {
+            Condition::Symbol { exact: Some(s), .. } | Condition::Raw { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
                     "exact".to_string(),
@@ -2093,10 +2030,10 @@ pub(crate) fn validate_regex_overlap_with_literal(
                     t.r#for.clone(),
                 ));
             }
-            Condition::StringValue {
+            Condition::Symbol {
                 substr: Some(s), ..
             }
-            | Condition::Symbol {
+            | Condition::Raw {
                 substr: Some(s), ..
             } => {
                 literal_patterns.push((
@@ -2114,8 +2051,9 @@ pub(crate) fn validate_regex_overlap_with_literal(
     // Check regex patterns against literal patterns
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::StringValue { regex: Some(r), .. }
-            | Condition::Symbol { regex: Some(r), .. } => Some(r),
+            Condition::Symbol { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
+                Some(r)
+            }
             _ => None,
         };
 
@@ -2197,7 +2135,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
     }
 }
 
-/// Find traits where both `type: string_value` and `type: raw` exist for the same pattern
+/// Find traits where both `type: text` and `type: raw` exist for the same pattern
 /// at the same criticality. These should be merged to just `raw` (which is broader).
 /// Returns: Vec<(string_trait_id, raw_trait_id, pattern_description)>
 #[must_use]
@@ -2428,7 +2366,6 @@ pub(crate) fn find_alternation_merge_candidates(
 
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::StringValue { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
         };
@@ -2525,7 +2462,7 @@ pub(crate) fn find_alternation_merge_candidates(
 /// Extract matching signature from a Condition (for string/raw collision detection)
 fn extract_match_signature(condition: &Condition) -> Option<(bool, MatchSignature)> {
     match condition {
-        Condition::StringValue {
+        Condition::Text {
             exact,
             substr,
             regex,

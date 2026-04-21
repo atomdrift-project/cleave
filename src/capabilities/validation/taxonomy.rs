@@ -254,7 +254,7 @@ pub(crate) fn find_hostile_meta_rules(
 // TODO: Extend duplicate detection to normalize patterns across match types
 // (symbol vs string_value vs raw) to catch semantic duplicates like:
 //   objectives/: type: symbol, exact: "chdir"
-//   micro-behaviors/: type: string_value, substr: "chdir"
+//   micro-behaviors/: type: text, substr: "chdir"
 // These detect the same thing but hash differently.
 // See TODO-baseline-trait-review.md for known cases.
 
@@ -1088,14 +1088,6 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
 /// on string/raw/hex conditions, Section type, SectionRatio type.
 fn condition_has_section_filter(cond: &Condition) -> bool {
     match cond {
-        Condition::StringValue {
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            ..
-        }
         | Condition::Raw {
             section,
             offset,
@@ -1124,11 +1116,10 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
 }
 
 /// Returns true if the condition is one where a section filter would be meaningful.
+/// `Text` is intentionally excluded — most traits use text-pattern matches without
+/// a section constraint, and requiring one would regress 2k+ existing rules.
 fn condition_supports_section_filter(cond: &Condition) -> bool {
-    matches!(
-        cond,
-        Condition::StringValue { .. } | Condition::Raw { .. } | Condition::Hex { .. }
-    )
+    matches!(cond, Condition::Raw { .. } | Condition::Hex { .. })
 }
 
 /// Extract tier prefix from a trait ID (everything before the first `::` or `/`-delimited namespace).

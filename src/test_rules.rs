@@ -567,30 +567,6 @@ impl<'a> RuleDebugger<'a> {
 
         match condition {
             Condition::Trait { id } => self.debug_trait_reference(id),
-            Condition::StringValue {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-                ..
-            } => self.debug_string_condition(
-                exact,
-                substr,
-                regex,
-                word,
-                *case_insensitive,
-                section.as_ref(),
-                *offset,
-                *offset_range,
-                *section_offset,
-                *section_offset_range,
-            ),
             Condition::Symbol {
                 exact,
                 substr,
@@ -2065,37 +2041,6 @@ fn format_location_suffix(
 fn describe_condition(condition: &Condition) -> String {
     match condition {
         Condition::Trait { id } => format!("trait: {}", id),
-        Condition::StringValue {
-            exact,
-            substr,
-            regex,
-            word,
-            section,
-            offset,
-            offset_range,
-            section_offset,
-            section_offset_range,
-            ..
-        } => {
-            let loc = format_location_suffix(
-                section,
-                *offset,
-                *offset_range,
-                *section_offset,
-                *section_offset_range,
-            );
-            if let Some(e) = exact {
-                format!("string[exact]: \"{}\"{}", truncate_string(e, 30), loc)
-            } else if let Some(c) = substr {
-                format!("string[substr]: \"{}\"{}", truncate_string(c, 30), loc)
-            } else if let Some(r) = regex {
-                format!("string[regex]: /{}/{}", truncate_string(r, 30), loc)
-            } else if let Some(w) = word {
-                format!("string[word]: \"{}\"{}", w, loc)
-            } else {
-                format!("string[?]{}", loc)
-            }
-        }
         Condition::Symbol {
             exact,
             substr,
@@ -2599,7 +2544,7 @@ traits:
     conf: 0.9
     for: [elf]
     if:
-      type: string_value
+      type: text
       exact: "ZSTD"
 
   - id: "known/malware/botnet/mirai/detected"
@@ -2609,7 +2554,7 @@ traits:
     for: [elf]
     size_min: 30000
     if:
-      type: string_value
+      type: text
       exact: "mirai"
 
 composite_rules:

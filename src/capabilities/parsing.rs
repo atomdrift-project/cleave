@@ -934,19 +934,6 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
     };
 
     match condition {
-        Condition::StringValue {
-            regex: regex_opt,
-            substr,
-            ..
-        } if substr.is_none() => {
-            if let Some(pattern) = regex_opt {
-                if is_literal(pattern) {
-                    // Convert regex to substr
-                    *substr = Some(pattern.clone());
-                    *regex_opt = None;
-                }
-            }
-        }
         Condition::Raw {
             regex: regex_opt,
             substr,
@@ -1053,7 +1040,6 @@ fn check_regex_length(
 
     let regex = match condition {
         Condition::Symbol { regex, .. }
-        | Condition::StringValue { regex, .. }
         | Condition::Raw { regex, .. }
         | Condition::Ast { regex, .. }
         | Condition::Section { regex, .. }

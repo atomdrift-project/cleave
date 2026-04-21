@@ -43,7 +43,7 @@ mod precision_tests {
     #[test]
     #[ignore]
     fn test_precision_count_min_scored() {
-        let mut trait_def = create_minimal_trait(Condition::StringValue {
+        let mut trait_def = create_minimal_trait(Condition::Raw {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -51,7 +51,6 @@ mod precision_tests {
             case_insensitive: false,
             is_check: None,
             not: None,
-            platforms: None,
             section: None,
             offset: None,
             offset_range: None,
@@ -78,7 +77,7 @@ mod precision_tests {
     #[test]
     #[ignore]
     fn test_precision_density_scored() {
-        let mut trait_def = create_minimal_trait(Condition::StringValue {
+        let mut trait_def = create_minimal_trait(Condition::Raw {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,
@@ -86,7 +85,6 @@ mod precision_tests {
             case_insensitive: false,
             is_check: None,
             not: None,
-            platforms: None,
             section: None,
             offset: None,
             offset_range: None,
@@ -177,7 +175,8 @@ mod duplicate_tests {
         }
     }
 
-    /// Create a string exact trait
+    /// Create a string exact trait (backed by `Condition::Raw` so the duplicate
+    /// detectors scoped to Raw/Symbol see the fixture).
     fn create_string_exact(
         id: &str,
         pattern: &str,
@@ -187,20 +186,19 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
                 word: None,
                 case_insensitive,
                 is_check: None,
+                not: None,
                 section: None,
                 offset: None,
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-                not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -219,20 +217,19 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::StringValue {
+            Condition::Raw {
                 exact: None,
                 substr: Some(pattern.to_string()),
                 regex: None,
                 word: None,
                 case_insensitive,
                 is_check: None,
+                not: None,
                 section: None,
                 offset: None,
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-                not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -251,20 +248,19 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::StringValue {
+            Condition::Raw {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
                 word: None,
                 case_insensitive,
                 is_check: None,
+                not: None,
                 section: None,
                 offset: None,
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-                not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -763,7 +759,7 @@ mod duplicate_tests {
         // Same exact pattern without any carveout -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -776,7 +772,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -788,7 +783,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("duplicate".to_string()),
                 substr: None,
                 regex: None,
@@ -801,7 +796,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -824,7 +818,7 @@ mod duplicate_tests {
         // Hex-encoded duplicate with same conf/crit -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("AB".to_string()),
                 substr: None,
                 regex: None,
@@ -837,7 +831,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -849,7 +842,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x41B".to_string()), // Normalizes to "AB"
                 substr: None,
                 regex: None,
@@ -862,7 +855,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -885,7 +877,7 @@ mod duplicate_tests {
         // Same normalized pattern "test", but original values differ by >2 chars AND confidence differs by >=0.2 -> NO warning
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("test".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -898,7 +890,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -910,7 +901,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x74\\x65\\x73\\x74".to_string()), // 16 chars hex-encoded "test" (diff = 12 > 2)
                 substr: None,
                 regex: None,
@@ -923,7 +914,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -945,7 +935,7 @@ mod duplicate_tests {
         // Same normalized "data", but original differs by >2 chars AND criticality differs -> NO warning
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("data".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -958,7 +948,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -970,7 +959,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x64ata".to_string()), // 7 chars hex-encoded first char (diff = 3 > 2)
                 substr: None,
                 regex: None,
@@ -983,7 +972,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1006,7 +994,7 @@ mod duplicate_tests {
         // Carveout requires BOTH >2 char diff AND conf/crit difference
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("pattern".to_string()), // 7 chars
                 substr: None,
                 regex: None,
@@ -1019,7 +1007,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1031,7 +1018,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("pattern".to_string()), // 7 chars (diff = 0, not >2)
                 substr: None,
                 regex: None,
@@ -1044,7 +1031,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1067,7 +1053,7 @@ mod duplicate_tests {
         // Same normalized "value", original differs by >2 chars BUT confidence diff <0.2 and crit same -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("value".to_string()), // 5 chars
                 substr: None,
                 regex: None,
@@ -1080,7 +1066,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1092,7 +1077,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x76\\x61lue".to_string()), // 11 chars, first 2 chars hex-encoded (diff = 6 > 2)
                 substr: None,
                 regex: None,
@@ -1105,7 +1090,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1128,7 +1112,7 @@ mod duplicate_tests {
         // Three traits, all normalize to "name", all pairs meet carveout criteria -> NO warnings
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("name".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1141,7 +1125,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1153,7 +1136,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x6e\\x61me".to_string()), // 11 chars (diff from trait1 = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1166,7 +1149,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1178,7 +1160,7 @@ mod duplicate_tests {
 
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x6e\\x61\\x6d\\x65".to_string()), // 16 chars, all hex-encoded (diff from trait1 = 12, from trait2 = 5 > 2)
                 substr: None,
                 regex: None,
@@ -1191,7 +1173,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1213,7 +1194,7 @@ mod duplicate_tests {
         // Three traits, all normalize to "code", one pair doesn't meet carveout -> should warn
         let trait1 = create_test_trait_with_conf_crit(
             "test::a",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("code".to_string()), // 4 chars
                 substr: None,
                 regex: None,
@@ -1226,7 +1207,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1238,7 +1218,7 @@ mod duplicate_tests {
 
         let trait2 = create_test_trait_with_conf_crit(
             "test::b",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x63\\x6fde".to_string()), // 11 chars (diff = 7 > 2)
                 substr: None,
                 regex: None,
@@ -1251,7 +1231,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1263,7 +1242,7 @@ mod duplicate_tests {
 
         let trait3 = create_test_trait_with_conf_crit(
             "test::c",
-            Condition::StringValue {
+            Condition::Raw {
                 exact: Some("\\x63\\x6f\\x64\\x65".to_string()), // 16 chars (diff from trait1 = 12 > 2)
                 substr: None,
                 regex: None,
@@ -1276,7 +1255,6 @@ mod duplicate_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -1595,7 +1573,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     word: None,
@@ -1608,7 +1586,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -1800,7 +1777,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "exact_notable",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("malware.exe".to_string()),
                     substr: None,
                     regex: None,
@@ -1813,7 +1790,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -1824,7 +1800,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "regex_hostile",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: None,
                     substr: None,
                     regex: Some("malware\\.exe".to_string()),
@@ -1837,7 +1813,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2051,7 +2026,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_notable",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2064,7 +2039,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2075,7 +2049,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_hostile",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("malicious_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2088,7 +2062,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2111,7 +2084,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_low_conf",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2124,7 +2097,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2135,7 +2107,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_high_conf",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("test_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2148,7 +2120,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2172,7 +2143,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_elf_macho",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2185,7 +2156,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2196,7 +2166,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_elf_pe",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("shared_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2209,7 +2179,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2233,7 +2202,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_macho",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2246,7 +2215,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2257,7 +2225,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_pe",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("platform_pattern".to_string()),
                     substr: None,
                     regex: None,
@@ -2270,7 +2238,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2294,7 +2261,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_component",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -2307,7 +2274,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2318,7 +2284,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_baseline",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("building_block".to_string()),
                     substr: None,
                     regex: None,
@@ -2331,7 +2297,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2355,7 +2320,7 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait_with_conf_crit(
                 "trait_a",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("pattern_a".to_string()),
                     substr: None,
                     regex: None,
@@ -2368,7 +2333,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2379,7 +2343,7 @@ mod duplicate_tests {
             ),
             create_test_trait_with_conf_crit(
                 "trait_b",
-                Condition::StringValue {
+                Condition::Raw {
                     exact: Some("pattern_b".to_string()),
                     substr: None,
                     regex: None,
@@ -2392,7 +2356,6 @@ mod duplicate_tests {
                     section_offset: None,
                     section_offset_range: None,
                     not: None,
-                    platforms: None,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -2767,7 +2730,7 @@ mod constraint_tests {
             crit,
             mbc: None,
             attack: None,
-            r#if: Condition::StringValue {
+            r#if: Condition::Raw {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -2780,7 +2743,6 @@ mod constraint_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -3361,7 +3323,7 @@ mod orphan_tests {
             crit: crate::types::Criticality::Component,
             mbc: None,
             attack: None,
-            r#if: Condition::StringValue {
+            r#if: Condition::Raw {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -3369,7 +3331,6 @@ mod orphan_tests {
                 case_insensitive: false,
                 is_check: None,
                 not: None,
-                platforms: None,
                 section: None,
                 offset: None,
                 offset_range: None,
@@ -3478,7 +3439,7 @@ mod excessive_file_types_tests {
             crit: Criticality::Notable,
             mbc: None,
             attack: None,
-            r#if: Condition::StringValue {
+            r#if: Condition::Raw {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,
@@ -3491,7 +3452,6 @@ mod excessive_file_types_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                platforms: None,
                 compiled_regex: None,
                 compiled_finder: None,
             },
@@ -4385,33 +4345,6 @@ mod raw_should_use_string_value_tests {
     }
 
     #[test]
-    fn skips_string_value_condition() {
-        let t = binary_trait(
-            "t/string",
-            Condition::StringValue {
-                exact: None,
-                substr: Some("long_pattern_here".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                is_check: None,
-                not: None,
-                platforms: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-        );
-        let mut warnings = Vec::new();
-        find_raw_should_use_string_value(&[t], &mut warnings);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
     fn flags_macho_type() {
         let mut t = binary_trait("t/macho", raw_substr("long_pattern_here"));
         t.r#for = vec![FileType::Macho];
@@ -4445,346 +4378,6 @@ mod raw_should_use_string_value_tests {
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("type: text"));
-    }
-}
-
-#[cfg(test)]
-mod string_value_should_use_raw_tests {
-    use crate::capabilities::validation::patterns::find_string_value_should_use_raw;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
-    use std::path::PathBuf;
-
-    fn source_trait(id: &str, condition: Condition, file_type: FileType) -> TraitDefinition {
-        TraitDefinition {
-            id: id.to_string(),
-            desc: "test".to_string(),
-            conf: 0.8,
-            crit: crate::types::Criticality::Notable,
-            mbc: None,
-            attack: None,
-            r#if: condition,
-            size_min: None,
-            size_max: None,
-            count_min: None,
-            count_max: None,
-            per_kb_min: None,
-            per_kb_max: None,
-            entropy_min: None,
-            entropy_max: None,
-            r#for: vec![file_type],
-            for_from_groups: false,
-            platforms: vec![Platform::All],
-            arch: vec![Arch::All],
-            not: None,
-            unless: None,
-            downgrade: None,
-            defined_in: PathBuf::from("test.yml"),
-            precision: None,
-        }
-    }
-
-    fn string_value_substr(pattern: &str) -> Condition {
-        Condition::StringValue {
-            exact: None,
-            substr: Some(pattern.to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            platforms: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
-        }
-    }
-
-    fn string_value_exact(pattern: &str) -> Condition {
-        Condition::StringValue {
-            exact: Some(pattern.to_string()),
-            substr: None,
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            platforms: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
-        }
-    }
-
-    fn string_value_regex(pattern: &str) -> Condition {
-        Condition::StringValue {
-            exact: None,
-            substr: None,
-            regex: Some(pattern.to_string()),
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            platforms: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
-        }
-    }
-
-    #[test]
-    fn flags_function_call_substr_on_python() {
-        let t = source_trait("t::eval", string_value_substr("eval("), FileType::Python);
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: text"));
-    }
-
-    #[test]
-    fn flags_import_statement_on_python() {
-        let t = source_trait(
-            "t::import",
-            string_value_substr("import subprocess"),
-            FileType::Python,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn flags_from_import_on_python() {
-        let t = source_trait(
-            "t::from-import",
-            string_value_substr("from flask import Flask"),
-            FileType::Python,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn flags_require_regex_on_javascript() {
-        let t = source_trait(
-            "t::require",
-            string_value_regex(r#"require\s*\(['""]crypto['"]\)"#),
-            FileType::JavaScript,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn flags_exact_source_code_line() {
-        let t = source_trait(
-            "t::fclose",
-            string_value_exact("fclose(stdin);"),
-            FileType::C,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn skips_plain_string_value_on_source() {
-        // A plain string like "password" is a legitimate string_value search
-        let t = source_trait(
-            "t::password",
-            string_value_substr("password"),
-            FileType::Python,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn skips_string_value_on_binary() {
-        // Binary types don't have AST extraction — string_value is fine
-        let t = source_trait("t::eval", string_value_substr("eval("), FileType::Elf);
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn skips_url_pattern_with_parens() {
-        // Regex alternation groups aren't function calls
-        let t = source_trait(
-            "t::url",
-            string_value_substr("https://evil.com"),
-            FileType::Python,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert!(warnings.is_empty());
-    }
-
-    #[test]
-    fn flags_method_call_on_javascript() {
-        let t = source_trait(
-            "t::fetch",
-            string_value_substr("fetch("),
-            FileType::JavaScript,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-
-    #[test]
-    fn flags_dotted_method_call() {
-        let t = source_trait(
-            "t::subprocess",
-            string_value_substr("subprocess.call("),
-            FileType::Python,
-        );
-        let mut warnings = Vec::new();
-        find_string_value_should_use_raw(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-    }
-}
-
-#[cfg(test)]
-mod deprecated_string_value_usage_tests {
-    use crate::capabilities::validation::patterns::find_deprecated_string_value_usage;
-    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
-    use std::path::PathBuf;
-
-    fn trait_with_types(
-        id: &str,
-        condition: Condition,
-        file_types: Vec<FileType>,
-    ) -> TraitDefinition {
-        TraitDefinition {
-            id: id.to_string(),
-            desc: "test".to_string(),
-            conf: 0.8,
-            crit: crate::types::Criticality::Notable,
-            mbc: None,
-            attack: None,
-            r#if: condition,
-            size_min: None,
-            size_max: None,
-            count_min: None,
-            count_max: None,
-            per_kb_min: None,
-            per_kb_max: None,
-            entropy_min: None,
-            entropy_max: None,
-            r#for: file_types,
-            for_from_groups: false,
-            platforms: vec![Platform::All],
-            arch: vec![Arch::All],
-            not: None,
-            unless: None,
-            downgrade: None,
-            defined_in: PathBuf::from("test.yml"),
-            precision: None,
-        }
-    }
-
-    fn string_value_substr(pattern: &str) -> Condition {
-        Condition::StringValue {
-            exact: None,
-            substr: Some(pattern.to_string()),
-            regex: None,
-            word: None,
-            case_insensitive: false,
-            is_check: None,
-            not: None,
-            platforms: None,
-            section: None,
-            offset: None,
-            offset_range: None,
-            section_offset: None,
-            section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
-        }
-    }
-
-    #[test]
-    fn ast_literal_prefers_string_literal() {
-        let t = trait_with_types(
-            "t::password",
-            string_value_substr("password"),
-            vec![FileType::Python],
-        );
-        let mut warnings = Vec::new();
-        find_deprecated_string_value_usage(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("supported at runtime"));
-        assert!(warnings[0].contains("type: string_literal"));
-    }
-
-    #[test]
-    fn ast_code_structure_prefers_text() {
-        let t = trait_with_types(
-            "t::eval",
-            string_value_substr("eval("),
-            vec![FileType::Python],
-        );
-        let mut warnings = Vec::new();
-        find_deprecated_string_value_usage(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: text"));
-        assert!(warnings[0].contains("code structure"));
-    }
-
-    #[test]
-    fn mixed_types_prefers_text() {
-        let t = trait_with_types(
-            "t::mixed",
-            string_value_substr("password"),
-            vec![FileType::Python, FileType::Elf],
-        );
-        let mut warnings = Vec::new();
-        find_deprecated_string_value_usage(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: text"));
-    }
-
-    #[test]
-    fn binary_only_prefers_text() {
-        let t = trait_with_types(
-            "t::binary",
-            string_value_substr("kernel32.dll"),
-            vec![FileType::Pe],
-        );
-        let mut warnings = Vec::new();
-        find_deprecated_string_value_usage(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: text"));
-    }
-
-    #[test]
-    fn unscoped_rule_gets_ambiguous_guidance() {
-        let t = trait_with_types(
-            "t::all",
-            string_value_substr("password"),
-            vec![FileType::All],
-        );
-        let mut warnings = Vec::new();
-        find_deprecated_string_value_usage(&[t], &mut warnings);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("type: text"));
-        assert!(warnings[0].contains("type: string_literal"));
     }
 }
 

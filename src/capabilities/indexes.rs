@@ -732,7 +732,7 @@ impl StringMatchIndex {
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             match &trait_def.r#if {
                 // Exact string patterns
-                Condition::StringValue {
+                Condition::Text {
                     exact: Some(ref exact_str),
                     case_insensitive,
                     ..
@@ -755,7 +755,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Substr string patterns - add to Aho-Corasick index
-                Condition::StringValue {
+                Condition::Text {
                     substr: Some(ref substr_str),
                     case_insensitive,
                     // Skip patterns with location constraints - they need special handling
@@ -787,7 +787,7 @@ impl StringMatchIndex {
                     }
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
-                Condition::StringValue {
+                Condition::Text {
                     regex: Some(ref regex_str),
                     ..
                 } => {
@@ -2304,7 +2304,7 @@ mod tests {
 
     // ==================== Overlapping Substr Match Tests ====================
 
-    /// Helper: build a TraitDefinition with a substr StringValue condition
+    /// Helper: build a TraitDefinition with a substr Text condition
     fn make_substr_trait(id: &str, substr: &str) -> TraitDefinition {
         TraitDefinition {
             id: id.to_string(),
@@ -2317,7 +2317,7 @@ mod tests {
             arch: vec![Arch::All],
             r#for: vec![RuleFileType::All],
             for_from_groups: false,
-            r#if: Condition::StringValue {
+            r#if: Condition::Text {
                 exact: None,
                 substr: Some(substr.to_string()),
                 regex: None,
@@ -2460,7 +2460,7 @@ mod tests {
     fn test_substr_overlapping_case_insensitive() {
         let make_ci_substr_trait = |id: &str, substr: &str| -> TraitDefinition {
             let mut t = make_substr_trait(id, substr);
-            if let Condition::StringValue {
+            if let Condition::Text {
                 ref mut case_insensitive,
                 ..
             } = t.r#if

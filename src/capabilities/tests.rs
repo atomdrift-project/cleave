@@ -205,7 +205,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -281,7 +281,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -354,7 +354,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -422,7 +422,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -490,7 +490,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -559,7 +559,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -612,7 +612,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         not: None,
         unless: None,
         downgrade: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -686,7 +686,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -759,7 +759,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
-        condition: Some(Condition::StringValue {
+        condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
             regex: None,
@@ -805,7 +805,7 @@ traits:
   - id: test/uses-defaults
     description: "Uses all defaults"
     condition:
-      type: string_value
+      type: text
       exact: "test1"
 
   - id: test/overrides-some
@@ -813,21 +813,21 @@ traits:
     mbc: "B0002"
     criticality: notable
     condition:
-      type: string_value
+      type: text
       exact: "test2"
 
   - id: test/unsets-mbc
     description: "Unsets mbc"
     mbc: none
     condition:
-      type: string_value
+      type: text
       exact: "test3"
 
   - id: test/unsets-attack
     description: "Unsets attack"
     attack: NONE
     condition:
-      type: string_value
+      type: text
       exact: "test4"
 "#;
 
@@ -862,7 +862,7 @@ composite_rules:
     description: "Uses all defaults"
     confidence: 0.5
     condition:
-      type: string_value
+      type: text
       exact: "HTTP/1.1"
 
   - id: test/unsets-attack
@@ -870,7 +870,7 @@ composite_rules:
     confidence: 0.6
     attack: none
     condition:
-      type: string_value
+      type: text
       exact: "GET /"
 "#;
 
@@ -1382,57 +1382,6 @@ fn test_precision_direct_conditions() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string3".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -1487,40 +1436,6 @@ fn test_precision_file_type_filter() {
         r#for: vec![RuleFileType::Elf, RuleFileType::Pe], // File type filter
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -1573,7 +1488,7 @@ fn test_precision_recursive_expansion() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("atomic".to_string()),
             regex: None,
@@ -1619,40 +1534,6 @@ fn test_precision_recursive_expansion() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -1829,40 +1710,6 @@ fn test_precision_caching() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -1928,57 +1775,6 @@ fn test_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string3".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -2010,40 +1806,6 @@ fn test_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("this_is_a_very_long_string_pattern_one".to_string()), // 38 chars = 8 buckets * 0.3 = 2.4
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("this_is_another_very_long_string_pattern".to_string()), // 40 chars = 8 buckets * 0.3 = 2.4
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -2105,7 +1867,7 @@ fn test_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![Condition::StringValue {
+        all: Some(vec![Condition::Text {
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2149,57 +1911,6 @@ fn test_suspicious_precision_threshold_validation() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("this_is_a_long_string_pattern".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("another_long_string_pattern".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("third_long_string_pattern_here".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -2302,7 +2013,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -2371,7 +2082,7 @@ fn test_precision_mixed_conditions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        all: Some(vec![Condition::StringValue {
+        all: Some(vec![Condition::Text {
             is_check: None,
             exact: Some("string1".to_string()),
             regex: None,
@@ -2389,45 +2100,11 @@ fn test_precision_mixed_conditions() {
             compiled_finder: None,
         }]),
         any: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("string3".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         needs: None,
         near_lines: None,
         near_bytes: None,
-        unless: Some(vec![Condition::StringValue {
+        unless: Some(vec![Condition::Text {
             is_check: None,
             exact: Some("string4".to_string()),
             regex: None,
@@ -2491,40 +2168,6 @@ fn test_precision_deep_nesting() {
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
         all: Some(vec![
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("l1-s1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("l1-s2".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -2557,23 +2200,6 @@ fn test_precision_deep_nesting() {
             Condition::Trait {
                 id: "test/level1".to_string(),
             },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("l2-s1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
-            },
         ]),
         any: None,
         needs: None,
@@ -2605,23 +2231,6 @@ fn test_precision_deep_nesting() {
         all: Some(vec![
             Condition::Trait {
                 id: "test/level2".to_string(),
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("l3-s1".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: None,
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
         ]),
         any: None,
@@ -2770,7 +2379,7 @@ fn test_precision_traits_with_size_restrictions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("pattern1".to_string()),
             regex: None,
@@ -2814,7 +2423,7 @@ fn test_precision_traits_with_size_restrictions() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::All],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("pattern2".to_string()),
             regex: None,
@@ -2918,7 +2527,7 @@ traits:
     conf: 0.9
     for: [elf]
     if:
-      type: string_value
+      type: text
       regex: "test"
 
   - id: invalid-trait
@@ -2927,7 +2536,7 @@ traits:
   conf: 0.9
     for: [elf]
     if:
-      type: string_value
+      type: text
       regex: "test"
 "#;
 
@@ -3653,7 +3262,7 @@ traits:
     desc: Test with invalid file type
     for: [invalid_lang, python]
     if:
-      type: string_value
+      type: text
       exact: test
 "#;
     fs::write(traits_dir.join("test.yaml"), trait_content).unwrap();
@@ -3915,7 +3524,7 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
             RuleFileType::JavaScript,
         ],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: None,
             regex: Some(
@@ -3995,7 +3604,7 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
             RuleFileType::Zip,
         ],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("HmacSHA256".to_string()),
             regex: None,
@@ -4064,7 +3673,7 @@ fn test_composite_precision_calibration_band() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("CreateProcessW".to_string()),
             regex: None,
@@ -4127,23 +3736,6 @@ fn test_composite_precision_calibration_band() {
         any: Some(vec![
             Condition::Trait {
                 id: "test/atomic-c".to_string(),
-            },
-            Condition::StringValue {
-                is_check: None,
-                exact: Some("SetThreadContext".to_string()),
-                regex: None,
-                word: None,
-                case_insensitive: false,
-                substr: None,
-                section: Some(".rdata".to_string()),
-                offset: None,
-                offset_range: None,
-                section_offset: None,
-                section_offset_range: None,
-                not: None,
-                platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
         ]),
         needs: Some(1),
@@ -4433,7 +4025,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Elf],
         for_from_groups: false,
-        r#if: Condition::StringValue {
+        r#if: Condition::Text {
             is_check: None,
             exact: Some("execve".to_string()),
             regex: None,

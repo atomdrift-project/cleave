@@ -331,10 +331,6 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                 regex: Some(ref regex_str),
                 ..
             }
-            | Condition::StringValue {
-                regex: Some(ref regex_str),
-                ..
-            }
             | Condition::Symbol {
                 regex: Some(ref regex_str),
                 ..
@@ -464,9 +460,6 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
     });
 
     match condition {
-        Condition::StringValue {
-            substr: Some(s), ..
-        }
         | Condition::StringLiteral {
             substr: Some(s), ..
         } => {
@@ -476,7 +469,6 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
                 None
             }
         }
-        Condition::StringValue { exact: Some(s), .. }
         | Condition::StringLiteral { exact: Some(s), .. } => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
                 Some((s.as_str(), "exact"))
@@ -484,7 +476,6 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
                 None
             }
         }
-        Condition::StringValue { regex: Some(s), .. }
         | Condition::StringLiteral { regex: Some(s), .. } => {
             if regex_code_re.is_match(s) {
                 Some((s.as_str(), "regex"))
@@ -508,126 +499,6 @@ fn targets_raw_text_only(file_types: &[FileType]) -> bool {
         return false;
     }
     file_types.iter().all(FileType::uses_raw_text_search)
-}
-
-#[derive(Clone, Copy)]
-enum StringValueReplacement {
-    Text,
-    StringLiteral,
-    Ambiguous,
-}
-
-fn classify_string_value_replacement(trait_def: &TraitDefinition) -> StringValueReplacement {
-    if trait_def.r#for.is_empty() || trait_def.r#for.iter().any(|ft| matches!(ft, FileType::All)) {
-        return StringValueReplacement::Ambiguous;
-    }
-
-    if trait_def.r#for.iter().all(|ft| is_ast_source_type(*ft))
-        && pattern_targets_code_structure(&trait_def.r#if).is_none()
-    {
-        return StringValueReplacement::StringLiteral;
-    }
-
-    StringValueReplacement::Text
-}
-
-/// Detect deprecated `type: string_value` usage during validation.
-///
-/// Runtime continues to honor `string_value` for backward compatibility, but
-/// `validate` should warn and guide authors toward `text` or `string_literal`.
-pub(crate) fn find_deprecated_string_value_usage(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
-    for trait_def in traits {
-        if !matches!(trait_def.r#if, Condition::StringValue { .. }) {
-            continue;
-        }
-
-        let source_file = trait_def
-            .defined_in
-            .to_str()
-            .unwrap_or("unknown")
-            .to_string();
-        let line_hint = find_line_number(&source_file, &trait_def.id);
-        let location = if let Some(line) = line_hint {
-            format!("{}:{}", source_file, line)
-        } else {
-            source_file
-        };
-
-        let guidance = match classify_string_value_replacement(trait_def) {
-            StringValueReplacement::Text => {
-                if let Some((pattern_value, pattern_kind)) =
-                    pattern_targets_code_structure(&trait_def.r#if)
-                {
-                    format!(
-                        "Use `type: text` instead because this {} '{}' matches code structure, not string literals",
-                        pattern_kind, pattern_value
-                    )
-                } else {
-                    "Use `type: text` instead".to_string()
-                }
-            }
-            StringValueReplacement::StringLiteral => {
-                "Use `type: string_literal` instead".to_string()
-            }
-            StringValueReplacement::Ambiguous => {
-                "Use `type: text` for general text search, or `type: string_literal` for AST string literals".to_string()
-            }
-        };
-
-        warnings.push(format!(
-            "Deprecated type: trait '{}' in {} uses `type: string_value` — this remains supported at runtime for compatibility, but `cleave validate` warns on it. {}",
-            trait_def.id, location, guidance
-        ));
-    }
-}
-
-/// Detect `type: string_value` conditions on AST-backed source file types where the
-/// pattern is clearly code structure and should use `type: text`.
-///
-pub(crate) fn find_string_value_should_use_text(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
-    for trait_def in traits {
-        // Only applies to traits targeting source/script file types
-        let targets_source = trait_def.r#for.iter().any(|ft| is_ast_source_type(*ft));
-
-        if !targets_source {
-            continue;
-        }
-
-        let (pattern_value, pattern_kind) = match &trait_def.r#if {
-            Condition::StringValue { .. } => {
-                if let Some(match_info) = pattern_targets_code_structure(&trait_def.r#if) {
-                    match_info
-                } else {
-                    continue;
-                }
-            }
-            _ => continue,
-        };
-
-        let source_file = trait_def
-            .defined_in
-            .to_str()
-            .unwrap_or("unknown")
-            .to_string();
-        let line_hint = find_line_number(&source_file, &trait_def.id);
-        let location = if let Some(line) = line_hint {
-            format!("{}:{}", source_file, line)
-        } else {
-            source_file
-        };
-
-        warnings.push(format!(
-            "Wrong type: trait '{}' in {} uses `type: string_value` with {} '{}' on source types — \
-             this pattern matches code structure, not string literals. Use `type: text` instead",
-            trait_def.id, location, pattern_kind, pattern_value
-        ));
-    }
 }
 
 /// Detect `type: string_literal` conditions on AST-backed source file types where
@@ -792,10 +663,3 @@ pub(crate) fn find_raw_should_use_string_value(
     find_raw_should_use_text(traits, warnings);
 }
 
-#[allow(dead_code)]
-pub(crate) fn find_string_value_should_use_raw(
-    traits: &[TraitDefinition],
-    warnings: &mut Vec<String>,
-) {
-    find_string_value_should_use_text(traits, warnings);
-}

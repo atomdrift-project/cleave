@@ -267,44 +267,6 @@ enum ConditionTagged {
         #[serde(default)]
         kind: Option<SymbolKind>,
     },
-    #[serde(rename = "string_value")]
-    StringValue {
-        #[serde(default)]
-        exact: Option<String>,
-        #[serde(default)]
-        substr: Option<String>,
-        #[serde(default)]
-        regex: Option<String>,
-        #[serde(default)]
-        word: Option<String>,
-        #[serde(default)]
-        case_insensitive: bool,
-        /// High-fidelity validator (e.g., is: external_ip)
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        #[serde(default)]
-        not: Option<Vec<NotException>>,
-        #[serde(default)]
-        platforms: Option<Vec<Platform>>,
-        #[serde(default)]
-        section: Option<String>,
-        #[serde(default)]
-        offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        #[serde(default)]
-        section_offset: Option<i64>,
-        #[serde(
-            default,
-            deserialize_with = "offset_range_serde::deserialize",
-            serialize_with = "offset_range_serde::serialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
-    },
     Text {
         #[serde(default)]
         exact: Option<String>,
@@ -472,7 +434,7 @@ enum ConditionTagged {
     },
 
     /// Search raw file content (for source files or when you need to match
-    /// across string boundaries in binaries). Unlike `type: string_value` which only
+    /// across string boundaries in binaries). Unlike `type: text` which only
     /// searches properly extracted/bounded strings, this searches the raw bytes.
     Raw {
         /// Full match (entire content must equal this - rarely useful)
@@ -694,37 +656,6 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
-                    compiled_regex: None,
-                    compiled_finder: None,
-                },
-                ConditionTagged::StringValue {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
-                } => Condition::StringValue {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    not,
-                    platforms,
-                    section,
-                    offset,
-                    offset_range,
-                    section_offset,
-                    section_offset_range,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -1005,37 +936,6 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 kind,
             },
-            Condition::StringValue {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-                compiled_regex: _,
-                compiled_finder: _,
-            } => ConditionTagged::StringValue {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                not,
-                platforms,
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-            },
             Condition::Text {
                 exact,
                 substr,
@@ -1295,7 +1195,7 @@ impl From<Condition> for ConditionTagged {
 /// Condition type in composite rules.
 ///
 /// Supports two YAML formats:
-/// 1. Tagged: `{ type: string_value, exact: "foo" }` - explicit type field
+/// 1. Tagged: `{ type: text, exact: "foo" }` - explicit type field
 /// 2. Shorthand: `{ id: my-trait }` - defaults to Trait when only `id` is present
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(from = "ConditionDeser", into = "ConditionTagged")]
@@ -1321,61 +1221,6 @@ pub(crate) enum Condition {
         /// across imports, exports, and internal functions.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         kind: Option<SymbolKind>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_finder: Option<memchr::memmem::Finder<'static>>,
-    },
-
-    /// Match a string value found in the file (extracted strings, imports, decoded strings)
-    StringValue {
-        /// Full string match (entire string must equal this)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        exact: Option<String>,
-        /// Substring match (appears anywhere in string)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        substr: Option<String>,
-        /// Regex pattern match
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Match pattern only at word boundaries (convenience for \bpattern\b)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        word: Option<String>,
-        /// If true, matching is case-insensitive
-        #[serde(default)]
-        case_insensitive: bool,
-        /// Optional high-fidelity validation check
-        #[serde(rename = "is", default)]
-        is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns
-        #[serde(skip_serializing_if = "Option::is_none")]
-        not: Option<Vec<NotException>>,
-        /// Platform filter - only evaluate this condition for these platforms
-        #[serde(skip_serializing_if = "Option::is_none")]
-        platforms: Option<Vec<Platform>>,
-        /// Section constraint: only match strings in this section (supports fuzzy names like "text")
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
-        #[serde(skip_serializing_if = "Option::is_none")]
-        section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
-        #[serde(
-            skip_serializing_if = "Option::is_none",
-            deserialize_with = "offset_range_serde::deserialize"
-        )]
-        section_offset_range: Option<(i64, Option<i64>)>,
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
@@ -1656,7 +1501,7 @@ pub(crate) enum Condition {
     },
 
     /// Search raw file content directly (for source files or matching across
-    /// string boundaries in binaries). Unlike `type: string_value` which only searches
+    /// string boundaries in binaries). Unlike `type: text` which only searches
     /// properly extracted/bounded strings, this searches the raw bytes as text.
     /// Use this when you need to match patterns in source code or when string
     /// extraction may not capture what you're looking for.
@@ -1915,7 +1760,6 @@ impl Condition {
     pub(crate) fn type_name(&self) -> &'static str {
         match self {
             Condition::Symbol { .. } => "symbol",
-            Condition::StringValue { .. } => "string_value",
             Condition::Text { .. } => "text",
             Condition::StringLiteral { .. } => "string_literal",
             Condition::Trait { .. } => "trait",
@@ -2029,21 +1873,6 @@ impl Condition {
                 Ok(())
             }
             // Validate location constraints for string/content conditions
-            Condition::StringValue {
-                section,
-                offset,
-                offset_range,
-                section_offset,
-                section_offset_range,
-                ..
-            } => validate_location_constraints(
-                section,
-                *offset,
-                *offset_range,
-                *section_offset,
-                *section_offset_range,
-                "string_value",
-            ),
             Condition::Text {
                 section,
                 offset,
@@ -2145,7 +1974,6 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::StringValue { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
@@ -2172,7 +2000,6 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
-            Condition::StringValue { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
@@ -2245,11 +2072,6 @@ impl Condition {
         };
 
         match self {
-            Condition::StringValue {
-                exact: Some(s),
-                case_insensitive: true,
-                ..
-            }
             | Condition::Text {
                 exact: Some(s),
                 case_insensitive: true,
@@ -2270,11 +2092,6 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringValue {
-                substr: Some(s),
-                case_insensitive: true,
-                ..
-            }
             | Condition::Text {
                 substr: Some(s),
                 case_insensitive: true,
@@ -2292,11 +2109,6 @@ impl Condition {
             }
             | Condition::Ast {
                 substr: Some(s),
-                case_insensitive: true,
-                ..
-            }
-            | Condition::StringValue {
-                word: Some(s),
                 case_insensitive: true,
                 ..
             }
@@ -2350,14 +2162,10 @@ impl Condition {
         };
 
         match self {
-            Condition::StringValue { exact: Some(s), .. }
             | Condition::Text { exact: Some(s), .. }
             | Condition::StringLiteral { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
-            Condition::StringValue {
-                substr: Some(s), ..
-            }
             | Condition::Text {
                 substr: Some(s), ..
             }
@@ -2370,12 +2178,10 @@ impl Condition {
             | Condition::Symbol {
                 substr: Some(s), ..
             } => check_empty(s, "substr"),
-            Condition::StringValue { regex: Some(s), .. }
             | Condition::Text { regex: Some(s), .. }
             | Condition::StringLiteral { regex: Some(s), .. }
             | Condition::Raw { regex: Some(s), .. }
             | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
-            Condition::StringValue { word: Some(s), .. }
             | Condition::Text { word: Some(s), .. }
             | Condition::StringLiteral { word: Some(s), .. }
             | Condition::Raw { word: Some(s), .. } => check_empty(s, "word"),
@@ -2399,11 +2205,6 @@ impl Condition {
 
         match self {
             // For exact matches, warn if less than 2 characters
-            Condition::StringValue {
-                exact: Some(s),
-                case_insensitive: false,
-                ..
-            }
             | Condition::Text {
                 exact: Some(s),
                 case_insensitive: false,
@@ -2424,11 +2225,6 @@ impl Condition {
                 None
             }
             // For substr, warn if less than 3 characters (more prone to false positives)
-            Condition::StringValue {
-                substr: Some(s),
-                case_insensitive: false,
-                ..
-            }
             | Condition::Text {
                 substr: Some(s),
                 case_insensitive: false,
@@ -2443,11 +2239,6 @@ impl Condition {
                 substr: Some(s), ..
             } => check_short(s, "substr", 3),
             // For word, warn if less than 2 characters
-            Condition::StringValue {
-                word: Some(s),
-                case_insensitive: false,
-                ..
-            }
             | Condition::Text {
                 word: Some(s),
                 case_insensitive: false,
@@ -2489,7 +2280,6 @@ impl Condition {
         };
 
         match self {
-            Condition::StringValue { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
@@ -2521,11 +2311,6 @@ impl Condition {
         };
 
         match self {
-            Condition::StringValue {
-                exact: Some(s),
-                case_insensitive: true,
-                ..
-            }
             | Condition::Text {
                 exact: Some(s),
                 case_insensitive: true,
@@ -2536,11 +2321,6 @@ impl Condition {
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "exact"),
-            Condition::StringValue {
-                substr: Some(s),
-                case_insensitive: true,
-                ..
-            }
             | Condition::Text {
                 substr: Some(s),
                 case_insensitive: true,
@@ -2551,11 +2331,6 @@ impl Condition {
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "substr"),
-            Condition::StringValue {
-                word: Some(s),
-                case_insensitive: true,
-                ..
-            }
             | Condition::Text {
                 word: Some(s),
                 case_insensitive: true,
@@ -2673,13 +2448,6 @@ impl Condition {
             };
 
         match self {
-            Condition::StringValue {
-                exact,
-                substr,
-                regex,
-                word,
-                ..
-            }
             | Condition::Text {
                 exact,
                 substr,
@@ -2743,79 +2511,6 @@ impl Condition {
                             )
                         })?,
                 );
-            }
-            Condition::StringValue {
-                regex,
-                word,
-                case_insensitive,
-                compiled_regex,
-                ..
-            } => {
-                // Compile main regex or word pattern
-                if let Some(word_pattern) = word {
-                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged(
-                            "string_value.word",
-                            word_pattern,
-                            &compile_pattern,
-                            true,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                        })?
-                    } else {
-                        compile_regex_logged(
-                            "string_value.word",
-                            word_pattern,
-                            &regex_pattern,
-                            false,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                        })?
-                    });
-                } else if let Some(regex_pattern) = regex {
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged(
-                            "string_value.regex",
-                            regex_pattern,
-                            &compile_pattern,
-                            true,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive string regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                    } else {
-                        compile_regex_logged(
-                            "string_value.regex",
-                            regex_pattern,
-                            regex_pattern,
-                            false,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile string regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                    });
-                }
             }
             Condition::Text {
                 regex,
@@ -3063,12 +2758,6 @@ impl Condition {
                 let normalized = s.trim_start_matches('_');
                 *compiled_finder =
                     Some(memchr::memmem::Finder::new(normalized.as_bytes()).into_owned());
-            }
-            Condition::StringValue {
-                substr: Some(s),
-                case_insensitive,
-                compiled_finder,
-                ..
             }
             | Condition::Text {
                 substr: Some(s),
@@ -3471,8 +3160,8 @@ mod location_constraint_tests {
 
     #[test]
     fn test_condition_validate_string_location() {
-        // Test that Condition::StringValue validates location constraints
-        let condition = Condition::StringValue {
+        // Test that Condition::Text validates location constraints
+        let condition = Condition::Text {
             exact: Some("test".to_string()),
             substr: None,
             regex: None,

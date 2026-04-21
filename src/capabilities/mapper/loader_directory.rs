@@ -19,7 +19,7 @@ use crate::capabilities::validation::{
     find_alternation_merge_candidates, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
     find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
-    find_condition_scope_violations, find_deprecated_string_value_usage, find_depth_violations,
+    find_condition_scope_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
@@ -1197,12 +1197,11 @@ impl super::CapabilityMapper {
             find_raw_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h3 completed in {:?}", step_start.elapsed());
 
-            // Detect deprecated string_value usage and string_literal patterns that should use text
+            // Detect string_literal patterns that should use text
             let step_start = std::time::Instant::now();
             tracing::trace!(
-                "Step 1h4/15: Detecting deprecated string_value usage and literal-only text mismatches"
+                "Step 1h4/15: Detecting literal-only text mismatches"
             );
-            find_deprecated_string_value_usage(&trait_definitions, &mut warnings);
             find_string_literal_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
 
@@ -2299,7 +2298,7 @@ impl super::CapabilityMapper {
                     collisions.len()
                 );
                 eprintln!(
-                    "   When both deprecated `type: string_value` and `type: raw` exist for the same pattern,"
+                    "   When both deprecated `type: text` and `type: raw` exist for the same pattern,"
                 );
                 eprintln!(
                     "   remove the legacy `string_value` rule. Keep `raw` only for byte-precise matching; otherwise prefer a single `text` rule:\n"

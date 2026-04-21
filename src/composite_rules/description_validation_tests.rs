@@ -21,7 +21,7 @@ mod description_validation_tests {
             arch: vec![Arch::All],
             r#for: vec![],
             for_from_groups: false,
-            r#if: Condition::StringValue {
+            r#if: Condition::Text {
                 exact: Some("test".to_string()),
                 substr: None,
                 regex: None,

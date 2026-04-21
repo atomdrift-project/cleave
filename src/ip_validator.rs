@@ -66,14 +66,15 @@ fn ip_pattern() -> Option<&'static regex::Regex> {
 /// - Reserved (240.0.0.0/4)
 /// - Documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24)
 /// - Version-like (first octet 0-3)
-/// - IPs with 2+ zero octets
+/// - IPs with any zero octet (technically sometimes routable, but noisy in static binary data)
 #[must_use]
 pub(crate) fn is_external_ip(ip: &Ipv4Addr) -> bool {
     let octets = ip.octets();
 
-    // Reject if two or more octets are zero (likely garbage data)
-    let zero_count = octets.iter().filter(|&&x| x == 0).count();
-    if zero_count >= 2 {
+    // Reject any zero octet. These may be technically routable in some cases,
+    // but are disproportionately version values or arbitrary bytes in static
+    // analysis output.
+    if octets.contains(&0) {
         return false;
     }
 
@@ -352,11 +353,21 @@ mod tests {
     }
 
     #[test]
-    fn test_external_ip_two_zero_octets_rejected() {
-        // Two zero octets should be rejected (likely garbage)
+    fn test_external_ip_zero_octets_rejected() {
+        // Any zero octet should be rejected for indicator quality. These can be
+        // technically routable, but are usually garbage/version-like in static data.
+        assert!(!is_external_ip(&Ipv4Addr::new(12, 5, 12, 0)));
+        assert!(!is_external_ip(&Ipv4Addr::new(33, 6, 0, 2)));
+        assert!(!is_external_ip(&Ipv4Addr::new(45, 0, 32, 156)));
         assert!(!is_external_ip(&Ipv4Addr::new(8, 8, 0, 0)));
         assert!(!is_external_ip(&Ipv4Addr::new(192, 0, 0, 1)));
         assert!(!is_external_ip(&Ipv4Addr::new(0, 0, 8, 8)));
+    }
+
+    #[test]
+    fn test_external_ip_nonzero_octets_kept() {
+        // Public addresses with no zero octets should still be accepted.
+        assert!(is_external_ip(&Ipv4Addr::new(33, 6, 11, 2)));
     }
 
     #[test]
@@ -396,6 +407,8 @@ mod tests {
         // Valid external IP
         assert!(validate_external_ip_string("8.8.8.8").is_some());
         assert!(validate_external_ip_string("45.33.32.156").is_some());
+        assert!(validate_external_ip_string("12.5.12.0").is_none());
+        assert!(validate_external_ip_string("33.6.0.2").is_none());
 
         // Private IPs - valid format but not external
         assert!(validate_external_ip_string("192.168.1.1").is_none());

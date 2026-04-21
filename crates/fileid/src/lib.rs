@@ -1069,7 +1069,14 @@ mod tests {
 
     #[test]
     fn unknown_binary_returns_none() {
-        assert!(detect(Path::new("data.bin"), b"\x00\x00\x00\x00").is_none());
+        // `.bin` now classifies as `Data` (see ext.rs), so use an
+        // unregistered extension + unrecognised magic to exercise the
+        // "truly unknown" path.
+        let got = detect(Path::new("data.blob"), b"\x00\x00\x00\x00");
+        assert!(
+            got.is_none(),
+            "expected None for unknown content, got {got:?}"
+        );
     }
 
     #[test]

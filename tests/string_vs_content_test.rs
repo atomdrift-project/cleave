@@ -193,21 +193,30 @@ def connect():
     let traits_dir = temp_dir.path().join("traits");
     fs::create_dir_all(&traits_dir).unwrap();
 
-    // String-based trait (should only match the string literal 8.8.8.8)
-    let string_trait = r#"traits:
+    // String-based trait (should only match the string literal 8.8.8.8).
+    // `type: string_value` was renamed to `type: string_literal` for
+    // AST-backed literal-only search — see the validator's guidance when
+    // the legacy name is used.
+    let string_trait = r#"defaults:
+  platforms: [all]
+
+traits:
   - id: string-ip-match
     desc: IP via string search
     crit: notable
     conf: 0.8
     for: [python]
     if:
-      type: string_value
+      type: string_literal
       regex: "\\b[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\.[0-9]{1,3}\\b"
       is: external_ip
 "#;
 
     // Raw-based trait (should match both IPs)
-    let raw_trait = r#"traits:
+    let raw_trait = r#"defaults:
+  platforms: [all]
+
+traits:
   - id: raw-ip-match
     desc: IP via raw search
     crit: notable

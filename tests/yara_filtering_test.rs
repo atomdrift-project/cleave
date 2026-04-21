@@ -340,8 +340,13 @@ fn test_scan_multi_filetype_directory() {
     fs::write(&py_file, "#!/usr/bin/env python3\nprint('python')\n").unwrap();
     fs::write(&js_file, "console.log('javascript');\n").unwrap();
 
+    // This test verifies CLI multi-file handling and file-type
+    // classification — not specific trait matches. Skip traits so a
+    // broken installed rule set (the `cleave-traits` repo can drift
+    // between schema versions) doesn't cause the binary to bail.
     let output = assert_cmd::cargo_bin_cmd!("cleave")
         .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("cleave_SKIP_TRAITS", "1")
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();

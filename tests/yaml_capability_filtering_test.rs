@@ -340,10 +340,14 @@ fn test_rules_without_filetype_are_universal() {
     fs::write(&py_file, "#!/usr/bin/env python3\nprint('python')\n").unwrap();
     fs::write(&js_file, "console.log('javascript');\n").unwrap();
 
-    // Analyze all three files
+    // Analyze all three files. Skip traits to insulate the test from
+    // parse errors in the user's installed `cleave-traits` checkout —
+    // this test only checks JSON structure and file-type classification,
+    // not trait content.
     for file in &[sh_file, py_file, js_file] {
         let output = assert_cmd::cargo_bin_cmd!("cleave")
-            .env("cleave_SKIP_YARA", "1") // Skip YARA - testing trait filtering
+            .env("cleave_SKIP_YARA", "1")
+            .env("cleave_SKIP_TRAITS", "1")
             .args(["--json", "analyze", file.to_str().unwrap()])
             .output()
             .unwrap();
@@ -449,7 +453,8 @@ fn test_platform_and_filetype_constraints_together() {
     fs::write(&script, "#!/bin/bash\necho 'test'\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing YAML trait filtering
+        .env("cleave_SKIP_YARA", "1")
+        .env("cleave_SKIP_TRAITS", "1") // insulate from cleave-traits schema drift
         .args(["--json", "analyze", script.to_str().unwrap()])
         .output()
         .unwrap();

@@ -264,11 +264,29 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
 }
 
 pub(crate) fn configure_rayon_thread_pool() {
+    // Archive analysis nests `par_iter` up to 2 levels deep (outer member
+    // walk + JAR class-file YARA scan). With fewer than ~4 workers the
+    // inner par_iter can commit every thread and the outer join has no
+    // reaper — a true nested-join deadlock that work-stealing cannot
+    // escape. We honour the explicit override regardless (some users have
+    // legitimate reasons: tests, constrained CI, profiling), but log
+    // loudly so the failure mode is discoverable.
+    const MIN_SAFE_THREADS: usize = 4;
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
     if let Some(threads) = std::env::var("CLEAVE_RAYON_THREADS")
         .ok()
         .and_then(|s| s.parse().ok())
     {
+        if threads < MIN_SAFE_THREADS {
+            tracing::warn!(
+                threads,
+                min_safe = MIN_SAFE_THREADS,
+                "CLEAVE_RAYON_THREADS below minimum safe value; archive analysis \
+                 may deadlock on nested par_iter. Set CLEAVE_RAYON_THREADS >= {} \
+                 unless you know what you're doing.",
+                MIN_SAFE_THREADS,
+            );
+        }
         builder = builder.num_threads(threads);
     }
     // build_global fails if a pool is already installed (e.g. by a parent

@@ -8,10 +8,9 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    eval_ast, eval_basename, eval_encoded, eval_exports_count, eval_hex, eval_metrics, eval_raw,
-    eval_section, eval_section_ratio, eval_string, eval_string_count, eval_string_literal,
-    eval_structure, eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
-    ContentLocationParams,
+    eval_ast, eval_basename, eval_encoded, eval_hex, eval_metrics, eval_raw, eval_section,
+    eval_section_ratio, eval_string, eval_string_literal, eval_structure, eval_symbol,
+    eval_syscall, eval_text, eval_trait, eval_yara_inline, ContentLocationParams,
 };
 use super::types::{
     default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
@@ -1307,9 +1306,6 @@ impl TraitDefinition {
                 feature,
                 min_sections,
             } => timed_eval!("structure", eval_structure(feature, *min_sections, ctx)),
-            Condition::ExportsCount { min, max } => {
-                timed_eval!("exports_count", eval_exports_count(*min, *max, ctx))
-            }
             Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
             Condition::Ast {
                 kind,
@@ -1357,23 +1353,6 @@ impl TraitDefinition {
             } => timed_eval!(
                 "section_ratio",
                 eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
-            Condition::StringValueCount {
-                min,
-                max,
-                min_length,
-                regex,
-                compiled_regex,
-            } => timed_eval!(
-                "string_count",
-                eval_string_count(
-                    *min,
-                    *max,
-                    *min_length,
-                    regex.as_ref(),
-                    compiled_regex.as_ref(),
-                    ctx,
-                )
             ),
             Condition::Metrics {
                 field,
@@ -2428,7 +2407,6 @@ impl CompositeTrait {
                 feature,
                 min_sections,
             } => self.eval_structure(feature, *min_sections, ctx),
-            Condition::ExportsCount { min, max } => self.eval_exports_count(*min, *max, ctx),
             Condition::Trait { id } => eval_trait(id, ctx),
             Condition::Ast {
                 kind,
@@ -2476,23 +2454,6 @@ impl CompositeTrait {
             } => timed_eval!(
                 "section_ratio",
                 eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
-            Condition::StringValueCount {
-                min,
-                max,
-                min_length,
-                regex,
-                compiled_regex,
-            } => timed_eval!(
-                "string_count",
-                eval_string_count(
-                    *min,
-                    *max,
-                    *min_length,
-                    regex.as_ref(),
-                    compiled_regex.as_ref(),
-                    ctx,
-                )
             ),
             Condition::Metrics {
                 field,
@@ -2724,38 +2685,6 @@ impl CompositeTrait {
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
         eval_structure(feature, min_sections, ctx)
-    }
-
-    /// Evaluate exports count condition
-    fn eval_exports_count<'a>(
-        &self,
-        min: Option<usize>,
-        max: Option<usize>,
-        ctx: &EvaluationContext<'a>,
-    ) -> ConditionResult {
-        let count = ctx.report.exports.len();
-        let matched = min.is_none_or(|m| count >= m) && max.is_none_or(|m| count <= m);
-
-        let evidence = if matched {
-            vec![Evidence {
-                method: "export_count".to_string(),
-                source: "composite_rule".to_string(),
-                value: count.to_string(),
-                location: None,
-                ..Default::default()
-            }]
-        } else {
-            Vec::new()
-        };
-        let match_count = evidence.len();
-        ConditionResult {
-            matched,
-            evidence,
-            match_count,
-            warnings: Vec::new(),
-            precision: 0.0,
-            matched_trait_ids: Vec::new(),
-        }
     }
 
     /// Check if evidence satisfies proximity constraints.

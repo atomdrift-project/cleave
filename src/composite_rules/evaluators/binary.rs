@@ -10,57 +10,6 @@ use super::build_regex;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
-/// Evaluate exports count condition
-#[must_use]
-pub(crate) fn eval_exports_count<'a>(
-    min: Option<usize>,
-    max: Option<usize>,
-    ctx: &EvaluationContext<'a>,
-) -> ConditionResult {
-    let count = ctx.report.exports.len();
-    let matched = min.is_none_or(|m| count >= m) && max.is_none_or(|m| count <= m);
-
-    // Calculate precision: base 1.0 + 0.5 each for min/max
-    let mut precision = 1.0f32;
-    if min.is_some() {
-        precision += 0.5;
-    }
-    if max.is_some() {
-        precision += 0.5;
-    }
-
-    let evidence = if matched {
-        // Deduplicate and take first few for display
-        let mut symbols: Vec<&str> = ctx
-            .report
-            .exports
-            .iter()
-            .map(|exp| exp.symbol.as_str())
-            .collect();
-        symbols.sort_unstable();
-        symbols.dedup();
-        let sample: Vec<&str> = symbols.into_iter().take(5).collect();
-        vec![Evidence {
-            method: "exports_count".to_string(),
-            source: "analysis".to_string(),
-            value: format!("({}) {}", count, sample.join(", ")),
-            location: None,
-            ..Default::default()
-        }]
-    } else {
-        Vec::new()
-    };
-    let match_count = evidence.len();
-    ConditionResult {
-        matched,
-        evidence,
-        match_count,
-        warnings: Vec::new(),
-        precision,
-        matched_trait_ids: Vec::new(),
-    }
-}
-
 /// Evaluate section ratio condition - check if section size is within ratio bounds
 #[must_use]
 pub(crate) fn eval_section_ratio<'a>(

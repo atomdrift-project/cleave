@@ -382,12 +382,6 @@ enum ConditionTagged {
         #[serde(default)]
         min_sections: Option<usize>,
     },
-    ExportsCount {
-        #[serde(default)]
-        min: Option<usize>,
-        #[serde(default)]
-        max: Option<usize>,
-    },
     Trait {
         id: String,
     },
@@ -440,17 +434,6 @@ enum ConditionTagged {
         min: Option<f64>,
         #[serde(default)]
         max: Option<f64>,
-    },
-    #[serde(rename = "string_value_count", alias = "string_count")]
-    StringValueCount {
-        #[serde(default)]
-        min: Option<usize>,
-        #[serde(default)]
-        max: Option<usize>,
-        #[serde(default)]
-        min_length: Option<usize>,
-        #[serde(default)]
-        regex: Option<String>,
     },
     Metrics {
         field: String,
@@ -819,7 +802,6 @@ impl From<ConditionDeser> for Condition {
                     feature,
                     min_sections,
                 },
-                ConditionTagged::ExportsCount { min, max } => Condition::ExportsCount { min, max },
                 ConditionTagged::Trait { id } => Condition::Trait { id },
                 ConditionTagged::Ast {
                     kind,
@@ -858,18 +840,6 @@ impl From<ConditionDeser> for Condition {
                     compare_to,
                     min,
                     max,
-                },
-                ConditionTagged::StringValueCount {
-                    min,
-                    max,
-                    min_length,
-                    regex,
-                } => Condition::StringValueCount {
-                    min,
-                    max,
-                    min_length,
-                    regex,
-                    compiled_regex: None,
                 },
                 ConditionTagged::Metrics {
                     field,
@@ -1147,7 +1117,6 @@ impl From<Condition> for ConditionTagged {
                 feature,
                 min_sections,
             },
-            Condition::ExportsCount { min, max } => ConditionTagged::ExportsCount { min, max },
             Condition::Trait { id } => ConditionTagged::Trait { id },
             Condition::Ast {
                 kind,
@@ -1186,18 +1155,6 @@ impl From<Condition> for ConditionTagged {
                 compare_to,
                 min,
                 max,
-            },
-            Condition::StringValueCount {
-                min,
-                max,
-                min_length,
-                regex,
-                compiled_regex: _,
-            } => ConditionTagged::StringValueCount {
-                min,
-                max,
-                min_length,
-                regex,
             },
             Condition::Metrics {
                 field,
@@ -1571,16 +1528,6 @@ pub(crate) enum Condition {
         min_sections: Option<usize>,
     },
 
-    /// Check export count
-    ExportsCount {
-        /// Minimum export count required
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min: Option<usize>,
-        /// Maximum export count allowed
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max: Option<usize>,
-    },
-
     /// Reference a previously-defined trait by ID
     Trait {
         /// The ID of the trait to reference
@@ -1685,26 +1632,6 @@ pub(crate) enum Condition {
         /// Maximum ratio (0.0-1.0)
         #[serde(skip_serializing_if = "Option::is_none")]
         max: Option<f64>,
-    },
-
-    /// Check extracted string value count
-    /// For detecting string concealment (very few visible strings)
-    StringValueCount {
-        /// Minimum number of strings
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min: Option<usize>,
-        /// Maximum number of strings (low count = suspicious)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max: Option<usize>,
-        /// Only count strings of this minimum length
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min_length: Option<usize>,
-        /// Only count strings matching this regex
-        #[serde(skip_serializing_if = "Option::is_none")]
-        regex: Option<String>,
-        /// Pre-compiled regex
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
     },
 
     /// Check computed metrics for obfuscation/anomaly detection
@@ -2022,13 +1949,11 @@ impl Condition {
             Condition::Text { .. } => "text",
             Condition::StringLiteral { .. } => "string_literal",
             Condition::Structure { .. } => "structure",
-            Condition::ExportsCount { .. } => "exports_count",
             Condition::Trait { .. } => "trait",
             Condition::Ast { .. } => "ast",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
             Condition::SectionRatio { .. } => "section_ratio",
-            Condition::StringValueCount { .. } => "string_value_count",
             Condition::Metrics { .. } => "metrics",
             Condition::Hex { .. } => "hex",
             Condition::Raw { .. } => "raw",
@@ -3124,28 +3049,6 @@ impl Condition {
                         },
                     )?
                 });
-            }
-            Condition::StringValueCount {
-                regex: Some(regex_pattern),
-                compiled_regex,
-                ..
-            } => {
-                // Compile string_count regex if present
-                *compiled_regex = Some(
-                    compile_regex_logged(
-                        "string_value_count.regex",
-                        regex_pattern,
-                        regex_pattern,
-                        false,
-                    )
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to compile string_count regex '{}': {}",
-                            regex_pattern,
-                            e
-                        )
-                    })?,
-                );
             }
             Condition::Basename {
                 regex: Some(regex_pattern),

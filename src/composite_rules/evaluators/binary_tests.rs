@@ -6,7 +6,7 @@
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::types::FileType;
-use crate::types::{AnalysisReport, Export, Section, SyscallInfo, TargetInfo};
+use crate::types::{AnalysisReport, Section, SyscallInfo, TargetInfo};
 
 fn create_test_report() -> AnalysisReport {
     let target = TargetInfo {
@@ -21,56 +21,6 @@ fn create_test_report() -> AnalysisReport {
 
 fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> EvaluationContext<'a> {
     EvaluationContext::test_only_new(report, data, FileType::All)
-}
-
-// =============================================================================
-// eval_exports_count tests
-// =============================================================================
-
-#[test]
-fn test_eval_exports_count_min() {
-    let mut report = create_test_report();
-    report.exports.push(Export {
-        symbol: "init".to_string(),
-        offset: Some("0x1000".to_string()),
-        source: "elf".to_string(),
-        forward_to: None,
-    });
-    report.exports.push(Export {
-        symbol: "main".to_string(),
-        offset: Some("0x2000".to_string()),
-        source: "elf".to_string(),
-        forward_to: None,
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let result = eval_exports_count(Some(1), None, &ctx);
-    assert!(result.matched);
-
-    let result = eval_exports_count(Some(5), None, &ctx);
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_exports_count_max() {
-    let mut report = create_test_report();
-    for i in 0..3 {
-        report.exports.push(Export {
-            symbol: format!("export_{}", i),
-            offset: Some(format!("0x{:x}", i * 0x1000)),
-            source: "elf".to_string(),
-            forward_to: None,
-        });
-    }
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let result = eval_exports_count(None, Some(5), &ctx);
-    assert!(result.matched);
-
-    let result = eval_exports_count(None, Some(2), &ctx);
-    assert!(!result.matched);
 }
 
 // =============================================================================

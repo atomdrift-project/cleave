@@ -466,10 +466,6 @@ fn score_condition(condition: &Condition) -> f32 {
             score += score_string_value(feature);
             score += score_presence(min_sections.as_ref());
         }
-        Condition::ExportsCount { min, max } => {
-            score += score_presence(min.as_ref());
-            score += score_presence(max.as_ref());
-        }
         Condition::Trait { id } => {
             score += score_string_value(id);
         }
@@ -524,16 +520,6 @@ fn score_condition(condition: &Condition) -> f32 {
             score += score_regex_value(compare_to);
             score += score_presence(min.as_ref());
             score += score_presence(max.as_ref());
-        }
-        Condition::StringValueCount {
-            min,
-            max,
-            min_length,
-            ..
-        } => {
-            score += score_presence(min.as_ref());
-            score += score_presence(max.as_ref());
-            score += score_presence(min_length.as_ref());
         }
         Condition::Metrics {
             field,

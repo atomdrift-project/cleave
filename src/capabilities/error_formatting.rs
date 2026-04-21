@@ -319,8 +319,7 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
         if line.starts_with("type:") {
             let invalid_string_type = line.starts_with("type: string")
                 && !line.starts_with("type: string_value")
-                && !line.starts_with("type: string_literal")
-                && !line.starts_with("type: string_count");
+                && !line.starts_with("type: string_literal");
             // Check if this is an invalid type
             if line.contains("type: word")
                 || invalid_string_type
@@ -472,7 +471,9 @@ fn provide_error_guidance(
                     guidance.push_str(
                         "   💡 Use 'min' and 'max' instead of 'min_ratio' and 'max_ratio'.\n",
                     );
-                    guidance.push_str("   💡 The field names are consistent with other conditions like 'exports_count'.\n");
+                    guidance.push_str(
+                        "   💡 Other section rules already use 'min' and 'max' the same way.\n",
+                    );
                     found_hallucination = true;
                 }
                 ("needs", _) => {
@@ -544,7 +545,6 @@ fn provide_error_guidance(
         guidance.push_str("   • yara       - Match YARA rule results\n");
         guidance.push_str("   • syscall    - Match system calls\n");
         guidance.push_str("   • structure  - Match structural features\n");
-        guidance.push_str("   • exports_count, string_count - Count checks\n");
         guidance.push_str("   • section_ratio, section - Section analysis\n");
         guidance.push_str(
             "   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n",

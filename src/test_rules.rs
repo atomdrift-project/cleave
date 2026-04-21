@@ -2335,9 +2335,7 @@ fn evaluate_condition_simple(
     condition: &Condition,
     ctx: &EvaluationContext<'_>,
 ) -> crate::composite_rules::context::ConditionResult {
-    use crate::composite_rules::evaluators::{
-        eval_basename, eval_exports_count, eval_section, eval_string_count, eval_syscall,
-    };
+    use crate::composite_rules::evaluators::{eval_basename, eval_section, eval_syscall};
 
     // Evaluate conditions that fall through to the _ => case in debug_condition
     match condition {
@@ -2372,21 +2370,6 @@ fn evaluate_condition_simple(
         Condition::Syscall { name, number, arch } => {
             eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
         }
-        Condition::ExportsCount { min, max } => eval_exports_count(*min, *max, ctx),
-        Condition::StringValueCount {
-            min,
-            max,
-            min_length,
-            regex,
-            compiled_regex,
-        } => eval_string_count(
-            *min,
-            *max,
-            *min_length,
-            regex.as_ref(),
-            compiled_regex.as_ref(),
-            ctx,
-        ),
         Condition::Basename {
             exact,
             substr,

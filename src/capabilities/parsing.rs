@@ -1056,7 +1056,6 @@ fn check_regex_length(
         | Condition::StringValue { regex, .. }
         | Condition::Raw { regex, .. }
         | Condition::Ast { regex, .. }
-        | Condition::StringValueCount { regex, .. }
         | Condition::Section { regex, .. }
         | Condition::Encoded { regex, .. }
         | Condition::Basename { regex, .. }

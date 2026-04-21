@@ -467,17 +467,6 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             // count_min, count_max, per_kb_min, per_kb_max now scored at trait level
         }
-        Condition::SectionRatio {
-            section,
-            compare_to,
-            min,
-            max,
-        } => {
-            score += score_regex_value(section);
-            score += score_regex_value(compare_to);
-            score += score_presence(min.as_ref());
-            score += score_presence(max.as_ref());
-        }
         Condition::Metrics {
             field,
             min,

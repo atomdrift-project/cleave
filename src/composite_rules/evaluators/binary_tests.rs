@@ -24,148 +24,6 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
 }
 
 // =============================================================================
-// eval_section_ratio tests
-// =============================================================================
-
-#[test]
-fn test_eval_section_ratio_vs_total() {
-    let mut report = create_test_report();
-    report.sections.push(Section {
-        name: ".text".to_string(),
-        address: None,
-        offset: None,
-        size: 500,
-        entropy: 6.5,
-        permissions: Some("rx".to_string()),
-    });
-    report.sections.push(Section {
-        name: ".data".to_string(),
-        address: None,
-        offset: None,
-        size: 300,
-        entropy: 4.0,
-        permissions: Some("rw".to_string()),
-    });
-    report.sections.push(Section {
-        name: ".rodata".to_string(),
-        address: None,
-        offset: None,
-        size: 200,
-        entropy: 5.0,
-        permissions: Some("r".to_string()),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // .text is 500/1000 = 50% of total
-    let result = eval_section_ratio(
-        r"\.text",
-        "total",
-        Some(0.4), // min 40%
-        Some(0.6), // max 60%
-        &ctx,
-    );
-    assert!(result.matched);
-    assert!(result.evidence[0].value.contains("50.0%"));
-}
-
-#[test]
-fn test_eval_section_ratio_vs_another_section() {
-    let mut report = create_test_report();
-    report.sections.push(Section {
-        name: ".text".to_string(),
-        address: None,
-        offset: None,
-        size: 1000,
-        entropy: 6.5,
-        permissions: Some("rx".to_string()),
-    });
-    report.sections.push(Section {
-        name: ".data".to_string(),
-        address: None,
-        offset: None,
-        size: 500,
-        entropy: 4.0,
-        permissions: Some("rw".to_string()),
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // .text is 1000/500 = 2.0x .data
-    let result = eval_section_ratio(r"\.text", r"\.data", Some(1.5), Some(2.5), &ctx);
-    assert!(result.matched);
-}
-
-#[test]
-fn test_eval_section_ratio_no_matching_section() {
-    let mut report = create_test_report();
-    report.sections.push(Section {
-        name: ".text".to_string(),
-        address: None,
-        offset: None,
-        size: 1000,
-        entropy: 6.5,
-        permissions: None,
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let result = eval_section_ratio(r"\.nonexistent", "total", Some(0.1), None, &ctx);
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_section_ratio_invalid_regex() {
-    let report = create_test_report();
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    let result = eval_section_ratio("[invalid regex", "total", Some(0.1), None, &ctx);
-    assert!(!result.matched);
-}
-
-#[test]
-fn test_eval_section_ratio_multiple_matching_sections() {
-    let mut report = create_test_report();
-    report.sections.push(Section {
-        name: ".text".to_string(),
-        address: None,
-        offset: None,
-        size: 400,
-        entropy: 6.5,
-        permissions: None,
-    });
-    report.sections.push(Section {
-        name: ".text2".to_string(),
-        address: None,
-        offset: None,
-        size: 100,
-        entropy: 6.0,
-        permissions: None,
-    });
-    report.sections.push(Section {
-        name: ".data".to_string(),
-        address: None,
-        offset: None,
-        size: 500,
-        entropy: 4.0,
-        permissions: None,
-    });
-    let data = vec![];
-    let ctx = create_test_context(&report, &data);
-
-    // .text + .text2 = 500 / 1000 = 50%
-    let result = eval_section_ratio(
-        r"\.text", // Matches both .text and .text2
-        "total",
-        Some(0.4),
-        Some(0.6),
-        &ctx,
-    );
-    assert!(result.matched);
-}
-
-// =============================================================================
 // eval_section tests
 // =============================================================================
 
@@ -724,9 +582,15 @@ fn test_eval_section_precision_scoring() {
         None,
         None,
         None,
-        None, // readable
-        None, // writable
-        None, // executable
+        None,
+        // readable
+        None,
+        // writable
+        None,
+        None,
+        None,
+        None,
+        // executable
         &ctx,
     );
     assert_eq!(result1.precision, 2.0);
@@ -743,9 +607,15 @@ fn test_eval_section_precision_scoring() {
         None,
         None,
         None,
-        None, // readable
-        None, // writable
-        None, // executable
+        None,
+        // readable
+        None,
+        // writable
+        None,
+        None,
+        None,
+        None,
+        // executable
         &ctx,
     );
     assert_eq!(result2.precision, 1.5);
@@ -762,9 +632,15 @@ fn test_eval_section_precision_scoring() {
         None,
         None,
         None,
-        None, // readable
-        None, // writable
-        None, // executable
+        None,
+        // readable
+        None,
+        // writable
+        None,
+        None,
+        None,
+        None,
+        // executable
         &ctx,
     );
     assert_eq!(result3.precision, 1.0);
@@ -780,9 +656,15 @@ fn test_eval_section_precision_scoring() {
         None,
         Some(6.0),
         Some(7.0),
-        None, // readable
-        None, // writable
-        None, // executable
+        None,
+        // readable
+        None,
+        // writable
+        None,
+        None,
+        None,
+        None,
+        // executable
         &ctx,
     );
     assert_eq!(result4.precision, 2.0); // 1.0 (substr) + 0.5 (entropy_min) + 0.5 (entropy_max)
@@ -1099,6 +981,9 @@ fn test_eval_section_length_precision_boost() {
         None,
         None,
         None,
+        None,
+        None,
+        None,
         &ctx,
     );
     assert_eq!(result_base.precision, 1.0);
@@ -1111,6 +996,9 @@ fn test_eval_section_length_precision_boost() {
         None,
         false,
         Some(500),
+        None,
+        None,
+        None,
         None,
         None,
         None,
@@ -1130,6 +1018,9 @@ fn test_eval_section_length_precision_boost() {
         false,
         Some(500),
         Some(5000),
+        None,
+        None,
+        None,
         None,
         None,
         None,

@@ -383,15 +383,6 @@ enum ConditionTagged {
         #[serde(default)]
         arch: Option<Vec<String>>,
     },
-    SectionRatio {
-        section: String,
-        #[serde(default = "default_compare_to")]
-        compare_to: String,
-        #[serde(default)]
-        min: Option<f64>,
-        #[serde(default)]
-        max: Option<f64>,
-    },
     Metrics {
         field: String,
         #[serde(default)]
@@ -761,17 +752,6 @@ impl From<ConditionDeser> for Condition {
                 ConditionTagged::Syscall { name, number, arch } => {
                     Condition::Syscall { name, number, arch }
                 }
-                ConditionTagged::SectionRatio {
-                    section,
-                    compare_to,
-                    min,
-                    max,
-                } => Condition::SectionRatio {
-                    section,
-                    compare_to,
-                    min,
-                    max,
-                },
                 ConditionTagged::Metrics {
                     field,
                     min,
@@ -1044,17 +1024,6 @@ impl From<Condition> for ConditionTagged {
             Condition::Syscall { name, number, arch } => {
                 ConditionTagged::Syscall { name, number, arch }
             }
-            Condition::SectionRatio {
-                section,
-                compare_to,
-                min,
-                max,
-            } => ConditionTagged::SectionRatio {
-                section,
-                compare_to,
-                min,
-                max,
-            },
             Condition::Metrics {
                 field,
                 min,
@@ -1459,22 +1428,6 @@ pub(crate) enum Condition {
         arch: Option<Vec<String>>,
     },
 
-    /// Check section size ratio (e.g., __const is 80%+ of binary)
-    /// For detecting encrypted payload droppers
-    SectionRatio {
-        /// Section name pattern (regex)
-        section: String,
-        /// Compare to "total" binary size or another section pattern
-        #[serde(default = "default_compare_to")]
-        compare_to: String,
-        /// Minimum ratio (0.0-1.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        min: Option<f64>,
-        /// Maximum ratio (0.0-1.0)
-        #[serde(skip_serializing_if = "Option::is_none")]
-        max: Option<f64>,
-    },
-
     /// Check computed metrics for obfuscation/anomaly detection
     /// For detecting obfuscation patterns in source code via statistical analysis
     Metrics {
@@ -1756,10 +1709,6 @@ pub(crate) enum Condition {
     },
 }
 
-fn default_compare_to() -> String {
-    "total".to_string()
-}
-
 impl Condition {
     /// Returns true if this condition is a trait reference
     #[must_use]
@@ -1779,7 +1728,7 @@ impl Condition {
 
         match self {
             // Section analysis is binary-only
-            Condition::SectionRatio { .. } | Condition::Section { .. } => is_binary,
+            Condition::Section { .. } => is_binary,
 
             // AST-backed searches require source code support
             Condition::Ast { .. } | Condition::StringLiteral { .. } => {
@@ -1802,7 +1751,6 @@ impl Condition {
             Condition::Ast { .. } => "ast",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
-            Condition::SectionRatio { .. } => "section_ratio",
             Condition::Metrics { .. } => "metrics",
             Condition::Hex { .. } => "hex",
             Condition::Raw { .. } => "raw",
@@ -2010,7 +1958,7 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
-            | Condition::Text { regex: Some(r), .. }
+            Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. }
@@ -2036,7 +1984,7 @@ impl Condition {
     #[must_use]
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
-            | Condition::Text { regex: Some(r), .. }
+            Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
@@ -2108,7 +2056,7 @@ impl Condition {
         };
 
         match self {
-            | Condition::Text {
+            Condition::Text {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -2198,11 +2146,11 @@ impl Condition {
         };
 
         match self {
-            | Condition::Text { exact: Some(s), .. }
+            Condition::Text { exact: Some(s), .. }
             | Condition::StringLiteral { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
-            | Condition::Text {
+            Condition::Text {
                 substr: Some(s), ..
             }
             | Condition::StringLiteral {
@@ -2214,11 +2162,11 @@ impl Condition {
             | Condition::Symbol {
                 substr: Some(s), ..
             } => check_empty(s, "substr"),
-            | Condition::Text { regex: Some(s), .. }
+            Condition::Text { regex: Some(s), .. }
             | Condition::StringLiteral { regex: Some(s), .. }
             | Condition::Raw { regex: Some(s), .. }
             | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
-            | Condition::Text { word: Some(s), .. }
+            Condition::Text { word: Some(s), .. }
             | Condition::StringLiteral { word: Some(s), .. }
             | Condition::Raw { word: Some(s), .. } => check_empty(s, "word"),
             _ => None,
@@ -2241,7 +2189,7 @@ impl Condition {
 
         match self {
             // For exact matches, warn if less than 2 characters
-            | Condition::Text {
+            Condition::Text {
                 exact: Some(s),
                 case_insensitive: false,
                 ..
@@ -2261,7 +2209,7 @@ impl Condition {
                 None
             }
             // For substr, warn if less than 3 characters (more prone to false positives)
-            | Condition::Text {
+            Condition::Text {
                 substr: Some(s),
                 case_insensitive: false,
                 ..
@@ -2275,7 +2223,7 @@ impl Condition {
                 substr: Some(s), ..
             } => check_short(s, "substr", 3),
             // For word, warn if less than 2 characters
-            | Condition::Text {
+            Condition::Text {
                 word: Some(s),
                 case_insensitive: false,
                 ..
@@ -2316,7 +2264,7 @@ impl Condition {
         };
 
         match self {
-            | Condition::Text { regex: Some(r), .. }
+            Condition::Text { regex: Some(r), .. }
             | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. } => {
@@ -2347,7 +2295,7 @@ impl Condition {
         };
 
         match self {
-            | Condition::Text {
+            Condition::Text {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -2357,7 +2305,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "exact"),
-            | Condition::Text {
+            Condition::Text {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
@@ -2367,7 +2315,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             } => check_pattern(s, "substr"),
-            | Condition::Text {
+            Condition::Text {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2484,7 +2432,7 @@ impl Condition {
             };
 
         match self {
-            | Condition::Text {
+            Condition::Text {
                 exact,
                 substr,
                 regex,
@@ -2795,7 +2743,7 @@ impl Condition {
                 *compiled_finder =
                     Some(memchr::memmem::Finder::new(normalized.as_bytes()).into_owned());
             }
-            | Condition::Text {
+            Condition::Text {
                 substr: Some(s),
                 case_insensitive,
                 compiled_finder,

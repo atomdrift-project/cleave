@@ -773,6 +773,10 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
     format!("{}…", &s[..end])
 }
 
+fn display_file_type(file_type: &str) -> String {
+    format!("detected: {}", file_type.to_uppercase())
+}
+
 /// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
 #[allow(dead_code)] // Used by binary target
 fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
@@ -889,8 +893,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         // Generate formula from filtered findings
         let formula = malecule_bridge::formula_from_findings(&filtered);
 
-        // Format file type (uppercase, e.g., "PE", "ELF")
-        let file_type_display = file.file_type.to_uppercase();
+        let file_type_display = display_file_type(&file.file_type);
 
         // File header: [indent] path  type • formula
         let type_formula = if formula.is_empty() {
@@ -963,12 +966,18 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
     // If no files had findings, show a simple message
     if output.is_empty() {
-        let path = report
-            .files
-            .first()
+        let first_file = report.files.first();
+        let path = first_file
             .map(|f| f.path.as_str())
             .unwrap_or(&report.target.path);
-        output.push_str(&format!("{}\n", path.bright_white()));
+        let file_type = first_file
+            .map(|f| f.file_type.as_str())
+            .unwrap_or(&report.target.file_type);
+        output.push_str(&format!(
+            "{}  {}\n",
+            path.bright_white(),
+            display_file_type(file_type).bright_black()
+        ));
         output.push_str("No findings\n");
     }
 
@@ -1239,6 +1248,8 @@ mod tests {
         let report = create_test_report(vec![], vec![]);
         let output = format_terminal(&report);
         assert!(output.contains("/test/sample.bin"));
+        assert!(output.contains("detected: ELF"));
+        assert!(output.contains("No findings"));
     }
 
     #[test]

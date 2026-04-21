@@ -9,8 +9,8 @@ use super::condition::{
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     eval_ast, eval_basename, eval_encoded, eval_hex, eval_metrics, eval_raw, eval_section,
-    eval_section_ratio, eval_string_literal, eval_symbol, eval_syscall, eval_text, eval_trait,
-    eval_yara_inline, ContentLocationParams,
+    eval_string_literal, eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
+    ContentLocationParams,
 };
 use super::types::{
     default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
@@ -575,7 +575,7 @@ impl TraitDefinition {
                 }
             }
             // Exact matches should use `unless:` instead of `not:`
-            | Condition::Text {
+            Condition::Text {
                 exact: Some(_),
                 regex: None,
                 word: None,
@@ -603,7 +603,7 @@ impl TraitDefinition {
                 );
             }
             // For String substr matches, validate that not: exceptions could match strings containing the substr
-            | Condition::Text {
+            Condition::Text {
                 substr: Some(search_substr),
                 regex: None,
                 word: None,
@@ -681,7 +681,7 @@ impl TraitDefinition {
                 );
             }
             // For regex matches, validate that exceptions could potentially match
-            | Condition::Text {
+            Condition::Text {
                 regex: Some(pattern),
                 ..
             }
@@ -1289,15 +1289,6 @@ impl TraitDefinition {
                     eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
                 )
             }
-            Condition::SectionRatio {
-                section,
-                compare_to,
-                min,
-                max,
-            } => timed_eval!(
-                "section_ratio",
-                eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
             Condition::Metrics {
                 field,
                 min,
@@ -2357,15 +2348,6 @@ impl CompositeTrait {
                     eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
                 )
             }
-            Condition::SectionRatio {
-                section,
-                compare_to,
-                min,
-                max,
-            } => timed_eval!(
-                "section_ratio",
-                eval_section_ratio(section, compare_to, *min, *max, ctx)
-            ),
             Condition::Metrics {
                 field,
                 min,

@@ -635,12 +635,6 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset,
                 *section_offset_range,
             ),
-            Condition::SectionRatio {
-                section,
-                compare_to,
-                min,
-                max,
-            } => self.debug_section_ratio_condition(section, compare_to, *min, *max),
             _ => {
                 // Generic fallback for other condition types
                 let desc = describe_condition(condition);
@@ -1908,84 +1902,6 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    fn debug_section_ratio_condition(
-        &self,
-        section: &str,
-        compare_to: &str,
-        min_ratio: Option<f64>,
-        max_ratio: Option<f64>,
-    ) -> ConditionDebugResult {
-        let desc = format!(
-            "section_ratio: {} vs {} [{:?}, {:?}]",
-            section, compare_to, min_ratio, max_ratio
-        );
-
-        // Get section bounds
-        let section_size = self
-            .section_map
-            .bounds(section)
-            .map(|bounds| bounds.1 - bounds.0);
-
-        let total_size = self.binary_data.len() as u64;
-
-        let (ratio, matched) = if let Some(sec_size) = section_size {
-            let compare_size = if compare_to == "total" {
-                total_size
-            } else if let Some(bounds) = self.section_map.bounds(compare_to) {
-                bounds.1 - bounds.0
-            } else {
-                total_size
-            };
-
-            let r = if compare_size > 0 {
-                sec_size as f64 / compare_size as f64
-            } else {
-                0.0
-            };
-
-            let min_ok = min_ratio.is_none_or(|min| r >= min);
-            let max_ok = max_ratio.is_none_or(|max| r <= max);
-            (Some(r), min_ok && max_ok)
-        } else {
-            (None, false)
-        };
-
-        let mut result = ConditionDebugResult::new(desc, matched);
-
-        if self.section_map.has_sections() {
-            result.details.push(format!(
-                "Available sections: {}",
-                self.section_map.section_names().join(", ")
-            ));
-        } else {
-            result
-                .details
-                .push("No sections found in binary".to_string());
-        }
-
-        if let Some(r) = ratio {
-            result.details.push(format!(
-                "Ratio: {:.4} ({} / {})",
-                r,
-                section_size.unwrap_or(0),
-                if compare_to == "total" {
-                    total_size
-                } else {
-                    self.section_map
-                        .bounds(compare_to)
-                        .map(|b| b.1 - b.0)
-                        .unwrap_or(0)
-                }
-            ));
-        } else {
-            result
-                .details
-                .push(format!("Section '{}' not found", section));
-        }
-
-        result
-    }
-
     // Helper to find trait definition by ID
     fn find_trait_definition(&self, id: &str) -> Option<&crate::composite_rules::TraitDefinition> {
         self.mapper.find_trait(id)
@@ -2125,20 +2041,6 @@ fn describe_condition(condition: &Condition) -> String {
                 desc.push_str(&format!(" @{:#x}+", start));
             }
             desc
-        }
-        Condition::SectionRatio {
-            section,
-            compare_to,
-            min,
-            max,
-        } => {
-            format!(
-                "section_ratio: {} vs {} [{:?}-{:?}]",
-                section,
-                compare_to,
-                min.unwrap_or(0.0),
-                max.unwrap_or(1.0)
-            )
         }
         _ => format!("{:?}", condition).chars().take(50).collect(),
     }

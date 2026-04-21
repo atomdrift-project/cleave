@@ -1085,7 +1085,7 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
 
 /// Returns true if the condition has a section filter or positional constraint applied to it.
 /// This includes: section/offset/offset_range/section_offset/section_offset_range fields
-/// on string/raw/hex conditions, Section type, SectionRatio type.
+/// on string/raw/hex conditions, or a Section type.
 fn condition_has_section_filter(cond: &Condition) -> bool {
     match cond {
         | Condition::Raw {
@@ -1110,7 +1110,7 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
                 || section_offset.is_some()
                 || section_offset_range.is_some()
         }
-        Condition::Section { .. } | Condition::SectionRatio { .. } => true,
+        Condition::Section { .. } => true,
         _ => false,
     }
 }

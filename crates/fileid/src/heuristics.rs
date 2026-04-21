@@ -103,6 +103,11 @@ const PATTERNS: &[(&[u8], Lang, u8)] = &[
     (b"case $", Lang::Shell, 5),
     (b"; then\n", Lang::Shell, 5),
     (b"; do\n", Lang::Shell, 5),
+    (b" && curl ", Lang::Shell, 10),
+    (b" && chmod +x ", Lang::Shell, 10),
+    (b"cd $", Lang::Shell, 5),
+    (b"curl -O http", Lang::Shell, 5),
+    (b"xattr -c ", Lang::Shell, 5),
     // ── Python ──
     (b"if __name__", Lang::Python, 10),
     (b"import ", Lang::Python, 5),

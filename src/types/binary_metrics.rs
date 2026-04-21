@@ -866,6 +866,13 @@ pub struct PeMetrics {
     /// public surface is almost entirely re-exports of another DLL.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub forward_ratio: f32,
+    /// All exports forward to a single DLL whose basename is a
+    /// version-suffixed variant of this DLL's basename — e.g.
+    /// `python3.dll` → `python312.dll`, `msvcp.dll` → `msvcp140.dll`.
+    /// This is the canonical benign stable-ABI / version-shim forwarder
+    /// pattern (CPython's python3.dll, MSVC runtime shims, VC redist).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub self_versioned_forwarder: bool,
 
     // === Resources ===
     /// Resource count
@@ -913,6 +920,13 @@ pub struct PeMetrics {
     /// Common name of the signer certificate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer: Option<String>,
+    /// Leaf-signer organization / CN chosen from the Authenticode chain by
+    /// filtering out well-known CA and timestamp authority entries. This is
+    /// the "who actually signed this" identity — e.g. `Python Software
+    /// Foundation`, `Microsoft Corporation` — as opposed to the root/
+    /// intermediate CAs that appear alongside it in the certificate chain.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub primary_signer: Option<String>,
 }
 
 /// Mach-O specific metrics

@@ -176,6 +176,143 @@ fn is_system_dll(name: &str) -> bool {
     )
 }
 
+/// Byte-scan an ASN.1 DER blob for every occurrence of `oid` followed by a
+/// short-form (<=127 byte) primitive string, returning the decoded UTF-8
+/// values in the order encountered. Used to pull CommonName / Organization
+/// attributes out of a PKCS#7 certificate chain without a full ASN.1 parser.
+/// Duplicates are skipped; output is capped at `max_results` to bound cost
+/// on malformed blobs. This is a heuristic extractor — it will also match OID
+/// bytes that happen to appear inside unrelated structures, but the
+/// downstream filtering tolerates a bit of noise.
+fn scan_asn1_attribute(data: &[u8], oid: &[u8], max_results: usize) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut search_pos = 0;
+    while let Some(pos) = data[search_pos..]
+        .windows(oid.len())
+        .position(|w| w == oid)
+    {
+        let abs_pos = search_pos + pos;
+        search_pos = abs_pos + oid.len();
+        let type_pos = abs_pos + oid.len();
+        if type_pos + 1 >= data.len() {
+            continue;
+        }
+        let len = data[type_pos + 1] as usize;
+        let str_pos = type_pos + 2;
+        if len == 0 || str_pos + len > data.len() {
+            continue;
+        }
+        let Ok(s) = std::str::from_utf8(&data[str_pos..str_pos + len]) else {
+            continue;
+        };
+        let s = s.trim_matches(char::from(0)).trim();
+        if s.is_empty() {
+            continue;
+        }
+        let owned = s.to_string();
+        if !out.contains(&owned) {
+            out.push(owned);
+        }
+        if out.len() >= max_results {
+            break;
+        }
+    }
+    out
+}
+
+/// True when `name` looks like a CA, timestamp authority, or other chain
+/// entry rather than a code-signing identity. Used to pick the "who really
+/// signed this" organization out of the Authenticode chain.
+fn is_ca_identity(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    // Role keywords that only appear in CA / intermediate / timestamp CNs.
+    const ROLE_MARKERS: &[&str] = &[
+        "root ca",
+        "intermediate",
+        "certificate authority",
+        "certification authority",
+        "timestamp",
+        "timestamping",
+        "time stamping",
+        "time-stamping",
+        "code signing ca",
+        "code signing pca",
+        "assured id",
+        "worldwide developer relations",
+    ];
+    for marker in ROLE_MARKERS {
+        if lower.contains(marker) {
+            return true;
+        }
+    }
+    // Standalone " ca" token (e.g. "Some Vendor CA") — match word-boundary
+    // only, to avoid swallowing names like "California Corp".
+    if lower.ends_with(" ca") || lower.contains(" ca ") {
+        return true;
+    }
+    // Well-known CA vendor brand names. If the name *is* one of these (or
+    // starts with one as a brand prefix), treat it as a CA identity.
+    const CA_BRANDS: &[&str] = &[
+        "digicert",
+        "sectigo",
+        "comodo",
+        "globalsign",
+        "verisign",
+        "symantec",
+        "thawte",
+        "geotrust",
+        "entrust",
+        "usertrust",
+        "addtrust",
+        "starfield",
+        "godaddy secure",
+        "go daddy secure",
+        "quovadis",
+        "letsencrypt",
+        "let's encrypt",
+        "amazon trust",
+        "actalis",
+    ];
+    for brand in CA_BRANDS {
+        if lower.starts_with(brand) {
+            let next = lower.as_bytes().get(brand.len()).copied();
+            if next.is_none_or(|c| !c.is_ascii_alphanumeric()) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Strip a trailing `.dll` suffix (case-insensitive) and lowercase the result.
+fn normalize_dll_stem(name: &str) -> String {
+    let stem = name.strip_suffix(".dll").unwrap_or(name);
+    let stem = stem.strip_suffix(".DLL").unwrap_or(stem);
+    stem.to_ascii_lowercase()
+}
+
+/// Lowercased basename of `path` with any `.dll` / `.DLL` suffix removed.
+/// Empty string if the path has no file component.
+fn self_basename_stem(path: &Path) -> String {
+    path.file_name()
+        .and_then(|f| f.to_str())
+        .map(normalize_dll_stem)
+        .unwrap_or_default()
+}
+
+/// True when `target` is a version-suffixed variant of `self_stem` —
+/// i.e. both names strip to the same non-empty alphabetic prefix once any
+/// trailing ASCII digits are removed. `python3` vs `python312` → match;
+/// `version` vs `version_orig` → no match (the malicious sideload pattern).
+fn is_version_variant(self_stem: &str, target: &str) -> bool {
+    if self_stem.is_empty() || target.is_empty() {
+        return false;
+    }
+    let self_alpha = self_stem.trim_end_matches(|c: char| c.is_ascii_digit());
+    let target_alpha = target.trim_end_matches(|c: char| c.is_ascii_digit());
+    !self_alpha.is_empty() && self_alpha == target_alpha
+}
+
 fn is_standard_entry_section(name: &str) -> bool {
     matches!(
         name.to_ascii_lowercase().as_str(),
@@ -707,7 +844,7 @@ impl PEAnalyzer {
         // post-parse panic is surfaced the same way as a parse-time failure.
         let (pe_metrics, lazy_walker_panicked) = match pe {
             Some(pe) => {
-                let (m, panicked) = self.compute_pe_metrics(pe, pe_data);
+                let (m, panicked) = self.compute_pe_metrics(pe, pe_data, logical_path);
                 (Some(m), panicked)
             }
             None => (None, false),
@@ -1238,7 +1375,10 @@ impl PEAnalyzer {
             if let Some(pe_metrics) = &metrics.pe {
                 if let Some(signer_full) = &pe_metrics.signer {
                     let sig_type = pe_metrics.signature_type.as_deref().unwrap_or("unknown");
-                    // Split if we have multiple signers
+                    // Chain entries (each CN in the Authenticode chain) are
+                    // kept at Baseline so composite rules like fake-certificate
+                    // can still match them by ID, but they stop cluttering the
+                    // Notable output alongside the actual signer.
                     for signer in signer_full.split(", ") {
                         let normalized_signer = signer
                             .to_lowercase()
@@ -1249,7 +1389,37 @@ impl PEAnalyzer {
                         report.findings.push(Finding {
                             id: format!("metadata/signed/{}::{}", sig_type, normalized_signer),
                             kind: FindingKind::Capability,
-                            desc: format!("Signed by: {}", signer),
+                            desc: format!("Authenticode chain CN: {}", signer),
+                            conf: 1.0,
+                            crit: Criticality::Baseline,
+                            mbc: None,
+                            attack: None,
+                            trait_refs: vec![],
+                            evidence: vec![Evidence {
+                                method: "authenticode".to_string(),
+                                source: "cleave".to_string(),
+                                value: signer.to_string(),
+                                ..Default::default()
+                            }],
+                            match_count: 1,
+                            source_file: None,
+                        });
+                    }
+                    // Primary signer: the leaf code-signing identity
+                    // (organization if available, else filtered leaf CN),
+                    // elevated to Notable so the real "who signed this"
+                    // answer stands out from the chain.
+                    if let Some(primary) = &pe_metrics.primary_signer {
+                        let normalized = primary
+                            .to_lowercase()
+                            .replace(' ', "-")
+                            .replace(',', "")
+                            .replace("(", "")
+                            .replace(")", "");
+                        report.findings.push(Finding {
+                            id: format!("metadata/signed/leaf::{}", normalized),
+                            kind: FindingKind::Capability,
+                            desc: format!("Signed by {}", primary),
                             conf: 1.0,
                             crit: Criticality::Notable,
                             mbc: None,
@@ -1258,7 +1428,7 @@ impl PEAnalyzer {
                             evidence: vec![Evidence {
                                 method: "authenticode".to_string(),
                                 source: "cleave".to_string(),
-                                value: signer.to_string(),
+                                value: primary.clone(),
                                 ..Default::default()
                             }],
                             match_count: 1,
@@ -1524,6 +1694,7 @@ impl PEAnalyzer {
         &self,
         pe: &PE<'a>,
         data: &[u8],
+        logical_path: &Path,
     ) -> (crate::types::binary_metrics::PeMetrics, bool) {
         use crate::types::binary_metrics::PeMetrics;
 
@@ -1657,39 +1828,15 @@ impl PEAnalyzer {
                                     dt.timestamp() < metrics.timestamp as i64;
                             }
 
-                            // Simple extraction of common names from certificate chain
+                            // Simple extraction of common names + organizations
+                            // from certificate chain. CN (2.5.4.3) holds the
+                            // per-cert subject; O (2.5.4.10) holds the signing
+                            // organization — which is what users care about for
+                            // "who signed this" (e.g. "Python Software Foundation").
                             let cn_oid = [0x55, 0x04, 0x03];
-                            let mut signers = Vec::new();
-                            let mut search_pos = 0;
-
-                            while let Some(pos) = pkcs7_data[search_pos..]
-                                .windows(cn_oid.len())
-                                .position(|w| w == cn_oid)
-                            {
-                                let abs_pos = search_pos + pos;
-                                search_pos = abs_pos + cn_oid.len();
-
-                                // Next byte is string type, then length
-                                let type_pos = abs_pos + cn_oid.len();
-                                if type_pos + 1 < pkcs7_data.len() {
-                                    let len = pkcs7_data[type_pos + 1] as usize;
-                                    let str_pos = type_pos + 2;
-                                    if len > 0 && str_pos + len <= pkcs7_data.len() {
-                                        if let Ok(cn) =
-                                            std::str::from_utf8(&pkcs7_data[str_pos..str_pos + len])
-                                        {
-                                            let cn = cn.trim_matches(char::from(0)).trim();
-                                            if !cn.is_empty() && !signers.contains(&cn.to_string())
-                                            {
-                                                signers.push(cn.to_string());
-                                            }
-                                        }
-                                    }
-                                }
-                                if signers.len() > 10 {
-                                    break;
-                                }
-                            }
+                            let o_oid = [0x55, 0x04, 0x0a];
+                            let signers = scan_asn1_attribute(pkcs7_data, &cn_oid, 10);
+                            let orgs = scan_asn1_attribute(pkcs7_data, &o_oid, 10);
 
                             if !signers.is_empty() {
                                 metrics.signer = Some(signers.join(", "));
@@ -1701,6 +1848,13 @@ impl PEAnalyzer {
                                 } else {
                                     metrics.signature_type = Some("developer".to_string());
                                 }
+                                // Primary signer: prefer a non-CA Organization,
+                                // fall back to the first non-CA Common Name.
+                                metrics.primary_signer = orgs
+                                    .iter()
+                                    .find(|s| !is_ca_identity(s))
+                                    .or_else(|| signers.iter().find(|s| !is_ca_identity(s)))
+                                    .cloned();
                             }
                         }
                     }
@@ -1797,6 +1951,7 @@ impl PEAnalyzer {
         let mut total_exports: u32 = 0;
         let mut forwarded: u32 = 0;
         let mut forwards_to_system: u32 = 0;
+        let mut forward_targets: HashSet<String> = HashSet::new();
         for export in &pe.exports {
             if export.name.is_none() {
                 continue;
@@ -1809,6 +1964,7 @@ impl PEAnalyzer {
                     if is_system_dll(lib) {
                         forwards_to_system += 1;
                     }
+                    forward_targets.insert(normalize_dll_stem(lib));
                 }
                 None => {}
             }
@@ -1820,6 +1976,13 @@ impl PEAnalyzer {
         } else {
             0.0
         };
+        metrics.self_versioned_forwarder = total_exports > 0
+            && forwarded == total_exports
+            && forward_targets.len() == 1
+            && is_version_variant(
+                &self_basename_stem(logical_path),
+                forward_targets.iter().next().map(String::as_str).unwrap_or(""),
+            );
 
         // Section alignment check
         if let Some(opt_header) = &pe.header.optional_header {

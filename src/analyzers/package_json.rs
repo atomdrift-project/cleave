@@ -1421,7 +1421,7 @@ impl PackageJsonAnalyzer {
             return false;
         };
 
-        if !name.starts_with("@react-native/") {
+        if name != "react-native" && !name.starts_with("@react-native/") {
             return false;
         }
 

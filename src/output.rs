@@ -774,7 +774,27 @@ fn truncate_with_ellipsis(s: &str, max_width: usize) -> String {
 }
 
 fn display_file_type(file_type: &str) -> String {
-    format!("detected: {}", file_type.to_uppercase())
+    file_type.to_uppercase()
+}
+
+/// Render a section label as a muted 256-color pill — bold white on dark bg.
+/// Hue encodes the namespace: red=well-known, magenta=objectives, blue=behaviors, gray=metadata.
+#[allow(dead_code)] // Used by binary target
+fn section_pill(ns: &Namespace) -> colored::ColoredString {
+    let (name, r, g, b) = match ns {
+        Namespace::WellKnown => (ns.display_name(), 95, 0, 0), // dark red (256 idx 52)
+        Namespace::Objectives => (ns.display_name(), 95, 0, 95), // dark magenta (53)
+        Namespace::MicroBehaviors => (ns.display_name(), 0, 0, 95), // dark blue (17)
+        Namespace::Metadata => (ns.display_name(), 48, 48, 48), // dark gray (236)
+    };
+    format!(" {name} ").bold().white().on_truecolor(r, g, b)
+}
+
+/// Full-width cyan ━ rule used as a file-boundary marker.
+#[allow(dead_code)] // Used by binary target
+fn file_rule(width: usize) -> colored::ColoredString {
+    let rule: String = "━".repeat(width);
+    rule.cyan()
 }
 
 /// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
@@ -925,9 +945,12 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             display_path.bright_white().bold(),
             type_formula.bright_black()
         ));
-        output.push('\n');
+        let rule_width = term_width.saturating_sub(indent.len());
+        output.push_str(&format!("{}{}\n", indent, file_rule(rule_width)));
 
-        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA
+        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA.
+        // First section follows the file rule with no gap; later sections get a leading blank.
+        let mut first_section = true;
         for ns in [
             Namespace::WellKnown,
             Namespace::Objectives,
@@ -938,8 +961,12 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
                 continue; // Skip empty sections
             };
 
-            // Section header
-            output.push_str(&format!("{}\n", ns.display_name().bright_magenta().bold()));
+            if !first_section {
+                output.push('\n');
+            }
+            first_section = false;
+
+            output.push_str(&format!("{}\n", section_pill(&ns)));
 
             // Render each finding
             for finding in findings {
@@ -960,8 +987,10 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
                     bullet, padded_trait, padded_desc, colored_evidence
                 ));
             }
-            output.push('\n');
         }
+
+        // Trailing blank after all sections separates this file from the next.
+        output.push('\n');
     }
 
     output

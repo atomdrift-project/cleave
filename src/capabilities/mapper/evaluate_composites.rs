@@ -302,9 +302,7 @@ impl super::CapabilityMapper {
             all_findings.push(Finding {
                 id: "objectives/anti-static/excessive-line-length".to_string(),
                 kind: FindingKind::Structural,
-                desc:
-                    "File contains excessively long lines (>1MB) that may cause regex backtracking"
-                        .to_string(),
+                desc: "Excessively long lines (>1MB)".to_string(),
                 conf: 0.9,
                 crit,
                 mbc: None,

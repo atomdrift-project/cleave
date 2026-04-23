@@ -900,15 +900,22 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             .max()
             .unwrap_or(20);
 
-        let desc_width = all_findings
+        let natural_desc_width = all_findings
             .iter()
             .map(|f| terse_description(&f.desc).len())
             .max()
             .unwrap_or(30);
 
-        // Evidence gets remaining space: term_width - 4 (bullet=3 + space) - trait - 2 - desc - 2
-        let fixed_width = 4 + trait_width + 2 + desc_width + 2;
-        let evidence_width = term_width.saturating_sub(fixed_width);
+        // Reserve at least MIN_EVIDENCE_WIDTH columns for evidence by capping the
+        // description column. One overly long description would otherwise push
+        // evidence off the screen, leaving every row with just a stray `…`.
+        // Layout overhead: bullet(3) + space(1) + trait + 2 spaces + 2 spaces = 8 + trait_width
+        const MIN_EVIDENCE_WIDTH: usize = 12;
+        let overhead = 8 + trait_width;
+        let max_desc_width = term_width.saturating_sub(overhead + MIN_EVIDENCE_WIDTH);
+        let desc_width = natural_desc_width.min(max_desc_width);
+
+        let evidence_width = term_width.saturating_sub(overhead + desc_width);
 
         // Generate formula from filtered findings
         let formula = malecule_bridge::formula_from_findings(&filtered);
@@ -978,7 +985,8 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
                 // Format: ● trait_id  description  evidence
                 let bullet = bullet_for_crit(&finding.crit);
                 let padded_trait = format!("{:width$}", trait_id, width = trait_width);
-                let padded_desc = format!("{:width$}", desc, width = desc_width);
+                let truncated_desc = truncate_with_ellipsis(&desc, desc_width);
+                let padded_desc = format!("{:width$}", truncated_desc, width = desc_width);
                 let truncated_evidence = truncate_with_ellipsis(&evidence, evidence_width);
                 let colored_evidence = colorize_by_crit(&truncated_evidence, &finding.crit);
 

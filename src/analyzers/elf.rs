@@ -20,6 +20,19 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
+const MAX_ELF_NOTE_SECTIONS: usize = 64;
+const MAX_ELF_NOTE_BYTES: usize = 1024 * 1024;
+const MAX_ELF_NOTES: u32 = 4096;
+const MAX_ELF_NOTE_NAME_BYTES: usize = 256;
+const MAX_ELF_BUILD_ID_BYTES: usize = 1024;
+
+#[derive(Debug, Clone, Default)]
+struct ElfNoteSummary {
+    note_count: u32,
+    build_id: Option<Vec<u8>>,
+    truncated: bool,
+}
+
 /// Analyzer for Linux ELF binaries (executables, shared objects, kernel modules)
 #[derive(Debug)]
 pub(crate) struct ElfAnalyzer {
@@ -63,6 +76,178 @@ impl ElfAnalyzer {
         std::str::from_utf8(&section_data[..nul])
             .ok()
             .map(ToString::to_string)
+    }
+
+    fn read_u32(bytes: &[u8], little_endian: bool) -> Option<u32> {
+        let raw: [u8; 4] = bytes.get(..4)?.try_into().ok()?;
+        Some(if little_endian {
+            u32::from_le_bytes(raw)
+        } else {
+            u32::from_be_bytes(raw)
+        })
+    }
+
+    fn align_note_offset(offset: usize, align: usize) -> Option<usize> {
+        let align = if align == 0 { 4 } else { align };
+        if !align.is_power_of_two() {
+            return offset.checked_add(align - 1).map(|n| n / align * align);
+        }
+        offset.checked_add(align - 1).map(|n| n & !(align - 1))
+    }
+
+    fn is_gnu_note_name(name: &[u8]) -> bool {
+        name.strip_suffix(&[0]).unwrap_or(name) == b"GNU"
+    }
+
+    // Work around goblin note parsing getting stuck on hostile or unusual SHT_NOTE
+    // ranges: goblin's Note::try_from_ctx decodes note names as UTF-8 and can spend
+    // unbounded CPU validating attacker-controlled namesz/section data. Cleave only
+    // needs note count and GNU build-id, so scan raw bytes with explicit budgets.
+    fn summarize_elf_notes<'a>(&self, elf: &Elf<'a>, data: &[u8]) -> ElfNoteSummary {
+        use goblin::elf::section_header::SHT_NOTE;
+
+        let mut summary = ElfNoteSummary::default();
+        let mut sections_seen = 0usize;
+        let mut bytes_scanned = 0usize;
+
+        for section in &elf.section_headers {
+            if section.sh_type != SHT_NOTE {
+                continue;
+            }
+
+            sections_seen += 1;
+            if sections_seen > MAX_ELF_NOTE_SECTIONS {
+                summary.truncated = true;
+                break;
+            }
+
+            let Ok(section_offset) = usize::try_from(section.sh_offset) else {
+                summary.truncated = true;
+                continue;
+            };
+            let Ok(section_size) = usize::try_from(section.sh_size) else {
+                summary.truncated = true;
+                continue;
+            };
+            if section_size == 0 {
+                continue;
+            }
+            let Some(section_end) = section_offset.checked_add(section_size) else {
+                summary.truncated = true;
+                continue;
+            };
+            if section_offset >= data.len() || section_end > data.len() {
+                summary.truncated = true;
+                continue;
+            }
+
+            let remaining_budget = MAX_ELF_NOTE_BYTES.saturating_sub(bytes_scanned);
+            if remaining_budget == 0 {
+                summary.truncated = true;
+                break;
+            }
+            let scan_len = section_size.min(remaining_budget);
+            if scan_len < section_size {
+                summary.truncated = true;
+            }
+            bytes_scanned = bytes_scanned.saturating_add(scan_len);
+
+            let scan_end = section_offset + scan_len;
+            let section_data = &data[section_offset..scan_end];
+            let mut offset = 0usize;
+            let align = usize::try_from(section.sh_addralign).unwrap_or(4).max(1);
+
+            while offset
+                .checked_add(12)
+                .is_some_and(|end| end <= section_data.len())
+            {
+                if summary.note_count >= MAX_ELF_NOTES {
+                    summary.truncated = true;
+                    return summary;
+                }
+
+                let namesz =
+                    match Self::read_u32(&section_data[offset..offset + 4], elf.little_endian) {
+                        Some(value) => value as usize,
+                        None => {
+                            summary.truncated = true;
+                            break;
+                        }
+                    };
+                let descsz = match Self::read_u32(
+                    &section_data[offset + 4..offset + 8],
+                    elf.little_endian,
+                ) {
+                    Some(value) => value as usize,
+                    None => {
+                        summary.truncated = true;
+                        break;
+                    }
+                };
+                let n_type =
+                    match Self::read_u32(&section_data[offset + 8..offset + 12], elf.little_endian)
+                    {
+                        Some(value) => value,
+                        None => {
+                            summary.truncated = true;
+                            break;
+                        }
+                    };
+
+                let Some(name_start) = offset.checked_add(12) else {
+                    summary.truncated = true;
+                    break;
+                };
+                let Some(name_end) = name_start.checked_add(namesz) else {
+                    summary.truncated = true;
+                    break;
+                };
+                if name_end > section_data.len() {
+                    summary.truncated = true;
+                    break;
+                }
+                let Some(desc_start) = Self::align_note_offset(name_end, align) else {
+                    summary.truncated = true;
+                    break;
+                };
+                let Some(desc_end) = desc_start.checked_add(descsz) else {
+                    summary.truncated = true;
+                    break;
+                };
+                if desc_end > section_data.len() {
+                    summary.truncated = true;
+                    break;
+                }
+                let Some(next_offset) = Self::align_note_offset(desc_end, align) else {
+                    summary.truncated = true;
+                    break;
+                };
+                if next_offset <= offset {
+                    summary.truncated = true;
+                    break;
+                }
+
+                summary.note_count = summary.note_count.saturating_add(1);
+                if summary.build_id.is_none()
+                    && n_type == NT_GNU_BUILD_ID
+                    && namesz <= MAX_ELF_NOTE_NAME_BYTES
+                    && descsz <= MAX_ELF_BUILD_ID_BYTES
+                    && Self::is_gnu_note_name(&section_data[name_start..name_end])
+                {
+                    summary.build_id = Some(section_data[desc_start..desc_end].to_vec());
+                } else if namesz > MAX_ELF_NOTE_NAME_BYTES || descsz > MAX_ELF_BUILD_ID_BYTES {
+                    summary.truncated = true;
+                }
+
+                if next_offset > section_data.len() {
+                    summary.truncated = true;
+                    break;
+                }
+                offset = next_offset;
+            }
+        }
+
+        summary
     }
 
     /// Creates a new ELF analyzer with default configuration
@@ -191,8 +376,10 @@ impl ElfAnalyzer {
                 // Update architecture now that we have parsed the header
                 report.target.architectures = Some(vec![self.arch_name(&elf)]);
 
+                let note_summary = self.summarize_elf_notes(&elf, data);
+
                 // Compute ELF-specific metrics
-                let elf_metrics = self.compute_elf_metrics(&elf, data);
+                let elf_metrics = self.compute_elf_metrics(&elf, &note_summary);
                 let symbols_found = !elf.syms.is_empty();
 
                 // Calculate code_size from goblin section flags (more accurate than radare2)
@@ -220,7 +407,7 @@ impl ElfAnalyzer {
                 }
                 let r2_inner = if on_rayon_worker {
                     let goblin_start = std::time::Instant::now();
-                    self.analyze_structure(&elf, data, &mut report);
+                    self.analyze_structure(&elf, data, &note_summary, &mut report);
                     self.analyze_dynamic_symbols(&elf, data, &mut report);
                     self.analyze_sections(&elf, data, &mut report);
                     goblin_ms = goblin_start.elapsed().as_millis();
@@ -266,7 +453,7 @@ impl ElfAnalyzer {
                         },
                         || {
                             let goblin_start = std::time::Instant::now();
-                            self.analyze_structure(&elf, data, &mut report);
+                            self.analyze_structure(&elf, data, &note_summary, &mut report);
                             self.analyze_dynamic_symbols(&elf, data, &mut report);
                             self.analyze_sections(&elf, data, &mut report);
                             goblin_ms = goblin_start.elapsed().as_millis();
@@ -730,7 +917,13 @@ impl ElfAnalyzer {
         report
     }
 
-    fn analyze_structure<'a>(&self, elf: &Elf<'a>, data: &[u8], report: &mut AnalysisReport) {
+    fn analyze_structure<'a>(
+        &self,
+        elf: &Elf<'a>,
+        data: &[u8],
+        note_summary: &ElfNoteSummary,
+        report: &mut AnalysisReport,
+    ) {
         // Binary format
         report.structure.push(StructuralFeature {
             id: "binary/format/elf".to_string(),
@@ -838,27 +1031,22 @@ impl ElfAnalyzer {
             );
         }
 
-        if let Some(note_iter) = elf.iter_note_sections(data, None) {
-            for note in note_iter.flatten() {
-                if note.name == "GNU" && note.n_type == NT_GNU_BUILD_ID {
-                    report.findings.push(
-                        Finding::structural(
-                            "metadata/build/reproducible::elf-build-id".to_string(),
-                            "ELF GNU build-id note present".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Baseline)
-                        .with_evidence(vec![Evidence {
-                            method: "note".to_string(),
-                            source: "goblin".to_string(),
-                            value: hex::encode(note.desc),
-                            location: None,
-                            ..Default::default()
-                        }]),
-                    );
-                    break;
-                }
-            }
+        if let Some(build_id) = &note_summary.build_id {
+            report.findings.push(
+                Finding::structural(
+                    "metadata/build/reproducible::elf-build-id".to_string(),
+                    "ELF GNU build-id note present".to_string(),
+                    1.0,
+                )
+                .with_criticality(Criticality::Baseline)
+                .with_evidence(vec![Evidence {
+                    method: "note".to_string(),
+                    source: "bounded-elf-note-scanner".to_string(),
+                    value: hex::encode(build_id),
+                    location: None,
+                    ..Default::default()
+                }]),
+            );
         }
 
         for section in &elf.section_headers {
@@ -1046,7 +1234,7 @@ impl ElfAnalyzer {
         }
     }
     /// Compute ELF-specific metrics from parsed ELF binary
-    fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>, data: &[u8]) -> ElfMetrics {
+    fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>, note_summary: &ElfNoteSummary) -> ElfMetrics {
         use goblin::elf::dynamic::{
             DT_BIND_NOW, DT_FINI_ARRAYSZ, DT_GNU_HASH, DT_INIT_ARRAYSZ, DT_RPATH, DT_RUNPATH,
             DT_TEXTREL,
@@ -1201,14 +1389,10 @@ impl ElfAnalyzer {
             }
         }
 
-        if let Some(note_iter) = elf.iter_note_sections(data, None) {
-            for note in note_iter.flatten() {
-                metrics.note_count += 1;
-                if note.name == "GNU" && note.n_type == NT_GNU_BUILD_ID {
-                    metrics.build_id_present = true;
-                    metrics.build_id_length = note.desc.len() as u32;
-                }
-            }
+        metrics.note_count = note_summary.note_count;
+        if let Some(build_id) = &note_summary.build_id {
+            metrics.build_id_present = true;
+            metrics.build_id_length = build_id.len() as u32;
         }
 
         metrics
@@ -1410,6 +1594,94 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
 
+    fn push_u16(out: &mut Vec<u8>, value: u16) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u32(out: &mut Vec<u8>, value: u32) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn push_u64(out: &mut Vec<u8>, value: u64) {
+        out.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn pad_to(out: &mut Vec<u8>, len: usize) {
+        out.resize(len, 0);
+    }
+
+    fn note_record(name: &[u8], desc: &[u8], n_type: u32) -> Vec<u8> {
+        let mut out = Vec::new();
+        push_u32(&mut out, name.len() as u32);
+        push_u32(&mut out, desc.len() as u32);
+        push_u32(&mut out, n_type);
+        out.extend_from_slice(name);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out.extend_from_slice(desc);
+        while out.len() % 4 != 0 {
+            out.push(0);
+        }
+        out
+    }
+
+    fn elf64_with_note_section(note_data: &[u8], sh_addralign: u64) -> Vec<u8> {
+        let note_offset = 0x100usize;
+        let shstrtab = b"\0.note.gnu.build-id\0.shstrtab\0";
+        let shstr_offset = note_offset + note_data.len();
+        let shoff = (shstr_offset + shstrtab.len() + 7) & !7;
+        let mut out = Vec::new();
+
+        out.extend_from_slice(b"\x7fELF");
+        out.extend_from_slice(&[2, 1, 1, 0, 0]);
+        out.extend_from_slice(&[0; 7]);
+        push_u16(&mut out, goblin::elf::header::ET_EXEC);
+        push_u16(&mut out, goblin::elf::header::EM_X86_64);
+        push_u32(&mut out, 1);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, shoff as u64);
+        push_u32(&mut out, 0);
+        push_u16(&mut out, 64);
+        push_u16(&mut out, 56);
+        push_u16(&mut out, 0);
+        push_u16(&mut out, 64);
+        push_u16(&mut out, 3);
+        push_u16(&mut out, 2);
+
+        pad_to(&mut out, note_offset);
+        out.extend_from_slice(note_data);
+        out.extend_from_slice(shstrtab);
+        pad_to(&mut out, shoff);
+
+        out.extend_from_slice(&[0; 64]);
+
+        push_u32(&mut out, 1);
+        push_u32(&mut out, goblin::elf::section_header::SHT_NOTE);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, note_offset as u64);
+        push_u64(&mut out, note_data.len() as u64);
+        push_u32(&mut out, 0);
+        push_u32(&mut out, 0);
+        push_u64(&mut out, sh_addralign);
+        push_u64(&mut out, 0);
+
+        push_u32(&mut out, 20);
+        push_u32(&mut out, goblin::elf::section_header::SHT_STRTAB);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, 0);
+        push_u64(&mut out, shstr_offset as u64);
+        push_u64(&mut out, shstrtab.len() as u64);
+        push_u32(&mut out, 0);
+        push_u32(&mut out, 0);
+        push_u64(&mut out, 1);
+        push_u64(&mut out, 0);
+
+        out
+    }
+
     fn test_elf_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.elf")
     }
@@ -1475,6 +1747,71 @@ mod tests {
         assert!(report.target.architectures.is_some());
         let archs = report.target.architectures.unwrap();
         assert!(!archs.is_empty());
+    }
+
+    #[test]
+    fn test_bounded_note_scanner_finds_gnu_build_id_without_goblin_iterator() {
+        let build_id: Vec<u8> = (0u8..20).collect();
+        let data = elf64_with_note_section(&note_record(b"GNU\0", &build_id, NT_GNU_BUILD_ID), 4);
+        let elf = Elf::parse(&data).unwrap();
+        let analyzer = ElfAnalyzer::new();
+
+        let summary = analyzer.summarize_elf_notes(&elf, &data);
+
+        assert_eq!(summary.note_count, 1);
+        assert_eq!(summary.build_id.as_deref(), Some(build_id.as_slice()));
+        assert!(!summary.truncated);
+    }
+
+    #[test]
+    fn test_bounded_note_scanner_caps_note_count() {
+        let one_note = note_record(b"\0", &[], 0);
+        let mut notes = Vec::new();
+        for _ in 0..(MAX_ELF_NOTES + 32) {
+            notes.extend_from_slice(&one_note);
+        }
+        let data = elf64_with_note_section(&notes, 4);
+        let elf = Elf::parse(&data).unwrap();
+        let analyzer = ElfAnalyzer::new();
+
+        let summary = analyzer.summarize_elf_notes(&elf, &data);
+
+        assert_eq!(summary.note_count, MAX_ELF_NOTES);
+        assert!(summary.truncated);
+    }
+
+    #[test]
+    fn test_bounded_note_scanner_stops_on_malformed_large_name() {
+        let mut note = Vec::new();
+        push_u32(&mut note, u32::MAX);
+        push_u32(&mut note, 0);
+        push_u32(&mut note, NT_GNU_BUILD_ID);
+        let data = elf64_with_note_section(&note, 4);
+        let elf = Elf::parse(&data).unwrap();
+        let analyzer = ElfAnalyzer::new();
+
+        let summary = analyzer.summarize_elf_notes(&elf, &data);
+
+        assert_eq!(summary.note_count, 0);
+        assert!(summary.build_id.is_none());
+        assert!(summary.truncated);
+    }
+
+    #[test]
+    fn test_bounded_note_scanner_enforces_byte_budget() {
+        let mut notes = Vec::new();
+        let note = note_record(b"\0", &[], 0);
+        while notes.len() <= MAX_ELF_NOTE_BYTES + note.len() {
+            notes.extend_from_slice(&note);
+        }
+        let data = elf64_with_note_section(&notes, 4);
+        let elf = Elf::parse(&data).unwrap();
+        let analyzer = ElfAnalyzer::new();
+
+        let summary = analyzer.summarize_elf_notes(&elf, &data);
+
+        assert!(summary.note_count <= MAX_ELF_NOTES);
+        assert!(summary.truncated);
     }
 
     #[test]

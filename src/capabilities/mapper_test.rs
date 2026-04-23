@@ -41,6 +41,19 @@ fn create_test_report_with_size(size: u64) -> AnalysisReport {
     })
 }
 
+/// Helper: Create a test analysis report for source files.
+fn create_test_source_report(path: &str, file_type: &str, size: u64) -> AnalysisReport {
+    use crate::types::TargetInfo;
+
+    AnalysisReport::new(TargetInfo {
+        path: path.to_string(),
+        file_type: file_type.to_string(),
+        size_bytes: size,
+        sha256: "abc123".to_string(),
+        architectures: None,
+    })
+}
+
 #[test]
 fn test_empty_mapper() {
     let mapper = CapabilityMapper::empty();
@@ -1188,5 +1201,87 @@ composite_rules:
             .iter()
             .any(|f| f.id == "test/victim::composite"),
         "victim composite should be retroactively suppressed by unless: test/suppressor::combined"
+    );
+}
+
+#[test]
+fn test_source_text_traits_do_not_use_extracted_string_prefilter() {
+    let yaml = r#"
+defaults:
+  platforms: [unix, windows]
+  for: [javascript]
+
+traits:
+  - id: "test/source::native-addon-require"
+    desc: "Requires prebuilt native addon"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      regex: "require\\(['\"]\\./prebuilt/[^'\"\\n]{1,120}\\.node['\"]\\)"
+
+  - id: "test/source::version-facade"
+    desc: "Exports version facade only"
+    crit: suspicious
+    conf: 0.9
+    if:
+      type: text
+      substr: "module.exports = { version: require('./package.json').version }"
+
+composite_rules:
+  - id: "test/source::native-addon-loader"
+    desc: "Version facade native addon loader"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: test/source::native-addon-require
+      - id: test/source::version-facade
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+    let mapper = CapabilityMapper::from_yaml(&path).unwrap();
+
+    let source = concat!(
+        "try { require('./prebuilt/addon.node') } catch(e) {}\n",
+        "module.exports = { version: require('./package.json').version }\n"
+    );
+    let mut report =
+        create_test_source_report("index.js", "javascript", source.len() as u64);
+
+    // Mimic source analyzer output: string literals are extracted, but the raw-text
+    // source patterns should still be evaluated against the full source content.
+    for value in ["./prebuilt/addon.node", "./package.json"] {
+        report.strings.push(crate::types::StringInfo {
+            value: value.to_string(),
+            offset: Some(0),
+            encoding: "utf-8".to_string(),
+            string_type: None,
+            section: None,
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+    }
+
+    mapper.evaluate_and_merge_findings(&mut report, source.as_bytes(), None, None);
+
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source::native-addon-require"),
+        "source text regex trait should be emitted from raw source text"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source::version-facade"),
+        "source text substr trait should be emitted from raw source text"
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "test/source::native-addon-loader"),
+        "composite depending on raw source text traits should also fire"
     );
 }

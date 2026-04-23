@@ -328,6 +328,7 @@ impl super::CapabilityMapper {
     ) -> Vec<Finding> {
         // Determine file type from report
         let file_type = self.detect_file_type(&report.target.file_type);
+        let use_string_prefilters = !file_type.uses_raw_text_search();
 
         let mut ctx = EvaluationContext::new(
             report,
@@ -421,8 +422,15 @@ impl super::CapabilityMapper {
 
             let trait_def = &self.trait_definitions[idx];
             // For dependent traits, skip string-based optimizations since
-            // we're matching on trait: conditions, not strings
-            if !dependent_only {
+            // we're matching on trait: conditions, not strings.
+            //
+            // Also skip them for raw-text source files. The string index is built from
+            // extracted string literals/imports/exports, but `type: text` on source
+            // files matches against the full source text. Using the extracted-string
+            // index as a prefilter is therefore unsound and can drop true positives
+            // for patterns that span syntax, such as `require('./prebuilt/addon.node')`
+            // or `module.exports = { version: require('./package.json').version }`.
+            if !dependent_only && use_string_prefilters {
                 // Check if this is an exact string trait with cached evidence
                 let is_simple_exact_string = trait_def.downgrade.is_none()
                     && matches!(

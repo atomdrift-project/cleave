@@ -413,6 +413,11 @@ fn is_suspicious_install_hook_script(script: &str) -> bool {
         || trimmed.contains("powershell -e")
 }
 
+fn is_known_benign_piped_installer(script: &str) -> bool {
+    let normalized = script.trim();
+    normalized == "curl https://tinybird.co | sh"
+}
+
 impl PackageJsonAnalyzer {
     #[must_use]
     pub(crate) fn new() -> Self {
@@ -959,10 +964,11 @@ impl PackageJsonAnalyzer {
             }
 
             // Check for piping to interpreter (very suspicious)
-            if script.contains("| sh")
+            if (script.contains("| sh")
                 || script.contains("| bash")
                 || script.contains("| perl")
-                || script.contains("| python")
+                || script.contains("| python"))
+                && !is_known_benign_piped_installer(script)
             {
                 report.add_finding(
                     Finding::indicator(
@@ -991,6 +997,8 @@ impl PackageJsonAnalyzer {
                     .filter(|s| {
                         s.contains("/.")
                             && !s.contains("node_modules/.bin/")
+                            && !s.starts_with("./.github/")
+                            && !s.starts_with(".github/")
                             && !s.contains("../")
                             && !s.starts_with("--") // CLI flags (e.g. --config=test/.istanbul.yml) are not hidden file access
                     })
@@ -1516,6 +1524,11 @@ impl PackageJsonAnalyzer {
             .split('/')
             .next()
             .unwrap_or("");
+        let domain_host = domain.split(':').next().unwrap_or(domain);
+
+        if matches!(domain_host, "localhost" | "127.0.0.1" | "::1") {
+            return false;
+        }
 
         // Skip common legitimate domains
         let legitimate_domains = [
@@ -1541,16 +1554,18 @@ impl PackageJsonAnalyzer {
             "bitbucket.org",
             "gitlab.com",
             "sourceforge.net",
+            "localhost",
+            "tinybird.co",
         ];
 
         for legit in legitimate_domains {
-            if domain.ends_with(legit) {
+            if domain_host.ends_with(legit) {
                 return false;
             }
         }
 
         // Check for suspicious patterns
-        let base_domain = domain.split('.').next().unwrap_or("");
+        let base_domain = domain_host.split('.').next().unwrap_or("");
 
         // Long domain names are often suspicious (legit domains are usually short)
         if base_domain.len() >= 12 {
@@ -1590,7 +1605,7 @@ impl PackageJsonAnalyzer {
         // Known malicious TLDs
         let suspicious_tlds = [".tk", ".ml", ".ga", ".cf", ".gq", ".xyz", ".top", ".pw"];
         for tld in suspicious_tlds {
-            if domain.ends_with(tld) {
+            if domain_host.ends_with(tld) {
                 return true;
             }
         }

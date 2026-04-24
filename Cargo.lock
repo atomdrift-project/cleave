@@ -1045,9 +1045,9 @@ dependencies = [
 
 [[package]]
 name = "crc-catalog"
-version = "2.4.0"
+version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19d374276b40fb8bbdee95aef7c7fa6b5316ec764510eb64b8dd0e2ed0d7e7f5"
+checksum = "217698eaf96b4a3f0bc4f3662aaa55bdf913cd54d7204591faa790070c6d0853"
 
 [[package]]
 name = "crc32fast"
@@ -3936,7 +3936,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.2.0"
-source = "git+https://codeberg.org/atomdrift/stng.git#c6a4c622a7c1ee1227e7032cfa40031db6700443"
+source = "git+https://codeberg.org/atomdrift/stng.git#1a92055feee178c754089a66b16a42a354cbff5f"
 dependencies = [
  "aho-corasick",
  "anyhow",

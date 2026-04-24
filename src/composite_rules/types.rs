@@ -259,6 +259,8 @@ pub(crate) enum FileType {
     SystemdService,
     /// freedesktop.org Desktop Entry (.desktop) - XDG application launcher / autostart
     DesktopEntry,
+    /// Generic XML document (MSBuild project, SVG, XML config, etc.)
+    Xml,
     /// PHP composer.json manifest
     ComposerJson,
     /// Python package metadata (PKG-INFO, METADATA)
@@ -397,6 +399,7 @@ impl FileType {
                     | FileType::GithubActions
                     | FileType::SystemdService
                     | FileType::DesktopEntry
+                    | FileType::Xml
                     | FileType::ComposerJson
                     | FileType::PkgInfo
                     | FileType::Plist
@@ -483,6 +486,7 @@ impl FileType {
             FileType::GithubActions,
             FileType::SystemdService,
             FileType::DesktopEntry,
+            FileType::Xml,
             FileType::ComposerJson,
             FileType::PkgInfo,
             FileType::Plist,
@@ -570,6 +574,7 @@ impl FileType {
             "desktop-entry" | "desktop_entry" | "desktop" | ".desktop" | "xdg-desktop" => {
                 FileType::DesktopEntry
             }
+            "xml" | "csproj" | "msbuild" | "xaml" | "svg" | "xml-document" => FileType::Xml,
             "composer-json" | "composerjson" | "composer.json" => FileType::ComposerJson,
             "jpeg" | "jpg" => FileType::Jpeg,
             "png" => FileType::Png,

@@ -420,12 +420,36 @@ impl super::CapabilityMapper {
                                     });
                                 }
                                 Err(e) => {
-                                    tracing::warn!("Failed to deserialize mapper cache: {}", e);
+                                    eprintln!("⏳ Trait cache is out of date, regenerating...");
+                                    tracing::debug!(
+                                        cache = %cache_path.display(),
+                                        error = %e,
+                                        "Mapper cache deserialization failed"
+                                    );
+                                    if let Err(rm_err) = std::fs::remove_file(&cache_path) {
+                                        tracing::debug!(
+                                            cache = %cache_path.display(),
+                                            error = %rm_err,
+                                            "Failed to remove stale mapper cache"
+                                        );
+                                    }
                                 }
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to read mapper cache: {}", e);
+                            eprintln!("⏳ Trait cache is out of date, regenerating...");
+                            tracing::debug!(
+                                cache = %cache_path.display(),
+                                error = %e,
+                                "Mapper cache read failed"
+                            );
+                            if let Err(rm_err) = std::fs::remove_file(&cache_path) {
+                                tracing::debug!(
+                                    cache = %cache_path.display(),
+                                    error = %rm_err,
+                                    "Failed to remove stale mapper cache"
+                                );
+                            }
                         }
                     }
                 } else {

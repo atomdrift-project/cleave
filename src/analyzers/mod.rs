@@ -226,6 +226,7 @@ pub fn analyzer_for_file_type(
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
+        | FileType::Xml
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -334,6 +335,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
+        | FileType::Xml
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -482,6 +484,7 @@ impl FileTypeExt for FileType {
         match self {
             FileType::SystemdService => "systemd".to_string(),
             FileType::DesktopEntry => "desktop-entry".to_string(),
+            FileType::Xml => "xml".to_string(),
             FileType::Tar => "tar".to_string(),
             FileType::TarGz => "tar.gz".to_string(),
             FileType::TarBz2 => "tar.bz2".to_string(),
@@ -535,6 +538,7 @@ impl FileTypeExt for FileType {
             FileType::GithubActions => vec!["yaml", "yml", "github-actions"],
             FileType::SystemdService => vec!["service", "systemd", "unit"],
             FileType::DesktopEntry => vec!["desktop", "desktop-entry", "freedesktop", "xdg"],
+            FileType::Xml => vec!["xml", "csproj", "xaml", "svg", "msbuild"],
             FileType::Zip => vec!["zip", "archive"],
             FileType::Tar
             | FileType::TarGz

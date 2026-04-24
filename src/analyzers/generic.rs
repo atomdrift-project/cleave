@@ -85,6 +85,7 @@ impl GenericAnalyzer {
             FileType::GithubActions => "github-actions",
             FileType::SystemdService => "systemd",
             FileType::DesktopEntry => "desktop-entry",
+            FileType::Xml => "xml",
             FileType::PkgInfo => "pkg-info",
             FileType::Plist => "plist",
             FileType::Html => "html",

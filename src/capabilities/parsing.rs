@@ -388,6 +388,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::GithubActions,
                     RuleFileType::SystemdService,
                     RuleFileType::DesktopEntry,
+                    RuleFileType::Xml,
                     RuleFileType::ComposerJson,
                     RuleFileType::PkgInfo,
                     RuleFileType::Plist,
@@ -472,6 +473,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 }
                 "desktop-entry" | "desktop_entry" | "desktop" | ".desktop" | "xdg-desktop" => {
                     vec![RuleFileType::DesktopEntry]
+                }
+                "xml" | "csproj" | "msbuild" | "xaml" | "svg" | "xml-document" => {
+                    vec![RuleFileType::Xml]
                 }
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],

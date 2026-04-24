@@ -58,6 +58,8 @@ pub(crate) enum StructuredFormat {
     SystemdService,
     /// freedesktop.org Desktop Entry (.desktop)
     DesktopEntry,
+    /// Generic XML document (MSBuild project, SVG, XML config)
+    Xml,
     /// Format could not be determined
     Unknown,
 }
@@ -280,6 +282,21 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
             return StructuredFormat::DesktopEntry;
         }
 
+        // Generic XML by extension (.xml, .csproj, .xaml, etc.)
+        if name_lower.ends_with(".xml")
+            || name_lower.ends_with(".csproj")
+            || name_lower.ends_with(".vbproj")
+            || name_lower.ends_with(".fsproj")
+            || name_lower.ends_with(".vcxproj")
+            || name_lower.ends_with(".proj")
+            || name_lower.ends_with(".props")
+            || name_lower.ends_with(".targets")
+            || name_lower.ends_with(".xaml")
+            || name_lower.ends_with(".svg")
+        {
+            return StructuredFormat::Xml;
+        }
+
         // Python package metadata files (RFC 822 format)
         if name_lower == "pkg-info" || name_lower == "metadata" {
             return StructuredFormat::PkgInfo;
@@ -317,9 +334,36 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
         if preview_str.contains("<plist") || preview_str.contains("<!DOCTYPE plist") {
             return StructuredFormat::Plist;
         }
+        // Any other `<?xml`-prolog document is generic XML.
+        return StructuredFormat::Xml;
     }
     if content.starts_with(b"<plist") {
         return StructuredFormat::Plist;
+    }
+
+    // Content-sniffed XML for extensionless files that start with a well-known
+    // root element. Matches the narrow set in fileid::magic::detect_xml, so the
+    // kv evaluator sees the same files fileid classifies as Xml.
+    if content.starts_with(b"<Project ") || content.starts_with(b"<Project\t") {
+        let head = &content[..content.len().min(512)];
+        if memchr::memmem::find(head, b"schemas.microsoft.com/developer/msbuild").is_some() {
+            return StructuredFormat::Xml;
+        }
+    }
+    for prefix in [
+        &b"<svg "[..],
+        &b"<svg>"[..],
+        &b"<rss "[..],
+        &b"<feed "[..],
+        &b"<RDF "[..],
+        &b"<configuration>"[..],
+        &b"<configuration "[..],
+        &b"<manifest "[..],
+        &b"<Configuration "[..],
+    ] {
+        if content.starts_with(prefix) {
+            return StructuredFormat::Xml;
+        }
     }
 
     // Check for PKG-INFO/METADATA format (RFC 822 headers)
@@ -703,6 +747,101 @@ fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
         None
     } else {
         Some(Value::Object(root))
+    }
+}
+
+/// Parse an XML document into a JSON value queryable by kv paths.
+///
+/// Mapping rules:
+/// - Root element becomes a top-level key: `{"Project": {...}}`.
+/// - Attributes are prefixed with `@`: `{"@ToolsVersion": "4.0"}`.
+/// - A single child element with unique tag → nested object.
+/// - Multiple sibling elements with the same tag → array of objects.
+/// - Element text content → `_text` key (or scalar value if the element has no
+///   attributes and no children). Text from CDATA sections is included.
+/// - Element namespaces are dropped from paths; only the local name is used.
+///
+/// Trait authors query paths like
+/// `Project.UsingTask.@TaskFactory` (exact: `CodeTaskFactory`) to detect the
+/// MSBuild inline-task LOLBAS, or `Project.UsingTask.Task.Code._text` for the
+/// embedded source.
+fn parse_xml_to_json(content: &[u8]) -> Option<Value> {
+    let text = std::str::from_utf8(content).ok()?;
+    let doc = roxmltree::Document::parse(text).ok()?;
+    let root = doc.root_element();
+    let root_value = xml_element_to_json(root);
+    let mut map = serde_json::Map::new();
+    map.insert(root.tag_name().name().to_string(), root_value);
+    Some(Value::Object(map))
+}
+
+fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
+    let mut children: serde_json::Map<String, Value> = serde_json::Map::new();
+
+    for attr in node.attributes() {
+        let key = format!("@{}", attr.name());
+        children.insert(key, Value::String(attr.value().to_string()));
+    }
+
+    // Expose namespace declarations (xmlns=, xmlns:prefix=) ONLY at the point
+    // they are declared, not inherited into every descendant. Skip a
+    // declaration if the parent element already has it in scope.
+    let parent = node.parent();
+    for ns in node.namespaces() {
+        let already_in_parent = parent
+            .and_then(|p| p.lookup_namespace_uri(ns.name()))
+            .is_some_and(|uri| uri == ns.uri());
+        if already_in_parent {
+            continue;
+        }
+        let key = match ns.name() {
+            None => "@xmlns".to_string(),
+            Some(prefix) => format!("@xmlns:{}", prefix),
+        };
+        children
+            .entry(key)
+            .or_insert_with(|| Value::String(ns.uri().to_string()));
+    }
+
+    let mut text_parts: Vec<String> = Vec::new();
+    for child in node.children() {
+        if child.is_element() {
+            let name = child.tag_name().name().to_string();
+            let value = xml_element_to_json(child);
+            match children.get_mut(&name) {
+                Some(Value::Array(arr)) => arr.push(value),
+                Some(existing) => {
+                    let old = std::mem::replace(existing, Value::Null);
+                    *existing = Value::Array(vec![old, value]);
+                }
+                None => {
+                    children.insert(name, value);
+                }
+            }
+        } else if child.is_text() {
+            if let Some(t) = child.text() {
+                let trimmed = t.trim();
+                if !trimmed.is_empty() {
+                    text_parts.push(trimmed.to_string());
+                }
+            }
+        }
+    }
+
+    let combined_text = if text_parts.is_empty() {
+        None
+    } else {
+        Some(text_parts.join(" "))
+    };
+
+    match (children.is_empty(), combined_text) {
+        (true, Some(t)) => Value::String(t),
+        (true, None) => Value::Object(children),
+        (false, Some(t)) => {
+            children.insert("_text".to_string(), Value::String(t));
+            Value::Object(children)
+        }
+        (false, None) => Value::Object(children),
     }
 }
 
@@ -1184,6 +1323,7 @@ fn structured_format_from_file_type(
         crate::composite_rules::FileType::Lnk => StructuredFormat::Lnk,
         crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
         crate::composite_rules::FileType::DesktopEntry => StructuredFormat::DesktopEntry,
+        crate::composite_rules::FileType::Xml => StructuredFormat::Xml,
         _ => StructuredFormat::Unknown,
     }
 }
@@ -1210,6 +1350,7 @@ pub(crate) fn parse_structured_content(
         StructuredFormat::Lnk => parse_lnk(content)?,
         StructuredFormat::SystemdService => parse_systemd_service(content)?,
         StructuredFormat::DesktopEntry => parse_desktop_entry(content)?,
+        StructuredFormat::Xml => parse_xml_to_json(content)?,
         StructuredFormat::Unknown => return None,
     };
     Some((format, value))
@@ -1281,6 +1422,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
             StructuredFormat::Lnk => parse_lnk(content),
             StructuredFormat::SystemdService => parse_systemd_service(content),
             StructuredFormat::DesktopEntry => parse_desktop_entry(content),
+            StructuredFormat::Xml => parse_xml_to_json(content),
             StructuredFormat::Unknown => None,
         };
 

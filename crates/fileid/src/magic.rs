@@ -316,9 +316,11 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
             // PHP opening tag: <?php
             if data.starts_with(b"<?php") {
                 Some((FileType::Php, DetectionSource::Magic))
+            } else if let Some(r) = detect_xml_plist(data) {
+                Some(r)
             } else {
-                // XML Plist: <plist or <!DOCTYPE plist (check first 256 bytes)
-                detect_xml_plist(data)
+                // Generic XML: <?xml prolog or well-known root elements.
+                detect_xml(data)
             }
         }
         _ => None,
@@ -431,6 +433,48 @@ fn lowercase_ext(path: &Path) -> Option<String> {
         return None;
     };
     Some(ext.to_string())
+}
+
+/// Detect a generic XML document by `<?xml` prolog or well-known root elements.
+///
+/// Called only when the file starts with `<` and is NOT a plist/PHP/HTML document.
+/// Plist is checked first (separate function), and HTML is distinguished from
+/// generic XML by the `looks_like_html` content heuristic that runs later.
+fn detect_xml(data: &[u8]) -> Option<(FileType, DetectionSource)> {
+    // Standard XML prolog
+    if data.starts_with(b"<?xml") {
+        return Some((FileType::Xml, DetectionSource::Magic));
+    }
+
+    // MSBuild projects often omit the prolog and start with `<Project `
+    // Matching the xmlns confirms it's real MSBuild (not some other <Project>).
+    if data.starts_with(b"<Project ") || data.starts_with(b"<Project\t") {
+        let head = &data[..data.len().min(512)];
+        if memchr::memmem::find(head, b"schemas.microsoft.com/developer/msbuild").is_some() {
+            return Some((FileType::Xml, DetectionSource::Magic));
+        }
+    }
+
+    // Other common extensionless XML roots. Each is narrow enough to avoid
+    // colliding with HTML — HTML would match `looks_like_html` heuristic after
+    // this returns None.
+    for prefix in [
+        &b"<svg "[..],
+        &b"<svg>"[..],
+        &b"<rss "[..],
+        &b"<feed "[..],
+        &b"<RDF "[..],
+        &b"<configuration>"[..],
+        &b"<configuration "[..],
+        &b"<manifest "[..],
+        &b"<Configuration "[..],
+    ] {
+        if data.starts_with(prefix) {
+            return Some((FileType::Xml, DetectionSource::Magic));
+        }
+    }
+
+    None
 }
 
 /// Detect XML Plist markers in the first 256 bytes.

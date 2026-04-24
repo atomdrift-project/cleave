@@ -645,6 +645,15 @@ pub enum DetectFileType {
         alias("xdg-desktop")
     )]
     DesktopEntry,
+    /// Generic XML document (MSBuild csproj, XAML, SVG, XML config)
+    #[value(
+        name = "xml",
+        alias("csproj"),
+        alias("xaml"),
+        alias("svg"),
+        alias("msbuild")
+    )]
+    Xml,
     /// Raw/binary content
     Raw,
 }

@@ -1005,6 +1005,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::GithubActions,
         FileType::SystemdService,
         FileType::DesktopEntry,
+        FileType::Xml,
         FileType::ComposerJson,
         FileType::PkgInfo,
         FileType::Plist,

@@ -110,6 +110,8 @@ pub enum FileType {
     SystemdService,
     /// freedesktop.org Desktop Entry (.desktop) - XDG application launcher / autostart
     DesktopEntry,
+    /// Generic XML document (.xml, MSBuild .csproj, SVG, XML config files, etc.)
+    Xml,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
     /// ZIP archive (zip, apk, ipa, nupkg, etc.)

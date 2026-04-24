@@ -114,10 +114,7 @@ impl Drop for RizinPgidGuard {
 /// from the registry by the normal cleanup paths, so calling this after a
 /// clean shutdown is a no-op. No-op on non-Unix.
 pub(crate) fn kill_all_rizin_groups() {
-    let pgids: Vec<i32> = RIZIN_PGIDS
-        .lock()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let pgids: Vec<i32> = RIZIN_PGIDS.lock().map(|g| g.clone()).unwrap_or_default();
     #[cfg(unix)]
     for pgid in &pgids {
         // SAFETY: libc::kill with a negative PID sends the signal to the

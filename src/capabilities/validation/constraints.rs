@@ -1004,6 +1004,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::PyProjectToml,
         FileType::GithubActions,
         FileType::SystemdService,
+        FileType::DesktopEntry,
         FileType::ComposerJson,
         FileType::PkgInfo,
         FileType::Plist,

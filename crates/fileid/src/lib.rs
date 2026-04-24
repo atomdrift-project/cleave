@@ -108,6 +108,8 @@ pub enum FileType {
     GithubActions,
     /// systemd service unit file (.service, .service.d/*.conf)
     SystemdService,
+    /// freedesktop.org Desktop Entry (.desktop) - XDG application launcher / autostart
+    DesktopEntry,
     /// Python package metadata (PKG-INFO, METADATA)
     PkgInfo,
     /// ZIP archive (zip, apk, ipa, nupkg, etc.)

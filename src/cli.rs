@@ -636,6 +636,15 @@ pub enum DetectFileType {
         alias(".service")
     )]
     SystemdService,
+    /// freedesktop.org Desktop Entry (.desktop)
+    #[value(
+        name = "desktop",
+        alias("desktop-entry"),
+        alias("desktop_entry"),
+        alias(".desktop"),
+        alias("xdg-desktop")
+    )]
+    DesktopEntry,
     /// Raw/binary content
     Raw,
 }

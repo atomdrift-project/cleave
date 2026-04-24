@@ -204,6 +204,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "ex" | "exs" => Some(FileType::Elixir),
         "scpt" | "applescript" => Some(FileType::AppleScript),
         "service" => Some(FileType::SystemdService),
+        "desktop" => Some(FileType::DesktopEntry),
         "plist" | "resx" => Some(FileType::Plist),
         "rtf" => Some(FileType::Rtf),
         "doc" | "msi" | "msp" | "msg" | "dot" | "ppt" | "xls" | "xlt" => Some(FileType::OleDoc),

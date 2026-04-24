@@ -1244,8 +1244,7 @@ composite_rules:
         "try { require('./prebuilt/addon.node') } catch(e) {}\n",
         "module.exports = { version: require('./package.json').version }\n"
     );
-    let mut report =
-        create_test_source_report("index.js", "javascript", source.len() as u64);
+    let mut report = create_test_source_report("index.js", "javascript", source.len() as u64);
 
     // Mimic source analyzer output: string literals are extracted, but the raw-text
     // source patterns should still be evaluated against the full source content.

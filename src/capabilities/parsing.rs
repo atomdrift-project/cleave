@@ -387,6 +387,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::PyProjectToml,
                     RuleFileType::GithubActions,
                     RuleFileType::SystemdService,
+                    RuleFileType::DesktopEntry,
                     RuleFileType::ComposerJson,
                     RuleFileType::PkgInfo,
                     RuleFileType::Plist,
@@ -468,6 +469,9 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "github-actions" => vec![RuleFileType::GithubActions],
                 "systemd-service" | "systemd_service" | "systemd" | "service" | ".service" => {
                     vec![RuleFileType::SystemdService]
+                }
+                "desktop-entry" | "desktop_entry" | "desktop" | ".desktop" | "xdg-desktop" => {
+                    vec![RuleFileType::DesktopEntry]
                 }
                 // Image formats
                 "jpeg" | "jpg" => vec![RuleFileType::Jpeg],
@@ -641,7 +645,10 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 // Apple-specific formats
                 RuleFileType::Plist | RuleFileType::Ipa => has_apple,
                 // systemd/deb/rpm are Linux-specific, not generic Unix
-                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => has_linux,
+                RuleFileType::SystemdService
+                | RuleFileType::DesktopEntry
+                | RuleFileType::Deb
+                | RuleFileType::Rpm => has_linux,
                 _ => true,
             }
         });
@@ -676,9 +683,10 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => (has_desktop, "linux, unix, macos, or windows"),
-                RuleFileType::SystemdService | RuleFileType::Deb | RuleFileType::Rpm => {
-                    (has_linux, "linux")
-                }
+                RuleFileType::SystemdService
+                | RuleFileType::DesktopEntry
+                | RuleFileType::Deb
+                | RuleFileType::Rpm => (has_linux, "linux"),
                 _ => continue,
             };
             if !supported {

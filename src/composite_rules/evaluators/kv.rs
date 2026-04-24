@@ -56,6 +56,8 @@ pub(crate) enum StructuredFormat {
     Lnk,
     /// systemd service unit file (.service, .service.d/*.conf)
     SystemdService,
+    /// freedesktop.org Desktop Entry (.desktop)
+    DesktopEntry,
     /// Format could not be determined
     Unknown,
 }
@@ -271,6 +273,11 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
             && name_lower.ends_with(".conf")
         {
             return StructuredFormat::SystemdService;
+        }
+
+        // freedesktop.org Desktop Entry files
+        if name_lower.ends_with(".desktop") {
+            return StructuredFormat::DesktopEntry;
         }
 
         // Python package metadata files (RFC 822 format)
@@ -620,6 +627,150 @@ fn parse_systemd_service(content: &[u8]) -> Option<Value> {
     } else {
         Some(Value::Object(root))
     }
+}
+
+/// Parse a freedesktop.org Desktop Entry file into a section-keyed JSON object.
+///
+/// Each section (e.g. `[Desktop Entry]`, `[Desktop Action foo]`) becomes a top-level
+/// key (normalized to snake_case). Inside each section, keys are normalized the same
+/// way as systemd keys, and known list-type values (`Categories`, `MimeType`,
+/// `Keywords`, `Actions`, `OnlyShowIn`, `NotShowIn`, `Implements`) are split on `;`.
+/// Localized key variants (e.g. `Name[cs]=...`) are dropped so only the canonical
+/// value is exposed to trait authors.
+fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
+    let text = std::str::from_utf8(content).ok()?;
+    let mut root: serde_json::Map<String, Value> = serde_json::Map::new();
+    let mut current_section: Option<String> = None;
+
+    for raw_line in text.lines() {
+        let line = raw_line.trim_end_matches('\r');
+        let trimmed = line.trim_start();
+
+        // Desktop entry spec: blank lines and `#` comments are ignored.
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        if let Some(section) = parse_desktop_section_header(trimmed) {
+            current_section = Some(section);
+            continue;
+        }
+
+        let Some(section_name) = current_section.as_deref() else {
+            continue;
+        };
+        let Some(eq_pos) = line.find('=') else {
+            continue;
+        };
+
+        let raw_key = line[..eq_pos].trim();
+        if raw_key.is_empty() {
+            continue;
+        }
+
+        // Drop localized variants (`Name[cs]=...`): the canonical unlocalized key
+        // is enough for detection, and exposing per-locale keys makes trait authoring
+        // unwieldy.
+        if raw_key.contains('[') {
+            continue;
+        }
+
+        let key = normalize_systemd_key(raw_key);
+        if key.is_empty() {
+            continue;
+        }
+
+        let raw_value = line[eq_pos + 1..].trim().to_string();
+        let Some(section_obj) = ensure_json_object(&mut root, section_name) else {
+            continue;
+        };
+
+        if is_desktop_list_key(&key) {
+            append_systemd_raw(section_obj, &key, raw_value.clone());
+            let items = split_desktop_list(&raw_value);
+            if items.is_empty() {
+                append_string_occurrence(section_obj, &key, raw_value);
+            } else {
+                append_string_items(section_obj, &key, items);
+            }
+            continue;
+        }
+
+        append_string_occurrence(section_obj, &key, raw_value);
+    }
+
+    if root.is_empty() {
+        None
+    } else {
+        Some(Value::Object(root))
+    }
+}
+
+fn parse_desktop_section_header(line: &str) -> Option<String> {
+    if line.starts_with('[') && line.ends_with(']') && line.len() >= 3 {
+        let inner = &line[1..line.len() - 1];
+        let normalized = normalize_systemd_key(inner);
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
+    } else {
+        None
+    }
+}
+
+/// Keys whose value is a `;`-separated list per the Desktop Entry spec.
+fn is_desktop_list_key(key: &str) -> bool {
+    matches!(
+        key,
+        "only_show_in"
+            | "not_show_in"
+            | "actions"
+            | "mime_type"
+            | "categories"
+            | "implements"
+            | "keywords"
+    )
+}
+
+/// Split a Desktop Entry list value on unescaped `;`.
+///
+/// Per freedesktop.org spec, `\;` escapes a literal semicolon inside a list item,
+/// and `\s`/`\n`/`\r`/`\t`/`\\` are the standard string escapes.
+fn split_desktop_list(input: &str) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut current = String::new();
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.next() {
+                Some('s') => current.push(' '),
+                Some('n') => current.push('\n'),
+                Some('r') => current.push('\r'),
+                Some('t') => current.push('\t'),
+                Some(';') => current.push(';'),
+                Some('\\') | None => current.push('\\'),
+                Some(other) => {
+                    current.push('\\');
+                    current.push(other);
+                }
+            }
+        } else if ch == ';' {
+            if !current.is_empty() {
+                items.push(std::mem::take(&mut current));
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if !current.is_empty() {
+        items.push(current);
+    }
+
+    items
 }
 
 fn collect_systemd_logical_lines(text: &str) -> Vec<String> {
@@ -1032,6 +1183,7 @@ fn structured_format_from_file_type(
         crate::composite_rules::FileType::PkgInfo => StructuredFormat::PkgInfo,
         crate::composite_rules::FileType::Lnk => StructuredFormat::Lnk,
         crate::composite_rules::FileType::SystemdService => StructuredFormat::SystemdService,
+        crate::composite_rules::FileType::DesktopEntry => StructuredFormat::DesktopEntry,
         _ => StructuredFormat::Unknown,
     }
 }
@@ -1057,6 +1209,7 @@ pub(crate) fn parse_structured_content(
         StructuredFormat::PkgInfo => parse_pkginfo(content)?,
         StructuredFormat::Lnk => parse_lnk(content)?,
         StructuredFormat::SystemdService => parse_systemd_service(content)?,
+        StructuredFormat::DesktopEntry => parse_desktop_entry(content)?,
         StructuredFormat::Unknown => return None,
     };
     Some((format, value))
@@ -1127,6 +1280,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
             StructuredFormat::PkgInfo => parse_pkginfo(content),
             StructuredFormat::Lnk => parse_lnk(content),
             StructuredFormat::SystemdService => parse_systemd_service(content),
+            StructuredFormat::DesktopEntry => parse_desktop_entry(content),
             StructuredFormat::Unknown => None,
         };
 
@@ -2327,6 +2481,133 @@ WantedBy=multi-user.target graphical.target
             read_write_paths,
             vec![&json!(["/etc/systemd/system", "/tmp"])]
         );
+    }
+
+    #[test]
+    fn test_parse_desktop_entry_benign() {
+        // Realistic small benign .desktop file (RustDesk)
+        let content = br#"[Desktop Entry]
+Name=RustDesk
+GenericName=Remote Desktop
+Comment=Remote Desktop
+Exec=rustdesk %u
+Icon=rustdesk
+Terminal=false
+Type=Application
+StartupNotify=true
+Categories=Network;RemoteAccess;GTK;
+Keywords=internet;linux;dart;rust;remote-control;p2p;teamviewer;rust-lang;rdp;remote-desktop;vnc;
+Actions=new-window;
+
+[Desktop Action new-window]
+Name=Open a New Window
+Exec=rustdesk %u
+"#;
+
+        let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
+
+        let exec = navigate(&parsed, &parse_path("desktop_entry.exec").unwrap());
+        assert_eq!(exec, vec![&json!("rustdesk %u")]);
+
+        let entry_type = navigate(&parsed, &parse_path("desktop_entry.type").unwrap());
+        assert_eq!(entry_type, vec![&json!("Application")]);
+
+        let terminal = navigate(&parsed, &parse_path("desktop_entry.terminal").unwrap());
+        assert_eq!(terminal, vec![&json!("false")]);
+
+        // Categories is a `;`-separated list → stored as array
+        let categories = navigate(&parsed, &parse_path("desktop_entry.categories").unwrap());
+        assert_eq!(categories, vec![&json!(["Network", "RemoteAccess", "GTK"])]);
+
+        // Secondary section is accessible
+        let action_exec = navigate(
+            &parsed,
+            &parse_path("desktop_action_new_window.exec").unwrap(),
+        );
+        assert_eq!(action_exec, vec![&json!("rustdesk %u")]);
+    }
+
+    #[test]
+    fn test_parse_desktop_entry_apt36_dropper() {
+        // Pattern modeled on the APT36 weaponized .desktop autostart dropper
+        // (CYFIRMA APT36 BOSS-Linux campaign): inline bash -c with base64-decoded
+        // payload, X-GNOME-Autostart-enabled=true, misleading pdf icon.
+        let content = br#"
+# fake embedded thumbnail data
+# iVBORw0KGgrhR6fHOI+odJY
+[Desktop Entry]
+Name=Contract_for_Procurement
+Exec=bash -c 'f(){ echo "$1"|base64 -d|xxd -r -p|base64 -d; }; p="/tmp/.a-$(date +%s%N|md5sum|cut -c1-8)"; v="$(f NTQ0NT==)"; (eval "$v" > "$p" 2>/dev/null && chmod +x "$p" 2>/dev/null && "$p") &'
+Terminal=false
+Type=Application
+Icon=application-pdf
+Categories=Utility;
+X-GNOME-Autostart-enabled=true
+X-KDE-SubstituteUID=false
+X-KDE-Username=root
+"#;
+
+        let parsed = parse_desktop_entry(content).expect("malicious desktop entry should parse");
+
+        // Exec value is fully preserved for trait matching on bash -c / base64 / eval / chmod
+        let exec = navigate(&parsed, &parse_path("desktop_entry.exec").unwrap());
+        assert_eq!(exec.len(), 1);
+        let exec_str = exec[0].as_str().expect("exec is string");
+        assert!(exec_str.contains("bash -c"));
+        assert!(exec_str.contains("base64 -d"));
+        assert!(exec_str.contains("eval"));
+        assert!(exec_str.contains("chmod +x"));
+
+        // Autostart signal
+        let autostart = navigate(
+            &parsed,
+            &parse_path("desktop_entry.x_gnome_autostart_enabled").unwrap(),
+        );
+        assert_eq!(autostart, vec![&json!("true")]);
+
+        // Privilege-hint signal
+        let kde_user = navigate(
+            &parsed,
+            &parse_path("desktop_entry.x_kde_username").unwrap(),
+        );
+        assert_eq!(kde_user, vec![&json!("root")]);
+
+        // Icon/type mismatch hint
+        let icon = navigate(&parsed, &parse_path("desktop_entry.icon").unwrap());
+        assert_eq!(icon, vec![&json!("application-pdf")]);
+    }
+
+    #[test]
+    fn test_parse_desktop_entry_skips_localized_keys() {
+        let content = br#"[Desktop Entry]
+Name=Editor
+Name[cs]=Editor CS
+Name[de]=Editor DE
+Exec=editor %F
+"#;
+        let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
+
+        // Base Name= is kept; localized variants are dropped.
+        let name = navigate(&parsed, &parse_path("desktop_entry.name").unwrap());
+        assert_eq!(name, vec![&json!("Editor")]);
+    }
+
+    #[test]
+    fn test_parse_desktop_entry_list_escapes() {
+        // `\;` in a list value is a literal semicolon, not a separator.
+        let content = br#"[Desktop Entry]
+Keywords=one;two\;still-two;three;
+"#;
+        let parsed = parse_desktop_entry(content).expect("desktop entry should parse");
+        let kw = navigate(&parsed, &parse_path("desktop_entry.keywords").unwrap());
+        assert_eq!(kw, vec![&json!(["one", "two;still-two", "three"])]);
+    }
+
+    #[test]
+    fn test_detect_format_desktop_by_extension() {
+        let path = Path::new("/etc/xdg/autostart/evil.desktop");
+        let format = detect_format(path, b"[Desktop Entry]\nExec=foo\n");
+        assert_eq!(format, StructuredFormat::DesktopEntry);
     }
 
     #[test]

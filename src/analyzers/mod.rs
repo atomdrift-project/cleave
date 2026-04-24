@@ -225,6 +225,7 @@ pub fn analyzer_for_file_type(
         FileType::PkgInfo
         | FileType::Plist
         | FileType::SystemdService
+        | FileType::DesktopEntry
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -332,6 +333,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         FileType::PkgInfo
         | FileType::Plist
         | FileType::SystemdService
+        | FileType::DesktopEntry
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
@@ -479,6 +481,7 @@ impl FileTypeExt for FileType {
     fn report_file_type(&self) -> String {
         match self {
             FileType::SystemdService => "systemd".to_string(),
+            FileType::DesktopEntry => "desktop-entry".to_string(),
             FileType::Tar => "tar".to_string(),
             FileType::TarGz => "tar.gz".to_string(),
             FileType::TarBz2 => "tar.bz2".to_string(),
@@ -531,6 +534,7 @@ impl FileTypeExt for FileType {
             FileType::ComposerJson => vec!["json", "composer.json", "php"],
             FileType::GithubActions => vec!["yaml", "yml", "github-actions"],
             FileType::SystemdService => vec!["service", "systemd", "unit"],
+            FileType::DesktopEntry => vec!["desktop", "desktop-entry", "freedesktop", "xdg"],
             FileType::Zip => vec!["zip", "archive"],
             FileType::Tar
             | FileType::TarGz

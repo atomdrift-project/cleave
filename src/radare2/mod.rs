@@ -77,6 +77,61 @@ static RIZIN_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 static RIZIN_FAILURES: AtomicU64 = AtomicU64::new(0);
 static RIZIN_SUCCESSES: AtomicU64 = AtomicU64::new(0);
 
+/// Live rizin process group IDs, populated at spawn and drained in every
+/// cleanup path. Exposed via `kill_all_rizin_groups` so a host signal handler
+/// can SIGKILL every in-flight subprocess before a forced `process::exit`.
+/// Concurrency is bounded by the rayon pool (~num_cpus), so a Vec is fine.
+static RIZIN_PGIDS: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+fn register_rizin_pgid(pgid: i32) {
+    if let Ok(mut guard) = RIZIN_PGIDS.lock() {
+        guard.push(pgid);
+    }
+}
+
+fn unregister_rizin_pgid(pgid: i32) {
+    if let Ok(mut guard) = RIZIN_PGIDS.lock() {
+        if let Some(idx) = guard.iter().position(|&p| p == pgid) {
+            guard.swap_remove(idx);
+        }
+    }
+}
+
+/// RAII handle that unregisters a rizin PGID on drop, covering every exit path
+/// from `execute_rizin_with_timeout` (success, timeout, cancellation, panic).
+struct RizinPgidGuard(i32);
+
+impl Drop for RizinPgidGuard {
+    fn drop(&mut self) {
+        unregister_rizin_pgid(self.0);
+    }
+}
+
+/// SIGKILL the process group of every currently-live rizin subprocess.
+///
+/// Intended for host CLI signal handlers (e.g. `ctrlc`) that need to reap
+/// rizin workers before `process::exit`. Idempotent: entries are removed
+/// from the registry by the normal cleanup paths, so calling this after a
+/// clean shutdown is a no-op. No-op on non-Unix.
+pub(crate) fn kill_all_rizin_groups() {
+    let pgids: Vec<i32> = RIZIN_PGIDS
+        .lock()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    #[cfg(unix)]
+    for pgid in &pgids {
+        // SAFETY: libc::kill with a negative PID sends the signal to the
+        // process group. Async-signal-safe; tolerates already-dead groups
+        // (ESRCH) silently, which is the correct behavior during a race
+        // with normal reap.
+        unsafe {
+            libc::kill(-(*pgid as libc::pid_t), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = pgids;
+}
+
 /// Disable radare2 analysis globally
 #[allow(dead_code)] // Used by the CLI binary target for process-wide disables
 pub(crate) fn disable_radare2() {
@@ -233,6 +288,15 @@ fn execute_rizin_with_timeout(
                 #[cfg(target_os = "linux")]
                 {
                     libc::setrlimit(libc::RLIMIT_AS, &limit);
+                    // Ask the kernel to SIGKILL this subprocess if its parent
+                    // (the cleave/litmus process) dies without running our own
+                    // cleanup — covers panic/abort/SIGKILL/OOM paths where the
+                    // `ctrlc` handler never gets to run `kill_all_rizin_groups`.
+                    // Caveat: the kernel tracks the spawning *thread*, so a
+                    // rayon worker exiting before rizin does would kill the
+                    // child early; rayon workers live the whole program in
+                    // practice, so this is safe. No macOS equivalent.
+                    libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
                 }
                 libc::setrlimit(libc::RLIMIT_DATA, &limit);
                 Ok(())
@@ -256,6 +320,8 @@ fn execute_rizin_with_timeout(
     // kept the *other* pipe's write-end open — the other reader thread would
     // block forever in read_to_end. That was the hang.
     let child_id = child.id();
+    register_rizin_pgid(child_id as i32);
+    let _pgid_guard = RizinPgidGuard(child_id as i32);
     let output_cap_hit = Arc::new(AtomicBool::new(false));
 
     // Spawn thread to read stdout (capped at 100MB to prevent OOM from

@@ -359,6 +359,15 @@ pub fn disable_radare2() {
     radare2::disable_radare2();
 }
 
+/// SIGKILL every currently-live rizin process group.
+///
+/// Intended for host CLI signal handlers that need to reap rizin workers
+/// before a forced `process::exit`. Cheap and idempotent — safe to call from
+/// the `ctrlc` crate's dispatch thread. No-op on non-Unix platforms.
+pub fn kill_all_rizin_groups() {
+    radare2::kill_all_rizin_groups();
+}
+
 /// Disable UPX integration process-wide.
 pub fn disable_upx() {
     upx::disable_upx();

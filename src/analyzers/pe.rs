@@ -862,6 +862,8 @@ impl PEAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = Vec::new();
+        let mut embedded_binary_count: u32 = 0;
+        let mut embedded_archive_count: u32 = 0;
         if goblin_ok {
             tools_used.push("goblin".to_string());
         }
@@ -1481,6 +1483,7 @@ impl PEAnalyzer {
                 Some(self.capability_mapper.clone()),
                 self.yara_engine.clone(),
             ) {
+                embedded_archive_count = embedded_archive_count.saturating_add(1);
                 let pe_filename = std::path::Path::new(&report.target.path)
                     .file_name()
                     .and_then(|n| n.to_str())
@@ -1549,6 +1552,7 @@ impl PEAnalyzer {
             );
             report.findings.push(sfx_result.sfx_finding);
             if let Some(archive_report) = sfx_result.archive_report {
+                embedded_archive_count = embedded_archive_count.saturating_add(1);
                 report.findings.extend(archive_report.findings);
                 report.files.extend(archive_report.files);
                 for tool in archive_report.metadata.tools_used {
@@ -1580,6 +1584,7 @@ impl PEAnalyzer {
                 {
                     continue;
                 }
+                embedded_binary_count = embedded_binary_count.saturating_add(1);
                 let mut finding = crate::analyzers::embedded_binary_detector::finding_for(
                     binary,
                     &report.target.path,
@@ -1661,6 +1666,16 @@ impl PEAnalyzer {
                     report.files.push(fa);
                 }
                 report.findings.push(finding);
+            }
+        }
+
+        // Flush embedded content counters into binary metrics.
+        if let Some(ref mut metrics) = report.metrics {
+            if let Some(ref mut binary) = metrics.binary {
+                binary.embedded_binary_count = embedded_binary_count;
+                binary.embedded_archive_count = embedded_archive_count;
+                binary.embedded_file_count =
+                    embedded_binary_count.saturating_add(embedded_archive_count);
             }
         }
 
@@ -2341,12 +2356,18 @@ impl Default for PEAnalyzer {
 
 impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Use data and strings from input (no file read, no string extraction)
+        // Use caller-provided strings when present; an empty slice means the
+        // caller only supplied bytes, so the structural analyzer should extract.
+        let strings = if input.strings.is_empty() {
+            None
+        } else {
+            Some(input.strings)
+        };
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
             input.data,
-            Some(input.strings),
+            strings,
             !input.skip_rizin,
             input.sha256.clone(),
         );

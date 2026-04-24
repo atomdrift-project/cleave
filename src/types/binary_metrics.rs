@@ -324,6 +324,23 @@ pub struct BinaryMetrics {
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub overlay_entropy: f32,
 
+    // === Embedded content ===
+    /// Embedded executables discovered inside this file (PE, ELF, Mach-O).
+    /// Source-agnostic — counts any validated embedded binary regardless of
+    /// which detector found it (byte-scan, overlay, SFX extraction, …).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub embedded_binary_count: u32,
+    /// Embedded archives discovered inside this file (zip, 7z, rar, gz, xz,
+    /// zstd, bz2, cab, lzh, iso, cpio, and SFX installer containers).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub embedded_archive_count: u32,
+    /// Total embedded files: `embedded_binary_count + embedded_archive_count`
+    /// plus any other carved artifacts (images, scripts, …) future detectors
+    /// report. Kept as a stable aggregate feature so the ML pipeline does not
+    /// need to re-sum as new kinds are added.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub embedded_file_count: u32,
+
     // === Density Ratios (ML-oriented) ===
     /// Import density: imports per KB of code
     #[serde(default, skip_serializing_if = "is_zero_f32")]
@@ -878,9 +895,6 @@ pub struct PeMetrics {
     /// Resource count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub resource_count: u32,
-    /// Embedded PE files
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub embedded_pe_count: u32,
     /// Version info present
     #[serde(default, skip_serializing_if = "is_false")]
     pub version_info_present: bool,
@@ -1373,14 +1387,13 @@ mod tests {
         let metrics = PeMetrics {
             rsrc_size: 102400,
             rsrc_entropy: 5.2,
-            embedded_pe_count: 2,
             icon_count: 5,
             version_info_present: true,
             manifest_present: true,
             ..Default::default()
         };
         assert_eq!(metrics.rsrc_size, 102400);
-        assert_eq!(metrics.embedded_pe_count, 2);
+        assert_eq!(metrics.icon_count, 5);
     }
 
     // ==================== MachoMetrics Default Tests ====================

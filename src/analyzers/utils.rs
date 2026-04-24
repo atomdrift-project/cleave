@@ -26,7 +26,7 @@ pub(crate) fn analyze_embedded_as_child(
     offset: usize,
     capability_mapper: Arc<CapabilityMapper>,
     yara_engine: Option<Arc<YaraEngine>>,
-    parent_strings: &[stng::ExtractedString],
+    _parent_strings: &[stng::ExtractedString],
 ) -> Option<crate::types::FileAnalysis> {
     let suffix = if kind_str == "pe" { ".exe" } else { "" };
     let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
@@ -36,27 +36,16 @@ pub(crate) fn analyze_embedded_as_child(
     let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
     let child_path_buf = PathBuf::from(&child_path);
 
-    // Filter parent strings to only those that fall within the embedded binary's range.
-    // This allows child traits to match against strings that were already extracted.
-    let offset_u64 = offset as u64;
-    let bytes_len_u64 = bytes.len() as u64;
-    let child_strings: Vec<stng::ExtractedString> = parent_strings
-        .iter()
-        .filter(|s| s.data_offset >= offset_u64 && s.data_offset < offset_u64 + bytes_len_u64)
-        .map(|s| {
-            let mut s = s.clone();
-            s.data_offset -= offset_u64; // Normalize offset to child
-            s
-        })
-        .collect();
-
     let file_type = if kind_str == "pe" {
         crate::analyzers::FileType::Pe
     } else {
         crate::analyzers::FileType::Elf
     };
 
-    let input = AnalysisInput::with_strings(&child_path_buf, bytes, &child_strings, file_type)
+    // Embedded binaries can be malformed or section-shifted relative to the
+    // host's string offsets. Re-extract from the carved bytes so an empty or
+    // mismapped parent string slice does not suppress child behavior matches.
+    let input = AnalysisInput::new(&child_path_buf, bytes, file_type)
         .with_backing_path(temp.path())
         .at_depth(1);
 

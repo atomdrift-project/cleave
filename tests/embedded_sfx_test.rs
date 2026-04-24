@@ -186,6 +186,24 @@ fn test_embedded_pe_in_pe_detected() {
         "Expected 'binary/embedded/pe' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
+
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let host_metrics = report["fs"]
+        .as_array()
+        .and_then(|files| files.first())
+        .and_then(|host| host["ms"]["binary"].as_object())
+        .expect("host PE should expose binary metrics in compact report");
+    assert_eq!(
+        host_metrics["embedded_binary_count"].as_f64(),
+        Some(1.0),
+        "PE host should count one embedded binary.\nbinary metrics:\n{}",
+        serde_json::to_string_pretty(host_metrics).unwrap(),
+    );
+    assert_eq!(
+        host_metrics["embedded_file_count"].as_f64(),
+        Some(1.0),
+        "embedded_file_count should aggregate binary + archive counts",
+    );
 }
 
 #[test]
@@ -242,6 +260,72 @@ fn test_embedded_elf_in_elf_detected() {
         stdout.contains("binary/embedded/elf"),
         "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
+    );
+
+    // Embedded-file counts should be populated alongside the finding.
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let host_metrics = report["fs"]
+        .as_array()
+        .and_then(|files| files.first())
+        .and_then(|host| host["ms"]["binary"].as_object())
+        .expect("host ELF should expose binary metrics in compact report");
+
+    assert_eq!(
+        host_metrics["embedded_binary_count"].as_f64(),
+        Some(1.0),
+        "host should report exactly one embedded binary.\nbinary metrics:\n{}",
+        serde_json::to_string_pretty(host_metrics).unwrap()
+    );
+    assert_eq!(
+        host_metrics["embedded_file_count"].as_f64(),
+        Some(1.0),
+        "host should report total embedded files matching the binary count",
+    );
+    assert!(
+        !host_metrics.contains_key("embedded_archive_count"),
+        "archive count should be omitted (zero) when nothing archive-shaped is embedded",
+    );
+}
+
+#[test]
+fn test_embedded_elf_child_extracts_its_own_strings() {
+    let tmp = TempDir::new().unwrap();
+    let mut host = fs::read("tests/fixtures/test.elf").unwrap();
+    let payload = fs::read("tests/fixtures/test.elf").unwrap();
+    let embed_at = host.len() + 16;
+    host.resize(embed_at, 0u8);
+    host.extend_from_slice(&payload);
+
+    let path = tmp.path().join("elf_dropper_with_child_strings.elf");
+    fs::write(&path, &host).unwrap();
+
+    let output = run_analyze_json(&path);
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let files = report["fs"]
+        .as_array()
+        .expect("report should contain file entries");
+    let child = files
+        .iter()
+        .find(|file| {
+            file["path"]
+                .as_str()
+                .is_some_and(|path| path.contains("!!embedded:elf@"))
+        })
+        .expect("embedded ELF should be analyzed as a child file");
+    let strings = child["ss"]
+        .as_array()
+        .expect("embedded ELF child should include extracted strings");
+
+    assert!(
+        strings.iter().any(|entry| {
+            entry
+                .as_array()
+                .and_then(|fields| fields.get(1))
+                .and_then(|value| value.as_str())
+                == Some("execve")
+        }),
+        "expected child ELF strings to be extracted from the carved bytes.\nchild:\n{}",
+        serde_json::to_string_pretty(child).unwrap()
     );
 }
 

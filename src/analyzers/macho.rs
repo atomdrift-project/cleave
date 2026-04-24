@@ -1522,11 +1522,16 @@ impl Analyzer for MachOAnalyzer {
         // Use preferred arch for structural analysis (imports, exports, strings, etc.)
         let preferred_range = self.preferred_arch_range(input.data);
         let preferred_data = &input.data[preferred_range];
+        let strings = if input.strings.is_empty() {
+            None
+        } else {
+            Some(input.strings)
+        };
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
             preferred_data,
-            Some(input.strings),
+            strings,
             !input.skip_rizin,
             input.sha256.clone(),
         );

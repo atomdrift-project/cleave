@@ -348,6 +348,8 @@ impl ElfAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec![];
+        let mut embedded_binary_count: u32 = 0;
+        let mut embedded_archive_count: u32 = 0;
 
         // Attempt to parse with goblin via the panic-safe wrapper. A
         // returned `Failed` *or* a caught `Panicked` both fall through to
@@ -585,6 +587,7 @@ impl ElfAnalyzer {
                                 match_count: 1,
                                 source_file: None,
                             });
+                            embedded_archive_count = embedded_archive_count.saturating_add(1);
                         } else {
                             // Regular overlay — analyze via overlay detector
                             if let Ok(Some(ov)) = crate::analyzers::overlay::analyze_overlay(
@@ -596,6 +599,7 @@ impl ElfAnalyzer {
                                 report.findings.push(ov.sfx_finding);
                                 report.findings.extend(ov.archive_report.findings);
                                 report.files.extend(ov.archive_report.files);
+                                embedded_archive_count = embedded_archive_count.saturating_add(1);
                             }
                         }
                     }
@@ -806,6 +810,7 @@ impl ElfAnalyzer {
                         binary,
                         &report.target.path,
                     ));
+                embedded_binary_count = embedded_binary_count.saturating_add(1);
                 if binary.offset >= data.len() {
                     continue;
                 }
@@ -898,6 +903,16 @@ impl ElfAnalyzer {
                     binary.overlay_entropy =
                         crate::entropy::calculate_entropy(&data[elf_content_end as usize..]) as f32;
                 }
+            }
+        }
+
+        // Flush embedded content counters into binary metrics.
+        if let Some(ref mut metrics) = report.metrics {
+            if let Some(ref mut binary) = metrics.binary {
+                binary.embedded_binary_count = embedded_binary_count;
+                binary.embedded_archive_count = embedded_archive_count;
+                binary.embedded_file_count =
+                    embedded_binary_count.saturating_add(embedded_archive_count);
             }
         }
 
@@ -1541,12 +1556,18 @@ impl ElfAnalyzer {
 
 impl Analyzer for ElfAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Use data and strings from input (no file read, no string extraction)
+        // Use caller-provided strings when present; an empty slice means the
+        // caller only supplied bytes, so the core analyzer should extract.
+        let strings = if input.strings.is_empty() {
+            None
+        } else {
+            Some(input.strings)
+        };
         let mut report = self.analyze_elf_core(
             input.path,
             input.backing_path(),
             input.data,
-            Some(input.strings),
+            strings,
             !input.skip_rizin,
             input.sha256.clone(),
         );

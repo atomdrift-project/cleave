@@ -184,15 +184,12 @@ impl ElfAnalyzer {
                         break;
                     }
                 };
-                let n_type =
-                    match Self::read_u32(&section_data[offset + 8..offset + 12], elf.little_endian)
-                    {
-                        Some(value) => value,
-                        None => {
-                            summary.truncated = true;
-                            break;
-                        }
-                    };
+                let Some(n_type) =
+                    Self::read_u32(&section_data[offset + 8..offset + 12], elf.little_endian)
+                else {
+                    summary.truncated = true;
+                    break;
+                };
 
                 let Some(name_start) = offset.checked_add(12) else {
                     summary.truncated = true;

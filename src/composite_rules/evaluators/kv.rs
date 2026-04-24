@@ -836,12 +836,11 @@ fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
 
     match (children.is_empty(), combined_text) {
         (true, Some(t)) => Value::String(t),
-        (true, None) => Value::Object(children),
         (false, Some(t)) => {
             children.insert("_text".to_string(), Value::String(t));
             Value::Object(children)
         }
-        (false, None) => Value::Object(children),
+        (_, None) => Value::Object(children),
     }
 }
 

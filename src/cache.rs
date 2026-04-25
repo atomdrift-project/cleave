@@ -129,7 +129,7 @@ pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
     let traits_dir = traits_path();
     if traits_dir.exists() {
         for entry in WalkDir::new(&traits_dir)
-            .follow_links(false)
+            .follow_links(true)
             .into_iter()
             .flatten()
         {
@@ -170,7 +170,7 @@ pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
     let traits_dir = traits_path();
     if traits_dir.exists() {
         for entry in WalkDir::new(&traits_dir)
-            .follow_links(false)
+            .follow_links(true)
             .into_iter()
             .flatten()
         {
@@ -212,7 +212,7 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
     let traits_dir = traits_path();
     if traits_dir.exists() {
         for entry in WalkDir::new(&traits_dir)
-            .follow_links(false)
+            .follow_links(true)
             .into_iter()
             .flatten()
         {

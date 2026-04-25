@@ -2462,6 +2462,7 @@ mod pattern_tests {
 mod taxonomy_tests {
     use crate::capabilities::validation::taxonomy::{
         find_cap_obj_violations, find_cap_wellknown_violations, find_metadata_cross_tier_refs,
+        find_objectives_wellknown_violations, ObjectivesWellknownViolation,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
@@ -2572,6 +2573,25 @@ mod taxonomy_tests {
     }
 
     #[test]
+    fn test_metadata_referencing_wellknown_non_malware_is_also_violation() {
+        let composites = vec![make_composite(
+            "metadata/format/composite",
+            &[
+                "well-known/tool/cobalt-strike/beacon",
+                "well-known/lib/openssl/v3",
+                "well-known/app/chrome/extension",
+            ],
+        )];
+        let sources = HashMap::new();
+        let v = find_metadata_cross_tier_refs(&[], &composites, &sources);
+        assert_eq!(
+            v.len(),
+            3,
+            "metadata/ must not reference any well-known/ subtree"
+        );
+    }
+
+    #[test]
     fn test_metadata_referencing_metadata_is_ok() {
         let traits = vec![make_trait(
             "metadata/format/composite",
@@ -2589,7 +2609,7 @@ mod taxonomy_tests {
     // ---- micro-behaviors → well-known ----
 
     #[test]
-    fn test_cap_referencing_wellknown_is_violation() {
+    fn test_cap_referencing_wellknown_malware_is_violation() {
         let traits = vec![make_trait(
             "micro-behaviors/crypto/known-malware",
             "well-known/malware/emotet/loader",
@@ -2601,17 +2621,21 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn test_cap_composite_referencing_wellknown_is_violation() {
+    fn test_cap_composite_referencing_wellknown_non_malware_is_also_violation() {
         let composites = vec![make_composite(
             "micro-behaviors/net/suspicious",
             &[
                 "micro-behaviors/net/http-post",
-                "well-known/tools/cobalt-strike/beacon",
+                "well-known/tool/cobalt-strike/beacon",
             ],
         )];
         let sources = HashMap::new();
         let v = find_cap_wellknown_violations(&[], &composites, &sources);
-        assert_eq!(v.len(), 1);
+        assert_eq!(
+            v.len(),
+            1,
+            "micro-behaviors/ may not reference any well-known/ subtree"
+        );
     }
 
     #[test]
@@ -2657,6 +2681,104 @@ mod taxonomy_tests {
             v.is_empty(),
             "objectives → cap is the normal direction and should be allowed"
         );
+    }
+
+    // ---- objectives/ → well-known/ ----
+
+    fn make_composite_with_unless(
+        id: &str,
+        all_refs: &[&str],
+        unless_refs: &[&str],
+    ) -> CompositeTrait {
+        let mut c = make_composite(id, all_refs);
+        c.unless = Some(
+            unless_refs
+                .iter()
+                .map(|r| Condition::Trait { id: r.to_string() })
+                .collect(),
+        );
+        c
+    }
+
+    #[test]
+    fn test_objectives_positive_wellknown_tool_is_violation() {
+        let composites = vec![make_composite(
+            "objectives/credential-access/dump",
+            &[
+                "micro-behaviors/process/lsass",
+                "well-known/tool/mimikatz/sekurlsa",
+            ],
+        )];
+        let sources = HashMap::new();
+        let v = find_objectives_wellknown_violations(&[], &composites, &sources);
+        assert_eq!(v.len(), 1, "well-known/tool ref in `all:` is positive evidence");
+        assert_eq!(v[0].3, ObjectivesWellknownViolation::PositiveWellknownRef);
+    }
+
+    #[test]
+    fn test_objectives_unless_wellknown_tool_is_ok() {
+        let composites = vec![make_composite_with_unless(
+            "objectives/credential-access/dump",
+            &["micro-behaviors/process/lsass"],
+            &["well-known/tool/sysinternals/procdump"],
+        )];
+        let sources = HashMap::new();
+        let v = find_objectives_wellknown_violations(&[], &composites, &sources);
+        assert!(
+            v.is_empty(),
+            "well-known/tool/ in `unless:` is benign-context suppression and is allowed"
+        );
+    }
+
+    #[test]
+    fn test_objectives_unless_wellknown_malware_is_violation() {
+        let composites = vec![make_composite_with_unless(
+            "objectives/credential-access/dump",
+            &["micro-behaviors/process/lsass"],
+            &["well-known/malware/stealer/redline"],
+        )];
+        let sources = HashMap::new();
+        let v = find_objectives_wellknown_violations(&[], &composites, &sources);
+        assert_eq!(
+            v.len(),
+            1,
+            "well-known/malware refs are forbidden even in unless/downgrade clauses"
+        );
+        assert_eq!(v[0].3, ObjectivesWellknownViolation::MalwareRef);
+    }
+
+    #[test]
+    fn test_objectives_positive_wellknown_malware_is_violation() {
+        let composites = vec![make_composite(
+            "objectives/credential-access/dump",
+            &[
+                "micro-behaviors/process/lsass",
+                "well-known/malware/stealer/redline",
+            ],
+        )];
+        let sources = HashMap::new();
+        let v = find_objectives_wellknown_violations(&[], &composites, &sources);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].3, ObjectivesWellknownViolation::MalwareRef);
+    }
+
+    #[test]
+    fn test_non_objectives_skipped() {
+        // The objectives/ check must not double-fire on micro-behaviors/ or metadata/ rules
+        // (those are flagged by find_cap_wellknown_violations / find_metadata_cross_tier_refs).
+        let composites = vec![
+            make_composite(
+                "micro-behaviors/foo",
+                &["well-known/tool/mimikatz/sekurlsa"],
+            ),
+            make_composite(
+                "metadata/format/foo",
+                &["well-known/lib/openssl/v3"],
+            ),
+        ];
+        let sources = HashMap::new();
+        let v = find_objectives_wellknown_violations(&[], &composites, &sources);
+        assert!(v.is_empty());
     }
 }
 

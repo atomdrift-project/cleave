@@ -29,7 +29,8 @@ use crate::capabilities::validation::{
     find_malware_subcategory_violations, find_meta_missing_section_filter,
     find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
     find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
-    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
+    find_oversized_trait_directories,
     find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
     find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
     find_redundant_needs_one, find_redundant_unix_platforms, find_short_pattern_warnings,
@@ -40,7 +41,8 @@ use crate::capabilities::validation::{
     find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
     simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
-    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
+    ObjectivesWellknownViolation, BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
+    MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -1482,7 +1484,15 @@ impl super::CapabilityMapper {
                     invalid_ids.len()
                 );
                 if debug {
-                    eprintln!("   IDs must only contain alphanumerics, dashes, and underscores:\n");
+                    eprintln!(
+                        "   IDs must be a bare local identifier using only [a-zA-Z0-9_-]."
+                    );
+                    eprintln!(
+                        "   The taxonomy hierarchy comes from the file's directory on disk,"
+                    );
+                    eprintln!(
+                        "   so '/' and ':' are not allowed inside an `id:` declaration.\n"
+                    );
                     for (id, invalid_char, source_file) in &invalid_ids {
                         let line_hint = find_line_number(source_file, id);
                         if let Some(line) = line_hint {
@@ -1497,7 +1507,12 @@ impl super::CapabilityMapper {
                             );
                         }
                     }
-                    eprintln!("\n   Use only [a-zA-Z0-9_-] in trait IDs. No slashes allowed.\n");
+                    eprintln!(
+                        "\n   Allowed in id: [a-zA-Z0-9_-] only."
+                    );
+                    eprintln!(
+                        "   Reference format (in if/all/any/none): <local_id> or <subdirectory>::<local_id>\n"
+                    );
                 } else {
                     eprintln!("   Set CLEAVE_DEBUG=1 to see details\n");
                 }
@@ -1773,7 +1788,10 @@ impl super::CapabilityMapper {
                 );
             }
 
-            // Validate that micro-behaviors/ rules do not reference well-known/ rules
+            // Validate that micro-behaviors/ rules do not improperly reference well-known/ rules.
+            // - well-known/malware/ refs are forbidden in any clause.
+            // - well-known/{tool,app,lib,game}/ refs are allowed only in unless/downgrade
+            //   (benign-context suppression), not as positive evidence.
             tracing::trace!("Step 13c/15: Checking for micro-behaviors/well-known violations");
             let cap_wk_violations = find_cap_wellknown_violations(
                 &trait_definitions,
@@ -1782,28 +1800,115 @@ impl super::CapabilityMapper {
             );
 
             if !cap_wk_violations.is_empty() {
+                let malware_count = cap_wk_violations
+                    .iter()
+                    .filter(|(_, _, _, r)| *r == ObjectivesWellknownViolation::MalwareRef)
+                    .count();
+                let positive_count = cap_wk_violations.len() - malware_count;
                 eprintln!(
-                    "\n❌ ERROR: {} micro-behaviors/ rules reference well-known/ rules",
+                    "\n❌ ERROR: {} micro-behaviors/ → well-known/ references violate the tier policy",
                     cap_wk_violations.len()
                 );
-                eprintln!("   Cap rules should only reference other cap or metadata rules:\n");
-                for (rule_id, ref_id, source_file) in &cap_wk_violations {
+                if malware_count > 0 {
+                    eprintln!(
+                        "   - {} reference well-known/malware/ (never allowed in micro-behaviors/)",
+                        malware_count
+                    );
+                }
+                if positive_count > 0 {
+                    eprintln!(
+                        "   - {} use well-known/{{tool,app,lib,game}}/ as positive evidence \
+                         (only allowed inside `unless:` / `downgrade:`)",
+                        positive_count
+                    );
+                }
+                eprintln!();
+                for (rule_id, ref_id, source_file, reason) in &cap_wk_violations {
                     let line_hint = find_line_number(source_file, ref_id);
                     if let Some(line) = line_hint {
                         eprintln!(
-                            "   {}:{}: Rule '{}' references '{}'",
-                            source_file, line, rule_id, ref_id
+                            "   {}:{}: Rule '{}' references '{}' — micro-behaviors/ {}",
+                            source_file,
+                            line,
+                            rule_id,
+                            ref_id,
+                            reason.as_str()
                         );
                     } else {
                         eprintln!(
-                            "   {}: Rule '{}' references '{}'",
-                            source_file, rule_id, ref_id
+                            "   {}: Rule '{}' references '{}' — micro-behaviors/ {}",
+                            source_file,
+                            rule_id,
+                            ref_id,
+                            reason.as_str()
                         );
                     }
                 }
                 warnings.push(format!(
-                    "{} micro-behaviors/ rules reference well-known/ rules",
+                    "{} micro-behaviors/ → well-known/ references violate the tier policy",
                     cap_wk_violations.len()
+                ));
+            }
+
+            // Validate that objectives/ rules do not improperly reference well-known/ rules.
+            // - well-known/malware/ refs are forbidden in any clause.
+            // - well-known/{tool,app,lib,game}/ refs are allowed only in unless/downgrade
+            //   (benign-context suppression), not as positive evidence for hostile intent.
+            tracing::trace!("Step 13d/15: Checking for objectives/well-known violations");
+            let obj_wk_violations = find_objectives_wellknown_violations(
+                &trait_definitions,
+                &composite_rules,
+                &rule_source_files,
+            );
+
+            if !obj_wk_violations.is_empty() {
+                let malware_count = obj_wk_violations
+                    .iter()
+                    .filter(|(_, _, _, r)| *r == ObjectivesWellknownViolation::MalwareRef)
+                    .count();
+                let positive_count = obj_wk_violations.len() - malware_count;
+                eprintln!(
+                    "\n❌ ERROR: {} objectives/ → well-known/ references violate the tier policy",
+                    obj_wk_violations.len()
+                );
+                if malware_count > 0 {
+                    eprintln!(
+                        "   - {} reference well-known/malware/ (never allowed in objectives/)",
+                        malware_count
+                    );
+                }
+                if positive_count > 0 {
+                    eprintln!(
+                        "   - {} use well-known/{{tool,app,lib,game}}/ as positive evidence \
+                         (only allowed inside `unless:` / `downgrade:`)",
+                        positive_count
+                    );
+                }
+                eprintln!();
+                for (rule_id, ref_id, source_file, reason) in &obj_wk_violations {
+                    let line_hint = find_line_number(source_file, ref_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' references '{}' — objectives/ {}",
+                            source_file,
+                            line,
+                            rule_id,
+                            ref_id,
+                            reason.as_str()
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' references '{}' — objectives/ {}",
+                            source_file,
+                            rule_id,
+                            ref_id,
+                            reason.as_str()
+                        );
+                    }
+                }
+                warnings.push(format!(
+                    "{} objectives/ → well-known/ references violate the tier policy",
+                    obj_wk_violations.len()
                 ));
             }
 
@@ -1845,11 +1950,11 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} unknown categories under well-known/",
                     wk_category_violations.len()
                 );
-                eprintln!("   Only whitelisted malware categories are allowed (apt, backdoor, botnet, etc.):\n");
+                eprintln!("   Only whitelisted subcategories are allowed under well-known/malware/ and well-known/tool/:\n");
                 for (dir_path, category) in &wk_category_violations {
                     eprintln!("   {}: unknown category '{}'", dir_path, category);
                 }
-                eprintln!("\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOLS_CATEGORIES in taxonomy.rs if legitimate.");
+                eprintln!("\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOL_CATEGORIES in taxonomy.rs if legitimate.");
                 warnings.push(format!(
                     "{} unknown categories under well-known/",
                     wk_category_violations.len()

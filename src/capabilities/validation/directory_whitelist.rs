@@ -590,8 +590,13 @@ const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
 
 /// Allowed top-level subdirectories in well-known/
 ///
-/// These represent specific malware families and tools.
-const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "tools"];
+/// These represent specific named entities the system can identify by fingerprint:
+/// - malware/ — malicious families
+/// - tool/   — security/sysadmin/RE tooling and dual-use binaries
+/// - app/    — end-user applications
+/// - lib/    — libraries and frameworks
+/// - game/   — games and game engines
+const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "tool", "app", "lib", "game"];
 
 /// Allowed subdirectories in well-known/malware/
 ///
@@ -624,7 +629,7 @@ const ALLOWED_MALWARE: &[&str] = &[
     "worm",         // Self-propagating across networks
 ];
 
-/// Allowed subdirectories in well-known/tools/
+/// Allowed subdirectories in well-known/tool/
 ///
 /// Categories of tools detected by signature or behavioral pattern.
 /// Each describes the tool's PURPOSE, not its legality.
@@ -633,6 +638,7 @@ const ALLOWED_MALWARE: &[&str] = &[
 const ALLOWED_TOOLS: &[&str] = &[
     "browser",             // Browser-based tools and extensions
     "detection",           // Detection and scanning tools
+    "development",         // Developer tooling (IDEs, build systems, package managers)
     "dual-use",            // Legitimate tools commonly abused (LOLBins, netcat, etc.)
     "offensive",           // Offensive security / red team tools
     "reverse-engineering", // RE tools (disassemblers, debuggers, decompilers)
@@ -670,16 +676,22 @@ const ALLOWED_METADATA: &[&str] = &[
 /// Prefer technology-neutral subdirectory names. Technology names belong in filenames.
 const ALLOWED_METADATA_BINARY: &[&str] = &[
     "anomaly",     // Structural violations and anomalies
+    "bundle",      // Bundle-format metadata (Info.plist, CFBundleIdentifier, XPC, launchd)
     "debug",       // Debug symbols (PDB, DWARF)
     "framework",   // Runtime/framework detection (.NET, Java, VB6, MFC)
     "installer",   // Installer framework detection
     "instruction", // Instruction-level patterns (indirect calls, CPUID)
     "layout",      // File-level structure (overlay, embedded, bundles)
+    "license",     // Embedded license-notice strings (GPL, etc.)
     "linking",     // Runtime linking and dynamic resolution
     "metrics",     // Structural measurements (counts, entropy, ratios, size)
+    "provenance",  // Source-tree / VCS-ident / build-origin markers
     "resource",    // Embedded resource analysis
     "section",     // Section analysis
+    "signing",     // Code-signing technologies (Authenticode, Apple codesign)
     "symbols",     // Import/export symbol analysis
+    "toolchain",   // Compiler/linker fingerprints (MSVC, Xcode, etc.)
+    "vendor",      // Vendor-identity detection from format-native metadata
 ];
 
 /// Allowed subdirectories in metadata/document/
@@ -1122,7 +1134,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
                     errors.push(format!(
                         "Unknown well-known/ subdirectory: '{}'\n  \
                          This rule is misplaced according to TAXONOMY.md.\n  \
-                         well-known/ should only contain 'malware' and 'tools'.\n  \
+                         well-known/ may only contain: malware, tool, app, lib, game.\n  \
                          There is almost certainly a better existing directory for this trait.",
                         dir_name
                     ));
@@ -1151,16 +1163,16 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
         }
     }
 
-    // Check well-known/tools/ subdirectories
-    if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known/tools")) {
+    // Check well-known/tool/ subdirectories
+    if let Ok(entries) = std::fs::read_dir(traits_path.join("well-known/tool")) {
         for entry in entries.flatten() {
             if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
                 let dir_name = entry.file_name().to_string_lossy().to_string();
                 if !ALLOWED_TOOLS.contains(&dir_name.as_str()) {
                     errors.push(format!(
-                        "Unknown well-known/tools/ subdirectory: '{}'\n  \
+                        "Unknown well-known/tool/ subdirectory: '{}'\n  \
                          This rule is misplaced according to TAXONOMY.md.\n  \
-                         tools/ categories describe a tool's purpose, not its legality.\n  \
+                         tool/ categories describe a tool's purpose, not its legality.\n  \
                          Malware families → well-known/malware/.\n  \
                          There is almost certainly a better existing directory for this trait.",
                         dir_name

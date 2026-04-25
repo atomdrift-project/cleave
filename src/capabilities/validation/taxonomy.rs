@@ -342,7 +342,8 @@ pub(crate) fn find_cap_obj_violations(
 ///
 /// Metadata rules describe file-level properties (format, language, quality) and should
 /// only reference other metadata/ rules. Referencing micro-behaviors/, objectives/, or
-/// well-known/ rules violates the tier hierarchy.
+/// well-known/ rules violates the tier hierarchy — metadata is the leaf layer for
+/// neutral structural facts and must not depend on behavior or named entities.
 ///
 /// Returns `(rule_id, ref_id, source_file)` for violations.
 #[must_use]
@@ -399,54 +400,220 @@ pub(crate) fn find_metadata_cross_tier_refs(
     violations
 }
 
-/// Find micro-behaviors/ rules that reference well-known/ rules.
+/// Returns the tier prefix (the segment before the first `/`, or before `::`) of a ref/id.
+fn ref_tier(id: &str) -> Option<&str> {
+    let base = id.find("::").map_or(id, |i| &id[..i]);
+    base.find('/').map(|i| &base[..i])
+}
+
+/// Returns true if `ref_id` points at a trait under `well-known/malware/`.
 ///
-/// Micro-behaviors describe observable capabilities and should only reference other
-/// micro-behaviors/ or metadata/ rules. Referencing well-known/ (specific malware/tool
-/// signatures) creates a dependency on named entities which belongs in objectives/ or
-/// well-known/ composites.
+/// References use `<subdirectory>::<local_id>`; the path before `::` is the directory
+/// from the traits root, so `well-known/malware/trojan/foo::bar` and `well-known/malware`
+/// both qualify, while `well-known/tool/...`, `well-known/app/...`, etc. do not.
+fn is_wellknown_malware_ref(ref_id: &str) -> bool {
+    let path = ref_id.find("::").map_or(ref_id, |i| &ref_id[..i]);
+    path == "well-known/malware" || path.starts_with("well-known/malware/")
+}
+
+/// Returns true if `ref_id` points at a trait under any well-known/ subtree.
+fn is_wellknown_ref(ref_id: &str) -> bool {
+    ref_tier(ref_id) == Some("well-known")
+}
+
+/// Find micro-behaviors/ rules that reference well-known/ rules in disallowed ways.
 ///
-/// Returns `(rule_id, ref_id, source_file)` for violations.
+/// Micro-behaviors are tier-0 atoms. Hostile-intent fingerprints inverted from this
+/// layer are forbidden:
+/// - `well-known/malware/*` is forbidden in any clause — capabilities cannot be
+///   gated on a specific malware family.
+/// - `well-known/{tool,app,lib,game}/*` is allowed only inside `unless:` /
+///   `downgrade:` (benign-context suppression, e.g., "do not flag this capability
+///   when the binary is a known signed sandboxie/sysinternals component").
 #[must_use]
 pub(crate) fn find_cap_wellknown_violations(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
     rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String, String)> {
+) -> Vec<(String, String, String, ObjectivesWellknownViolation)> {
+    find_tier_wellknown_violations(
+        "micro-behaviors",
+        trait_definitions,
+        composite_rules,
+        rule_source_files,
+    )
+}
+
+/// Reason an `objectives/` → `well-known/` reference is rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ObjectivesWellknownViolation {
+    /// objectives/ may never reference well-known/malware/, in any clause. Malware-family
+    /// IDs are not prerequisites for generic objectives — composing them belongs in
+    /// well-known/ correlation rules, not in objective definitions.
+    MalwareRef,
+    /// well-known/{tool,app,lib,game}/ refs are only allowed as benign-context
+    /// suppressions (`unless:` / `downgrade:`), not as positive evidence for hostile
+    /// intent (`all:` / `any:` / atomic `if:`).
+    PositiveWellknownRef,
+}
+
+impl ObjectivesWellknownViolation {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::MalwareRef => "may not reference well-known/malware/",
+            Self::PositiveWellknownRef => {
+                "may reference well-known/{tool,app,lib,game}/ only inside `unless:` or `downgrade:` (benign-context), not as positive evidence"
+            }
+        }
+    }
+}
+
+/// Find `objectives/` rules whose references into `well-known/` violate the policy.
+/// See `find_tier_wellknown_violations` for the policy details.
+#[must_use]
+pub(crate) fn find_objectives_wellknown_violations(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String, ObjectivesWellknownViolation)> {
+    find_tier_wellknown_violations(
+        "objectives",
+        trait_definitions,
+        composite_rules,
+        rule_source_files,
+    )
+}
+
+/// Shared implementation for `find_cap_wellknown_violations` and
+/// `find_objectives_wellknown_violations`. Both apply the same policy:
+/// - `well-known/malware/*` forbidden in any clause.
+/// - `well-known/{tool,app,lib,game}/*` allowed in benign-context clauses
+///   (`unless:` / `downgrade:`); allowed in positive-evidence clauses
+///   (`all:`, `any:`, atomic `if:`) only when the *containing* rule does not
+///   itself claim hostile intent (i.e., its `crit` is below `suspicious`).
+///   Rules at `suspicious` / `hostile` cannot pin their classification to a
+///   named-entity fingerprint.
+fn find_tier_wellknown_violations(
+    tier: &str,
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    rule_source_files: &HashMap<String, String>,
+) -> Vec<(String, String, String, ObjectivesWellknownViolation)> {
     let mut violations = Vec::new();
 
-    fn extract_tier(id: &str) -> Option<&str> {
-        let base = id.find("::").map_or(id, |idx| &id[..idx]);
-        base.find('/').map(|i| &base[..i])
-    }
+    let push = |id: &str,
+                ref_id: &str,
+                reason: ObjectivesWellknownViolation,
+                out: &mut Vec<(String, String, String, ObjectivesWellknownViolation)>| {
+        let source = rule_source_files
+            .get(id)
+            .cloned()
+            .unwrap_or_else(|| "unknown".to_string());
+        out.push((id.to_string(), ref_id.to_string(), source, reason));
+    };
+
+    let claims_hostile_intent = |crit: Criticality| -> bool {
+        crit >= Criticality::Suspicious
+    };
+
+    let classify =
+        |ref_id: &str,
+         in_benign_clause: bool,
+         rule_crit: Criticality|
+         -> Option<ObjectivesWellknownViolation> {
+            if !is_wellknown_ref(ref_id) {
+                return None;
+            }
+            if is_wellknown_malware_ref(ref_id) {
+                return Some(ObjectivesWellknownViolation::MalwareRef);
+            }
+            if in_benign_clause {
+                return None;
+            }
+            // Positive-evidence ref to well-known/{tool,app,lib,game} is only a
+            // violation when the rule itself claims hostile intent. Rules whose
+            // own crit stays below `suspicious` (baseline / notable / lower)
+            // are informational and may use named-entity refs freely.
+            if claims_hostile_intent(rule_crit) {
+                Some(ObjectivesWellknownViolation::PositiveWellknownRef)
+            } else {
+                None
+            }
+        };
+
+    let scan_conditions =
+        |conds: &[Condition], in_benign: bool, refs: &mut Vec<(String, bool)>| {
+            for cond in conds {
+                if let Condition::Trait { id } = cond {
+                    refs.push((id.clone(), in_benign));
+                }
+            }
+        };
 
     for trait_def in trait_definitions {
-        if extract_tier(&trait_def.id) != Some("micro-behaviors") {
+        if ref_tier(&trait_def.id) != Some(tier) {
             continue;
         }
-        if let Condition::Trait { id: ref_id } = &trait_def.r#if {
-            if extract_tier(ref_id) == Some("well-known") {
-                let source = rule_source_files
-                    .get(&trait_def.id)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                violations.push((trait_def.id.clone(), ref_id.clone(), source));
+        let mut refs: Vec<(String, bool)> = Vec::new();
+
+        // Atomic `if:` is positive evidence.
+        if let Condition::Trait { id } = &trait_def.r#if {
+            refs.push((id.clone(), false));
+        }
+        // `unless:` is benign-context suppression.
+        if let Some(unless) = &trait_def.unless {
+            scan_conditions(unless, true, &mut refs);
+        }
+        // Atomic traits also support `downgrade:` with all/any/none — all benign-context.
+        if let Some(downgrade) = &trait_def.downgrade {
+            if let Some(c) = &downgrade.all {
+                scan_conditions(c, true, &mut refs);
+            }
+            if let Some(c) = &downgrade.any {
+                scan_conditions(c, true, &mut refs);
+            }
+            if let Some(c) = &downgrade.none {
+                scan_conditions(c, true, &mut refs);
+            }
+        }
+
+        for (ref_id, benign) in refs {
+            if let Some(reason) = classify(&ref_id, benign, trait_def.crit) {
+                push(&trait_def.id, &ref_id, reason, &mut violations);
             }
         }
     }
 
     for rule in composite_rules {
-        if extract_tier(&rule.id) != Some("micro-behaviors") {
+        if ref_tier(&rule.id) != Some(tier) {
             continue;
         }
-        let trait_refs = collect_trait_refs_from_rule(rule);
-        for (ref_id, _) in trait_refs {
-            if extract_tier(&ref_id) == Some("well-known") {
-                let source = rule_source_files
-                    .get(&rule.id)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                violations.push((rule.id.clone(), ref_id.clone(), source));
+        let mut refs: Vec<(String, bool)> = Vec::new();
+
+        if let Some(c) = &rule.all {
+            scan_conditions(c, false, &mut refs);
+        }
+        if let Some(c) = &rule.any {
+            scan_conditions(c, false, &mut refs);
+        }
+        if let Some(c) = &rule.unless {
+            scan_conditions(c, true, &mut refs);
+        }
+        if let Some(downgrade) = &rule.downgrade {
+            if let Some(c) = &downgrade.all {
+                scan_conditions(c, true, &mut refs);
+            }
+            if let Some(c) = &downgrade.any {
+                scan_conditions(c, true, &mut refs);
+            }
+            if let Some(c) = &downgrade.none {
+                scan_conditions(c, true, &mut refs);
+            }
+        }
+
+        for (ref_id, benign) in refs {
+            if let Some(reason) = classify(&ref_id, benign, rule.crit) {
+                push(&rule.id, &ref_id, reason, &mut violations);
             }
         }
     }
@@ -617,9 +784,16 @@ pub(crate) fn find_depth_violations(yaml_files: &[String]) -> Vec<(String, usize
     violations
 }
 
-/// Find trait and composite rule IDs that contain invalid characters.
+/// Find trait and composite rule IDs whose local identifier contains invalid
+/// characters. Local IDs must match `[a-zA-Z0-9_-]+`.
 ///
-/// IDs should only contain alphanumerics, dashes, and underscores (no slashes).
+/// The loader prepends `<directory>::` to YAML ids that don't already contain
+/// `::` or `/`, so the canonical form here is `path::local_id`. We strip
+/// everything before `::` and validate only the local part — the path prefix
+/// is loader-generated and always contains `/`.
+///
+/// (The "user wrote a path-qualified id like `well-known/malware/foo::bar` in
+/// the `id:` field" case is enforced at parse time, see parsing.rs.)
 ///
 /// Returns a list of `(id, invalid_char, source_file)` violations.
 #[must_use]
@@ -631,13 +805,10 @@ pub(crate) fn find_invalid_trait_ids(
     let mut violations = Vec::new();
 
     for trait_def in trait_definitions {
-        // Extract local ID (after :: delimiter, or the whole ID if no delimiter)
-        let local_id = if let Some(idx) = trait_def.id.find("::") {
-            &trait_def.id[idx + 2..]
-        } else {
-            &trait_def.id
-        };
-
+        let local_id = trait_def
+            .id
+            .rfind("::")
+            .map_or(trait_def.id.as_str(), |i| &trait_def.id[i + 2..]);
         if let Some(invalid_char) = validate_trait_id_chars(local_id) {
             let source = rule_source_files
                 .get(&trait_def.id)
@@ -648,13 +819,10 @@ pub(crate) fn find_invalid_trait_ids(
     }
 
     for rule in composite_rules {
-        // Extract local ID (after :: delimiter, or the whole ID if no delimiter)
-        let local_id = if let Some(idx) = rule.id.find("::") {
-            &rule.id[idx + 2..]
-        } else {
-            &rule.id
-        };
-
+        let local_id = rule
+            .id
+            .rfind("::")
+            .map_or(rule.id.as_str(), |i| &rule.id[i + 2..]);
         if let Some(invalid_char) = validate_trait_id_chars(local_id) {
             let source = rule_source_files
                 .get(&rule.id)
@@ -812,23 +980,27 @@ const WELL_KNOWN_MALWARE_CATEGORIES: &[&str] = &[
     "worm",
 ];
 
-/// Allowed second-level categories under `well-known/tools/`.
-const WELL_KNOWN_TOOLS_CATEGORIES: &[&str] = &[
-    "breachcore",
+/// Allowed second-level categories under `well-known/tool/`.
+const WELL_KNOWN_TOOL_CATEGORIES: &[&str] = &[
     "browser",
     "detection",
+    "development",
     "dual-use",
-    "gnulib",
-    "keyauth",
-    "mercurial",
     "offensive",
     "reverse-engineering",
     "sysadmin",
-    "testing",
 ];
 
-/// Validate that well-known/malware/ and well-known/tools/ only contain whitelisted
-/// second-level categories.
+/// Allowed top-level categories under `well-known/`.
+///
+/// Kept in sync with `ALLOWED_WELL_KNOWN` in directory_whitelist.rs. Anything outside
+/// this set is reported by the directory whitelist; this list is reused here to scope
+/// second-level subcategory checks.
+const WELL_KNOWN_TOP_LEVEL: &[&str] = &["malware", "tool", "app", "lib", "game"];
+
+/// Validate that well-known/<category>/ only contains whitelisted second-level
+/// subcategories where one is defined (currently malware/ and tool/). The app/, lib/,
+/// and game/ buckets have no fixed subcategory list and are ignored here.
 ///
 /// Returns `(directory_path, unknown_category)` for violations.
 #[must_use]
@@ -842,14 +1014,19 @@ pub(crate) fn find_wellknown_category_violations(trait_dirs: &[String]) -> Vec<(
             continue;
         }
 
-        // Check well-known/malware/<category> and well-known/tools/<category>
         if parts[0] != "well-known" {
+            continue;
+        }
+
+        // Skip top-level categories that are themselves invalid — the directory
+        // whitelist reports those. Avoid double-flagging.
+        if !WELL_KNOWN_TOP_LEVEL.contains(&parts[1]) {
             continue;
         }
 
         let (allowed, category) = match parts[1] {
             "malware" => (WELL_KNOWN_MALWARE_CATEGORIES, parts[2]),
-            "tools" => (WELL_KNOWN_TOOLS_CATEGORIES, parts[2]),
+            "tool" => (WELL_KNOWN_TOOL_CATEGORIES, parts[2]),
             _ => continue,
         };
 

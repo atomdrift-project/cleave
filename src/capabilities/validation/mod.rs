@@ -122,11 +122,13 @@ pub(crate) use taxonomy::{
     find_depth_violations, find_duplicate_second_level_directories,
     find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
     find_invalid_trait_ids, find_malware_subcategory_violations, find_meta_missing_section_filter,
-    find_metadata_cross_tier_refs, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_redundant_unix_platforms,
+    find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_redundant_unix_platforms,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
-    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
+    ObjectivesWellknownViolation, BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
+    MAX_TRAITS_PER_DIRECTORY,
 };
 
 // Logic constraint validation

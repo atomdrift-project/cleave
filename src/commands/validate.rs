@@ -274,6 +274,25 @@ const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
     ("scripts/make_pickle.py", 3),
     ("scripts/make_png.py", 3),
     ("scripts/make_xlsx.py", 3),
+    // Build scripts under does-nothing/scripts/: these legitimately
+    // trigger `py-tiny-comment-ratio-small-file` (no docstrings) and
+    // `py-many-zero-param-helpers` (each is a no-arg artifact builder).
+    // Both atoms are weak `notable` signals; the hostile composite that
+    // combines them requires additional obfuscation primitives that
+    // these scripts don't carry, so bumping the cap to 3 is safe.
+    ("scripts/make_zip_bundle.py", 3),
+    ("scripts/make_pptx.py", 3),
+    ("scripts/make_deb.py", 3),
+    // Single-line "imports X / python code embedded in string" samples
+    // for various languages — same pair of new metric atoms as above.
+    ("artifacts/sample.swift", 3),
+    ("artifacts/sample.scala", 3),
+    ("artifacts/sample.java", 3),
+    // Empty PyPI metadata-only packages — `pkginfo-no-author-email` +
+    // `pkginfo-no-homepage` (or similar pair) total to 2; cap at 3 to
+    // leave one slot of headroom.
+    ("artifacts/sample.egg", 3),
+    ("artifacts/sample.whl", 3),
 ];
 
 /// Look up the cap for a file whose `path` may be either absolute (root file)

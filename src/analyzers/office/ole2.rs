@@ -7,6 +7,32 @@ use super::vba;
 use anyhow::Result;
 use std::io::{Cursor, Read};
 
+/// Maximum embedded executables extracted per OLE2 document.
+/// Bounds work for adversarial inputs that pile many MZ-prefixed streams.
+const MAX_EMBEDDED_EXECUTABLES: usize = 10;
+
+/// Maximum embedded executable size to extract (50 MB).
+/// Streams above this are reported as present but skipped for sub-analysis.
+const MAX_EMBEDDED_EXECUTABLE_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Minimum credible PE/ELF size — anything smaller is a stub or a false MZ.
+const MIN_EMBEDDED_EXECUTABLE_SIZE: u64 = 1024;
+
+/// Kind of embedded executable detected by header sniffing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EmbeddedExecKind {
+    Pe,
+    Elf,
+}
+
+/// Embedded executable extracted from an OLE2 stream.
+#[derive(Debug, Clone)]
+pub(crate) struct EmbeddedExecutable {
+    pub stream_path: String,
+    pub kind: EmbeddedExecKind,
+    pub data: Vec<u8>,
+}
+
 /// Parsed OLE2 compound document.
 #[derive(Debug)]
 #[allow(dead_code)] // Fields used for Debug output and future analysis expansion
@@ -21,8 +47,8 @@ pub(crate) struct Ole2Document {
     pub has_encryption: bool,
     /// Stream names found in the document
     pub stream_names: Vec<String>,
-    /// Streams containing embedded PE/ELF executables
-    pub embedded_executables: Vec<String>,
+    /// Streams containing embedded PE/ELF executables (with extracted bytes for sub-analysis)
+    pub embedded_executables: Vec<EmbeddedExecutable>,
     /// OLE10Native embedded objects (filename, size)
     pub ole10_native_objects: Vec<Ole10NativeInfo>,
     /// Known dangerous CLSIDs found on storages
@@ -87,13 +113,16 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     let cursor = Cursor::new(data);
     let mut comp = cfb::CompoundFile::open(cursor)?;
 
-    // Enumerate all entries, collecting CLSIDs from storages
-    let mut entries: Vec<(String, u64)> = Vec::new();
+    // Enumerate all entries, collecting CLSIDs from storages.
+    // `is_stream` is captured so embedded-executable scanning can skip storages
+    // without round-tripping through `open_stream` errors.
+    let mut entries: Vec<(String, u64, bool)> = Vec::new();
     let mut dangerous_clsids: Vec<ClsidMatch> = Vec::new();
 
     for entry in comp.walk() {
         let path = entry.path().to_string_lossy().to_string();
         let len = entry.len();
+        let is_stream = entry.is_stream();
 
         // Check CLSIDs on storage entries
         if entry.is_storage() {
@@ -107,10 +136,10 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
             }
         }
 
-        entries.push((path, len));
+        entries.push((path, len, is_stream));
     }
 
-    let stream_names: Vec<String> = entries.iter().map(|(name, _)| name.clone()).collect();
+    let stream_names: Vec<String> = entries.iter().map(|(name, _, _)| name.clone()).collect();
 
     // Detect document subtype
     let doc_subtype = detect_subtype(&stream_names);
@@ -181,39 +210,62 @@ fn detect_subtype(stream_names: &[String]) -> Ole2Subtype {
 }
 
 /// Scan streams for embedded PE/ELF executables.
+///
+/// Sniffs the first 8 bytes of every stream (no name filter) so MSI binary
+/// streams (`Binary.<name>`), ad-hoc storage attachments, and obfuscated
+/// container streams are all caught. The full stream payload is read into
+/// memory for matching streams so the caller can route the bytes through the
+/// PE/ELF analyzer pipeline.
+///
+/// Bounds: skips streams below [`MIN_EMBEDDED_EXECUTABLE_SIZE`] (no real
+/// payload fits) or above [`MAX_EMBEDDED_EXECUTABLE_SIZE`] (avoid OOM on
+/// adversarial inputs); caps the result count at
+/// [`MAX_EMBEDDED_EXECUTABLES`].
 fn find_embedded_executables(
     comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
-    entries: &[(String, u64)],
-) -> Vec<String> {
+    entries: &[(String, u64, bool)],
+) -> Vec<EmbeddedExecutable> {
     let mut found = Vec::new();
 
-    for (path, size) in entries {
-        // Skip very large streams to avoid excessive memory use
-        if *size > 50 * 1024 * 1024 || *size < 2 {
+    for (path, size, is_stream) in entries {
+        if found.len() >= MAX_EMBEDDED_EXECUTABLES {
+            break;
+        }
+        if !*is_stream
+            || *size < MIN_EMBEDDED_EXECUTABLE_SIZE
+            || *size > MAX_EMBEDDED_EXECUTABLE_SIZE
+        {
             continue;
         }
 
-        // Only check streams that might contain embedded objects
-        let lower = path.to_lowercase();
-        if lower.contains("ole")
-            || lower.contains("embed")
-            || lower.contains("object")
-            || lower.contains("package")
-        {
-            if let Ok(mut stream) = comp.open_stream(path) {
-                let mut header = [0u8; 8];
-                if stream.read_exact(&mut header).is_ok() {
-                    // Check for MZ (PE) header
-                    if header[0] == b'M' && header[1] == b'Z' {
-                        found.push(path.clone());
-                    }
-                    // Check for ELF header
-                    if header[..4] == [0x7f, b'E', b'L', b'F'] {
-                        found.push(path.clone());
-                    }
-                }
-            }
+        let Ok(mut stream) = comp.open_stream(path) else {
+            continue;
+        };
+        let mut header = [0u8; 8];
+        if stream.read_exact(&mut header).is_err() {
+            continue;
         }
+        let kind = if header[0] == b'M' && header[1] == b'Z' {
+            EmbeddedExecKind::Pe
+        } else if header[..4] == [0x7f, b'E', b'L', b'F'] {
+            EmbeddedExecKind::Elf
+        } else {
+            continue;
+        };
+
+        // Slurp the full stream. cfb's stream reader is in-memory backed by
+        // the host slice, so this is a single contiguous copy.
+        let mut data = Vec::with_capacity(*size as usize);
+        data.extend_from_slice(&header);
+        if stream.read_to_end(&mut data).is_err() {
+            continue;
+        }
+
+        found.push(EmbeddedExecutable {
+            stream_path: path.clone(),
+            kind,
+            data,
+        });
     }
 
     found
@@ -226,11 +278,11 @@ fn find_embedded_executables(
 /// field followed by embedded file metadata (filename, path).
 fn find_ole10_native(
     comp: &mut cfb::CompoundFile<Cursor<&[u8]>>,
-    entries: &[(String, u64)],
+    entries: &[(String, u64, bool)],
 ) -> Vec<Ole10NativeInfo> {
     let mut found = Vec::new();
 
-    for (path, size) in entries {
+    for (path, size, _is_stream) in entries {
         if *size < 6 || *size > 50 * 1024 * 1024 {
             continue;
         }

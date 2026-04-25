@@ -72,10 +72,13 @@ impl OfficeAnalyzer {
         let sha256 = format!("{:x}", hasher.finalize());
 
         // Route to appropriate parser
-        let (type_str, findings, vba_modules) = match file_type {
+        let (type_str, findings, vba_modules, embedded_execs) = match file_type {
             FileType::OleDoc => self.analyze_ole2(data),
-            FileType::Ooxml => self.analyze_ooxml(data, file_path),
-            _ => ("unknown".to_string(), Vec::new(), Vec::new()),
+            FileType::Ooxml => {
+                let (t, f, v) = self.analyze_ooxml(data, file_path);
+                (t, f, v, Vec::new())
+            }
+            _ => ("unknown".to_string(), Vec::new(), Vec::new(), Vec::new()),
         };
 
         let target = TargetInfo {
@@ -98,16 +101,33 @@ impl OfficeAnalyzer {
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("document");
-        let findings_before_vba = report.findings.len();
+        let findings_before_subfiles = report.findings.len();
         self.analyze_vba_subfiles(&mut report, &vba_modules, doc_name, cancellation);
+
+        // Recursively analyze embedded PE/ELF payloads carried in OLE2 streams
+        // (e.g., MSI binary custom-action DLLs). Routes them through the standard
+        // PE/ELF pipeline and merges findings upward, mirroring the VBA path.
+        let embedded_count = embedded_execs.len() as u32;
+        self.analyze_embedded_executables(&mut report, &embedded_execs, doc_name, cancellation);
+
+        // Surface count on the cross-format binary metric so ML/scoring can use it.
+        if embedded_count > 0 {
+            let metrics = report.metrics.get_or_insert_with(Default::default);
+            let binary = metrics.binary.get_or_insert_with(Default::default);
+            binary.embedded_binary_count =
+                binary.embedded_binary_count.saturating_add(embedded_count);
+            binary.embedded_file_count = binary
+                .embedded_binary_count
+                .saturating_add(binary.embedded_archive_count);
+        }
 
         // Delegate pattern detection to capability mapper (YAML traits + YARA)
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
 
-        // Evaluate container-level composites that combine parent + VBA sub-file findings
+        // Evaluate container-level composites that combine parent + sub-file findings
         // (e.g., composites requiring both OOXML metadata markers AND VBA behavioral traits)
-        let nested_findings: Vec<_> = report.findings[findings_before_vba..].to_vec();
+        let nested_findings: Vec<_> = report.findings[findings_before_subfiles..].to_vec();
         if !nested_findings.is_empty() {
             let container_findings = self.capability_mapper.evaluate_container_composites(
                 &report,
@@ -221,14 +241,129 @@ impl OfficeAnalyzer {
         }
     }
 
-    fn analyze_ole2(&self, data: &[u8]) -> (String, Vec<Finding>, Vec<vba::VbaModule>) {
+    /// Analyze embedded PE/ELF payloads carried in OLE2 streams as sub-files.
+    ///
+    /// MSI custom-action DLLs and similar binary payloads live in named streams
+    /// (e.g., `Binary.<name>`). Routing them through the standard PE/ELF
+    /// analyzer surfaces the embedded binary's full trait set on the parent
+    /// document — without this, a binary-CA MSI would only show the
+    /// `embedded-executable` marker and none of the loader's actual behavior.
+    fn analyze_embedded_executables(
+        &self,
+        report: &mut AnalysisReport,
+        executables: &[ole2::EmbeddedExecutable],
+        doc_name: &str,
+        cancellation: Option<&Arc<std::sync::atomic::AtomicBool>>,
+    ) {
+        for exec in executables {
+            if cancellation.is_some_and(|c| c.load(std::sync::atomic::Ordering::Acquire)) {
+                break;
+            }
+
+            let (file_type, kind_str) = match exec.kind {
+                ole2::EmbeddedExecKind::Pe => (FileType::Pe, "pe"),
+                ole2::EmbeddedExecKind::Elf => (FileType::Elf, "elf"),
+            };
+
+            let Some(analyzer) =
+                analyzer_for_file_type_arc(&file_type, Some(self.capability_mapper.clone()))
+            else {
+                continue;
+            };
+
+            // Sanitize the OLE stream path (which has leading "/" and may
+            // contain reserved characters) into a stable virtual filename.
+            let stream_label = exec.stream_path.trim_start_matches('/').replace('/', "_");
+            let virtual_path_str = format!("{doc_name}!!ole/{stream_label}");
+            let virtual_path = Path::new(&virtual_path_str);
+
+            let strings = stng::extract_strings_with_options(
+                &exec.data,
+                &crate::analyzers::attach_stng_cancellation(
+                    crate::analyzers::stng_text_opts(4),
+                    cancellation,
+                ),
+            );
+            let mut input =
+                AnalysisInput::with_strings(virtual_path, &exec.data, &strings, file_type);
+            input.cancellation = cancellation.cloned();
+            input.depth = 1;
+
+            match analyzer.analyze_input(&input) {
+                Ok(mut sub_report) => {
+                    let sub_findings = std::mem::take(&mut sub_report.findings);
+
+                    let mut by_id: HashMap<String, usize> = report
+                        .findings
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| (f.id.clone(), i))
+                        .collect();
+
+                    for mut finding in sub_findings {
+                        for evidence in &mut finding.evidence {
+                            if let Some(ref loc) = evidence.location {
+                                evidence.location = Some(format!("ole:{}/{}", stream_label, loc));
+                            } else {
+                                evidence.location = Some(format!("ole:{stream_label}"));
+                            }
+                        }
+                        match by_id.get(&finding.id) {
+                            Some(&idx) => {
+                                let existing = &report.findings[idx];
+                                if (finding.crit, finding.conf.total_cmp(&existing.conf))
+                                    > (existing.crit, std::cmp::Ordering::Equal)
+                                {
+                                    report.findings[idx] = finding;
+                                }
+                            }
+                            None => {
+                                by_id.insert(finding.id.clone(), report.findings.len());
+                                report.findings.push(finding);
+                            }
+                        }
+                    }
+
+                    let (mut file_entry, nested_files, _archive_contents) =
+                        sub_report.into_file_analysis(0);
+                    file_entry.path = virtual_path_str.clone();
+                    file_entry.depth = 1;
+                    file_entry.compute_summary();
+                    report.files.push(file_entry);
+
+                    for mut nested in nested_files {
+                        nested.depth += 1;
+                        report.files.push(nested);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        stream = %exec.stream_path,
+                        kind = kind_str,
+                        error = %e,
+                        "Failed to analyze embedded executable as sub-file"
+                    );
+                }
+            }
+        }
+    }
+
+    fn analyze_ole2(
+        &self,
+        data: &[u8],
+    ) -> (
+        String,
+        Vec<Finding>,
+        Vec<vba::VbaModule>,
+        Vec<ole2::EmbeddedExecutable>,
+    ) {
         let mut findings = Vec::new();
 
         let doc = match ole2::parse_ole2(data) {
             Ok(doc) => doc,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to parse OLE2 document");
-                return ("ole".to_string(), findings, Vec::new());
+                return ("ole".to_string(), findings, Vec::new(), Vec::new());
             }
         };
 
@@ -274,13 +409,20 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Embedded executables — objective (implies payload delivery intent)
-        for stream in &doc.embedded_executables {
+        // Embedded executables — objective (implies payload delivery intent).
+        // The actual payload is also routed through analyze_embedded_executables
+        // for full sub-analysis; this finding is the structural marker.
+        for exec in &doc.embedded_executables {
             findings.push(Finding {
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
                     .to_string(),
                 kind: FindingKind::Indicator,
-                desc: format!("Embedded executable in OLE2 stream: {stream}"),
+                desc: format!(
+                    "Embedded {:?} payload in OLE2 stream: {} ({} bytes)",
+                    exec.kind,
+                    exec.stream_path,
+                    exec.data.len()
+                ),
                 conf: 0.95,
                 crit: Criticality::Hostile,
                 mbc: None,
@@ -343,7 +485,12 @@ impl OfficeAnalyzer {
         // Document metadata
         add_metadata_findings(&doc.metadata, &mut findings);
 
-        (type_str, findings, doc.vba_modules)
+        (
+            type_str,
+            findings,
+            doc.vba_modules,
+            doc.embedded_executables,
+        )
     }
 
     fn analyze_ooxml(

@@ -50,6 +50,7 @@ mod proximity_scripting_symbols_tests {
                 platforms: None,
                 is_check: None,
                 kind: Some(SymbolKind::Import),
+                not: None,
                 compiled_regex: None,
                 compiled_finder: None,
             })

@@ -496,6 +496,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -519,6 +520,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -540,6 +542,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -564,6 +567,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -585,6 +589,7 @@ mod validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1683,6 +1688,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1704,6 +1710,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1723,6 +1730,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1741,6 +1749,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };
@@ -1759,6 +1768,7 @@ mod llm_validation_tests {
             platforms: None,
             is_check: None,
             kind: None,
+            not: None,
             compiled_regex: None,
             compiled_finder: None,
         };

@@ -300,6 +300,76 @@ fn test_eval_symbol_no_match() {
 }
 
 #[test]
+fn test_eval_symbol_not_filters_substr_match() {
+    // Two imports both contain "eval" — `eval` (a real call) and
+    // `safe_eval_template` (a helper we want to exclude). A `not:` substring
+    // exception on `template` must drop the helper but keep `eval`.
+    let mut report = create_test_report();
+    report.imports.push(Import {
+        symbol: "eval".to_string(),
+        library: None,
+        source: "builtin".to_string(),
+        offset: None,
+    });
+    report.imports.push(Import {
+        symbol: "safe_eval_template".to_string(),
+        library: None,
+        source: "builtin".to_string(),
+        offset: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let pattern = "eval".to_string();
+    let not = vec![NotException::Shorthand("template".to_string())];
+
+    let result = eval_symbol(
+        None,
+        Some(&pattern),
+        None,
+        None,
+        None,
+        Some(&not),
+        &ctx,
+    );
+
+    assert!(result.matched);
+    assert_eq!(result.evidence.len(), 1);
+    assert_eq!(result.evidence[0].value, "eval");
+}
+
+#[test]
+fn test_eval_symbol_not_filters_all_matches() {
+    // When every match is excluded by `not:`, the condition must report no
+    // match — not silently report a hit with empty evidence.
+    let mut report = create_test_report();
+    report.imports.push(Import {
+        symbol: "eval_template".to_string(),
+        library: None,
+        source: "builtin".to_string(),
+        offset: None,
+    });
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let pattern = "eval".to_string();
+    let not = vec![NotException::Shorthand("template".to_string())];
+
+    let result = eval_symbol(
+        None,
+        Some(&pattern),
+        None,
+        None,
+        None,
+        Some(&not),
+        &ctx,
+    );
+
+    assert!(!result.matched);
+    assert!(result.evidence.is_empty());
+}
+
+#[test]
 fn test_eval_symbol_platform_filtering() {
     let mut report = create_test_report();
     report.imports.push(Import {

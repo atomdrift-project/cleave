@@ -655,3 +655,155 @@ pub(crate) fn find_raw_should_use_string_value(
 ) {
     find_raw_should_use_text(traits, warnings);
 }
+
+/// If `pattern` is structurally equivalent to a bare function call `NAME(`,
+/// return `NAME`. Method calls (`obj.fn(`) and patterns with arguments are
+/// rejected — those depend on call-site shape that `type: symbol` can't replace.
+fn extract_simple_function_call_name(pattern: &str, is_regex: bool) -> Option<String> {
+    if is_regex {
+        // Strip a trivial leading boundary guard (\b, ^, (^|X), (?:^|X)).
+        static LEAD_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+        let lead_re = LEAD_RE
+            .get_or_init(|| {
+                regex::Regex::new(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))").ok()
+            })
+            .as_ref()?;
+        let body = if let Some(m) = lead_re.find(pattern) {
+            &pattern[m.end()..]
+        } else {
+            pattern
+        };
+
+        // Body must be NAME, optional \s*/\s+, then literal \( and optionally \)
+        // or trailing \b. Anything else (arg-shape matching) is out of scope.
+        static BODY_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+        let body_re = BODY_RE
+            .get_or_init(|| {
+                regex::Regex::new(
+                    r"^([a-zA-Z_][a-zA-Z0-9_]+)(?:\\s[*+])?\\\((?:\\\))?(?:\\b)?$",
+                )
+                .ok()
+            })
+            .as_ref()?;
+        let caps = body_re.captures(body)?;
+        Some(caps.get(1)?.as_str().to_string())
+    } else {
+        // substr / exact — must be a bare `NAME(` or `NAME ( )` pattern. No
+        // dots in the name (those are method calls), no arguments, no trailing
+        // content beyond an empty arg list.
+        static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+        let re = RE
+            .get_or_init(|| {
+                regex::Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]+)\s*\(\s*\)?\s*$").ok()
+            })
+            .as_ref()?;
+        let caps = re.captures(pattern)?;
+        Some(caps.get(1)?.as_str().to_string())
+    }
+}
+
+/// Detect `type: text` (or `type: raw`) function-call patterns whose every
+/// `for:` target supports tree-sitter symbol resolution. For these languages,
+/// `type: symbol` is both faster (a hash lookup against the extracted symbol
+/// table) and more accurate (no spurious matches on the same identifier inside
+/// comments, string literals, or unrelated context).
+///
+/// Example: a trait with `for: [javascript, typescript]` and `if: { type: text,
+/// substr: "eval(" }` should be `if: { type: symbol, exact: eval }`.
+pub(crate) fn find_ast_function_call_should_use_symbol(
+    traits: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    for trait_def in traits {
+        // Every for-type must be an AST-source language. An empty for-list
+        // means "all" — that includes binary types where `symbol` has very
+        // different semantics, so skip.
+        if trait_def.r#for.is_empty()
+            || !trait_def.r#for.iter().all(|ft| is_ast_source_type(*ft))
+        {
+            continue;
+        }
+        // Symbol conditions are capped at 4 file types (see constraints.rs).
+        // Don't recommend a conversion that would immediately exceed the cap.
+        if trait_def.r#for.len() > 4 {
+            continue;
+        }
+        // Section / offset filters target binary structure — leave alone.
+        if condition_has_position_constraints(&trait_def.r#if) {
+            continue;
+        }
+
+        let (exact, substr, regex, word, case_insensitive, is_check) =
+            match &trait_def.r#if {
+                Condition::Text {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    ..
+                }
+                | Condition::Raw {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    ..
+                } => (exact, substr, regex, word, case_insensitive, is_check),
+                _ => continue,
+            };
+        // Only convertible conditions are in scope. Symbol matches are
+        // deterministic, so case folding and is_check validators don't apply.
+        // Inline `not:` clauses inside the condition usually exist to
+        // disambiguate text-mode false matches that symbol mode can't make
+        // anyway — flag the trait and let the conversion drop the `not:`.
+        if word.is_some() || *case_insensitive || is_check.is_some() {
+            continue;
+        }
+        let (kind, value, name) = if let Some(v) = exact {
+            if substr.is_some() || regex.is_some() {
+                continue;
+            }
+            let Some(name) = extract_simple_function_call_name(v, false) else {
+                continue;
+            };
+            ("exact", v.as_str(), name)
+        } else if let Some(v) = substr {
+            if regex.is_some() {
+                continue;
+            }
+            let Some(name) = extract_simple_function_call_name(v, false) else {
+                continue;
+            };
+            ("substr", v.as_str(), name)
+        } else if let Some(v) = regex {
+            let Some(name) = extract_simple_function_call_name(v, true) else {
+                continue;
+            };
+            ("regex", v.as_str(), name)
+        } else {
+            continue;
+        };
+
+        let source_file = trait_def
+            .defined_in
+            .to_str()
+            .unwrap_or("unknown")
+            .to_string();
+        let line_hint = find_line_number(&source_file, &trait_def.id);
+        let location = if let Some(line) = line_hint {
+            format!("{}:{}", source_file, line)
+        } else {
+            source_file
+        };
+
+        warnings.push(format!(
+            "Performance: trait '{}' in {} uses `type: text` with {} '{}' to match a function call on AST source types — \
+             use `type: symbol` with `exact: {}` instead (faster, no false positives on the name inside comments or string literals)",
+            trait_def.id, location, kind, value, name
+        ));
+    }
+}

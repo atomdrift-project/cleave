@@ -2735,3 +2735,289 @@ pub(crate) fn check_basename_pattern_duplicates(
         duplicates_found
     );
 }
+
+/// Reduce a regex to its structural shape: replace each character class with a
+/// canonical `[CC]` (positive) or `[NCC]` (negative) placeholder so two patterns
+/// that differ only in the contents of a character class collapse to the same
+/// string. Escapes are preserved verbatim, everything else is left alone.
+fn structural_shape(pattern: &str) -> String {
+    let bytes = pattern.as_bytes();
+    let mut out = String::with_capacity(pattern.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == b'\\' && i + 1 < bytes.len() {
+            out.push('\\');
+            out.push(bytes[i + 1] as char);
+            i += 2;
+            continue;
+        }
+        if b == b'[' {
+            // Walk forward to the matching unescaped ']'.
+            let mut j = i + 1;
+            let negative = j < bytes.len() && bytes[j] == b'^';
+            while j < bytes.len() && bytes[j] != b']' {
+                if bytes[j] == b'\\' && j + 1 < bytes.len() {
+                    j += 2;
+                } else {
+                    j += 1;
+                }
+            }
+            if j >= bytes.len() {
+                // Unterminated class — bail and keep original.
+                return pattern.to_string();
+            }
+            out.push_str(if negative { "[NCC]" } else { "[CC]" });
+            i = j + 1;
+            continue;
+        }
+        out.push(b as char);
+        i += 1;
+    }
+    out
+}
+
+/// Strip a trivial leading boundary guard from a structurally-shaped pattern
+/// so `\beval`, `(^|[NCC])eval`, `(?:^|\s)eval` and friends all collapse to
+/// just `eval` for shape comparison.
+fn strip_leading_boundary(s: &str) -> &str {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| {
+            // Matches: \b | ^ | (^|X) | (?:^|X)
+            // X is a single char class placeholder, escape, or literal up to 8 chars
+            // (long enough to cover [NCC]/[CC]/\s/\W/\b/[!/]/etc., short enough to
+            // avoid eating real content).
+            regex::Regex::new(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))").ok()
+        })
+        .as_ref();
+    if let Some(re) = re {
+        if let Some(m) = re.find(s) {
+            return &s[m.end()..];
+        }
+    }
+    s
+}
+
+/// Strip a leading inline-flag block like `(?i)`, `(?is)`, `(?-i)` so flag-only
+/// differences don't prevent shape collapse.
+fn strip_leading_flags(s: &str) -> &str {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    let re = RE
+        .get_or_init(|| regex::Regex::new(r"^\(\?[a-zA-Z\-]{1,8}\)").ok())
+        .as_ref();
+    if let Some(re) = re {
+        if let Some(m) = re.find(s) {
+            return &s[m.end()..];
+        }
+    }
+    s
+}
+
+/// Detect atomic regex traits whose patterns are structurally identical except
+/// for the inside of a character class — almost certainly the same intent
+/// expressed twice.
+///
+/// Catches cases like:
+///   - `(^|[^\w$])eval\s*\(` vs `(^|[^\w$.])eval\s*\(` — leading guard differs
+///     by one character; both fire on the same `eval(` calls.
+///   - `eval\s*\(\s*[a-zA-Z_$][a-zA-Z0-9_$]*\s*\)` vs the `_dup` variant
+///     without `$` in the identifier class — same shape.
+///
+/// Only same-tier (criticality_for_overlap), overlapping-for-types pairs are
+/// flagged. Component/Baseline/Filtered are skipped because those are
+/// deliberately reusable building blocks.
+pub(crate) fn find_structural_regex_duplicates(
+    trait_definitions: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
+    let start = std::time::Instant::now();
+    let initial_warning_count = warnings.len();
+
+    /// Body scope: text and string_literal collapse together (the latter is a
+    /// strict subset of the former for matching purposes), raw is binary, and
+    /// symbol matches in the symbol table.
+    #[derive(Clone, Copy, PartialEq, Eq, Hash)]
+    enum Scope {
+        Body,
+        Raw,
+        Symbol,
+    }
+
+    struct Entry {
+        location: PatternLocation,
+        scope: Scope,
+    }
+
+    let mut entries: Vec<Entry> = Vec::new();
+
+    for trait_def in trait_definitions {
+        // Skip building-block tiers — they're meant to be reused.
+        if matches!(
+            criticality_for_overlap(trait_def.crit),
+            Criticality::Baseline
+        ) {
+            continue;
+        }
+
+        let (regex_opt, scope, condition_type) = match &trait_def.r#if {
+            Condition::Text { regex, .. } => (regex.as_ref(), Scope::Body, "text"),
+            Condition::StringLiteral { regex, .. } => {
+                (regex.as_ref(), Scope::Body, "string_literal")
+            }
+            Condition::Raw { regex, .. } => (regex.as_ref(), Scope::Raw, "raw"),
+            Condition::Symbol { regex, .. } => (regex.as_ref(), Scope::Symbol, "symbol"),
+            _ => continue,
+        };
+        let Some(regex) = regex_opt else { continue };
+
+        let for_types: HashSet<String> = trait_def
+            .r#for
+            .iter()
+            .map(|ft| format!("{:?}", ft).to_lowercase())
+            .collect();
+
+        let section = if let Condition::Raw { section, .. } = &trait_def.r#if {
+            section.clone()
+        } else {
+            None
+        };
+
+        entries.push(Entry {
+            location: PatternLocation {
+                trait_id: trait_def.id.clone(),
+                file_path: trait_def.defined_in.to_string_lossy().to_string(),
+                condition_type: condition_type.to_string(),
+                match_type: "regex".to_string(),
+                original_value: regex.clone(),
+                for_types,
+                section,
+                count_min: trait_def.count_min,
+                count_max: trait_def.count_max,
+                per_kb_min: trait_def.per_kb_min,
+                per_kb_max: trait_def.per_kb_max,
+                confidence: trait_def.conf,
+                criticality: trait_def.crit,
+            },
+            scope,
+        });
+    }
+
+    // Compute the canonical shape for each entry.
+    let shapes: Vec<String> = entries
+        .iter()
+        .map(|e| {
+            let raw = structural_shape(&e.location.original_value);
+            let no_flags = strip_leading_flags(&raw);
+            let no_lead = strip_leading_boundary(no_flags);
+            // Trailing trivial anchors / boundaries.
+            let no_trail_anchor = if no_lead.ends_with('$') && !no_lead.ends_with("\\$") {
+                &no_lead[..no_lead.len() - 1]
+            } else {
+                no_lead
+            };
+            let no_trail = no_trail_anchor
+                .strip_suffix("\\b")
+                .unwrap_or(no_trail_anchor);
+            no_trail.to_string()
+        })
+        .collect();
+
+    // Group by (shape, scope, crit_tier). Skip groups whose shape is too short
+    // to be a meaningful structural match.
+    let mut groups: HashMap<(String, Scope, String), Vec<usize>> = HashMap::new();
+    for (idx, e) in entries.iter().enumerate() {
+        let shape = &shapes[idx];
+        // Count alphanumeric/underscore bytes outside `[...]` placeholders and
+        // outside `\<x>` escape sequences. Two patterns sharing only the
+        // placeholders produce trivial collisions, so require real literal
+        // anchoring to bucket.
+        let mut literal_bytes = 0usize;
+        let bytes = shape.as_bytes();
+        let mut k = 0;
+        while k < bytes.len() {
+            let b = bytes[k];
+            if b == b'\\' && k + 1 < bytes.len() {
+                k += 2;
+                continue;
+            }
+            if b == b'[' {
+                while k < bytes.len() && bytes[k] != b']' {
+                    k += 1;
+                }
+                if k < bytes.len() {
+                    k += 1;
+                }
+                continue;
+            }
+            if b.is_ascii_alphanumeric() || b == b'_' {
+                literal_bytes += 1;
+            }
+            k += 1;
+        }
+        if literal_bytes < 4 {
+            continue;
+        }
+        let crit_key = format!("{:?}", criticality_for_overlap(e.location.criticality));
+        let key = (shape.clone(), e.scope, crit_key);
+        groups.entry(key).or_default().push(idx);
+    }
+
+    let mut seen: FxHashSet<(String, String)> = FxHashSet::default();
+    for ((shape, _scope, _tier), indices) in groups {
+        if indices.len() < 2 {
+            continue;
+        }
+        for i in 0..indices.len() {
+            for j in (i + 1)..indices.len() {
+                let a = &entries[indices[i]].location;
+                let b = &entries[indices[j]].location;
+
+                if a.original_value == b.original_value {
+                    // Already caught by find_duplicate_traits_and_composites.
+                    continue;
+                }
+                if !has_filetype_overlap(a, b) {
+                    continue;
+                }
+                if a.section.is_some() && b.section.is_some() && a.section != b.section {
+                    continue;
+                }
+                if !has_same_count_density_filters(a, b) {
+                    continue;
+                }
+
+                let key_a = format!("{}::{}", a.file_path, a.trait_id);
+                let key_b = format!("{}::{}", b.file_path, b.trait_id);
+                let key = if key_a <= key_b {
+                    (key_a.clone(), key_b.clone())
+                } else {
+                    (key_b.clone(), key_a.clone())
+                };
+                if !seen.insert(key) {
+                    continue;
+                }
+
+                warnings.push(format!(
+                    "Structurally duplicate regex (same shape, same crit tier, overlapping file types):\n   {}::{} ({}) => {}\n   {}::{} ({}) => {}\n   shape: {}\n   → Action: keep one or split the intent into orthogonal patterns",
+                    a.file_path,
+                    a.trait_id,
+                    a.condition_type,
+                    a.original_value,
+                    b.file_path,
+                    b.trait_id,
+                    b.condition_type,
+                    b.original_value,
+                    shape,
+                ));
+            }
+        }
+    }
+
+    let dups_found = warnings.len() - initial_warning_count;
+    tracing::debug!(
+        "Structural regex duplicate detection completed in {:?} ({} duplicates found)",
+        start.elapsed(),
+        dups_found
+    );
+}

@@ -266,6 +266,10 @@ enum ConditionTagged {
         /// across all categories — preserving the pre-`kind` semantic.
         #[serde(default)]
         kind: Option<SymbolKind>,
+        /// Exclude individual matches where the symbol name (or surrounding
+        /// trait-level evidence) matches any of these patterns.
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
     },
     Text {
         #[serde(default)]
@@ -652,6 +656,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
+                    not,
                 } => Condition::Symbol {
                     exact,
                     substr,
@@ -659,6 +664,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
+                    not,
                     compiled_regex: None,
                     compiled_finder: None,
                 },
@@ -924,6 +930,7 @@ impl From<Condition> for ConditionTagged {
                 platforms,
                 is_check,
                 kind,
+                not,
                 compiled_regex: _,
                 compiled_finder: _,
             } => ConditionTagged::Symbol {
@@ -933,6 +940,7 @@ impl From<Condition> for ConditionTagged {
                 platforms,
                 is_check,
                 kind,
+                not,
             },
             Condition::Text {
                 exact,
@@ -1214,6 +1222,10 @@ pub(crate) enum Condition {
         /// across imports, exports, and internal functions.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         kind: Option<SymbolKind>,
+        /// Exclude individual matches where the symbol name matches any of
+        /// these patterns. Combined (OR) with the trait-level `not:` filter.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        not: Option<Vec<NotException>>,
         /// Pre-compiled regex (populated after deserialization, not serialized)
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,

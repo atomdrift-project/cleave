@@ -85,6 +85,27 @@ fn default_confidence() -> f32 {
     1.0
 }
 
+/// Combine the condition-level and trait-level `not:` exception lists into a
+/// single owned vector, preserving ordering. Returns `None` when both inputs
+/// are empty so call sites can keep the no-exception fast paths.
+fn merge_not_exceptions(
+    cond: Option<&Vec<NotException>>,
+    trait_level: Option<&Vec<NotException>>,
+) -> Option<Vec<NotException>> {
+    match (cond, trait_level) {
+        (None, None) => None,
+        (Some(c), None) => Some(c.clone()),
+        (None, Some(t)) => Some(t.clone()),
+        (Some(c), Some(t)) => {
+            let mut merged = Vec::with_capacity(c.len() + t.len());
+            merged.extend_from_slice(c);
+            merged.extend_from_slice(t);
+            Some(merged)
+        }
+    }
+}
+
+
 /// Extract relative path from full path (relative to traits directory)
 /// Returns None if path conversion fails
 fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
@@ -1135,23 +1156,27 @@ impl TraitDefinition {
                 platforms,
                 is_check,
                 kind,
+                not,
                 compiled_regex,
                 compiled_finder,
-            } => timed_eval!(
-                "symbol",
-                eval_symbol(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    platforms.as_ref(),
-                    *is_check,
-                    *kind,
-                    compiled_regex.as_ref(),
-                    compiled_finder.as_ref(),
-                    self.not.as_ref(),
-                    ctx,
+            } => {
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                timed_eval!(
+                    "symbol",
+                    eval_symbol(
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        platforms.as_ref(),
+                        *is_check,
+                        *kind,
+                        compiled_regex.as_ref(),
+                        compiled_finder.as_ref(),
+                        merged_not.as_ref(),
+                        ctx,
+                    )
                 )
-            ),
+            }
             Condition::Text {
                 exact,
                 substr,
@@ -2203,20 +2228,24 @@ impl CompositeTrait {
                 platforms,
                 is_check,
                 kind,
+                not,
                 compiled_regex,
                 compiled_finder,
-            } => self.eval_symbol(
-                exact.as_ref(),
-                substr.as_ref(),
-                regex.as_ref(),
-                platforms.as_ref(),
-                *is_check,
-                *kind,
-                compiled_regex.as_ref(),
-                compiled_finder.as_ref(),
-                self.not.as_ref(),
-                ctx,
-            ),
+            } => {
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                self.eval_symbol(
+                    exact.as_ref(),
+                    substr.as_ref(),
+                    regex.as_ref(),
+                    platforms.as_ref(),
+                    *is_check,
+                    *kind,
+                    compiled_regex.as_ref(),
+                    compiled_finder.as_ref(),
+                    merged_not.as_ref(),
+                    ctx,
+                )
+            }
             Condition::Text {
                 exact,
                 substr,

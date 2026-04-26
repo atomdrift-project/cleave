@@ -16,8 +16,9 @@ use crate::capabilities::validation::{
     check_regex_alternative_subsets, check_regex_contains_literal,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    find_alternation_merge_candidates, find_atomic_logic_duplicates,
-    find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
+    find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
+    find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
+    find_broad_platform_traits,
     find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
     find_condition_scope_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
@@ -30,16 +31,17 @@ use crate::capabilities::validation::{
     find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
     find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
     find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
-    find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_redundant_unix_platforms, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_too_short_patterns, find_unanchored_wellknown_composites,
-    find_wellknown_category_violations, find_wellknown_missing_section_filter,
-    find_wellknown_missing_size_filter, precalculate_all_composite_precisions,
-    simple_rule_to_composite_rule, validate_composite_trait_only, validate_directory_structure,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_raw_should_use_text,
+    find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
+    find_redundant_unix_platforms, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_too_short_patterns,
+    find_unanchored_wellknown_composites, find_wellknown_category_violations,
+    find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
+    precalculate_all_composite_precisions, simple_rule_to_composite_rule,
+    validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
     ObjectivesWellknownViolation, BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
     MAX_TRAITS_PER_DIRECTORY,
@@ -1193,6 +1195,13 @@ impl super::CapabilityMapper {
             check_overlapping_regex_patterns(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1e2 completed in {:?}", step_start.elapsed());
 
+            // Catch structurally-identical regex pairs (e.g. only the inside of
+            // a character class differs) — common copy/paste duplication.
+            let step_start = std::time::Instant::now();
+            tracing::trace!("Step 1e3/15: Checking for structurally duplicate regex patterns");
+            find_structural_regex_duplicates(&trait_definitions, &mut warnings);
+            tracing::trace!("Step 1e3 completed in {:?}", step_start.elapsed());
+
             // Check for simple regex that should be exact
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1f/15: Checking for regex patterns that should be exact");
@@ -1228,6 +1237,15 @@ impl super::CapabilityMapper {
             tracing::trace!("Step 1h4/15: Detecting literal-only text mismatches");
             find_string_literal_should_use_text(&trait_definitions, &mut warnings);
             tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
+
+            // Detect text/raw function-call patterns on AST source types — these
+            // should use `type: symbol` for performance and accuracy.
+            let step_start = std::time::Instant::now();
+            tracing::trace!(
+                "Step 1h5/15: Detecting text function-call patterns that should use symbol"
+            );
+            find_ast_function_call_should_use_symbol(&trait_definitions, &mut warnings);
+            tracing::trace!("Step 1h5 completed in {:?}", step_start.elapsed());
 
             // Check for exact patterns contained by substr patterns (redundancy)
             let step_start = std::time::Instant::now();

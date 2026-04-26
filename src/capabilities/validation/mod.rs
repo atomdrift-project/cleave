@@ -100,6 +100,7 @@ pub(crate) use duplicates::{
     check_same_string_different_types, find_alternation_merge_candidates,
     find_atomic_logic_duplicates, find_duplicate_traits_and_composites, find_for_only_duplicates,
     find_string_content_collisions, find_string_pattern_duplicates,
+    find_structural_regex_duplicates,
 };
 
 // Composite rule validation
@@ -110,8 +111,8 @@ pub(crate) use composite::{
 
 // Pattern quality checks
 pub(crate) use patterns::{
-    find_non_capturing_groups, find_raw_should_use_text, find_short_pattern_warnings,
-    find_slow_regex_patterns, find_string_literal_should_use_text,
+    find_ast_function_call_should_use_symbol, find_non_capturing_groups, find_raw_should_use_text,
+    find_short_pattern_warnings, find_slow_regex_patterns, find_string_literal_should_use_text,
 };
 
 // Taxonomy validation

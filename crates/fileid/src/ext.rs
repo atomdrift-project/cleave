@@ -156,6 +156,9 @@ fn detect_from_filename(path: &Path) -> Option<FileType> {
     if name.starts_with("Makefile") || name.starts_with("GNUmakefile") {
         return Some(FileType::Makefile);
     }
+    if name.eq_ignore_ascii_case("LICENSE") || name.eq_ignore_ascii_case("COPYING") {
+        return Some(FileType::Text);
+    }
 
     None
 }

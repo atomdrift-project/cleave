@@ -1130,6 +1130,14 @@ mod tests {
     /// recognized when the file sits inside a temp directory, which is how
     /// the HTTP upload handlers preserve the original name.
     #[test]
+    fn license_in_temp_dir_detected_as_text() {
+        let data = include_bytes!("testdata/LICENSE");
+        let det = detect(Path::new("/tmp/fn-list/LICENSE"), data).unwrap();
+        assert_eq!(det.file_type, FileType::Text);
+        assert_eq!(det.source, DetectionSource::Filename);
+    }
+
+    #[test]
     fn package_json_in_temp_dir() {
         let det = detect(Path::new("/tmp/cleave-abc123/package.json"), b"{}").unwrap();
         assert_eq!(det.file_type, FileType::PackageJson);

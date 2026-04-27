@@ -679,10 +679,8 @@ fn extract_simple_function_call_name(pattern: &str, is_regex: bool) -> Option<St
         static BODY_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
         let body_re = BODY_RE
             .get_or_init(|| {
-                regex::Regex::new(
-                    r"^([a-zA-Z_][a-zA-Z0-9_]+)(?:\\s[*+])?\\\((?:\\\))?(?:\\b)?$",
-                )
-                .ok()
+                regex::Regex::new(r"^([a-zA-Z_][a-zA-Z0-9_]+)(?:\\s[*+])?\\\((?:\\\))?(?:\\b)?$")
+                    .ok()
             })
             .as_ref()?;
         let caps = body_re.captures(body)?;
@@ -693,9 +691,7 @@ fn extract_simple_function_call_name(pattern: &str, is_regex: bool) -> Option<St
         // content beyond an empty arg list.
         static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
         let re = RE
-            .get_or_init(|| {
-                regex::Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]+)\s*\(\s*\)?\s*$").ok()
-            })
+            .get_or_init(|| regex::Regex::new(r"^\s*([a-zA-Z_][a-zA-Z0-9_]+)\s*\(\s*\)?\s*$").ok())
             .as_ref()?;
         let caps = re.captures(pattern)?;
         Some(caps.get(1)?.as_str().to_string())
@@ -718,9 +714,7 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
         // Every for-type must be an AST-source language. An empty for-list
         // means "all" — that includes binary types where `symbol` has very
         // different semantics, so skip.
-        if trait_def.r#for.is_empty()
-            || !trait_def.r#for.iter().all(|ft| is_ast_source_type(*ft))
-        {
+        if trait_def.r#for.is_empty() || !trait_def.r#for.iter().all(|ft| is_ast_source_type(*ft)) {
             continue;
         }
         // Symbol conditions are capped at 4 file types (see constraints.rs).
@@ -733,28 +727,27 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
             continue;
         }
 
-        let (exact, substr, regex, word, case_insensitive, is_check) =
-            match &trait_def.r#if {
-                Condition::Text {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    ..
-                }
-                | Condition::Raw {
-                    exact,
-                    substr,
-                    regex,
-                    word,
-                    case_insensitive,
-                    is_check,
-                    ..
-                } => (exact, substr, regex, word, case_insensitive, is_check),
-                _ => continue,
-            };
+        let (exact, substr, regex, word, case_insensitive, is_check) = match &trait_def.r#if {
+            Condition::Text {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                ..
+            }
+            | Condition::Raw {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                ..
+            } => (exact, substr, regex, word, case_insensitive, is_check),
+            _ => continue,
+        };
         // Only convertible conditions are in scope. Symbol matches are
         // deterministic, so case folding and is_check validators don't apply.
         // Inline `not:` clauses inside the condition usually exist to

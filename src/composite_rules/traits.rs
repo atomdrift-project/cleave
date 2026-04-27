@@ -105,7 +105,6 @@ fn merge_not_exceptions(
     }
 }
 
-
 /// Extract relative path from full path (relative to traits directory)
 /// Returns None if path conversion fails
 fn get_relative_source_file(path: &std::path::Path) -> Option<String> {

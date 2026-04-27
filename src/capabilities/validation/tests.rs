@@ -2899,7 +2899,11 @@ mod taxonomy_tests {
         )];
         let sources = HashMap::new();
         let v = find_objectives_wellknown_violations(&[], &composites, &sources);
-        assert_eq!(v.len(), 1, "well-known/tool ref in `all:` is positive evidence");
+        assert_eq!(
+            v.len(),
+            1,
+            "well-known/tool ref in `all:` is positive evidence"
+        );
         assert_eq!(v[0].3, ObjectivesWellknownViolation::PositiveWellknownRef);
     }
 
@@ -2959,10 +2963,7 @@ mod taxonomy_tests {
                 "micro-behaviors/foo",
                 &["well-known/tool/mimikatz/sekurlsa"],
             ),
-            make_composite(
-                "metadata/format/foo",
-                &["well-known/lib/openssl/v3"],
-            ),
+            make_composite("metadata/format/foo", &["well-known/lib/openssl/v3"]),
         ];
         let sources = HashMap::new();
         let v = find_objectives_wellknown_violations(&[], &composites, &sources);

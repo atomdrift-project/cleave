@@ -323,15 +323,7 @@ fn test_eval_symbol_not_filters_substr_match() {
     let pattern = "eval".to_string();
     let not = vec![NotException::Shorthand("template".to_string())];
 
-    let result = eval_symbol(
-        None,
-        Some(&pattern),
-        None,
-        None,
-        None,
-        Some(&not),
-        &ctx,
-    );
+    let result = eval_symbol(None, Some(&pattern), None, None, None, Some(&not), &ctx);
 
     assert!(result.matched);
     assert_eq!(result.evidence.len(), 1);
@@ -355,15 +347,7 @@ fn test_eval_symbol_not_filters_all_matches() {
     let pattern = "eval".to_string();
     let not = vec![NotException::Shorthand("template".to_string())];
 
-    let result = eval_symbol(
-        None,
-        Some(&pattern),
-        None,
-        None,
-        None,
-        Some(&not),
-        &ctx,
-    );
+    let result = eval_symbol(None, Some(&pattern), None, None, None, Some(&not), &ctx);
 
     assert!(!result.matched);
     assert!(result.evidence.is_empty());

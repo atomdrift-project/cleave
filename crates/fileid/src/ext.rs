@@ -178,7 +178,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
 
     match ext_lower {
         "sh" | "bash" | "ksh" | "zsh" | "csh" | "tcsh" | "dash" => Some(FileType::Shell),
-        "py" => Some(FileType::Python),
+        "py" | "pth" => Some(FileType::Python),
         "js" | "mjs" | "cjs" | "jsx" => Some(FileType::JavaScript),
         "ts" | "tsx" | "mts" | "cts" => Some(FileType::TypeScript),
         "go" => Some(FileType::Go),
@@ -260,6 +260,10 @@ mod tests {
     fn python_extension() {
         assert_eq!(
             detect_from_path(Path::new("script.py")),
+            Some(FileType::Python)
+        );
+        assert_eq!(
+            detect_from_path(Path::new("site-package.pth")),
             Some(FileType::Python)
         );
     }

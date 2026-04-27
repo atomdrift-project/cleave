@@ -18,9 +18,8 @@ use crate::capabilities::validation::{
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
-    find_broad_platform_traits,
-    find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
-    find_condition_scope_violations, find_depth_violations,
+    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
+    find_composite_only_wellknown_files, find_condition_scope_violations, find_depth_violations,
     find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
@@ -1502,15 +1501,9 @@ impl super::CapabilityMapper {
                     invalid_ids.len()
                 );
                 if debug {
-                    eprintln!(
-                        "   IDs must be a bare local identifier using only [a-zA-Z0-9_-]."
-                    );
-                    eprintln!(
-                        "   The taxonomy hierarchy comes from the file's directory on disk,"
-                    );
-                    eprintln!(
-                        "   so '/' and ':' are not allowed inside an `id:` declaration.\n"
-                    );
+                    eprintln!("   IDs must be a bare local identifier using only [a-zA-Z0-9_-].");
+                    eprintln!("   The taxonomy hierarchy comes from the file's directory on disk,");
+                    eprintln!("   so '/' and ':' are not allowed inside an `id:` declaration.\n");
                     for (id, invalid_char, source_file) in &invalid_ids {
                         let line_hint = find_line_number(source_file, id);
                         if let Some(line) = line_hint {
@@ -1525,9 +1518,7 @@ impl super::CapabilityMapper {
                             );
                         }
                     }
-                    eprintln!(
-                        "\n   Allowed in id: [a-zA-Z0-9_-] only."
-                    );
+                    eprintln!("\n   Allowed in id: [a-zA-Z0-9_-] only.");
                     eprintln!(
                         "   Reference format (in if/all/any/none): <local_id> or <subdirectory>::<local_id>\n"
                     );

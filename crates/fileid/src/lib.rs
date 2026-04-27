@@ -530,6 +530,15 @@ mod tests {
     }
 
     #[test]
+    fn python_by_import_heuristic_without_filename() {
+        assert_detect(
+            "mystery",
+            b"import os, subprocess, tempfile, base64; exec(base64.b64decode('cHJpbnQoMSk='))\n",
+            FileType::Python,
+        );
+    }
+
+    #[test]
     fn python_bytecode_magic() {
         assert_detect(
             "mod.pyc",

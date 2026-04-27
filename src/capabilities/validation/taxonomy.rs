@@ -501,54 +501,51 @@ fn find_tier_wellknown_violations(
 ) -> Vec<(String, String, String, ObjectivesWellknownViolation)> {
     let mut violations = Vec::new();
 
-    let push = |id: &str,
-                ref_id: &str,
-                reason: ObjectivesWellknownViolation,
-                out: &mut Vec<(String, String, String, ObjectivesWellknownViolation)>| {
-        let source = rule_source_files
-            .get(id)
-            .cloned()
-            .unwrap_or_else(|| "unknown".to_string());
-        out.push((id.to_string(), ref_id.to_string(), source, reason));
-    };
-
-    let claims_hostile_intent = |crit: Criticality| -> bool {
-        crit >= Criticality::Suspicious
-    };
-
-    let classify =
-        |ref_id: &str,
-         in_benign_clause: bool,
-         rule_crit: Criticality|
-         -> Option<ObjectivesWellknownViolation> {
-            if !is_wellknown_ref(ref_id) {
-                return None;
-            }
-            if is_wellknown_malware_ref(ref_id) {
-                return Some(ObjectivesWellknownViolation::MalwareRef);
-            }
-            if in_benign_clause {
-                return None;
-            }
-            // Positive-evidence ref to well-known/{tool,app,lib,game} is only a
-            // violation when the rule itself claims hostile intent. Rules whose
-            // own crit stays below `suspicious` (baseline / notable / lower)
-            // are informational and may use named-entity refs freely.
-            if claims_hostile_intent(rule_crit) {
-                Some(ObjectivesWellknownViolation::PositiveWellknownRef)
-            } else {
-                None
-            }
+    let push =
+        |id: &str,
+         ref_id: &str,
+         reason: ObjectivesWellknownViolation,
+         out: &mut Vec<(String, String, String, ObjectivesWellknownViolation)>| {
+            let source = rule_source_files
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            out.push((id.to_string(), ref_id.to_string(), source, reason));
         };
 
-    let scan_conditions =
-        |conds: &[Condition], in_benign: bool, refs: &mut Vec<(String, bool)>| {
-            for cond in conds {
-                if let Condition::Trait { id } = cond {
-                    refs.push((id.clone(), in_benign));
-                }
+    let claims_hostile_intent = |crit: Criticality| -> bool { crit >= Criticality::Suspicious };
+
+    let classify = |ref_id: &str,
+                    in_benign_clause: bool,
+                    rule_crit: Criticality|
+     -> Option<ObjectivesWellknownViolation> {
+        if !is_wellknown_ref(ref_id) {
+            return None;
+        }
+        if is_wellknown_malware_ref(ref_id) {
+            return Some(ObjectivesWellknownViolation::MalwareRef);
+        }
+        if in_benign_clause {
+            return None;
+        }
+        // Positive-evidence ref to well-known/{tool,app,lib,game} is only a
+        // violation when the rule itself claims hostile intent. Rules whose
+        // own crit stays below `suspicious` (baseline / notable / lower)
+        // are informational and may use named-entity refs freely.
+        if claims_hostile_intent(rule_crit) {
+            Some(ObjectivesWellknownViolation::PositiveWellknownRef)
+        } else {
+            None
+        }
+    };
+
+    let scan_conditions = |conds: &[Condition], in_benign: bool, refs: &mut Vec<(String, bool)>| {
+        for cond in conds {
+            if let Condition::Trait { id } = cond {
+                refs.push((id.clone(), in_benign));
             }
-        };
+        }
+    };
 
     for trait_def in trait_definitions {
         if ref_tier(&trait_def.id) != Some(tier) {

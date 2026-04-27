@@ -169,6 +169,7 @@ enum Namespace {
     Objectives,
     MicroBehaviors,
     Metadata,
+    ThirdParty,
 }
 
 impl Namespace {
@@ -180,6 +181,7 @@ impl Namespace {
             "objectives" => Some(Self::Objectives),
             "micro-behaviors" => Some(Self::MicroBehaviors),
             "metadata" => Some(Self::Metadata),
+            "third_party" | "third-party" => Some(Self::ThirdParty),
             _ => None,
         }
     }
@@ -191,6 +193,7 @@ impl Namespace {
             Self::Objectives => "OBJECTIVES",
             Self::MicroBehaviors => "MICRO-BEHAVIORS",
             Self::Metadata => "METADATA",
+            Self::ThirdParty => "THIRD-PARTY",
         }
     }
 }
@@ -786,6 +789,7 @@ fn section_pill(ns: &Namespace) -> colored::ColoredString {
         Namespace::Objectives => (ns.display_name(), 95, 0, 95), // dark magenta (53)
         Namespace::MicroBehaviors => (ns.display_name(), 0, 0, 95), // dark blue (17)
         Namespace::Metadata => (ns.display_name(), 48, 48, 48), // dark gray (236)
+        Namespace::ThirdParty => (ns.display_name(), 120, 56, 0), // dark orange
     };
     format!(" {name} ").bold().white().on_truecolor(r, g, b)
 }
@@ -827,7 +831,12 @@ fn short_trait_id(id: &str) -> String {
     if parts.len() > 1 {
         // Skip namespace prefix (well-known, objectives, micro-behaviors)
         let first = parts[0];
-        if first == "well-known" || first == "objectives" || first == "micro-behaviors" {
+        if first == "well-known"
+            || first == "objectives"
+            || first == "micro-behaviors"
+            || first == "third_party"
+            || first == "third-party"
+        {
             return parts[1..].join("/");
         }
     }
@@ -955,7 +964,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         let rule_width = term_width.saturating_sub(indent.len());
         output.push_str(&format!("{}{}\n", indent, file_rule(rule_width)));
 
-        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA.
+        // Render namespaces in fixed order: WELL-KNOWN, OBJECTIVES, MICRO-BEHAVIORS, METADATA, THIRD-PARTY.
         // First section follows the file rule with no gap; later sections get a leading blank.
         let mut first_section = true;
         for ns in [
@@ -963,6 +972,7 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
             Namespace::Objectives,
             Namespace::MicroBehaviors,
             Namespace::Metadata,
+            Namespace::ThirdParty,
         ] {
             let Some(findings) = by_namespace.get(&ns) else {
                 continue; // Skip empty sections
@@ -1288,6 +1298,36 @@ mod tests {
         let report = create_test_report(capabilities, vec![]);
         let output = format_terminal(&report);
         assert!(output.contains("execution/shell") || output.contains("MICRO-BEHAVIORS"));
+    }
+
+    #[test]
+    fn test_format_terminal_includes_third_party() {
+        let findings = vec![Finding {
+            kind: FindingKind::Indicator,
+            trait_refs: vec![],
+            id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string(),
+            desc: "Detect the BPFDoor backdoor".to_string(),
+            conf: 0.95,
+            crit: Criticality::Hostile,
+            mbc: None,
+            attack: None,
+            evidence: vec![Evidence {
+                method: "yara".to_string(),
+                source: "test".to_string(),
+                value: "$op1".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+            match_count: 1,
+            source_file: None,
+        }];
+        let report = create_test_report(findings, vec![]);
+
+        let output = format_terminal(&report);
+
+        assert!(output.contains("THIRD-PARTY"));
+        assert!(output.contains("Sekoia/Backdoor/Lin/Bpfdoor"));
+        assert!(!output.contains("third_party/Sekoia"));
     }
 
     #[test]

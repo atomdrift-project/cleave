@@ -110,9 +110,13 @@ const PATTERNS: &[(&[u8], Lang, u8)] = &[
     (b"xattr -c ", Lang::Shell, 5),
     // ── Python ──
     (b"if __name__", Lang::Python, 10),
+    (b"import os", Lang::Python, 10),
+    (b"base64.b64decode", Lang::Python, 10),
     (b"import ", Lang::Python, 5),
     (b"def ", Lang::Python, 5),
     (b"except ", Lang::Python, 5),
+    (b"exec(", Lang::Python, 5),
+    (b"subprocess.", Lang::Python, 5),
     (b"self.", Lang::Python, 5),
     // ── PowerShell ──
     (b"$ErrorActionPreference", Lang::PowerShell, 10),

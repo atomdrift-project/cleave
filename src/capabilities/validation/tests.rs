@@ -2722,6 +2722,39 @@ mod taxonomy_tests {
         }
     }
 
+    fn make_composite_suspicious(id: &str, all_refs: &[&str]) -> CompositeTrait {
+        CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Suspicious,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: Some(
+                all_refs
+                    .iter()
+                    .map(|r| Condition::Trait { id: r.to_string() })
+                    .collect(),
+            ),
+            any: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
     // ---- metadata cross-tier refs ----
 
     #[test]
@@ -2810,7 +2843,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_cap_composite_referencing_wellknown_non_malware_is_also_violation() {
-        let composites = vec![make_composite(
+        let composites = vec![make_composite_suspicious(
             "micro-behaviors/net/suspicious",
             &[
                 "micro-behaviors/net/http-post",
@@ -2890,7 +2923,7 @@ mod taxonomy_tests {
 
     #[test]
     fn test_objectives_positive_wellknown_tool_is_violation() {
-        let composites = vec![make_composite(
+        let composites = vec![make_composite_suspicious(
             "objectives/credential-access/dump",
             &[
                 "micro-behaviors/process/lsass",

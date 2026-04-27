@@ -525,6 +525,7 @@ impl FileTypeExt for FileType {
             FileType::ObjectiveC => vec!["m", "mm", "objc"],
             FileType::Groovy => vec!["groovy", "gradle"],
             FileType::Scala => vec!["scala", "sc"],
+            FileType::Kotlin => vec!["kt", "kts"],
             FileType::Zig => vec!["zig"],
             FileType::Elixir => vec!["ex", "exs"],
             FileType::C => vec!["c", "h", "hh"],

@@ -86,6 +86,8 @@ pub enum FileType {
     Groovy,
     /// Scala source file (.scala)
     Scala,
+    /// Kotlin source file (.kt, .kts)
+    Kotlin,
     /// Zig source file (.zig)
     Zig,
     /// Elixir source file (.ex, .exs)
@@ -256,6 +258,7 @@ impl FileType {
                 | Self::Rust
                 | Self::Shell
                 | Self::PowerShell
+                | Self::Kotlin
         )
     }
 }

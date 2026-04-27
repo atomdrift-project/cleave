@@ -43,11 +43,12 @@ enum Lang {
     Lua,
     JavaScript,
     C,
+    Kotlin,
 }
 
 /// All languages in index order. Used to map score indices back to Lang values
 /// without unsafe transmute.
-const LANGS: [Lang; 9] = [
+const LANGS: [Lang; 10] = [
     Lang::Shell,
     Lang::Python,
     Lang::PowerShell,
@@ -57,6 +58,7 @@ const LANGS: [Lang; 9] = [
     Lang::Lua,
     Lang::JavaScript,
     Lang::C,
+    Lang::Kotlin,
 ];
 
 const LANG_COUNT: usize = LANGS.len();
@@ -74,6 +76,7 @@ impl Lang {
             Self::Lua => 6,
             Self::JavaScript => 7,
             Self::C => 8,
+            Self::Kotlin => 9,
         }
     }
 
@@ -88,6 +91,7 @@ impl Lang {
             Self::Lua => FileType::Lua,
             Self::JavaScript => FileType::JavaScript,
             Self::C => FileType::C,
+            Self::Kotlin => FileType::Kotlin,
         }
     }
 }
@@ -112,7 +116,6 @@ const PATTERNS: &[(&[u8], Lang, u8)] = &[
     (b"if __name__", Lang::Python, 10),
     (b"import os", Lang::Python, 10),
     (b"base64.b64decode", Lang::Python, 10),
-    (b"import ", Lang::Python, 5),
     (b"def ", Lang::Python, 5),
     (b"except ", Lang::Python, 5),
     (b"exec(", Lang::Python, 5),
@@ -166,6 +169,13 @@ const PATTERNS: &[(&[u8], Lang, u8)] = &[
     (b"#include \"", Lang::C, 10),
     (b"section .text", Lang::C, 10),
     (b"[BITS 32]", Lang::C, 10),
+    // ── Kotlin ──
+    (b"package ", Lang::Kotlin, 10),
+    (b"import kotlin", Lang::Kotlin, 5),
+    (b"fun main(", Lang::Kotlin, 5),
+    (b"val ", Lang::Kotlin, 5),
+    (b"var ", Lang::Kotlin, 5),
+    (b"suspend fun ", Lang::Kotlin, 5),
 ];
 
 struct AcScanner {
@@ -401,5 +411,44 @@ mod tests {
             b"(function() { var x = 1; console.log(x); module.exports = x; })();\n",
         );
         assert_eq!(detect_from_content(&data), Some(FileType::JavaScript));
+    }
+
+    #[test]
+    fn kotlin_heuristic() {
+        let data = b"
+package com.airbnb.lottie.baselineprofile
+
+import androidx.benchmark.macro.junit4.BaselineProfileRule
+import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.filters.LargeTest
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+
+/**
+ * You can run the generator with the Generate Baseline Profile gradle task.
+ * ```
+ * ./gradlew :lottie(-compose):generateReleaseBaselineProfile -Pandroid.testInstrumentationRunnerArguments.androidx.benchmark.enabledRules=BaselineProfile
+ * ```
+ *
+ * After you run the generator, you can verify the improvements running the [StartupBenchmarks] benchmark.
+ **/
+@RunWith(AndroidJUnit4::class)
+@LargeTest
+class BaselineProfileGenerator {
+
+    @get:Rule
+    val rule = BaselineProfileRule()
+
+    @Test
+    fun generate() {
+        rule.collect(\"com.airbnb.lottie.benchmark.app\") {
+            pressHome()
+            startActivityAndWait()
+        }
+    }
+}
+";
+        assert_eq!(detect_from_content(data), Some(FileType::Kotlin));
     }
 }

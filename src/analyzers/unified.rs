@@ -276,6 +276,17 @@ pub(crate) fn config_for_file_type(
             string_node_types: &["string", "interpolated_string"],
             comment_style: CommentStyle::CStyle,
         }),
+        FileType::Kotlin => Some(LanguageConfig {
+            name: "kotlin",
+            file_type: "kotlin",
+            description: "Kotlin source code",
+            language: tree_sitter_kotlin_sg::LANGUAGE.into(),
+            call_node_types: &["call_expression"],
+            function_node_types: &["fun_declaration", "function_declaration"],
+            function_name_field: "name",
+            string_node_types: &["line_string_literal", "multi_line_string_literal"],
+            comment_style: CommentStyle::CStyle,
+        }),
         FileType::Zig => Some(LanguageConfig {
             name: "zig",
             file_type: "zig",

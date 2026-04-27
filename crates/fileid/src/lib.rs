@@ -259,6 +259,14 @@ impl FileType {
                 | Self::Shell
                 | Self::PowerShell
                 | Self::Kotlin
+                | Self::Java
+                | Self::Go
+                | Self::Swift
+                | Self::ObjectiveC
+                | Self::Groovy
+                | Self::Scala
+                | Self::Zig
+                | Self::Elixir
         )
     }
 }

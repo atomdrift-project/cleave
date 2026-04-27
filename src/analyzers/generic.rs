@@ -285,6 +285,7 @@ impl GenericAnalyzer {
                     &self.capability_mapper,
                     0,
                     None,
+                    None,
                 );
             report.files.extend(encoded_layers);
             report.findings.extend(plain_findings);

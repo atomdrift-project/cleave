@@ -129,6 +129,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                Some(&crate::FileType::AppleScript),
                 cancellation.map(Arc::as_ref),
             );
         report.files.extend(encoded_layers);
@@ -187,6 +188,7 @@ impl Analyzer for AppleScriptAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                Some(&crate::FileType::AppleScript),
                 self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);

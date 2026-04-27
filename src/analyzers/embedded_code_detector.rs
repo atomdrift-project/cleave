@@ -686,6 +686,7 @@ pub fn analyze_embedded_string(
     _string_index: usize,
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
+    host_file_type: Option<&FileType>,
 ) -> Result<EmbeddedAnalysisResult> {
     // Check depth limit
     if current_depth >= MAX_DECODE_DEPTH {
@@ -695,8 +696,8 @@ pub fn analyze_embedded_string(
     // Detect language (uses stng classification, no regex needed)
     let t_detect = std::time::Instant::now();
     let is_encoded = !string_info.encoding_chain.is_empty();
-    let file_type =
-        detect_language(string_info, is_encoded).context("No language detected in string")?;
+    let file_type = detect_language_with_host(string_info, is_encoded, host_file_type)
+        .context("No language detected in string")?;
     let detect_time = t_detect.elapsed();
 
     let offset = string_info.offset.unwrap_or(0);
@@ -1035,6 +1036,7 @@ pub(crate) fn process_all_strings(
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
+    host_file_type: Option<&FileType>,
     cancelled: Option<&AtomicBool>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     process_all_strings_with_host(
@@ -1042,17 +1044,17 @@ pub(crate) fn process_all_strings(
         strings,
         capability_mapper,
         current_depth,
-        None,
+        host_file_type,
         cancelled,
     )
 }
 
-pub(crate) fn process_all_strings_with_host(
+    pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,
     current_depth: usize,
-    _host_file_type: Option<&FileType>,
+    host_file_type: Option<&FileType>,
     cancelled: Option<&AtomicBool>,
 ) -> (Vec<FileAnalysis>, Vec<Finding>) {
     if is_source_map_string_set(strings) {
@@ -1196,6 +1198,7 @@ pub(crate) fn process_all_strings_with_host(
             idx,
             capability_mapper,
             current_depth,
+            host_file_type,
         ) {
             Ok(EmbeddedAnalysisResult::EncodedLayer(file_analysis)) => {
                 detected_count += 1;
@@ -1290,7 +1293,7 @@ mod tests {
         let mapper = Arc::new(CapabilityMapper::default());
 
         let (encoded_layers, plain_findings) =
-            process_all_strings("sample.ts", &strings, &mapper, 0, None);
+            process_all_strings("sample.ts", &strings, &mapper, 0, None, None);
 
         assert!(plain_findings.is_empty());
         assert_eq!(encoded_layers.len(), 1);

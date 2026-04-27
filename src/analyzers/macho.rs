@@ -544,6 +544,7 @@ impl MachOAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                Some(&crate::FileType::MachO),
                 self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);

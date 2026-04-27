@@ -934,6 +934,7 @@ impl UnifiedSourceAnalyzer {
                     &all_strings,
                     &self.capability_mapper,
                     0,
+                    Some(&self.file_type),
                     self.cancellation.as_deref(),
                 );
             report.files.extend(encoded_layers);

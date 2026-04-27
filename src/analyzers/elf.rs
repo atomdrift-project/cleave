@@ -862,6 +862,7 @@ impl ElfAnalyzer {
                 &report.strings,
                 &self.capability_mapper,
                 0,
+                Some(&crate::FileType::Elf),
                 self.cancellation.as_deref(),
             );
         report.files.extend(encoded_layers);

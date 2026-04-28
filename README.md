@@ -37,8 +37,7 @@ Usage:
 ```bash
 cleave suspect.bin                            # single sample
 cleave /tmp/box-o-malware                     # recursive, unpacks archives
-cleave --format jsonl --min-crit suspicious   # streaming triage feed
-cleave diff old.tgz new.tgz                   # behavior delta across releases
+cleave --format jsonl --min-crit suspicious   # JSON output
 ```
 
 Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](https://github.com/upx/upx) for runtime unpacking.

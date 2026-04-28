@@ -2,7 +2,7 @@
   <img src="media/logo.svg" alt="cleave" width="240">
 </p>
 
-cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[50,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Built for supply-chain and malware triage.
+cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[50,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Built for supply-chain and malware triage — useful standalone, and designed from day one to be embedded in other open-source or commercial software via its stable JSON contract. Apache-2.0, no telemetry.
 
 ![screenshot](media/screenshot.png)
 

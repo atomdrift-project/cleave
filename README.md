@@ -10,10 +10,12 @@ Apache-2.0, no telemetry.
 
 ## What It Analyzes
 
-- **Binaries**: Mach-O, ELF, PE, Java `.class`, Python `.pyc`, compiled AppleScript
-- **Source** (~20 languages via tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir
-- **Archives** (recursive): zip, tar, 7z, rar, jar/war, deb, rpm, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
-- **Documents & data**: RTF, LNK, PNG (steganography), PDF, plist, VBScript, Batch, package manifests, GitHub Actions workflows
+- **Binaries**: Mach-O, ELF, PE, MSI, Java `.class`, Python `.pyc`, Python pickle, compiled AppleScript
+- **Source** (~22 languages via tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, Kotlin, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir, Batch, VBScript, Makefile
+- **Archives** (recursive): zip, tar (gz/bz2/xz/zst), 7z, rar, cab, jar/war, deb, rpm, pkg, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
+- **Documents & data**: PDF, RTF, LNK, Office (OLE2 + OOXML), OpenDocument, plist, HTML, XML, Markdown, PNG/JPEG (steganography & EXIF), package manifests, GitHub Actions workflows, systemd units, XDG `.desktop` entries
+
+See [FILE_FORMATS.md](FILE_FORMATS.md) for the full table with extensions and descriptions.
 
 ## Quick Start
 
@@ -46,8 +48,16 @@ Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](http
 - **Capabilities, not verdicts.** Findings ranked from `baseline` to `hostile`. Downstream classifiers (e.g. [litmus](https://codeberg.org/atomdrift/litmus)) consume the JSONL directly.
 - **No skips.** Every archive member is analyzed regardless of size or filename.
 - **Layered unpacking.** UPX, embedded binaries, and base64/hex/AES/XOR payloads via [stng](https://codeberg.org/atomdrift/stng).
+- **Automated reverse engineering.** [rizin](https://github.com/rizinorg/rizin) drives disassembly, function discovery, and cross-references on ELF / Mach-O / PE binaries to surface behaviors that strings and headers miss.
 - **Deterministic output.** JSONL streaming, SHA256-keyed cache, same input → same output.
 - **AST matching** via tree-sitter; YARA-X for signatures; [Goblin](https://github.com/m4b/goblin) for headers.
+
+## Rules & Taxonomy
+
+Behavior rules live in the [cleave-traits](https://codeberg.org/atomdrift/cleave-traits) repository:
+
+- [RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md) — rule language reference (matchers, combinators, scoring).
+- [TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md) — capability taxonomy aligned to MBC and ATT&CK.
 
 ## Related
 

@@ -1760,10 +1760,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 method: "pattern".to_string(),
                 source: "cleave".to_string(),
                 value: format!(
-                    "encoding={}, type={:?}, preview={}",
-                    payload.encoding_chain.join(", "),
-                    payload.detected_type,
-                    payload.preview
+                    "{} <{}>",
+                    payload.preview,
+                    payload.encoding_chain.join("+")
                 ),
                 location: Some(format!("offset:{}", payload.original_offset)),
                 ..Default::default()

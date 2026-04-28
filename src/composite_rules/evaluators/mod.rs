@@ -282,6 +282,62 @@ pub(crate) fn truncate_evidence(s: &str, max_len: usize) -> String {
     }
 }
 
+/// Render evidence for a substring match inside a containing string.
+///
+/// When the containing string is short, return it as-is. Otherwise return a
+/// window of `context` chars on each side of the match, with leading/trailing
+/// `…` to mark truncation. Byte offsets are snapped to UTF-8 char boundaries.
+#[must_use]
+pub(crate) fn match_window(
+    source: &str,
+    mat_start: usize,
+    mat_end: usize,
+    context: usize,
+) -> String {
+    // Short enough to show in full — no windowing needed.
+    if source.chars().count() <= context * 2 + 40 {
+        return source.to_string();
+    }
+
+    // Snap match bounds to char boundaries (Aho-Corasick gives byte offsets).
+    let mut start = mat_start.min(source.len());
+    while start > 0 && !source.is_char_boundary(start) {
+        start -= 1;
+    }
+    let mut end = mat_end.min(source.len());
+    while end < source.len() && !source.is_char_boundary(end) {
+        end += 1;
+    }
+
+    // Walk back `context` chars from the match start.
+    let prefix_start = source[..start]
+        .char_indices()
+        .rev()
+        .take(context)
+        .last()
+        .map(|(i, _)| i)
+        .unwrap_or(start);
+    let prefix_truncated = prefix_start > 0;
+
+    // Walk forward `context` chars past the match end.
+    let suffix_end = source[end..]
+        .char_indices()
+        .nth(context)
+        .map(|(i, _)| end + i)
+        .unwrap_or(source.len());
+    let suffix_truncated = suffix_end < source.len();
+
+    let mut out = String::with_capacity(suffix_end - prefix_start + 6);
+    if prefix_truncated {
+        out.push('…');
+    }
+    out.push_str(&source[prefix_start..suffix_end]);
+    if suffix_truncated {
+        out.push('…');
+    }
+    out
+}
+
 /// Parameters for location-constrained content evaluation.
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ContentLocationParams {

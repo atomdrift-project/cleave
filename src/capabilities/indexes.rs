@@ -5,7 +5,7 @@
 //! - `StringMatchIndex`: Batched string matching using Aho-Corasick automaton
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
-use crate::composite_rules::evaluators::truncate_evidence;
+use crate::composite_rules::evaluators::{match_window, truncate_evidence};
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
 use crate::types::binary::normalize_symbol;
 use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
@@ -968,7 +968,7 @@ impl StringMatchIndex {
             if let Some(ref ac) = self.substr_automaton {
                 for mat in ac.find_overlapping_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
-                    if let Some((pattern_str, trait_indices)) =
+                    if let Some((_pattern_str, trait_indices)) =
                         self.substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
@@ -978,10 +978,11 @@ impl StringMatchIndex {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
-                                    value: format!(
-                                        "{} (contains: {})",
-                                        string_info.value.chars().take(80).collect::<String>(),
-                                        pattern_str
+                                    value: match_window(
+                                        &string_info.value,
+                                        mat.start(),
+                                        mat.end(),
+                                        24,
                                     ),
                                     location: string_info.offset.map(|o| format!("{:#x}", o)),
                                     ..Default::default()
@@ -996,7 +997,7 @@ impl StringMatchIndex {
             if let Some(ref ac) = self.ci_substr_automaton {
                 for mat in ac.find_overlapping_iter(&string_info.value) {
                     let pattern_idx = mat.pattern().as_usize();
-                    if let Some((original_pattern, trait_indices)) =
+                    if let Some((_original_pattern, trait_indices)) =
                         self.ci_substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
@@ -1006,10 +1007,11 @@ impl StringMatchIndex {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
-                                    value: format!(
-                                        "{} (contains: {})",
-                                        string_info.value.chars().take(80).collect::<String>(),
-                                        original_pattern
+                                    value: match_window(
+                                        &string_info.value,
+                                        mat.start(),
+                                        mat.end(),
+                                        24,
                                     ),
                                     location: string_info.offset.map(|o| format!("{:#x}", o)),
                                     ..Default::default()
@@ -1095,7 +1097,7 @@ impl StringMatchIndex {
                     if let Some(ref ac) = self.substr_automaton {
                         for mat in ac.find_overlapping_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
-                            if let Some((pattern_str, trait_indices)) =
+                            if let Some((_pattern_str, trait_indices)) =
                                 self.substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
@@ -1105,14 +1107,11 @@ impl StringMatchIndex {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
-                                            value: format!(
-                                                "{} (contains: {})",
-                                                string_info
-                                                    .value
-                                                    .chars()
-                                                    .take(80)
-                                                    .collect::<String>(),
-                                                pattern_str
+                                            value: match_window(
+                                                &string_info.value,
+                                                mat.start(),
+                                                mat.end(),
+                                                24,
                                             ),
                                             location: string_info
                                                 .offset
@@ -1129,7 +1128,7 @@ impl StringMatchIndex {
                     if let Some(ref ac) = self.ci_substr_automaton {
                         for mat in ac.find_overlapping_iter(&string_info.value) {
                             let pattern_idx = mat.pattern().as_usize();
-                            if let Some((original_pattern, trait_indices)) =
+                            if let Some((_original_pattern, trait_indices)) =
                                 self.ci_substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
@@ -1139,14 +1138,11 @@ impl StringMatchIndex {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
-                                            value: format!(
-                                                "{} (contains: {})",
-                                                string_info
-                                                    .value
-                                                    .chars()
-                                                    .take(80)
-                                                    .collect::<String>(),
-                                                original_pattern
+                                            value: match_window(
+                                                &string_info.value,
+                                                mat.start(),
+                                                mat.end(),
+                                                24,
                                             ),
                                             location: string_info
                                                 .offset

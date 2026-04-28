@@ -51,8 +51,9 @@ Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](http
 
 ## Related
 
-- [malcontent](https://github.com/chainguard-dev/malcontent) — predecessor; cleave significantly improves upon its accuracy.
-- [capa](https://github.com/mandiant/capa) — original inspiration; cleave has 20× the rule coverage and broader format support.
+- [malcontent](https://github.com/chainguard-dev/malcontent) — cleave's predecessor; cleave significantly improves upon its accuracy with 3X the rule coverage, AST, and automated reverse-engineering.
+
+- [capa](https://github.com/mandiant/capa) — original inspiration; cleave has 20× the rule coverage, broader format support, and is an order of magnitude faster. capa does integrate better with reverse engineering tools.
 
 ## License
 

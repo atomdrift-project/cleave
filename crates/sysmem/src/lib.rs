@@ -1,8 +1,8 @@
 //! Lightweight system memory queries with zero dependencies.
 //!
-//! Provides [`total_memory`] (physical RAM) and [`current_rss`] (resident set size)
-//! on macOS, Linux, FreeBSD, OpenBSD, NetBSD, and Windows. Returns `None` on
-//! unsupported platforms.
+//! Provides [`total_memory`] (effective available memory) and [`current_rss`]
+//! (resident set size) on macOS, Linux, FreeBSD, OpenBSD, NetBSD, and Windows.
+//! Returns `None` on unsupported platforms.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -13,7 +13,11 @@ const GB: u64 = 1024 * 1024 * 1024;
 
 // ── public API ──────────────────────────────────────────────────────────
 
-/// Total physical memory in bytes, cached after the first call.
+/// Effective total memory in bytes, cached after the first call.
+///
+/// On Linux, this is the smaller of `/proc/meminfo` MemTotal and cgroup v2
+/// memory.high/memory.max when a cgroup limit is visible. If `/proc/meminfo`
+/// is hidden by service sandboxing, the cgroup limit is still used.
 ///
 /// Returns `None` only on unsupported platforms.
 #[must_use]
@@ -149,7 +153,17 @@ fn current_rss_impl() -> Option<u64> {
 
 #[cfg(target_os = "linux")]
 fn total_memory_impl() -> Option<u64> {
+    effective_linux_memory(meminfo_total_memory(), cgroup_memory_limit())
+}
+
+#[cfg(target_os = "linux")]
+fn meminfo_total_memory() -> Option<u64> {
     let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    parse_meminfo_total_memory(&meminfo)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_meminfo_total_memory(meminfo: &str) -> Option<u64> {
     for line in meminfo.lines() {
         if let Some(rest) = line.strip_prefix("MemTotal:") {
             let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
@@ -157,6 +171,65 @@ fn total_memory_impl() -> Option<u64> {
         }
     }
     None
+}
+
+#[cfg(target_os = "linux")]
+fn effective_linux_memory(physical: Option<u64>, cgroup_limit: Option<u64>) -> Option<u64> {
+    match (physical, cgroup_limit) {
+        (Some(p), Some(c)) => Some(p.min(c)),
+        (Some(p), None) => Some(p),
+        (None, Some(c)) => Some(c),
+        (None, None) => None,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_memory_limit() -> Option<u64> {
+    let path = cgroup_v2_path()?;
+    [
+        read_trimmed(path.join("memory.high")),
+        read_trimmed(path.join("memory.max")),
+    ]
+    .into_iter()
+    .flatten()
+    .filter_map(|v| parse_cgroup_memory_value(&v))
+    .min()
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_v2_path() -> Option<std::path::PathBuf> {
+    let cgroup = std::fs::read_to_string("/proc/self/cgroup").ok()?;
+    for line in cgroup.lines() {
+        let mut parts = line.splitn(3, ':');
+        let hierarchy = parts.next()?;
+        let controllers = parts.next()?;
+        let rel = parts.next()?;
+        if hierarchy == "0" && controllers.is_empty() {
+            let rel = rel.trim_start_matches('/');
+            return Some(if rel.is_empty() {
+                std::path::PathBuf::from("/sys/fs/cgroup")
+            } else {
+                std::path::PathBuf::from("/sys/fs/cgroup").join(rel)
+            });
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn read_trimmed(path: std::path::PathBuf) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn parse_cgroup_memory_value(value: &str) -> Option<u64> {
+    if value == "max" {
+        return None;
+    }
+    value.parse().ok()
 }
 
 #[cfg(target_os = "linux")]
@@ -424,5 +497,36 @@ mod tests {
         let a = total_memory();
         let b = total_memory();
         assert_eq!(a, b);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_meminfo_total_memory_reads_kib() {
+        let mem = parse_meminfo_total_memory("MemTotal:       131693424 kB\nMemFree: 1 kB\n")
+            .expect("memtotal");
+        assert_eq!(mem, 131_693_424 * 1024);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn effective_linux_memory_prefers_lowest_available_limit() {
+        assert_eq!(
+            effective_linux_memory(Some(128 * GB), Some(64 * GB)),
+            Some(64 * GB)
+        );
+        assert_eq!(effective_linux_memory(None, Some(64 * GB)), Some(64 * GB));
+        assert_eq!(effective_linux_memory(Some(128 * GB), None), Some(128 * GB));
+        assert_eq!(effective_linux_memory(None, None), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_cgroup_memory_value_handles_max() {
+        assert_eq!(
+            parse_cgroup_memory_value("77309411328"),
+            Some(77_309_411_328)
+        );
+        assert_eq!(parse_cgroup_memory_value("max"), None);
+        assert_eq!(parse_cgroup_memory_value("not-a-number"), None);
     }
 }

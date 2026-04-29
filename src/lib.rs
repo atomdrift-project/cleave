@@ -1759,11 +1759,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             evidence: vec![types::Evidence {
                 method: "pattern".to_string(),
                 source: "cleave".to_string(),
-                value: format!(
-                    "{} <{}>",
-                    payload.preview,
-                    payload.encoding_chain.join("+")
-                ),
+                value: format!("{} <{}>", payload.preview, payload.encoding_chain.join("+")),
                 location: Some(format!("offset:{}", payload.original_offset)),
                 ..Default::default()
             }],

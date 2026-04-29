@@ -86,8 +86,11 @@ pub fn run() -> Result<()> {
     let traits_ver = cleave::traits_repo::version()
         .map(|v| format!(" (traits: {v})"))
         .unwrap_or_default();
+    let traits_dir = cleave::traits_repo::try_resolve()
+        .map(|p| format!(" traits_dir={}", p.display()))
+        .unwrap_or_default();
     eprintln!(
-        "✅ validate{traits_ver}: traits + ground-truth ({}/{}) + does-nothing ({}/{})",
+        "✅ validate{traits_ver}{traits_dir}: traits + ground-truth ({}/{}) + does-nothing ({}/{})",
         gt_stats.0, gt_stats.1, dn_stats.0, dn_stats.1
     );
     Ok(())

@@ -1049,7 +1049,7 @@ pub(crate) fn process_all_strings(
     )
 }
 
-    pub(crate) fn process_all_strings_with_host(
+pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
     capability_mapper: &Arc<CapabilityMapper>,

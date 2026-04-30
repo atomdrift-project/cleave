@@ -409,7 +409,8 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Embedded executables — objective (implies payload delivery intent).
+        // Embedded executables are structural evidence. Malicious delivery intent
+        // needs loader or execution behavior from companion traits.
         // The actual payload is also routed through analyze_embedded_executables
         // for full sub-analysis; this finding is the structural marker.
         for exec in &doc.embedded_executables {
@@ -424,7 +425,7 @@ impl OfficeAnalyzer {
                     exec.data.len()
                 ),
                 conf: 0.95,
-                crit: Criticality::Hostile,
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: Some("T1027.006".to_string()),
                 trait_refs: vec![],
@@ -1040,7 +1041,8 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Embedded executables — objective (payload delivery)
+        // Embedded executables are structural evidence. Malicious delivery intent
+        // needs loader or execution behavior from companion traits.
         for entry in &doc.embedded_executables {
             findings.push(Finding {
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
@@ -1048,7 +1050,7 @@ impl OfficeAnalyzer {
                 kind: FindingKind::Indicator,
                 desc: format!("Embedded executable in OOXML entry: {entry}"),
                 conf: 0.95,
-                crit: Criticality::Hostile,
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: Some("T1027.006".to_string()),
                 trait_refs: vec![],

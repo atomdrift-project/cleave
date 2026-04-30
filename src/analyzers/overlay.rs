@@ -162,7 +162,7 @@ pub(crate) fn analyze_overlay(
                     archive_type.to_uppercase()
                 ),
                 conf: 0.9,
-                crit: Criticality::Suspicious, // Failed extraction is suspicious
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: None,
                 evidence: vec![

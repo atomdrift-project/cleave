@@ -151,7 +151,7 @@ fn test_analyze_hex_encoded_javascript() {
 
     let capability_mapper = make_capability_mapper();
 
-    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 0);
+    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 0, None);
 
     assert!(
         result.is_ok(),
@@ -196,7 +196,7 @@ fn test_analyze_plain_embedded_python() {
 
     let capability_mapper = make_capability_mapper();
 
-    let result = analyze_embedded_string("test.elf", &string_info, 0, &capability_mapper, 0);
+    let result = analyze_embedded_string("test.elf", &string_info, 0, &capability_mapper, 0, None);
 
     assert!(
         result.is_ok(),
@@ -238,14 +238,14 @@ fn test_max_depth_limit() {
     let capability_mapper = make_capability_mapper();
 
     // Depth 3 should succeed
-    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 2);
+    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 2, None);
     assert!(
         result.is_ok(),
         "Depth 2 should work (becomes 3 after increment)"
     );
 
     // Depth 4 should fail
-    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 3);
+    let result = analyze_embedded_string("test.bin", &string_info, 0, &capability_mapper, 3, None);
     assert!(
         result.is_err(),
         "Depth 3 should fail (would become 4, exceeds MAX_DECODE_DEPTH)"

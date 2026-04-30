@@ -333,6 +333,8 @@ fn extension_content_mismatch_criticality(expected: &str, actual: &str) -> types
 
     if expected_is_image && actual_is_image {
         types::Criticality::Notable
+    } else if expected == "Data" || actual == "TarGz" || actual == "Zip" {
+        types::Criticality::Notable
     } else {
         types::Criticality::Suspicious
     }

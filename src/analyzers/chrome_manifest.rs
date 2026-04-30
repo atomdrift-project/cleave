@@ -500,11 +500,11 @@ impl ChromeManifestAnalyzer {
         for (perm, risk, desc) in &dangerous_perms {
             let (crit, finding_id) = match risk {
                 PermissionRisk::Critical => (
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                     format!("supply-chain/chrome-ext/permission-critical/{}", perm),
                 ),
                 PermissionRisk::High => (
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                     format!("supply-chain/chrome-ext/permission-high/{}", perm),
                 ),
                 PermissionRisk::Medium => (
@@ -538,7 +538,7 @@ impl ChromeManifestAnalyzer {
                     ),
                     0.9,
                 )
-                .with_criticality(Criticality::Suspicious)
+                .with_criticality(Criticality::Notable)
                 .with_attack("T1176".to_string())
                 .with_evidence(vec![Evidence {
                     method: "heuristic".to_string(),
@@ -605,7 +605,7 @@ impl ChromeManifestAnalyzer {
                     "Extension has access to ALL websites".to_string(),
                     0.95,
                 )
-                .with_criticality(Criticality::Suspicious)
+                .with_criticality(Criticality::Notable)
                 .with_attack("T1185".to_string())
                 .with_evidence(vec![Evidence {
                     method: "parser".to_string(),

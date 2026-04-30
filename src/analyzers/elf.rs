@@ -1476,7 +1476,7 @@ impl ElfAnalyzer {
                 "Binary is packed with UPX".to_string(),
                 1.0,
             )
-            .with_criticality(Criticality::Suspicious),
+            .with_criticality(Criticality::Notable),
         );
 
         if !UPXDecompressor::is_available() {
@@ -1543,7 +1543,7 @@ impl ElfAnalyzer {
                         description,
                         1.0,
                     )
-                    .with_criticality(Criticality::Suspicious),
+                    .with_criticality(Criticality::Notable),
                 );
             }
         }
@@ -2117,8 +2117,8 @@ mod tests {
         assert!(upx_finding.is_some(), "Should have UPX finding");
         let finding = upx_finding.unwrap();
 
-        // UPX packing is Suspicious criticality
-        assert_eq!(finding.crit, Criticality::Suspicious);
+        // UPX packing alone is packaging evidence, not a hostile conclusion.
+        assert_eq!(finding.crit, Criticality::Notable);
         assert_eq!(finding.conf, 1.0);
         assert_eq!(finding.desc, "Binary is packed with UPX");
     }

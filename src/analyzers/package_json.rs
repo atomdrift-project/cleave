@@ -870,7 +870,7 @@ impl PackageJsonAnalyzer {
                         format!("Script '{}' sends data via HTTP POST", name),
                         0.9,
                     )
-                    .with_criticality(Criticality::Suspicious)
+                    .with_criticality(Criticality::Notable)
                     .with_attack("T1041".to_string())
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
@@ -1038,7 +1038,7 @@ impl PackageJsonAnalyzer {
                         ),
                         0.75,
                     )
-                    .with_criticality(Criticality::Suspicious)
+                    .with_criticality(Criticality::Notable)
                     .with_attack("T1071.001".to_string())
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
@@ -1121,7 +1121,7 @@ impl PackageJsonAnalyzer {
                         format!("Package name '{}' matches suspicious patterns", name),
                         0.7,
                     )
-                    .with_criticality(Criticality::Suspicious)
+                    .with_criticality(Criticality::Notable)
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
@@ -1226,7 +1226,7 @@ impl PackageJsonAnalyzer {
                         format!("Suspicious package name: '{}'", name),
                         0.8,
                     )
-                    .with_criticality(Criticality::Suspicious)
+                    .with_criticality(Criticality::Notable)
                     .with_evidence(vec![Evidence {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),

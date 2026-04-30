@@ -597,20 +597,16 @@ pub(crate) fn push_rizin_warnings(
     batched: &BatchedAnalysis,
 ) {
     if batched.memory_exceeded {
-        // Legitimate binaries do not push rizin past 4 GiB. Exceeding the cap is
-        // itself an evasion signal — adversarial symbol tables, decompression
-        // bombs, or deliberately pathological control flow designed to blow up
-        // static analyzers. Treat it as suspicious, not structural noise.
         let mut finding = crate::types::Finding::new(
             "metadata/analysis/rizin-memory-exceeded".to_string(),
-            crate::types::FindingKind::Indicator,
+            crate::types::FindingKind::Structural,
             format!(
-                "rizin subprocess exceeded its {} GiB memory cap — possible anti-analysis bloat",
+                "rizin subprocess exceeded its {} GiB memory cap; deep binary analysis was truncated",
                 RIZIN_MEMORY_LIMIT_BYTES / 1024 / 1024 / 1024
             ),
             0.6,
         );
-        finding.crit = crate::types::Criticality::Suspicious;
+        finding.crit = crate::types::Criticality::Notable;
         report.push_finding_capped(finding);
     }
     if batched.timed_out {

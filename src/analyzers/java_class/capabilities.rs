@@ -94,7 +94,7 @@ impl super::JavaClassAnalyzer {
                             desc: description.to_string(),
                             conf: 0.9,
                             crit: if cap_id.contains("unsafe") {
-                                Criticality::Hostile
+                                Criticality::Notable
                             } else if *cap_id == "net/jndi" || *cap_id == "net/rmi" {
                                 Criticality::Suspicious
                             } else {

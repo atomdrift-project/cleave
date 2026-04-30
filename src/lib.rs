@@ -94,7 +94,7 @@ pub(crate) fn hash_str(s: &str) -> u64 {
     hasher.finish()
 }
 
-fn looks_like_textual_payload_preview(preview: &str) -> bool {
+fn looks_like_actionable_payload_preview(preview: &str) -> bool {
     let preview = preview.trim();
     if preview.is_empty() || preview == "<binary data>" {
         return false;
@@ -118,19 +118,7 @@ fn looks_like_textual_payload_preview(preview: &str) -> bool {
         "http://",
         "https://",
     ];
-    if markers.iter().any(|marker| preview.contains(marker)) {
-        return true;
-    }
-
-    let chars = preview.chars().count();
-    if chars == 0 {
-        return false;
-    }
-
-    let alpha = preview.chars().filter(char::is_ascii_alphabetic).count();
-    let whitespace = preview.chars().filter(char::is_ascii_whitespace).count();
-
-    alpha * 100 / chars >= 60 && whitespace > 0
+    markers.iter().any(|marker| preview.contains(marker))
 }
 
 fn is_benign_unicode_escape_payload(payload: &types::ExtractedPayload) -> bool {
@@ -161,10 +149,12 @@ fn should_skip_unknown_xor_payload_for_source(
     payload: &types::ExtractedPayload,
 ) -> bool {
     file_type.is_source_code()
-        && payload.encoding_chain.len() == 1
-        && payload.encoding_chain[0] == "xor"
+        && payload
+            .encoding_chain
+            .iter()
+            .any(|encoding| encoding == "xor")
         && payload.detected_type == FileType::Unknown
-        && !looks_like_textual_payload_preview(&payload.preview)
+        && !looks_like_actionable_payload_preview(&payload.preview)
 }
 
 fn smallest_section_for_offset(
@@ -233,7 +223,7 @@ fn should_skip_unknown_xor_payload_for_binary(
 
         return in_readonly_data
             && is_signed_developer_library
-            && !looks_like_textual_payload_preview(&payload.preview);
+            && !looks_like_actionable_payload_preview(&payload.preview);
     }
 
     false

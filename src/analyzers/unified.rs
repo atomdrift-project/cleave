@@ -895,65 +895,6 @@ impl UnifiedSourceAnalyzer {
             // Compute ratio metrics from already-populated counters
             Self::compute_text_ratio_metrics(&mut metrics);
 
-            // Flag invisible Unicode steganography characters.
-            // Variation selectors, zero-width chars, and tag chars in source code
-            // are suspicious at high counts; a single occurrence may be a BOM or
-            // formatting artifact.
-            // Note: U+FE0F (Variation Selector-16) is commonly used in emoji (e.g. ℹ️ 🖱️)
-            // and can appear 4-6 times in a normal source file with emoji log messages.
-            // Note: U+200D (ZWJ) is used in emoji family sequences (👨‍👩‍👦 etc.) at 2-3
-            // chars per sequence; 8 family emojis in test/log data produce ~15 ZWJ chars.
-            // Require >= 20 before escalating to suspicious to avoid FP on emoji-heavy files.
-            if let Some(ref text) = metrics.text {
-                if text.invisible_chars >= 2 {
-                    // Libraries dealing with Unicode data, fake data generation,
-                    // or internationalization legitimately contain invisible chars.
-                    let path_lower = file_path.display().to_string().to_lowercase();
-                    let is_known_benign_bundle = path_lower.ends_with("yarn-standalone.js");
-                    let is_unicode_library =
-                        ["unicode", "faker", "i18n", "locale", "icu", "cldr", "intl"]
-                            .iter()
-                            .any(|kw| path_lower.contains(kw));
-                    let is_test_fixture = path_lower.contains("/test/")
-                        || path_lower.contains("/tests/")
-                        || path_lower.contains("\\test\\")
-                        || path_lower.contains("\\tests\\")
-                        || path_lower.contains(".test.")
-                        || path_lower.contains(".spec.");
-                    let (crit, conf) =
-                        if is_known_benign_bundle || is_unicode_library || is_test_fixture {
-                            // Libraries that intentionally ship adversarial Unicode
-                            // samples or fake-data corpora should not surface a
-                            // human-review finding from this generic heuristic.
-                            (crate::types::Criticality::Baseline, 0.4)
-                        } else if text.invisible_chars >= 60 {
-                            (crate::types::Criticality::Suspicious, 0.95)
-                        } else {
-                            (crate::types::Criticality::Notable, 0.7)
-                        };
-                    report.add_finding(
-                        crate::types::Finding::indicator(
-                            "objectives/anti-static/obfuscate/steganography/invisible-unicode"
-                                .to_string(),
-                            format!(
-                                "Source contains {} invisible Unicode characters (variation selectors, zero-width, or tag chars)",
-                                text.invisible_chars
-                            ),
-                            conf,
-                        )
-                        .with_criticality(crit)
-                        .with_attack("T1027".to_string())
-                        .with_evidence(vec![crate::types::Evidence {
-                            method: "metrics".to_string(),
-                            source: "text_metrics".to_string(),
-                            value: format!("text.invisible_chars = {}", text.invisible_chars),
-                            location: None,
-                            ..Default::default()
-                        }]),
-                    );
-                }
-            }
-
             report.metrics = Some(metrics);
         }
         // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.

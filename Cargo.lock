@@ -933,9 +933,9 @@ checksum = "938e716cb1ade5d6c8f959c13a7248b889c07491fc7e41167c3afe20f8f0de1e"
 
 [[package]]
 name = "cpubits"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ef0c543070d296ea414df2dd7625d1b24866ce206709d8a4a424f28377f5861"
+checksum = "15b85f9c39137c3a891689859392b1bd49812121d0d61c9caf00d46ed5ce06ae"
 
 [[package]]
 name = "cpufeatures"
@@ -4066,7 +4066,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 [[package]]
 name = "stng"
 version = "1.2.1"
-source = "git+https://codeberg.org/atomdrift/stng.git#255d48e93bd474e85217a11441c5a5674e944552"
+source = "git+https://codeberg.org/atomdrift/stng.git#7bd7a590b39d782138767a17adf8b2eee0a45e44"
 dependencies = [
  "aho-corasick",
  "anyhow",

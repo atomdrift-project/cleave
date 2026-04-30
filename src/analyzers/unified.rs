@@ -26,6 +26,18 @@ use std::path::Path;
 use std::sync::Arc;
 use tree_sitter::{Language, Parser};
 
+/// Keep indentation-sensitive external scanners below Tree-sitter's 1024-byte
+/// serialized scanner-state buffer. Python stores roughly two bytes per indent.
+const MAX_SAFE_INDENT_STACK_DEPTH: usize = 450;
+const TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE: usize = 1024;
+
+#[derive(Debug)]
+struct AstSkipFinding {
+    id: &'static str,
+    desc: String,
+    evidence: String,
+}
+
 /// Configuration for a language analyzer.
 #[derive(Clone, Debug)]
 pub(crate) struct LanguageConfig {
@@ -485,28 +497,35 @@ impl UnifiedSourceAnalyzer {
             owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
         }
 
-        // Parse the source with a timeout
-        let mut options = tree_sitter::ParseOptions::new();
-        let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
-            if start.elapsed() > timeout_limit {
-                std::ops::ControlFlow::Break(())
-            } else {
-                std::ops::ControlFlow::Continue(())
-            }
-        };
-        options.progress_callback = Some(&mut cb);
+        let scanner_risk = scanner_state_overflow_risk(&self.file_type, content);
 
-        let tree = self.parser.borrow_mut().parse_with_options(
-            &mut |i, _| {
-                if i < content.len() {
-                    &content.as_bytes()[i..]
+        // Parse the source with a timeout unless a known external-scanner state
+        // pattern could abort the process before Rust can recover.
+        let tree = if scanner_risk.is_none() {
+            let mut options = tree_sitter::ParseOptions::new();
+            let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
+                if start.elapsed() > timeout_limit {
+                    std::ops::ControlFlow::Break(())
                 } else {
-                    &[]
+                    std::ops::ControlFlow::Continue(())
                 }
-            },
-            None,
-            Some(options),
-        );
+            };
+            options.progress_callback = Some(&mut cb);
+
+            self.parser.borrow_mut().parse_with_options(
+                &mut |i, _| {
+                    if i < content.len() {
+                        &content.as_bytes()[i..]
+                    } else {
+                        &[]
+                    }
+                },
+                None,
+                Some(options),
+            )
+        } else {
+            None
+        };
 
         if let Some(ref tree) = tree {
             let root = tree.root_node();
@@ -514,6 +533,32 @@ impl UnifiedSourceAnalyzer {
             self.extract_strings(&root, content.as_bytes(), &mut report);
         } else if start.elapsed() > timeout_limit {
             timed_out = true;
+        }
+
+        if let Some(reason) = scanner_risk {
+            tracing::info!(
+                path = %file_path.display(),
+                reason = %reason.desc,
+                "AST parsing skipped to avoid tree-sitter external scanner abort"
+            );
+            report.findings.push(
+                crate::types::Finding::structural(reason.id.to_string(), reason.desc, 0.85)
+                    .with_criticality(crate::types::Criticality::Suspicious)
+                    .with_attack("T1027".to_string())
+                    .with_evidence(vec![crate::types::Evidence {
+                        method: "parser-guard".to_string(),
+                        source: "tree-sitter".to_string(),
+                        value: reason.evidence,
+                        location: Some("source:indentation".to_string()),
+                        ..Default::default()
+                    }]),
+            );
+
+            let text = crate::analyzers::text_metrics::analyze_text(content);
+            report.metrics = Some(crate::types::Metrics {
+                text: Some(text),
+                ..Default::default()
+            });
         }
 
         if timed_out {
@@ -1394,6 +1439,58 @@ impl Analyzer for UnifiedSourceAnalyzer {
     }
 }
 
+fn scanner_state_overflow_risk(
+    file_type: &crate::analyzers::FileType,
+    content: &str,
+) -> Option<AstSkipFinding> {
+    if !matches!(file_type, crate::analyzers::FileType::Python) {
+        return None;
+    }
+
+    let depth = estimated_python_indent_stack_depth(content);
+    if depth > MAX_SAFE_INDENT_STACK_DEPTH {
+        Some(AstSkipFinding {
+            id: "objectives/anti-static/obfuscation/parser::python-indentation-scanner-state-overflow",
+            desc: format!(
+                "Python AST parsing skipped because indentation depth ({depth}) can overflow tree-sitter external scanner serialization"
+            ),
+            evidence: format!(
+                "language=python indent_stack_depth={depth} safe_depth_limit={MAX_SAFE_INDENT_STACK_DEPTH} tree_sitter_serialization_buffer_bytes={TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE}"
+            ),
+        })
+    } else {
+        None
+    }
+}
+
+fn estimated_python_indent_stack_depth(content: &str) -> usize {
+    let mut stack = vec![0usize];
+    let mut max_depth = 1usize;
+
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+
+        let indent = line
+            .bytes()
+            .take_while(|b| matches!(b, b' ' | b'\t'))
+            .fold(0usize, |col, b| if b == b'\t' { col + 8 } else { col + 1 });
+
+        while stack.last().is_some_and(|last| indent < *last) {
+            stack.pop();
+        }
+
+        if stack.last().is_some_and(|last| indent > *last) {
+            stack.push(indent);
+            max_depth = max_depth.max(stack.len());
+        }
+    }
+
+    max_depth
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1420,6 +1517,40 @@ if __name__ == "__main__":
         assert!(report.structure.iter().any(|s| s.id.contains("python")));
         assert!(!report.functions.is_empty());
         assert!(!report.strings.is_empty());
+    }
+
+    #[test]
+    fn test_deep_python_indentation_emits_specific_suspicious_parser_trait() {
+        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Python).unwrap();
+        let path = PathBuf::from("deep.py");
+        let mut code = String::new();
+        for depth in 0..=MAX_SAFE_INDENT_STACK_DEPTH + 8 {
+            code.push_str(&" ".repeat(depth * 2));
+            code.push_str("if True:\n");
+        }
+        code.push_str(&" ".repeat((MAX_SAFE_INDENT_STACK_DEPTH + 9) * 2));
+        code.push_str("print('ok')\n");
+
+        let report = analyzer.analyze_source(&path, &code);
+        let finding = report
+            .findings
+            .iter()
+            .find(|f| {
+                f.id == "objectives/anti-static/obfuscation/parser::python-indentation-scanner-state-overflow"
+            })
+            .expect("specific parser skip finding");
+        assert_eq!(finding.crit, crate::types::Criticality::Suspicious);
+        assert!(finding
+            .evidence
+            .iter()
+            .any(|e| e.value.contains("indent_stack_depth=")
+                && e.value
+                    .contains("tree_sitter_serialization_buffer_bytes=1024")));
+        assert!(report
+            .metrics
+            .as_ref()
+            .and_then(|m| m.text.as_ref())
+            .is_some());
     }
 
     #[test]

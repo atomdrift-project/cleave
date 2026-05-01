@@ -593,64 +593,14 @@ fn lang_name(file_type: &FileType) -> &'static str {
     }
 }
 
-/// Generate automatic language detection trait (auto-generated, no YAML needed like metadata/sign)
-fn generate_language_trait(
-    detected_lang: &FileType,
-    encoding_chain: &[String],
-    offset: u64,
-) -> Finding {
-    let (trait_id, criticality) = if encoding_chain.is_empty() {
-        // Plain embedded code is structural context, not a behavioral objective.
-        (
-            format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
-            Criticality::Baseline,
-        )
-    } else {
-        let encoding = &encoding_chain[0];
-        // Wide-encoded JavaScript in native binaries is frequently legitimate embedded UI
-        // content. The decoded script is analyzed separately, so keep the generic language
-        // marker structural rather than suspicious and avoid colliding with trait-based
-        // encoded-language rules that are tuned independently.
-        if encoding == "wide" && matches!(detected_lang, FileType::JavaScript) {
-            (
-                format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
-                Criticality::Baseline,
-            )
-        } else {
-            let crit = if encoding == "url" {
-                Criticality::Notable
-            } else {
-                Criticality::Suspicious
-            };
-            (
-                format!(
-                    "metadata/lang/encoded/{}::{}",
-                    encoding,
-                    lang_name(detected_lang)
-                ),
-                // Encoded code is suspicious by default because it often reflects obfuscation.
-                // URL encoding is common enough in some contexts (like format strings) to downgrade to Notable.
-                crit,
-            )
-        }
-    };
-
-    let description = format!(
-        "{} code {} in string",
-        lang_name(detected_lang),
-        if encoding_chain.is_empty() {
-            "embedded"
-        } else {
-            "encoded"
-        }
-    );
-
+/// Generate automatic plain embedded-language metadata.
+fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64) -> Finding {
     Finding {
-        id: trait_id,
+        id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
         kind: crate::types::FindingKind::Capability,
-        desc: description,
+        desc: format!("{} code embedded in string", lang_name(detected_lang)),
         conf: 1.0,
-        crit: criticality,
+        crit: Criticality::Baseline,
         mbc: None,
         attack: None,
         trait_refs: vec![],
@@ -720,14 +670,17 @@ pub fn analyze_embedded_string(
     };
 
     // Create analyzer for detected language; disable embedded detection to prevent recursion.
-    let analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)
+    let mut analyzer = UnifiedSourceAnalyzer::for_file_type(&file_type)
         .context("Failed to create analyzer for language")?
         .with_capability_mapper_arc(capability_mapper.clone())
         .without_embedded_detection();
+    if is_encoded {
+        analyzer = analyzer.with_encoded_context(string_info.encoding_chain.clone());
+    }
 
     // Analyze in-memory
     let t_analyze = std::time::Instant::now();
-    let mut report = analyzer.analyze_source(Path::new(&virtual_path), &string_info.value);
+    let report = analyzer.analyze_source(Path::new(&virtual_path), &string_info.value);
     let analyze_time = t_analyze.elapsed();
 
     if analyze_time.as_millis() > 100 {
@@ -740,13 +693,8 @@ pub fn analyze_embedded_string(
         );
     }
 
-    // Generate language detection trait (auto-generated, no YAML needed)
-    let lang_trait = generate_language_trait(&file_type, &string_info.encoding_chain, offset);
-
     if is_encoded {
         // Encoded code - create a separate layer
-        report.findings.push(lang_trait);
-
         let mut file_entry = report.to_file_analysis(0);
         file_entry.path = virtual_path.clone();
         file_entry.depth = (current_depth + 1) as u32;
@@ -768,7 +716,7 @@ pub fn analyze_embedded_string(
     } else {
         // Plain embedded code - return findings for parent
         let mut findings = report.findings;
-        findings.push(lang_trait);
+        findings.push(generate_embedded_language_trait(&file_type, offset));
 
         // Prefix evidence locations to indicate they came from embedded code
         for finding in &mut findings {

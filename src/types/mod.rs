@@ -117,7 +117,7 @@ pub(crate) use image_metrics::ImageMetrics;
 pub(crate) use jpeg_metrics::JpegMetrics;
 pub(crate) use png_metrics::PngMetrics;
 
-pub(crate) use scores::Metrics;
+pub(crate) use scores::{EncodedMetrics, Metrics};
 
 use std::path::PathBuf;
 

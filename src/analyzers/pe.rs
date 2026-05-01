@@ -340,6 +340,35 @@ fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
         .any(|w| w == b"This program cannot be run in DOS mode")
 }
 
+fn looks_like_dos_executable(data: &[u8]) -> bool {
+    if data.len() < 0x40 || !data.starts_with(b"MZ") {
+        return false;
+    }
+
+    let pe_offset = u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
+    if pe_offset + 4 <= data.len() && &data[pe_offset..pe_offset + 4] == b"PE\x00\x00" {
+        return false;
+    }
+
+    let last_page_bytes = u16::from_le_bytes([data[2], data[3]]) as usize;
+    let page_count = u16::from_le_bytes([data[4], data[5]]) as usize;
+    let header_paragraphs = u16::from_le_bytes([data[8], data[9]]) as usize;
+    if page_count == 0 || header_paragraphs == 0 {
+        return false;
+    }
+
+    let declared_size = (page_count.saturating_sub(1) * 512)
+        + if last_page_bytes == 0 {
+            512
+        } else {
+            last_page_bytes
+        };
+    let header_size = header_paragraphs * 16;
+    declared_size >= header_size
+        && declared_size <= data.len().saturating_add(512)
+        && header_size < data.len()
+}
+
 fn pdb_filename(bytes: &[u8]) -> Option<String> {
     let trimmed = bytes.split(|b| *b == 0).next()?.trim_ascii();
     if trimmed.is_empty() {
@@ -1228,6 +1257,7 @@ impl PEAnalyzer {
         if let Some(failure) = parse_failure {
             let err = &failure.message;
             let error_lower = err.to_lowercase();
+            let is_dos_executable = looks_like_dos_executable(pe_data);
             let is_resource_error = error_lower.contains("resourcestring")
                 || error_lower.contains("resourcetable")
                 || error_lower.contains("resource");
@@ -1235,10 +1265,12 @@ impl PEAnalyzer {
 
             // Resource directory errors and parser limitations are non-critical —
             // the PE structure itself is intact, only metadata is malformed.
+            // MZ-format DOS executables are also not PE tampering: they often lack
+            // a valid PE signature and may be bundled in installers or boot media.
             // Only non-resource header corruption indicates deliberate tampering.
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
-            let (crit, conf) = if is_resource_error || is_parser_limitation {
+            let (crit, conf) = if is_resource_error || is_parser_limitation || is_dos_executable {
                 (Criticality::Baseline, 0.3)
             } else if rizin_found_hidden_content {
                 (Criticality::Suspicious, 0.8)
@@ -2281,7 +2313,7 @@ impl PEAnalyzer {
             u32::from_le_bytes([data[0x3c], data[0x3d], data[0x3e], data[0x3f]]) as usize;
         if pe_sig_offset + 4 <= data.len() {
             let sig = &data[pe_sig_offset..pe_sig_offset + 4];
-            if sig != b"PE\x00\x00" {
+            if sig != b"PE\x00\x00" && !looks_like_dos_executable(data) {
                 findings.push(Finding {
                     id: "objectives/anti-analysis/pe-tampering/pe-signature-corrupted".to_string(),
                     kind: FindingKind::Structural,

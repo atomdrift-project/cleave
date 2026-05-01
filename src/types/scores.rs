@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
 use super::image_metrics::ImageMetrics;
-use super::is_zero_f32;
+use super::{is_zero_f32, is_zero_u32};
 use super::jpeg_metrics::JpegMetrics;
 use super::language_metrics::{
     CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -50,6 +50,9 @@ pub struct Metrics {
     /// Import/dependency metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imports: Option<ImportMetrics>,
+    /// Encoded embedded-code counts
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encoded: Option<EncodedMetrics>,
 
     // === Language-specific metrics (mutually exclusive) ===
     /// Python-specific metrics (only for Python files)
@@ -143,6 +146,101 @@ pub struct Metrics {
     /// Composite supply chain risk score with component breakdown
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supply_chain: Option<SupplyChainScore>,
+}
+
+/// Embedded code counts by decoded language and encoding.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
+pub struct EncodedMetrics {
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub total_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub base64_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub hex_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub xor_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub url_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub unicode_escape_count: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub python: Option<EncodedLanguageMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub javascript: Option<EncodedLanguageMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub php: Option<EncodedLanguageMetrics>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shell: Option<EncodedLanguageMetrics>,
+}
+
+/// Encoded embedded-code counts for one decoded language.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
+pub struct EncodedLanguageMetrics {
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub total_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub base64_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub hex_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub xor_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub url_count: u32,
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub unicode_escape_count: u32,
+}
+
+impl EncodedMetrics {
+    pub fn increment(&mut self, language: &str, encoding: &str) {
+        self.total_count = self.total_count.saturating_add(1);
+        self.increment_encoding(encoding);
+
+        let bucket = match language {
+            "python" => &mut self.python,
+            "javascript" | "typescript" => &mut self.javascript,
+            "php" => &mut self.php,
+            "shell" => &mut self.shell,
+            _ => return,
+        };
+        let language_metrics = bucket.get_or_insert_with(EncodedLanguageMetrics::default);
+        language_metrics.increment(encoding);
+    }
+
+    fn increment_encoding(&mut self, encoding: &str) {
+        match normalize_encoding(encoding) {
+            "base64" => self.base64_count = self.base64_count.saturating_add(1),
+            "hex" => self.hex_count = self.hex_count.saturating_add(1),
+            "xor" => self.xor_count = self.xor_count.saturating_add(1),
+            "url" => self.url_count = self.url_count.saturating_add(1),
+            "unicode-escape" => {
+                self.unicode_escape_count = self.unicode_escape_count.saturating_add(1)
+            }
+            _ => {}
+        }
+    }
+}
+
+impl EncodedLanguageMetrics {
+    fn increment(&mut self, encoding: &str) {
+        self.total_count = self.total_count.saturating_add(1);
+        match normalize_encoding(encoding) {
+            "base64" => self.base64_count = self.base64_count.saturating_add(1),
+            "hex" => self.hex_count = self.hex_count.saturating_add(1),
+            "xor" => self.xor_count = self.xor_count.saturating_add(1),
+            "url" => self.url_count = self.url_count.saturating_add(1),
+            "unicode-escape" => {
+                self.unicode_escape_count = self.unicode_escape_count.saturating_add(1)
+            }
+            _ => {}
+        }
+    }
+}
+
+fn normalize_encoding(encoding: &str) -> &str {
+    match encoding {
+        "base64-obf" => "base64",
+        other => other,
+    }
 }
 
 // =============================================================================

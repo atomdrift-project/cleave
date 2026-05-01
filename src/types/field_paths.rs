@@ -32,7 +32,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
         ShellMetrics,
     };
-    use super::scores::{ObfuscationScore, PackingScore, SupplyChainScore};
+    use super::scores::{
+        EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
+    };
     use super::text_metrics::{
         CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
         StringMetrics, TextMetrics,
@@ -59,6 +61,16 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
     for field in ImportMetrics::valid_field_paths() {
         paths.insert(format!("imports.{}", field));
+    }
+    for field in EncodedMetrics::valid_field_paths() {
+        if !matches!(field, "python" | "javascript" | "php" | "shell") {
+            paths.insert(format!("encoded.{}", field));
+        }
+    }
+    for lang in ["python", "javascript", "php", "shell"] {
+        for field in EncodedLanguageMetrics::valid_field_paths() {
+            paths.insert(format!("encoded.{}.{}", lang, field));
+        }
     }
 
     // Language-specific metrics

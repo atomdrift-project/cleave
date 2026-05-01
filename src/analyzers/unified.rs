@@ -19,7 +19,7 @@ use crate::analyzers::{
     FileType, FileTypeExt,
 };
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, Function, Metrics, StringInfo, TargetInfo};
+use crate::types::{AnalysisReport, EncodedMetrics, Function, Metrics, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::path::Path;
@@ -349,6 +349,8 @@ pub(crate) struct UnifiedSourceAnalyzer {
     skip_embedded_detection: bool,
     /// Per-request cancellation flag.
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    /// Encoding chain for decoded embedded-code layers.
+    encoded_context: Option<Vec<String>>,
 }
 
 impl std::fmt::Debug for UnifiedSourceAnalyzer {
@@ -380,6 +382,7 @@ impl UnifiedSourceAnalyzer {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             skip_embedded_detection: false,
             cancellation: None,
+            encoded_context: None,
         })
     }
 
@@ -408,6 +411,12 @@ impl UnifiedSourceAnalyzer {
     /// Used for inner analysis to prevent recursive calling.
     pub(crate) fn without_embedded_detection(mut self) -> Self {
         self.skip_embedded_detection = true;
+        self
+    }
+
+    /// Set encoded-layer context for metrics on decoded embedded-code files.
+    pub(crate) fn with_encoded_context(mut self, encoding_chain: Vec<String>) -> Self {
+        self.encoded_context = Some(encoding_chain);
         self
     }
 
@@ -1128,14 +1137,22 @@ impl UnifiedSourceAnalyzer {
 
         let func_metrics = function_metrics::analyze_functions(&func_infos, total_lines);
 
-        Metrics {
+        let mut metrics = Metrics {
             text: Some(text),
             identifiers: Some(identifier_metrics),
             strings: Some(string_metrics),
             comments: Some(comment_metrics),
             functions: Some(func_metrics),
             ..Default::default()
+        };
+
+        if let Some(encoding) = self.encoded_context.as_ref().and_then(|chain| chain.first()) {
+            let mut encoded = EncodedMetrics::default();
+            encoded.increment(self.config.file_type, encoding);
+            metrics.encoded = Some(encoded);
         }
+
+        metrics
     }
 
     /// Single-pass AST walk that extracts identifiers, string values, and function info

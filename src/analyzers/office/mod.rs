@@ -409,11 +409,19 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Embedded executables are structural evidence. Malicious delivery intent
-        // needs loader or execution behavior from companion traits.
+        // Embedded executables are structural evidence. MSI installers
+        // legitimately contain embedded PE DLLs as custom-action components,
+        // so skip the generic finding for them and rely on sub-analysis of the
+        // extracted payload for actual behavioral classification.
         // The actual payload is also routed through analyze_embedded_executables
         // for full sub-analysis; this finding is the structural marker.
+        let is_msi = doc.doc_subtype == ole2::Ole2Subtype::Msi;
         for exec in &doc.embedded_executables {
+            if is_msi {
+                // MSI custom-action DLLs are normal; the sub-analysis covers
+                // any actual malicious behavior in the embedded binary.
+                continue;
+            }
             findings.push(Finding {
                 id: "objectives/command-and-control/dropper/payload::embedded-executable"
                     .to_string(),

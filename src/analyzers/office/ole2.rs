@@ -80,6 +80,7 @@ pub(crate) enum Ole2Subtype {
     Excel,
     PowerPoint,
     Msg,
+    Msi,
     Unknown,
 }
 
@@ -91,6 +92,7 @@ impl Ole2Subtype {
             Self::Excel => "xls",
             Self::PowerPoint => "ppt",
             Self::Msg => "msg",
+            Self::Msi => "msi",
             Self::Unknown => "ole",
         }
     }
@@ -204,6 +206,25 @@ fn detect_subtype(stream_names: &[String]) -> Ole2Subtype {
         }
         if lower.contains("__properties_version") || lower.contains("__substg1") {
             return Ole2Subtype::Msg;
+        }
+        // MSI installers: _Tables stream or Binary. streams with MSI structure
+        if lower.contains("_tables") || lower.contains("/binary.") {
+            return Ole2Subtype::Msi;
+        }
+        // MSI installers also encode their table/stream names into the Unicode
+        // PUA-ish range U+3800..U+4900. A stream whose payload-name (everything
+        // after the leading "/" and excluding the SummaryInformation control
+        // stream) is composed entirely of codepoints in that range is an MSI
+        // table/storage entry — see the MSI streamname encoding in [MS-MSI].
+        let payload = name
+            .trim_start_matches('/')
+            .trim_start_matches('\u{0005}');
+        if !payload.is_empty()
+            && payload
+                .chars()
+                .all(|c| ('\u{3800}'..'\u{4900}').contains(&c))
+        {
+            return Ole2Subtype::Msi;
         }
     }
     Ole2Subtype::Unknown
@@ -518,6 +539,9 @@ mod tests {
 
         let unknown_streams = vec!["/SomeStream".to_string()];
         assert_eq!(detect_subtype(&unknown_streams), Ole2Subtype::Unknown);
+
+        let msi_streams = vec!["/Binary.123".to_string(), "/_Tables".to_string()];
+        assert_eq!(detect_subtype(&msi_streams), Ole2Subtype::Msi);
     }
 
     #[test]
@@ -526,6 +550,7 @@ mod tests {
         assert_eq!(Ole2Subtype::Excel.as_str(), "xls");
         assert_eq!(Ole2Subtype::PowerPoint.as_str(), "ppt");
         assert_eq!(Ole2Subtype::Msg.as_str(), "msg");
+        assert_eq!(Ole2Subtype::Msi.as_str(), "msi");
         assert_eq!(Ole2Subtype::Unknown.as_str(), "ole");
     }
 }

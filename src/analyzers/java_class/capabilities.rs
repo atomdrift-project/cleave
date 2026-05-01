@@ -362,11 +362,16 @@ impl super::JavaClassAnalyzer {
                 );
             }
 
-            // File operations
-            if s_lower.contains("file-manager")
-                || s_lower.contains("browse-file")
-                || s_lower.contains("upload")
-                || s_lower.contains("exfil")
+            // File operations. Skip strings that look like Java class refs / type
+            // descriptors (e.g. "org/apache/tomcat/util/http/fileupload/...") — these
+            // are framework package paths, not exfiltration intent. Use "exfilt" rather
+            // than "exfil" so benign substrings like "ClassPathIndexFile" do not match.
+            let looks_like_class_path = s.contains('/') || s.starts_with('L') && s.ends_with(';');
+            if !looks_like_class_path
+                && (s_lower.contains("file-manager")
+                    || s_lower.contains("browse-file")
+                    || s_lower.contains("upload")
+                    || s_lower.contains("exfilt"))
             {
                 self.add_capability(
                     report,

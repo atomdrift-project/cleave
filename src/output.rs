@@ -1046,6 +1046,7 @@ mod tests {
             source_code_metrics: None,
             overlay_metrics: None,
             metrics: None,
+            kv_tree: None,
             paths: vec![],
             directories: vec![],
             env_vars: vec![],

@@ -161,6 +161,31 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         paths.insert(format!("lnk.{}", field));
     }
 
+    // Office metrics: cross-format fields plus per-container sub-structs.
+    // Sub-structs (`ole`, `ooxml`, `vba`, `xlm`) are flattened so a trait can
+    // write `field: office.xlm.char_count` directly, mirroring how `binary.*`
+    // and the language-specific metrics expose their fields.
+    use super::office_metrics::{OfficeMetrics, OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
+    for field in OfficeMetrics::valid_field_paths() {
+        // Skip the four nested-struct field names; they're not numeric and
+        // are exposed as `office.<sub>.<field>` instead.
+        if !matches!(field, "ole" | "ooxml" | "vba" | "xlm") {
+            paths.insert(format!("office.{}", field));
+        }
+    }
+    for field in OleMetrics::valid_field_paths() {
+        paths.insert(format!("office.ole.{}", field));
+    }
+    for field in OoxmlMetrics::valid_field_paths() {
+        paths.insert(format!("office.ooxml.{}", field));
+    }
+    for field in VbaMetrics::valid_field_paths() {
+        paths.insert(format!("office.vba.{}", field));
+    }
+    for field in XlmMetrics::valid_field_paths() {
+        paths.insert(format!("office.xlm.{}", field));
+    }
+
     // Composite scores
     for field in ObfuscationScore::valid_field_paths() {
         paths.insert(format!("obfuscation.{}", field));

@@ -338,13 +338,15 @@ pub enum Command {
         layer: Option<String>,
     },
 
-    /// Dump key/value pairs from structured files (manifests, systemd units, LNK, plist)
+    /// Dump key/value pairs from structured files (manifests, systemd units, LNK, plist, office docs)
     Kv {
-        /// Target file (package.json, Cargo.toml, manifest.json, *.plist, *.lnk, *.service, etc.)
+        /// Target file (package.json, Cargo.toml, manifest.json, *.plist, *.lnk, *.service,
+        /// *.doc/.docx/.xls/.xlsx/.ppt/.pptx, etc.)
         #[arg(required = true)]
         target: String,
 
-        /// Optional path filter (e.g., "scripts.postinstall" or "content_scripts[*].matches")
+        /// Optional path filter (e.g., "scripts.postinstall", "content_scripts[*].matches",
+        /// or "core.creator" / "ole.compobj.app_version" for office documents)
         #[arg(short, long)]
         path: Option<String>,
     },

@@ -132,6 +132,15 @@ pub struct AnalysisReport {
     /// Unified metrics container for ML analysis
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metrics: Option<Metrics>,
+    /// Synthetic key-value tree for `type: kv` matchers on file
+    /// formats whose metadata isn't natively a manifest (e.g.,
+    /// office documents). Populated by analyzers; consumed by the
+    /// kv evaluator. The schema is the public trait-base API for
+    /// each format that opts in. Serialized so external consumers
+    /// (and the upcoming `cleave kv` extension) can introspect the
+    /// same path map trait authors target.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub kv_tree: Option<Box<serde_json::Value>>,
     /// Raw paths discovered (complete list)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub paths: Vec<PathInfo>,
@@ -196,6 +205,7 @@ impl AnalysisReport {
             source_code_metrics: None,
             overlay_metrics: None,
             metrics: None,
+            kv_tree: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),

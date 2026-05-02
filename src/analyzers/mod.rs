@@ -52,6 +52,7 @@ pub(crate) mod macho;
 pub(crate) mod macho_codesign;
 pub(crate) mod office;
 pub(crate) mod package_json;
+pub mod pdf;
 pub mod pe;
 pub(crate) mod pickle;
 pub(crate) mod png;
@@ -192,6 +193,12 @@ pub fn analyzer_for_file_type(
             office::OfficeAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
+        // PDF documents — lenient byte-scan extractor for action /
+        // info / embedded-file / filter-chain surfacing.
+        FileType::Pdf => Some(Box::new(
+            pdf::PdfAnalyzer::new().with_capability_mapper(mapper_or_empty),
+        )),
+
         // LNK files - Windows shortcuts
         FileType::Lnk => Some(Box::new(
             lnk::LnkAnalyzer::new().with_capability_mapper(mapper_or_empty),
@@ -298,6 +305,11 @@ pub(crate) fn analyzer_for_file_type_arc(
         // Microsoft Office documents (OLE2 and OOXML)
         FileType::OleDoc | FileType::Ooxml => Some(Box::new(
             office::OfficeAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
+        )),
+
+        // PDF documents — lenient byte-scan extractor.
+        FileType::Pdf => Some(Box::new(
+            pdf::PdfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // LNK files - Windows shortcuts

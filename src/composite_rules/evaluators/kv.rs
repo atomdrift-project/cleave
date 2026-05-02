@@ -1393,41 +1393,44 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         );
     }
 
-    // Check cached format, detect if not cached
-    let detected_format = ctx
-        .cached_kv_format
-        .get_or_init(|| detect_format(file_path, content));
-    let format = if *detected_format == StructuredFormat::Unknown {
-        structured_format_from_file_type(&ctx.file_type)
-    } else {
-        *detected_format
+    // Files whose metadata isn't natively a manifest format (office
+    // documents, etc.) get a synthetic kv tree built by the analyzer
+    // and stashed on `report.kv_tree`. Use it directly when present
+    // — skips both magic-byte format detection and re-parsing.
+    let parsed: &Value = match ctx.report.kv_tree.as_ref() {
+        Some(synthetic) => synthetic.as_ref(),
+        None => {
+            let detected_format = ctx
+                .cached_kv_format
+                .get_or_init(|| detect_format(file_path, content));
+            let format = if *detected_format == StructuredFormat::Unknown {
+                structured_format_from_file_type(&ctx.file_type)
+            } else {
+                *detected_format
+            };
+            if format == StructuredFormat::Unknown {
+                return None;
+            }
+            let cached = ctx.cached_kv_parsed.get_or_init(|| {
+                let parsed_value: Option<Value> = match format {
+                    StructuredFormat::Json => serde_json::from_slice(content).ok(),
+                    StructuredFormat::Yaml => serde_yaml::from_slice(content).ok(),
+                    StructuredFormat::Toml => std::str::from_utf8(content)
+                        .ok()
+                        .and_then(|s| toml::from_str(s).ok()),
+                    StructuredFormat::Plist => plist::from_bytes(content).ok(),
+                    StructuredFormat::PkgInfo => parse_pkginfo(content),
+                    StructuredFormat::Lnk => parse_lnk(content),
+                    StructuredFormat::SystemdService => parse_systemd_service(content),
+                    StructuredFormat::DesktopEntry => parse_desktop_entry(content),
+                    StructuredFormat::Xml => parse_xml_to_json(content),
+                    StructuredFormat::Unknown => None,
+                };
+                Box::new(parsed_value.unwrap_or(Value::Null))
+            });
+            cached.as_ref()
+        }
     };
-
-    // If format is unknown, no need to parse
-    if format == StructuredFormat::Unknown {
-        return None;
-    }
-
-    // Check cached parsed data, parse if not cached
-    let parsed = ctx.cached_kv_parsed.get_or_init(|| {
-        let parsed_value: Option<Value> = match format {
-            StructuredFormat::Json => serde_json::from_slice(content).ok(),
-            StructuredFormat::Yaml => serde_yaml::from_slice(content).ok(),
-            StructuredFormat::Toml => std::str::from_utf8(content)
-                .ok()
-                .and_then(|s| toml::from_str(s).ok()),
-            StructuredFormat::Plist => plist::from_bytes(content).ok(),
-            StructuredFormat::PkgInfo => parse_pkginfo(content),
-            StructuredFormat::Lnk => parse_lnk(content),
-            StructuredFormat::SystemdService => parse_systemd_service(content),
-            StructuredFormat::DesktopEntry => parse_desktop_entry(content),
-            StructuredFormat::Xml => parse_xml_to_json(content),
-            StructuredFormat::Unknown => None,
-        };
-
-        // Box the value for caching (or use a sentinel null value if parsing failed)
-        Box::new(parsed_value.unwrap_or(Value::Null))
-    });
 
     // If parsing failed (stored as Null sentinel), return None
     if parsed.is_null() {
@@ -1582,6 +1585,89 @@ mod tests {
     ) -> Option<Evidence> {
         let ctx = create_test_ctx(data, path);
         evaluate_kv(condition, &ctx)
+    }
+
+    /// Build a test context whose report carries a synthetic kv tree —
+    /// the path the office analyzer takes when stashing
+    /// `report.kv_tree`. Used by `synthetic_kv_tree_*` tests below.
+    fn create_test_ctx_with_kv_tree<'a>(
+        binary_data: &'a [u8],
+        path: &'a std::path::Path,
+        file_type: FileType,
+        kv_tree: serde_json::Value,
+    ) -> EvaluationContext<'a> {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: path.display().to_string(),
+            file_type: "test".to_string(),
+            size_bytes: binary_data.len() as u64,
+            sha256: "test".to_string(),
+            architectures: None,
+        });
+        report.kv_tree = Some(Box::new(kv_tree));
+        let leaked: &'static AnalysisReport = Box::leak(Box::new(report));
+        EvaluationContext::test_only_new(leaked, binary_data, file_type)
+    }
+
+    /// `report.kv_tree` is consulted in preference to the file's
+    /// own structured-format parsing — even when the binary is empty.
+    #[test]
+    fn synthetic_kv_tree_resolves_paths_for_office() {
+        let kv = serde_json::json!({
+            "summary": {
+                "author": "Иван Иванов",
+                "create_time": "2025-03-12T10:30:00Z",
+                "revision": 1,
+            },
+            "ole": {
+                "compobj": {
+                    "app_version": "Excel.Sheet.8",
+                },
+            },
+        });
+        let path = std::path::Path::new("evil.doc");
+        let ctx = create_test_ctx_with_kv_tree(&[], path, FileType::All, kv);
+
+        // Cyrillic-author regex fires.
+        let cond = Condition::Kv {
+            path: "summary.author".to_string(),
+            exact: None,
+            substr: None,
+            regex: Some(r"[Ѐ-ӿ]".to_string()),
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: regex::Regex::new(r"[Ѐ-ӿ]").ok(),
+        };
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+
+        // Excel.Sheet.8 in compobj fires.
+        let cond = Condition::Kv {
+            path: "ole.compobj.app_version".to_string(),
+            exact: None,
+            substr: Some("Excel.".to_string()),
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+
+        // Path that doesn't exist returns None.
+        let cond = Condition::Kv {
+            path: "summary.title".to_string(),
+            exact: Some("anything".to_string()),
+            substr: None,
+            regex: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(evaluate_kv(&cond, &ctx).is_none());
     }
 
     fn evaluate_kv_test_with_file_type(

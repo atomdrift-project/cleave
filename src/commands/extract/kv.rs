@@ -4,15 +4,26 @@
 //! `path: value` pairs. Supported formats: JSON (package.json, manifest.json,
 //! composer.json), YAML (GitHub Actions workflows, action.yml), TOML
 //! (Cargo.toml, pyproject.toml), Apple plists, Python PKG-INFO/METADATA,
-//! Windows Shell Link (.lnk), and systemd .service unit files.
+//! Windows Shell Link (.lnk), systemd .service unit files, and Microsoft
+//! Office documents (legacy OLE2 `.doc`/`.xls`/`.ppt` and modern OOXML
+//! `.docx`/`.xlsx`/`.pptx`).
+//!
+//! For office documents the dump is the synthesized kv tree the office
+//! analyzer attaches to `report.kv_tree` during analysis — `summary.*`,
+//! `core.*`, `ole.compobj.*`, `relationships[]`, `embedded[]`. The same
+//! paths are accepted by `type: kv` traits, so this command is the
+//! canonical discovery tool for authoring office-document kv rules.
 //!
 //! The emitted paths use the same syntax accepted by `test-match --type kv
 //! --kv-path`, so the output doubles as a discovery tool for authoring kv rules.
 
+use crate::analyzers::office::office_kv;
+use crate::analyzers::pdf::pdf_kv;
 use crate::cli;
 use crate::composite_rules::evaluators::kv::{
     detect_format, navigate, parse_path, parse_structured_content, StructuredFormat,
 };
+use crate::rtf::rtf_kv;
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
@@ -33,15 +44,31 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
     }
 
     let content = fs::read(path)?;
-    let Some((detected, parsed)) = parse_structured_content(path, &content) else {
-        let format = detect_format(path, &content);
-        if format == StructuredFormat::Unknown {
-            anyhow::bail!(
-                "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest): {}",
-                target
-            );
-        }
-        anyhow::bail!("Detected {:?} but failed to parse: {}", format, target);
+
+    // Documents that aren't natively manifest formats (office, RTF,
+    // and eventually PDF) get a synthetic kv tree built by their
+    // dedicated analyzer module. We try each in order before
+    // falling through to the generic structured-content parser. The
+    // returned trees use snake_case schemas — see
+    // `analyzers::office::office_kv` and `rtf::rtf_kv`.
+    let (detected, parsed) = if let Some(office_value) = office_kv::extract_office_kv(path, &content) {
+        (StructuredFormat::Json, office_value)
+    } else if let Some(rtf_value) = rtf_kv::extract_rtf_kv(&content) {
+        (StructuredFormat::Json, rtf_value)
+    } else if let Some(pdf_value) = pdf_kv::extract_pdf_kv(&content) {
+        (StructuredFormat::Json, pdf_value)
+    } else {
+        let Some((detected, parsed)) = parse_structured_content(path, &content) else {
+            let format = detect_format(path, &content);
+            if format == StructuredFormat::Unknown {
+                anyhow::bail!(
+                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, or PDF): {}",
+                    target
+                );
+            }
+            anyhow::bail!("Detected {:?} but failed to parse: {}", format, target);
+        };
+        (detected, parsed)
     };
 
     let roots: Vec<(&Value, String)> = if let Some(filter) = path_filter {

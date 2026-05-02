@@ -36,6 +36,8 @@ pub(crate) mod hex_decoder;
 pub(crate) mod ole_extractor;
 /// Main RTF parser
 pub(crate) mod parser;
+/// Synthesized key-value tree for `type: kv` trait matching
+pub(crate) mod rtf_kv;
 /// Type definitions for RTF documents
 pub(crate) mod types;
 

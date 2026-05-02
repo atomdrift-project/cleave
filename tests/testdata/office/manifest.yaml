@@ -1,0 +1,33 @@
+# Office corpus manifest.
+#
+# Each entry pins the expected behavior of one sample. The harness in
+# tests/office_corpus_test.rs walks this list and asserts:
+#   - the file analyzes without panic
+#   - max(finding.crit) >= min_max_crit
+#   - every must_fire ID appears
+#   - no must_not_fire ID appears
+#   - the full finding list matches the insta snapshot
+#
+# Snapshot regression is the primary regression gate; the explicit
+# must_fire/must_not_fire entries anchor the *intended* signal so a
+# silent rule rewrite that drops a key trait still fails CI even if the
+# snapshot is naively accepted.
+#
+# Add samples in alphabetical order under each bucket. Use SHA256 prefix
+# in the path to keep names stable when names rotate publicly.
+#
+# Schema:
+#   samples:
+#     - path: <relative to tests/testdata/office/>
+#       bucket: malicious | benign-with-macros | benign-no-macros
+#       description: <short human label, shown in test failure>
+#       xor_encoded: true | false        # default false
+#       min_max_crit: baseline | notable | suspicious | hostile
+#       must_fire: [trait_id, ...]
+#       must_not_fire: [trait_id, ...]
+#       # Optional: assert specific office.* metrics
+#       expected_metrics:
+#         office.has_macros: true
+#         office.xlm.char_count_min: 200
+
+samples: []

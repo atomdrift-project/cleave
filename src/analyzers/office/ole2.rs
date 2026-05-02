@@ -55,6 +55,8 @@ pub(crate) struct Ole2Document {
     pub dangerous_clsids: Vec<ClsidMatch>,
     /// Document metadata (author, title, etc.)
     pub metadata: DocumentMetadata,
+    /// CompObj stream contents (None when stream missing or malformed).
+    pub compobj: Option<CompObjData>,
 }
 
 /// Info about an OLE10Native embedded object.
@@ -98,7 +100,12 @@ impl Ole2Subtype {
     }
 }
 
-/// Document metadata extracted from SummaryInformation property set.
+/// Document metadata extracted from SummaryInformation /
+/// DocumentSummaryInformation property sets.
+///
+/// String fields come from `\x05SummaryInformation` per MS-OLEPS;
+/// numeric fields cover both streams.  Keep all fields optional —
+/// many real-world documents omit several properties.
 #[derive(Debug, Default)]
 #[allow(dead_code)] // Fields populated for metadata reporting
 pub(crate) struct DocumentMetadata {
@@ -108,6 +115,40 @@ pub(crate) struct DocumentMetadata {
     pub application: Option<String>,
     pub create_time: Option<String>,
     pub last_save_time: Option<String>,
+    /// PIDSI_PAGECOUNT (0x0E) — VT_I4.  Zero on freshly-built lures.
+    pub page_count: Option<u32>,
+    /// PIDSI_WORDCOUNT (0x0F) — VT_I4.  Low values on lures.
+    pub word_count: Option<u32>,
+    /// PIDSI_CHARCOUNT (0x10) — VT_I4.
+    pub char_count: Option<u32>,
+    /// PIDSI_REVNUMBER (0x09) — VT_LPSTR holding a decimal integer
+    /// (Word writes "1" / "12" etc.); we parse the leading number.
+    pub revision_number: Option<u32>,
+    /// PIDSI_EDITTIME (0x0A) — VT_FILETIME stored as a duration in
+    /// 100-ns units.  Surfaced as minutes for trait friendliness.
+    pub total_edit_time_minutes: Option<u64>,
+    /// PIDDSI_SECURITY (0x13) from DocumentSummaryInformation —
+    /// bit 0 password-protected, bit 1 read-only-recommended,
+    /// bit 2 read-only-enforced, bit 3 locked.
+    pub security_flag: Option<u32>,
+}
+
+/// CompObj stream contents per MS-OLEDS §2.3.6.1.  Surfaces the three
+/// ProgID/clipboard fields most useful for fake-extension detection
+/// — a `.doc` whose CompObj says `Excel.Sheet.8` is a known
+/// masquerade pattern (CVE-2017-0199 droppers, malicious DOCX renames).
+#[derive(Debug, Default, Clone)]
+#[allow(dead_code)] // Read by office analyzer to populate OleMetrics
+pub(crate) struct CompObjData {
+    /// AnsiUserType — human-readable type label
+    /// (e.g., "Microsoft Office Excel Worksheet").
+    pub user_type: String,
+    /// AnsiClipboardFormat string variant (e.g., "Biff8"). Empty when
+    /// the format is a registered clipboard ID rather than a string.
+    pub clipboard_format: String,
+    /// "Reserved3" string — the canonical ProgID Office writes here
+    /// (e.g., "Excel.Sheet.8", "Word.Document.8", "PowerPoint.Show.8").
+    pub app_version: String,
 }
 
 /// Parse an OLE2 compound document.
@@ -178,6 +219,10 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     // Extract metadata
     let metadata = extract_metadata(&mut comp);
 
+    // CompObj stream parsing — best-effort; missing or malformed
+    // streams produce None and the doc is otherwise unaffected.
+    let compobj = extract_compobj(&mut comp);
+
     Ok(Ole2Document {
         doc_subtype,
         has_vba,
@@ -188,7 +233,113 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
         ole10_native_objects,
         dangerous_clsids,
         metadata,
+        compobj,
     })
+}
+
+/// Read and parse the `\x01CompObj` stream if present.
+fn extract_compobj(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> Option<CompObjData> {
+    let mut data = Vec::new();
+    {
+        let mut stream = comp.open_stream("\x01CompObj").ok()?;
+        if stream.read_to_end(&mut data).is_err() {
+            return None;
+        }
+    }
+    parse_compobj(&data)
+}
+
+/// Parse the CompObj stream layout (MS-OLEDS §2.3.6.1).
+///
+/// The stream begins with a 28-byte fixed header (Reserved1 4 + Version
+/// 4 + Reserved2 20) followed by:
+///   - AnsiUserType: LengthPrefixedAnsiString
+///   - AnsiClipboardFormat: ClipboardFormatOrAnsiString
+///   - Reserved3:  optional LengthPrefixedAnsiString (the ProgID)
+///
+/// LengthPrefixedAnsiString = u32 LE length (incl. trailing NUL) +
+/// `length` bytes. A length of 0 means absent. ClipboardFormat encodes
+/// either a 32-bit clipboard ID (1..=0x1FF, no string) or a marker
+/// `0xFFFFFFFE`/`0xFFFFFFFF` followed by a length-prefixed string. We
+/// surface only the *string* variant — the registered-ID case isn't
+/// useful for masquerade detection.
+fn parse_compobj(data: &[u8]) -> Option<CompObjData> {
+    const HEADER_SIZE: usize = 28;
+    if data.len() < HEADER_SIZE + 4 {
+        return None;
+    }
+    let mut pos = HEADER_SIZE;
+    let mut out = CompObjData::default();
+
+    // 1) AnsiUserType
+    if let Some((s, advance)) = read_length_prefixed_ansi(&data[pos..]) {
+        out.user_type = s;
+        pos += advance;
+    } else {
+        return Some(out);
+    }
+
+    // 2) AnsiClipboardFormat — MS-OLEDS encodes this as either a 4-byte
+    //    registered clipboard ID or a length-prefixed ANSI string. The
+    //    naive "small value = ID, large value = length" heuristic fails
+    //    for short formats like `"Biff8\0"` (length 6, looks like an
+    //    ID).  We prefer the string interpretation: if the declared
+    //    length fits in the remaining buffer AND the bytes look like
+    //    printable ASCII, accept as a string. Otherwise fall back to
+    //    "registered ID, advance 4".
+    if data.len() < pos + 4 {
+        return Some(out);
+    }
+    let marker = u32::from_le_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]);
+    if marker == 0 {
+        pos += 4;
+    } else {
+        let len = marker as usize;
+        let str_start = pos + 4;
+        let fits = data.len() >= str_start + len && len > 0 && len <= 256;
+        let printable = fits
+            && data[str_start..str_start + len]
+                .iter()
+                .all(|b| b.is_ascii_graphic() || *b == b' ' || *b == 0);
+        if fits && printable {
+            out.clipboard_format = sanitize_ansi(&data[str_start..str_start + len]);
+            pos = str_start + len;
+        } else {
+            // Registered clipboard ID — no string follows.
+            pos += 4;
+        }
+    }
+
+    // 3) Reserved3 — optional LengthPrefixedAnsiString carrying ProgID.
+    if let Some((s, _advance)) = read_length_prefixed_ansi(&data[pos..]) {
+        out.app_version = s;
+    }
+
+    Some(out)
+}
+
+/// Read a `LengthPrefixedAnsiString` from the start of `buf`. Returns
+/// the decoded string (with trailing NUL stripped) and the number of
+/// bytes consumed. Returns `None` when the buffer is too short or the
+/// length field exceeds remaining bytes.
+fn read_length_prefixed_ansi(buf: &[u8]) -> Option<(String, usize)> {
+    if buf.len() < 4 {
+        return None;
+    }
+    let len = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    if len == 0 {
+        return Some((String::new(), 4));
+    }
+    if buf.len() < 4 + len {
+        return None;
+    }
+    Some((sanitize_ansi(&buf[4..4 + len]), 4 + len))
+}
+
+fn sanitize_ansi(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .trim_end_matches('\0')
+        .to_string()
 }
 
 /// Detect document subtype from stream names.
@@ -385,18 +536,27 @@ fn lookup_dangerous_clsid(clsid: &str) -> Option<&'static str> {
     }
 }
 
-/// Extract metadata from SummaryInformation property set.
+/// Extract metadata from SummaryInformation and
+/// DocumentSummaryInformation property sets.
 ///
 /// The OLE property set format (MS-OLEPS) uses fixed-offset records.
-/// We parse just enough to extract the key metadata fields.
+/// Both streams share the same outer structure; only the property IDs
+/// they expose differ.
 fn extract_metadata(comp: &mut cfb::CompoundFile<Cursor<&[u8]>>) -> DocumentMetadata {
     let mut meta = DocumentMetadata::default();
 
-    // Try \x05SummaryInformation
+    // \x05SummaryInformation — title/author/page count/edit time/etc.
     if let Ok(mut stream) = comp.open_stream("\x05SummaryInformation") {
         let mut data = Vec::new();
         if stream.read_to_end(&mut data).is_ok() {
             parse_summary_info(&data, &mut meta);
+        }
+    }
+    // \x05DocumentSummaryInformation — security flag and custom props.
+    if let Ok(mut stream) = comp.open_stream("\x05DocumentSummaryInformation") {
+        let mut data = Vec::new();
+        if stream.read_to_end(&mut data).is_ok() {
+            parse_doc_summary_info(&data, &mut meta);
         }
     }
 
@@ -468,17 +628,154 @@ fn parse_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
             continue;
         }
 
-        // Property IDs for SummaryInformation:
-        // 2 = Title, 4 = Author, 6 = ApplicationName, 8 = LastAuthor
-        // 12 = CreateTime, 13 = LastSaveTime
+        // Property IDs for SummaryInformation (PIDSI_*):
+        // 0x02 Title, 0x04 Author, 0x06 ApplicationName, 0x08 LastAuthor,
+        // 0x09 RevNumber, 0x0A EditTime, 0x0E PageCount, 0x0F WordCount,
+        // 0x10 CharCount, 0x0C CreateTime, 0x0D LastSaveTime
         match prop_id {
-            2 => meta.title = read_property_string(section, prop_offset),
-            4 => meta.author = read_property_string(section, prop_offset),
-            6 => meta.application = read_property_string(section, prop_offset),
-            8 => meta.last_author = read_property_string(section, prop_offset),
+            0x02 => meta.title = read_property_string(section, prop_offset),
+            0x04 => meta.author = read_property_string(section, prop_offset),
+            0x06 => meta.application = read_property_string(section, prop_offset),
+            0x08 => meta.last_author = read_property_string(section, prop_offset),
+            0x09 => {
+                if let Some(s) = read_property_string(section, prop_offset) {
+                    meta.revision_number = parse_leading_u32(&s);
+                }
+            }
+            0x0A => meta.total_edit_time_minutes = read_filetime_minutes(section, prop_offset),
+            0x0E => meta.page_count = read_property_u32(section, prop_offset),
+            0x0F => meta.word_count = read_property_u32(section, prop_offset),
+            0x10 => meta.char_count = read_property_u32(section, prop_offset),
             _ => {}
         }
     }
+}
+
+/// Parse DocumentSummaryInformation. Currently captures `PIDDSI_SECURITY`
+/// (property 0x13) only; future expansion can pick up custom properties
+/// here without touching SummaryInformation parsing.
+fn parse_doc_summary_info(data: &[u8], meta: &mut DocumentMetadata) {
+    let Some(section) = locate_first_section(data) else {
+        return;
+    };
+    if section.len() < 8 {
+        return;
+    }
+    let num_props = u32::from_le_bytes([section[4], section[5], section[6], section[7]]) as usize;
+
+    for i in 0..num_props {
+        let entry_offset = 8 + i * 8;
+        if entry_offset + 8 > section.len() {
+            break;
+        }
+        let prop_id = u32::from_le_bytes([
+            section[entry_offset],
+            section[entry_offset + 1],
+            section[entry_offset + 2],
+            section[entry_offset + 3],
+        ]);
+        let prop_offset = u32::from_le_bytes([
+            section[entry_offset + 4],
+            section[entry_offset + 5],
+            section[entry_offset + 6],
+            section[entry_offset + 7],
+        ]) as usize;
+
+        if prop_offset + 8 > section.len() {
+            continue;
+        }
+
+        if prop_id == 0x13 {
+            meta.security_flag = read_property_u32(section, prop_offset);
+        }
+    }
+}
+
+/// Walk the MS-OLEPS outer structure and return a slice into the first
+/// property-set section (the `size + num_properties + entries` block).
+fn locate_first_section(data: &[u8]) -> Option<&[u8]> {
+    if data.len() < 48 {
+        return None;
+    }
+    let bom = u16::from_le_bytes([data[0], data[1]]);
+    if bom != 0xFFFE {
+        return None;
+    }
+    let num_sections = u32::from_le_bytes([data[24], data[25], data[26], data[27]]) as usize;
+    if num_sections == 0 {
+        return None;
+    }
+    let section_offset = u32::from_le_bytes([data[44], data[45], data[46], data[47]]) as usize;
+    if section_offset + 8 > data.len() {
+        return None;
+    }
+    Some(&data[section_offset..])
+}
+
+/// Read a VT_I4 (0x0003) property value as u32.  Negative values are
+/// clamped to zero — the four numeric SummaryInformation properties
+/// we care about are intrinsically non-negative.
+fn read_property_u32(section: &[u8], offset: usize) -> Option<u32> {
+    if offset + 8 > section.len() {
+        return None;
+    }
+    let vt_type = u32::from_le_bytes([
+        section[offset],
+        section[offset + 1],
+        section[offset + 2],
+        section[offset + 3],
+    ]);
+    if vt_type != 0x0003 {
+        return None;
+    }
+    let value = i32::from_le_bytes([
+        section[offset + 4],
+        section[offset + 5],
+        section[offset + 6],
+        section[offset + 7],
+    ]);
+    Some(value.max(0) as u32)
+}
+
+/// Read a VT_FILETIME (0x0040) property value and return the duration
+/// in *minutes*.  PIDSI_EDITTIME stores the total time the document
+/// has been edited, packaged as a FILETIME-style duration in 100-ns
+/// units.  Real edit times are tiny relative to absolute FILETIMEs,
+/// so a literal-FILETIME-as-timestamp interpretation overflows; we
+/// always treat the value as a duration here.
+fn read_filetime_minutes(section: &[u8], offset: usize) -> Option<u64> {
+    if offset + 12 > section.len() {
+        return None;
+    }
+    let vt_type = u32::from_le_bytes([
+        section[offset],
+        section[offset + 1],
+        section[offset + 2],
+        section[offset + 3],
+    ]);
+    if vt_type != 0x0040 {
+        return None;
+    }
+    let raw = u64::from_le_bytes([
+        section[offset + 4],
+        section[offset + 5],
+        section[offset + 6],
+        section[offset + 7],
+        section[offset + 8],
+        section[offset + 9],
+        section[offset + 10],
+        section[offset + 11],
+    ]);
+    // 100-ns units → minutes: divide by 600_000_000.
+    Some(raw / 600_000_000)
+}
+
+/// Parse the leading run of decimal digits as a u32 (ignoring trailing
+/// junk like "12.0" → 12). Used for `PIDSI_REVNUMBER` which Word stores
+/// as a string.
+fn parse_leading_u32(s: &str) -> Option<u32> {
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    digits.parse().ok()
 }
 
 /// Read a VT_LPSTR property value from the section.
@@ -525,6 +822,262 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Helper: build a CompObj stream payload with the given strings.
+    /// `clipboard_marker` controls whether the clipboard slot is a
+    /// registered ID, absent, or a length-prefixed string.
+    enum ClipboardSlot {
+        None,
+        RegisteredId(u32),
+        AnsiString(&'static str),
+    }
+
+    fn build_compobj(
+        user_type: &str,
+        clipboard: ClipboardSlot,
+        app_version: Option<&str>,
+    ) -> Vec<u8> {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&[0u8; 28]); // header (Reserved1 + Version + Reserved2)
+
+        // AnsiUserType
+        let ut_len = (user_type.len() + 1) as u32;
+        buf.extend_from_slice(&ut_len.to_le_bytes());
+        buf.extend_from_slice(user_type.as_bytes());
+        buf.push(0);
+
+        // AnsiClipboardFormat
+        match clipboard {
+            ClipboardSlot::None => {
+                buf.extend_from_slice(&0u32.to_le_bytes());
+            }
+            ClipboardSlot::RegisteredId(id) => {
+                buf.extend_from_slice(&id.to_le_bytes());
+            }
+            ClipboardSlot::AnsiString(s) => {
+                let len = (s.len() + 1) as u32;
+                buf.extend_from_slice(&len.to_le_bytes());
+                buf.extend_from_slice(s.as_bytes());
+                buf.push(0);
+            }
+        }
+
+        // Reserved3 (ProgID)
+        if let Some(av) = app_version {
+            let len = (av.len() + 1) as u32;
+            buf.extend_from_slice(&len.to_le_bytes());
+            buf.extend_from_slice(av.as_bytes());
+            buf.push(0);
+        }
+
+        buf
+    }
+
+    /// Excel CompObj layout — string clipboard slot + ProgID.
+    #[test]
+    fn parse_compobj_excel_typical() {
+        let payload = build_compobj(
+            "Microsoft Office Excel Worksheet",
+            ClipboardSlot::AnsiString("Biff8"),
+            Some("Excel.Sheet.8"),
+        );
+        let parsed = parse_compobj(&payload).expect("parses");
+        assert_eq!(parsed.user_type, "Microsoft Office Excel Worksheet");
+        assert_eq!(parsed.clipboard_format, "Biff8");
+        assert_eq!(parsed.app_version, "Excel.Sheet.8");
+    }
+
+    /// Word with a registered clipboard ID — clipboard_format stays empty
+    /// (no string variant), but user_type and ProgID still parse.
+    #[test]
+    fn parse_compobj_registered_clipboard_id() {
+        let payload = build_compobj(
+            "Microsoft Word Document",
+            ClipboardSlot::RegisteredId(0x31),
+            Some("Word.Document.8"),
+        );
+        let parsed = parse_compobj(&payload).expect("parses");
+        assert_eq!(parsed.user_type, "Microsoft Word Document");
+        assert_eq!(parsed.clipboard_format, "");
+        assert_eq!(parsed.app_version, "Word.Document.8");
+    }
+
+    /// Adversarial CompObj that lies about user_type length — parser
+    /// must refuse the user_type read (returns Some with empty fields)
+    /// rather than panic on the slice.
+    #[test]
+    fn parse_compobj_oversized_user_type_does_not_panic() {
+        let mut payload = vec![0u8; 28];
+        payload.extend_from_slice(&100u32.to_le_bytes());
+        payload.extend_from_slice(b"\x00\x00\x00\x00");
+        let parsed = parse_compobj(&payload).expect("returns parsed default");
+        assert_eq!(parsed.user_type, "");
+    }
+
+    /// Empty user_type slot still parses (length 0 means absent).
+    #[test]
+    fn parse_compobj_empty_user_type() {
+        let mut payload = vec![0u8; 28];
+        payload.extend_from_slice(&0u32.to_le_bytes()); // user_type len = 0
+        payload.extend_from_slice(&0u32.to_le_bytes()); // clipboard marker = 0
+        let parsed = parse_compobj(&payload).expect("parses");
+        assert_eq!(parsed.user_type, "");
+        assert_eq!(parsed.clipboard_format, "");
+        assert_eq!(parsed.app_version, "");
+    }
+
+    /// Build a minimal MS-OLEPS property-set stream containing one
+    /// section with the given (property_id, payload) entries. Every
+    /// payload byte slice must be a fully formed VT_* value (type
+    /// dword + value bytes). Returns the assembled stream.
+    fn build_property_set_stream(entries: &[(u32, &[u8])]) -> Vec<u8> {
+        // Outer header (28 bytes): BOM + version + osversion + clsid + num_sections=1
+        let mut out = Vec::new();
+        out.extend_from_slice(&0xFFFEu16.to_le_bytes()); // BOM
+        out.extend_from_slice(&0u16.to_le_bytes()); // version
+        out.extend_from_slice(&0u32.to_le_bytes()); // osversion
+        out.extend_from_slice(&[0u8; 16]); // clsid
+        out.extend_from_slice(&1u32.to_le_bytes()); // num_sections
+
+        // SectionHeader: fmtid (16 bytes) + offset (4 bytes)
+        out.extend_from_slice(&[0u8; 16]); // fmtid
+        let section_offset_pos = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes()); // placeholder offset
+
+        // Pad to ensure section_offset >= 48 (matches the parser's bound).
+        while out.len() < 48 {
+            out.push(0);
+        }
+        let section_start = out.len();
+        // Patch section_offset.
+        let off = (section_start as u32).to_le_bytes();
+        out[section_offset_pos..section_offset_pos + 4].copy_from_slice(&off);
+
+        // Section: size (4) + num_props (4), then num_props (id + offset)
+        // entries, then payloads.
+        let num_props = entries.len() as u32;
+        // Section size patched after we know the final size.
+        let section_size_pos = out.len();
+        out.extend_from_slice(&0u32.to_le_bytes()); // placeholder
+        out.extend_from_slice(&num_props.to_le_bytes());
+
+        // Compute payload offsets relative to the section start.
+        let table_size = entries.len() * 8; // 4 id + 4 offset per entry
+        let mut payload_offset = 8 + table_size; // section header (8) + table
+
+        // Emit id+offset entries first.
+        let mut payload_offsets = Vec::with_capacity(entries.len());
+        for (id, payload) in entries {
+            out.extend_from_slice(&id.to_le_bytes());
+            out.extend_from_slice(&(payload_offset as u32).to_le_bytes());
+            payload_offsets.push(payload_offset);
+            payload_offset += payload.len();
+        }
+        // Emit payloads in order.
+        for (_, payload) in entries {
+            out.extend_from_slice(payload);
+        }
+        // Patch section_size.
+        let section_size = (out.len() - section_start) as u32;
+        out[section_size_pos..section_size_pos + 4]
+            .copy_from_slice(&section_size.to_le_bytes());
+        let _ = payload_offsets; // for debugging
+        out
+    }
+
+    fn vt_i4(v: i32) -> [u8; 8] {
+        let mut b = [0u8; 8];
+        b[..4].copy_from_slice(&0x0003u32.to_le_bytes());
+        b[4..].copy_from_slice(&v.to_le_bytes());
+        b
+    }
+
+    fn vt_filetime(units_100ns: u64) -> [u8; 12] {
+        let mut b = [0u8; 12];
+        b[..4].copy_from_slice(&0x0040u32.to_le_bytes());
+        b[4..].copy_from_slice(&units_100ns.to_le_bytes());
+        b
+    }
+
+    fn vt_lpstr(s: &str) -> Vec<u8> {
+        let mut b = Vec::with_capacity(8 + s.len() + 1);
+        b.extend_from_slice(&0x001Eu32.to_le_bytes());
+        let len = (s.len() + 1) as u32;
+        b.extend_from_slice(&len.to_le_bytes());
+        b.extend_from_slice(s.as_bytes());
+        b.push(0);
+        b
+    }
+
+    #[test]
+    fn parse_summary_info_captures_numeric_properties() {
+        let page = vt_i4(7);
+        let word = vt_i4(123);
+        let char_ = vt_i4(800);
+        let rev = vt_lpstr("12");
+        // 30 minutes = 30 * 60 * 10_000_000 = 18_000_000_000
+        let edit = vt_filetime(18_000_000_000);
+        let stream = build_property_set_stream(&[
+            (0x0E, &page),
+            (0x0F, &word),
+            (0x10, &char_),
+            (0x09, &rev),
+            (0x0A, &edit),
+        ]);
+        let mut meta = DocumentMetadata::default();
+        parse_summary_info(&stream, &mut meta);
+        assert_eq!(meta.page_count, Some(7));
+        assert_eq!(meta.word_count, Some(123));
+        assert_eq!(meta.char_count, Some(800));
+        assert_eq!(meta.revision_number, Some(12));
+        assert_eq!(meta.total_edit_time_minutes, Some(30));
+    }
+
+    #[test]
+    fn parse_doc_summary_info_captures_security_flag() {
+        // Security flag = 2 (recommend read-only).
+        let security = vt_i4(2);
+        let stream = build_property_set_stream(&[(0x13, &security)]);
+        let mut meta = DocumentMetadata::default();
+        parse_doc_summary_info(&stream, &mut meta);
+        assert_eq!(meta.security_flag, Some(2));
+    }
+
+    #[test]
+    fn read_property_u32_rejects_wrong_vt_type() {
+        // Build VT_LPSTR where VT_I4 is expected.
+        let mut buf = vec![0u8; 0];
+        buf.extend_from_slice(&0x001Eu32.to_le_bytes()); // wrong type
+        buf.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(read_property_u32(&buf, 0), None);
+    }
+
+    #[test]
+    fn read_filetime_minutes_zero_for_zero_units() {
+        let mut buf = vec![0u8; 0];
+        buf.extend_from_slice(&0x0040u32.to_le_bytes());
+        buf.extend_from_slice(&0u64.to_le_bytes());
+        assert_eq!(read_filetime_minutes(&buf, 0), Some(0));
+    }
+
+    #[test]
+    fn parse_leading_u32_handles_mixed_input() {
+        assert_eq!(parse_leading_u32("12"), Some(12));
+        assert_eq!(parse_leading_u32("12.0"), Some(12));
+        assert_eq!(parse_leading_u32("abc"), None);
+        assert_eq!(parse_leading_u32(""), None);
+    }
+
+    /// LengthPrefixedAnsiString with NUL preserved correctly: trailing
+    /// NUL stripped, embedded NULs kept.
+    #[test]
+    fn read_length_prefixed_ansi_strips_trailing_nul_only() {
+        // "ABC\0" = 4 bytes
+        let raw = b"\x04\x00\x00\x00ABC\0";
+        let (s, advance) = read_length_prefixed_ansi(raw).expect("reads");
+        assert_eq!(s, "ABC");
+        assert_eq!(advance, 8);
+    }
 
     #[test]
     fn test_detect_subtype() {

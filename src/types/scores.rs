@@ -14,6 +14,7 @@ use super::language_metrics::{
     ShellMetrics,
 };
 use super::lnk_metrics::LnkMetrics;
+use super::office_metrics::OfficeMetrics;
 use super::png_metrics::PngMetrics;
 use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
@@ -135,6 +136,12 @@ pub struct Metrics {
     /// LNK-specific metrics (presence flags and argument whitespace analysis)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lnk: Option<LnkMetrics>,
+    /// Microsoft Office metrics (cross-format and per-container sub-metrics).
+    /// Populated for OLE2 and OOXML documents; nested `ole`/`ooxml`/`vba`/
+    /// `xlm` sub-structs are present only when the corresponding format
+    /// component is detected.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub office: Option<OfficeMetrics>,
 
     // === Composite scores ===
     /// Composite obfuscation score with component breakdown

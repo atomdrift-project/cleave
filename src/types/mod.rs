@@ -49,6 +49,7 @@ pub(crate) mod jpeg_metrics;
 pub(crate) mod language_metrics;
 pub(crate) mod lnk_metrics;
 pub(crate) mod ml_features;
+pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
 pub(crate) mod png_metrics;
 pub(crate) mod scores;

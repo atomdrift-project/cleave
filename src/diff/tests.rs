@@ -57,6 +57,7 @@ fn create_test_report_for_diff(path: &str, trait_ids: &[&str]) -> AnalysisReport
         source_code_metrics: None,
         overlay_metrics: None,
         metrics: None,
+        kv_tree: None,
         paths: vec![],
         directories: vec![],
         env_vars: vec![],

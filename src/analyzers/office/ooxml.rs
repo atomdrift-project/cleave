@@ -73,7 +73,11 @@ pub(crate) struct ExternalRef {
     pub rel_type: String,
 }
 
-/// Document metadata from docProps.
+/// Document metadata from docProps/core.xml (Dublin Core) and
+/// docProps/app.xml (Office-specific application metadata).
+///
+/// Field names mirror the OPC element tags so the office kv tree
+/// snake_case mapping is mechanical.
 #[derive(Debug, Default)]
 pub(crate) struct OoxmlMetadata {
     pub creator: Option<String>,
@@ -82,6 +86,11 @@ pub(crate) struct OoxmlMetadata {
     pub modified: Option<String>,
     pub application: Option<String>,
     pub company: Option<String>,
+    pub title: Option<String>,
+    pub subject: Option<String>,
+    pub description: Option<String>,
+    pub keywords: Option<String>,
+    pub category: Option<String>,
 }
 
 /// Parse an OOXML document.
@@ -431,6 +440,11 @@ fn extract_metadata(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlMetada
                     "lastModifiedBy" => meta.last_modified_by = node.text().map(String::from),
                     "created" => meta.created = node.text().map(String::from),
                     "modified" => meta.modified = node.text().map(String::from),
+                    "title" => meta.title = node.text().map(String::from),
+                    "subject" => meta.subject = node.text().map(String::from),
+                    "description" => meta.description = node.text().map(String::from),
+                    "keywords" => meta.keywords = node.text().map(String::from),
+                    "category" => meta.category = node.text().map(String::from),
                     _ => {}
                 }
             }

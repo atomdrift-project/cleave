@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 /// Represents a parsed RTF document
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,8 +10,23 @@ pub(crate) struct RtfDocument {
     pub control_words: Vec<ControlWord>,
     /// OLE objects embedded in the document
     pub embedded_objects: Vec<OleObject>,
+    /// Field-instruction groups (`{\field{\*\fldinst{...}}}`) — DDE,
+    /// INCLUDETEXT, IMPORT, LINK and similar.  Captured for kv-tree
+    /// surfacing and DDE-execution detection.
+    pub fields: Vec<RtfFieldInstruction>,
     /// Document-level statistics
     pub metadata: DocumentMetadata,
+}
+
+/// Parsed RTF `\field` instruction.  `kind` is the first whitespace-
+/// separated token of the `\fldinst` payload (e.g., `DDEAUTO`,
+/// `INCLUDETEXT`, `IMPORT`, `LINK`); `target` is the remainder
+/// trimmed of surrounding whitespace and quotes.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct RtfFieldInstruction {
+    pub kind: String,
+    pub target: String,
+    pub offset: usize,
 }
 
 /// RTF header information
@@ -89,4 +105,19 @@ pub(crate) struct DocumentMetadata {
     pub has_objupdate: bool,
     /// Character set detected in the header
     pub detected_charset: Option<String>,
+    /// `\info` group string fields (`\title`, `\author`, `\manager`,
+    /// `\company`, `\operator`, `\subject`, `\category`, `\keywords`,
+    /// `\comment`, `\doccomm`, `\hlinkbase`, `\creatim`, `\revtim`,
+    /// `\printim`).  Keys use the canonical RTF control word with no
+    /// leading backslash.
+    #[serde(default)]
+    pub info: BTreeMap<String, String>,
+    /// `\info` numeric fields (`\nofpages`, `\nofwords`, `\nofchars`,
+    /// `\nofcharsws`, `\edmins`, `\version`, `\vern`).  Stored as
+    /// i64 to handle the signed RTF parameter encoding.
+    #[serde(default)]
+    pub info_numeric: BTreeMap<String, i64>,
+    /// Total `\fonttbl` font count.
+    #[serde(default)]
+    pub font_count: usize,
 }

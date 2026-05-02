@@ -63,16 +63,26 @@ impl RtfAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // Parse RTF document for structural analysis
+        // Parse RTF document for structural analysis. Stash the
+        // synthesized kv tree on `report.kv_tree` BEFORE the
+        // capability mapper runs so `type: kv` traits resolve
+        // (see `rtf::rtf_kv` for the schema — `info.*`,
+        // `info_numeric.*`, `objects[]`, `fields[]`, `header.*`,
+        // `shape.*`).
         match self.rtf_parser.parse(data) {
-            Ok(_rtf_doc) => {
-                // Record tools used
+            Ok(rtf_doc) => {
                 report.metadata.tools_used.push("rtf-parser".to_string());
-                // Structural analysis is complete; YAML traits will handle pattern detection
+                let kv = crate::rtf::rtf_kv::build_rtf_kv(&rtf_doc);
+                if kv
+                    .as_object()
+                    .is_some_and(|m| !m.is_empty())
+                {
+                    report.kv_tree = Some(Box::new(kv));
+                }
             }
             Err(_e) => {
-                // Parsing errors are noted but don't abort analysis
-                // YAML traits will still evaluate the raw content
+                // Parser failures still let YAML traits run against
+                // the raw content; the kv tree is just unavailable.
                 report.metadata.tools_used.push("rtf-parser".to_string());
             }
         }

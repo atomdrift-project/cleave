@@ -105,6 +105,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "notable",    // dumping ground
     "old",        // temporal, will rot
     "other",      // dumping ground
+    "operations",
+    "operation",
     "pattern",    // vague
     "patterns",   // vague
     "go-runtime", // platform

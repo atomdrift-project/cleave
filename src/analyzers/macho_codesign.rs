@@ -472,24 +472,28 @@ fn check_hardened_runtime_flag(cd_data: &[u8]) -> bool {
 
 /// Extract identifier string from code directory.
 ///
-/// CodeDirectory layout (blob header already skipped):
+/// CodeDirectory layout (blob header already stripped by `parse_superblob`):
 ///   offset 0: version (4), offset 4: flags (4), offset 8: hashOffset (4),
 ///   offset 12: identOffset (4)
 ///
-/// The identOffset points directly to the null-terminated identifier string.
+/// `identOffset` is **blob-relative** (measured from the magic field, i.e.
+/// before the 8-byte header `parse_superblob` strips), so we subtract 8 to
+/// get the offset into `cd_data`. Without this, we read 8 bytes past the
+/// real start of the identifier string — which truncated `com.apple.ls` to
+/// `e.ls`, etc.
 fn extract_identifier(cd_data: &[u8]) -> Option<String> {
     if cd_data.len() < 16 {
         return None;
     }
 
-    let ident_offset = u32::from_be_bytes([cd_data[12], cd_data[13], cd_data[14], cd_data[15]]);
-    let ident_offset = ident_offset as usize;
+    let blob_relative_offset =
+        u32::from_be_bytes([cd_data[12], cd_data[13], cd_data[14], cd_data[15]]) as usize;
+    let ident_offset = blob_relative_offset.checked_sub(8)?;
 
     if ident_offset >= cd_data.len() {
         return None;
     }
 
-    // Extract null-terminated string starting at ident_offset
     let ident_data = &cd_data[ident_offset..];
     let len = ident_data
         .iter()
@@ -744,21 +748,37 @@ mod tests {
 
     #[test]
     fn test_extract_identifier_valid() {
+        // identOffset is blob-relative (counts the 8-byte blob header
+        // that parse_superblob already stripped), so a string at
+        // body-offset 50 is identOffset=58 on the wire.
         let mut cd_data = vec![0u8; 100];
-        // Set ident_offset at position 12-15 to point to offset 50
-        cd_data[12] = 0x00;
-        cd_data[13] = 0x00;
-        cd_data[14] = 0x00;
-        cd_data[15] = 50;
+        cd_data[12..16].copy_from_slice(&58u32.to_be_bytes());
 
-        // Place identifier string at offset 50
         let identifier = b"com.example.app";
         cd_data[50..50 + identifier.len()].copy_from_slice(identifier);
-        cd_data[50 + identifier.len()] = 0; // null terminator
+        cd_data[50 + identifier.len()] = 0;
 
         let result = extract_identifier(&cd_data);
-        assert!(result.is_some());
-        assert_eq!(result.unwrap(), "com.example.app");
+        assert_eq!(result.as_deref(), Some("com.example.app"));
+    }
+
+    #[test]
+    fn test_extract_identifier_handles_apple_short_id() {
+        // Regression: `com.apple.ls` was getting truncated to `e.ls`
+        // because identOffset (blob-relative) was used as a body
+        // offset directly.  Place the string at body-offset 36
+        // (identOffset=44 on the wire) and verify the full string
+        // round-trips.
+        let mut cd_data = vec![0u8; 64];
+        cd_data[12..16].copy_from_slice(&44u32.to_be_bytes());
+        let identifier = b"com.apple.ls";
+        cd_data[36..36 + identifier.len()].copy_from_slice(identifier);
+        cd_data[36 + identifier.len()] = 0;
+
+        assert_eq!(
+            extract_identifier(&cd_data).as_deref(),
+            Some("com.apple.ls")
+        );
     }
 
     #[test]
@@ -771,14 +791,20 @@ mod tests {
     #[test]
     fn test_extract_identifier_offset_out_of_bounds() {
         let mut cd_data = vec![0u8; 50];
-        // Set ident_offset to 100 (beyond data size)
-        cd_data[12] = 0x00;
-        cd_data[13] = 0x00;
-        cd_data[14] = 0x00;
-        cd_data[15] = 100;
+        // Blob-relative offset 200 → body-relative 192, beyond data.
+        cd_data[12..16].copy_from_slice(&200u32.to_be_bytes());
 
         let result = extract_identifier(&cd_data);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_extract_identifier_offset_below_header() {
+        // A blob-relative offset < 8 would point inside the (stripped)
+        // header — return None rather than wrap-around.
+        let mut cd_data = vec![0u8; 50];
+        cd_data[12..16].copy_from_slice(&4u32.to_be_bytes());
+        assert!(extract_identifier(&cd_data).is_none());
     }
 
     #[test]

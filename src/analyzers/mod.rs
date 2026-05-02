@@ -41,6 +41,19 @@ pub(crate) mod symbol_extraction;
 pub(crate) mod text_metrics;
 pub(crate) mod utils;
 
+// Cross-format binary metadata kv-tree synthesis (B0 foundation).
+pub(crate) mod binary_kv;
+// B0.5 quick-win extractors: ELF .comment, sanitizer detection, etc.
+pub(crate) mod binary_extractors;
+// B1: Go buildinfo extractor (cross-format PE/ELF/Mach-O/raw).
+pub(crate) mod go_buildinfo;
+// Cross-format builder-path / builder-username recovery.
+pub(crate) mod builder_paths;
+// B2: PE-specific extractors (Rich header, imphash, VERSIONINFO).
+pub(crate) mod pe_extractors;
+// B4: Mach-O load command extractors (UUID, build_version, dylibs, rpath, source_version).
+pub(crate) mod macho_extractors;
+
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;
 pub(crate) mod elf;
@@ -454,12 +467,18 @@ pub(crate) fn is_analyzable(_path: &Path, file_type: &FileType) -> bool {
 
 /// Check if file content matches its extension's expected type.
 /// Returns (expected_type, actual_type_hint) if mismatch detected.
+///
+/// For shebang-juke overrides (e.g. `.js` file with `#!/bin/bash`) the
+/// `expected` slot holds the extension's implied type (the file's *real*
+/// language) and the `actual` slot holds the type the shebang tried to
+/// claim. Callers should phrase this as "shebang claims X but file is Y"
+/// when `is_shebang_juke()` is true.
 #[must_use]
 #[allow(dead_code)]
 pub fn check_extension_content_mismatch(
     file_path: &Path,
     file_data: &[u8],
-) -> Option<(String, String)> {
+) -> Option<(String, String, bool)> {
     if file_data.len() < 4 {
         return None;
     }
@@ -467,9 +486,17 @@ pub fn check_extension_content_mismatch(
     // Only flag when the extension explicitly maps to a *different* known type.
     // Unknown/unrecognized extensions (e.g. .elf, .so, .ko, .bin) are not mismatches.
     let ext_type = det.extension_type()?;
+    if det.is_shebang_juke() {
+        // file_type is what the extension says; ext_type is what the shebang claimed.
+        return Some((
+            format!("{:?}", det.file_type),
+            format!("{ext_type:?}"),
+            true,
+        ));
+    }
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = format!("{ext_type:?}");
-    Some((ext_desc, content_desc))
+    Some((ext_desc, content_desc, false))
 }
 
 /// Re-export the canonical file type from the fileid crate.

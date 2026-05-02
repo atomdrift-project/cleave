@@ -195,24 +195,13 @@ impl MachOAnalyzer {
         self.analyze_structure_with_signature(&macho, &mut report, codesig_data.as_ref());
         let structure_ms = _t.elapsed().as_millis();
 
-        // Generate signature findings from parsed code signature
+        // Generate signature findings from parsed code signature.
+        // The unsigned case is now emitted by the YAML trait
+        // `metadata/signed::unsigned-macho` reading from
+        // `kv: signing.is_signed exists: false`.
         let _t = std::time::Instant::now();
         if let Some(ref codesig) = codesig_data {
             self.generate_signature_findings(codesig, &mut report);
-        } else {
-            report.findings.push(Finding {
-                id: "metadata/unsigned".to_string(),
-                kind: FindingKind::Capability,
-                desc: "Binary is not digitally signed".to_string(),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            });
         }
         let sig_findings_ms = _t.elapsed().as_millis();
 
@@ -634,21 +623,10 @@ impl MachOAnalyzer {
             });
         }
 
-        if let Some(uuid) = macho.load_commands.iter().find_map(|lc| match &lc.command {
-            goblin::mach::load_command::CommandVariant::Uuid(command) => {
-                Some(hex::encode(command.uuid))
-            }
-            _ => None,
-        }) {
-            Self::push_metadata_finding(
-                report,
-                "metadata/build/reproducible::macho-uuid",
-                "Mach-O UUID present",
-                "load_command",
-                "goblin",
-                uuid,
-            );
-        }
+        // Mach-O UUID is now emitted by the YAML trait
+        // `metadata/build/reproducible::macho-uuid` reading from the
+        // binary kv tree (`macho.uuid` — populated by
+        // `analyzers::macho_extractors::extract`).
 
         if let Some(name) = macho.name {
             Self::push_metadata_finding(
@@ -934,46 +912,12 @@ impl MachOAnalyzer {
             });
         }
 
-        // Notarized by Apple
-        if codesig.is_notarized {
-            report.findings.push(Finding {
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "metadata/notarized".to_string(),
-                desc: "Binary is notarized by Apple".to_string(),
-                conf: 1.0,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            });
-        }
-
-        // Hardened runtime flag
-        if codesig.has_hardened_runtime {
-            report.findings.push(Finding {
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: "metadata/hardened-runtime".to_string(),
-                desc: "Hardened runtime enabled".to_string(),
-                conf: 1.0,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "code_directory_flags".to_string(),
-                    source: "codesign_parser".to_string(),
-                    value: "0x00010000".to_string(),
-                    location: None,
-                    ..Default::default()
-                }],
-
-                match_count: 0,
-                source_file: None,
-            });
-        }
+        // `metadata/notarized` and `metadata/hardened-runtime` were
+        // here.  Now emitted by YAML kv traits reading
+        // `signing.notarized` and `signing.hardened_runtime` from the
+        // binary kv tree.  See:
+        //   - metadata/signed/macho-codesign.yaml::macho-notarized
+        //   - metadata/signed/trust-level/traits.yaml::hardened-runtime-dup
     }
 
     fn arch_name<'a>(&self, macho: &MachO<'a>) -> String {

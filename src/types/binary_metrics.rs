@@ -577,6 +577,18 @@ pub struct ElfMetrics {
     /// Number of RUNPATH entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub runpath_count: u32,
+    /// SONAME string (DT_SONAME), e.g. `"libfoo.so.1"`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soname: Option<String>,
+    /// Needed shared libraries (DT_NEEDED), in dynamic-section order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub needed: Vec<String>,
+    /// RPATH entries (DT_RPATH), one string per `:`-separated path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rpaths: Vec<String>,
+    /// RUNPATH entries (DT_RUNPATH), one string per `:`-separated path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runpaths: Vec<String>,
     /// DT_INIT_ARRAY count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub init_array_count: u32,
@@ -654,6 +666,10 @@ pub struct ElfMetrics {
     /// GNU build-id length in bytes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub build_id_length: u32,
+    /// GNU build-id hex string (lowercase, no separators).
+    /// Surfaced under the cross-format `debug.build_id` kv path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_id: Option<String>,
     /// .gnu_debuglink section present
     #[serde(default, skip_serializing_if = "is_false")]
     pub debuglink_present: bool,

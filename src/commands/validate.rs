@@ -106,10 +106,15 @@ fn collect_targets() -> Result<Vec<Target>> {
     // /bin/sh — fork/setsid/exec/signal/pty.
     // /usr/bin/curl — HTTP/SOCKS/OAuth/TLS/crypto.
     for (path, min, max) in [
-        ("/bin/ls", 1, 8),
-        ("/bin/cp", 1, 10),
-        ("/bin/sh", 1, 8),
-        ("/usr/bin/curl", 5, 12),
+        // Bumped +1 after B4: cleave's macho_extractors now populates
+        // `macho.uuid`, which lets the existing
+        // metadata/build/reproducible::macho-uuid trait fire as a new
+        // baseline finding (previously unmatched because no UUID was
+        // being extracted).
+        ("/bin/ls", 1, 9),
+        ("/bin/cp", 1, 11),
+        ("/bin/sh", 1, 9),
+        ("/usr/bin/curl", 5, 13),
     ] {
         let p = PathBuf::from(path);
         if p.exists() {

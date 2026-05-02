@@ -172,6 +172,7 @@ cbc = { version = "0.1", features = ["alloc"] }
 
 # Utilities
 sha2 = { version = "0.10", features = ["asm-aarch64"] }
+md-5 = "0.10"
 regex = "1.12"
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns
 memchr = "2.8"

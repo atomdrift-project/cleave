@@ -286,6 +286,9 @@ pub enum DetectionSource {
     Extension,
     /// Lightweight content heuristics (pattern matching).
     Heuristic,
+    /// Extension overrode a shebang juke (e.g. `.js` file with `#!/bin/bash`).
+    /// `extension_type()` returns the type the shebang claimed.
+    ExtensionOverridesShebang,
 }
 
 /// What the file extension implies about the content.
@@ -326,8 +329,20 @@ impl Detection {
     pub fn extension_mismatch(&self) -> bool {
         matches!(
             self.source,
-            DetectionSource::Magic | DetectionSource::Shebang | DetectionSource::Heuristic
+            DetectionSource::Magic
+                | DetectionSource::Shebang
+                | DetectionSource::Heuristic
+                | DetectionSource::ExtensionOverridesShebang
         ) && !matches!(self.ext_match, ExtensionMatch::Consistent)
+    }
+
+    /// True when content was identified as a script language but the
+    /// shebang juked toward a different scripting language. Callers can
+    /// use this to label the mismatch as "shebang juke" rather than the
+    /// generic extension/content disagreement.
+    #[must_use]
+    pub fn is_shebang_juke(&self) -> bool {
+        self.source == DetectionSource::ExtensionOverridesShebang
     }
 
     /// The file type implied by the extension, if any.
@@ -341,6 +356,26 @@ impl Detection {
     }
 }
 
+/// True when a shebang→extension mismatch should be treated as evasion.
+///
+/// Specifically: a shell shebang on a file whose extension claims a different
+/// scripting language. We treat the extension as authoritative in this case.
+/// We deliberately do NOT generalise to all script-vs-script mismatches —
+/// `#!/usr/bin/env python3` on a `.py` file with no other indicators is fine.
+fn is_shebang_juke(detected: FileType, ext_type: FileType) -> bool {
+    matches!(detected, FileType::Shell)
+        && matches!(
+            ext_type,
+            FileType::JavaScript
+                | FileType::TypeScript
+                | FileType::Python
+                | FileType::Ruby
+                | FileType::Php
+                | FileType::Perl
+                | FileType::Lua
+        )
+}
+
 /// Detect file type from content + path. Content is trusted first, extension as fallback.
 ///
 /// Returns `None` if the file format cannot be identified.
@@ -349,6 +384,29 @@ pub fn detect(path: &Path, data: &[u8]) -> Option<Detection> {
     // Stage 1: Content-based detection (magic bytes, shebangs)
     if let Some((file_type, source)) = magic::detect_from_content(path, data) {
         let ext_ft = ext::detect_from_path(path);
+
+        // Shebang-juke override: when the shebang claims a different scripting
+        // language than the file's extension implies, and both languages are
+        // plausible (script ↔ script), prefer the extension. The shebang is
+        // a 12-byte string an attacker can prepend to any file; the extension
+        // is what the user/loader treats the file as. JavaScript ".js" carrying
+        // a "#!/bin/bash" shebang is a textbook static-analysis evasion seen
+        // in the npm xmlrpc supply-chain compromise (2024) and similar.
+        if source == DetectionSource::Shebang {
+            if let Some(ext_type) = ext_ft {
+                if ext_type != file_type && is_shebang_juke(file_type, ext_type) {
+                    // Distinct source variant lets callers tell the juke case
+                    // apart from a normal shebang detection. ext_match stores
+                    // the type the shebang claimed.
+                    return Some(Detection {
+                        file_type: ext_type,
+                        source: DetectionSource::ExtensionOverridesShebang,
+                        ext_match: ExtensionMatch::Different(file_type),
+                    });
+                }
+            }
+        }
+
         let ext_match = match ext_ft {
             Some(e) if e != file_type => ExtensionMatch::Different(e),
             None if path.extension().is_some() => ExtensionMatch::Unknown,
@@ -609,11 +667,32 @@ mod tests {
     }
 
     #[test]
-    fn shell_shebang_overrides_ext() {
+    fn script_extension_overrides_shell_shebang_juke() {
+        // .py with a bash shebang: the shebang is a static-analysis-evasion
+        // juke, the extension is what the user/loader treats the file as.
+        // Trust the extension; flag the mismatch.
         let det = detect(Path::new("script.py"), b"#!/bin/bash\necho hello\n").unwrap();
-        assert_eq!(det.file_type, FileType::Shell);
+        assert_eq!(det.file_type, FileType::Python);
         assert!(det.extension_mismatch());
-        assert_eq!(det.extension_type(), Some(FileType::Python));
+        assert_eq!(det.extension_type(), Some(FileType::Shell));
+    }
+
+    #[test]
+    fn js_extension_overrides_bash_shebang_juke() {
+        // npm xmlrpc / xmrdropper pattern.
+        let det = detect(Path::new("validator.js"), b"#!/bin/bash\nconst fs = require('fs');\n")
+            .unwrap();
+        assert_eq!(det.file_type, FileType::JavaScript);
+        assert!(det.extension_mismatch());
+        assert_eq!(det.extension_type(), Some(FileType::Shell));
+    }
+
+    #[test]
+    fn shell_extension_with_shell_shebang_no_juke() {
+        // .sh with bash shebang: not a juke, no override.
+        let det = detect(Path::new("script.sh"), b"#!/bin/bash\necho hello\n").unwrap();
+        assert_eq!(det.file_type, FileType::Shell);
+        assert!(!det.extension_mismatch());
     }
 
     #[test]

@@ -772,6 +772,7 @@ dependencies = [
  "lnk",
  "lru",
  "malecule",
+ "md-5",
  "memchr",
  "memmap2",
  "multer",

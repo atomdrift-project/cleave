@@ -406,7 +406,7 @@ impl ElfAnalyzer {
                 }
                 let r2_inner = if on_rayon_worker {
                     let goblin_start = std::time::Instant::now();
-                    self.analyze_structure(&elf, data, &note_summary, &mut report);
+                    self.analyze_structure(&elf, data, &mut report);
                     self.analyze_dynamic_symbols(&elf, data, &mut report);
                     self.analyze_sections(&elf, data, &mut report);
                     goblin_ms = goblin_start.elapsed().as_millis();
@@ -452,7 +452,7 @@ impl ElfAnalyzer {
                         },
                         || {
                             let goblin_start = std::time::Instant::now();
-                            self.analyze_structure(&elf, data, &note_summary, &mut report);
+                            self.analyze_structure(&elf, data, &mut report);
                             self.analyze_dynamic_symbols(&elf, data, &mut report);
                             self.analyze_sections(&elf, data, &mut report);
                             goblin_ms = goblin_start.elapsed().as_millis();
@@ -934,7 +934,6 @@ impl ElfAnalyzer {
         &self,
         elf: &Elf<'a>,
         data: &[u8],
-        note_summary: &ElfNoteSummary,
         report: &mut AnalysisReport,
     ) {
         // Binary format
@@ -994,73 +993,17 @@ impl ElfAnalyzer {
             });
         }
 
-        if let Some(interpreter) = elf.interpreter {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::elf-interpreter",
-                "ELF program interpreter present",
-                "pt_interp",
-                interpreter.to_string(),
-            );
-        }
+        // ELF dynamic-linking metadata (interpreter, soname, needed
+        // libs, rpath, runpath) is now emitted by YAML traits in
+        // `metadata/binary/linking/runtime/elf.yaml` reading from the
+        // binary kv tree (`elf.{interpreter,soname,needed,rpath,runpath}`).
+        // The kv tree is populated by `compute_elf_metrics` →
+        // `analyzers::binary_kv::elf_section`.
 
-        if let Some(soname) = elf.soname {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::elf-soname",
-                "ELF SONAME present",
-                "dt_soname",
-                soname.to_string(),
-            );
-        }
-
-        for needed in &elf.libraries {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::elf-needed-lib",
-                "ELF needed library",
-                "dt_needed",
-                (*needed).to_string(),
-            );
-        }
-
-        for rpath in &elf.rpaths {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::elf-rpath",
-                "ELF RPATH entry",
-                "dt_rpath",
-                (*rpath).to_string(),
-            );
-        }
-
-        for runpath in &elf.runpaths {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::elf-runpath",
-                "ELF RUNPATH entry",
-                "dt_runpath",
-                (*runpath).to_string(),
-            );
-        }
-
-        if let Some(build_id) = &note_summary.build_id {
-            report.findings.push(
-                Finding::structural(
-                    "metadata/build/reproducible::elf-build-id".to_string(),
-                    "ELF GNU build-id note present".to_string(),
-                    1.0,
-                )
-                .with_criticality(Criticality::Baseline)
-                .with_evidence(vec![Evidence {
-                    method: "note".to_string(),
-                    source: "bounded-elf-note-scanner".to_string(),
-                    value: hex::encode(build_id),
-                    location: None,
-                    ..Default::default()
-                }]),
-            );
-        }
+        // ELF GNU build-id is now emitted by the YAML trait
+        // `metadata/build/reproducible::elf-build-id` reading from the
+        // binary kv tree (`debug.build_id` — populated by
+        // `compute_elf_metrics`).
 
         for section in &elf.section_headers {
             let Some(name) = elf.shdr_strtab.get_at(section.sh_name) else {
@@ -1255,6 +1198,20 @@ impl ElfAnalyzer {
         use goblin::elf::program_header::{PF_X, PT_GNU_RELRO, PT_GNU_STACK, PT_LOAD};
         use goblin::elf::sym::STB_LOCAL;
 
+        // RPATH/RUNPATH entries from goblin arrive as one Vec entry per
+        // DT_*PATH dynamic tag, but each entry is itself a `:`-separated
+        // list of paths.  Split so each path is its own string — that's
+        // the form trait authors and downstream tooling expect.
+        let split_paths = |entries: &[&str]| -> Vec<String> {
+            entries
+                .iter()
+                .flat_map(|e| e.split(':'))
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string)
+                .collect()
+        };
+
         let mut metrics = ElfMetrics {
             e_type: elf.header.e_type as u32,
             e_machine: elf.header.e_machine as u32,
@@ -1265,6 +1222,10 @@ impl ElfAnalyzer {
             section_header_count: elf.section_headers.len() as u32,
             has_interpreter: elf.interpreter.is_some(),
             has_soname: elf.soname.is_some(),
+            soname: elf.soname.map(str::to_string),
+            needed: elf.libraries.iter().map(|s| (*s).to_string()).collect(),
+            rpaths: split_paths(&elf.rpaths),
+            runpaths: split_paths(&elf.runpaths),
             rpath_count: elf.rpaths.len() as u32,
             runpath_count: elf.runpaths.len() as u32,
             dynsym_count: elf.dynsyms.len() as u32,
@@ -1406,6 +1367,7 @@ impl ElfAnalyzer {
         if let Some(build_id) = &note_summary.build_id {
             metrics.build_id_present = true;
             metrics.build_id_length = build_id.len() as u32;
+            metrics.build_id = Some(hex::encode(build_id));
         }
 
         metrics

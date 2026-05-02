@@ -1395,6 +1395,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
+            // Populate the binary kv tree *before* the capability
+            // mapper runs so `type: kv` traits resolve against
+            // `report.kv_tree` (e.g. signing.team_id, build.is_pie).
+            analyzers::binary_kv::attach_to_report(&mut report);
+            analyzers::binary_extractors::augment_report(&mut report, eval_data);
             set_phase("macho:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -1434,6 +1439,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
+            // Populate `report.kv_tree` from already-extracted ELF
+            // metrics (entry_section, build_id, RELRO, canary, etc.)
+            // before traits run.  Format-specific extractors (B0.5
+            // .comment, B3 DWARF) layer additional sections on top.
+            analyzers::binary_kv::attach_to_report(&mut report);
+            analyzers::binary_extractors::augment_report(&mut report, file_data);
             set_phase("elf:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -1478,6 +1489,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let mut report = struct_result?;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
+            // Populate `report.kv_tree` from already-extracted PE
+            // metrics (PDB path, signing flags, etc.) before traits
+            // run.  B2 layers VERSIONINFO / Rich header / imphash on
+            // top via `binary_kv::extend_with`.
+            analyzers::binary_kv::attach_to_report(&mut report);
+            analyzers::binary_extractors::augment_report(&mut report, file_data);
             set_phase("pe:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -1549,14 +1566,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 
     // Add finding for extension/content mismatch if detected
-    if let Some((expected, actual)) = mismatch {
+    if let Some((expected, actual, is_juke)) = mismatch {
+        let (desc, evidence_value) = if is_juke {
+            (
+                format!("Shebang claims {} but file is {} (extension juke)", actual, expected),
+                format!("file={}, shebang={}", expected, actual),
+            )
+        } else {
+            (
+                format!("File extension claims {} but content is {}", expected, actual),
+                format!("expected={}, actual={}", expected, actual),
+            )
+        };
         report.findings.push(types::Finding {
             id: "metadata/file-extension-mismatch".to_string(),
             kind: types::FindingKind::Indicator,
-            desc: format!(
-                "File extension claims {} but content is {}",
-                expected, actual
-            ),
+            desc,
             conf: 1.0,
             crit: extension_content_mismatch_criticality(&expected, &actual),
             mbc: None,
@@ -1565,7 +1590,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             evidence: vec![types::Evidence {
                 method: "magic-byte".to_string(),
                 source: "cleave".to_string(),
-                value: format!("expected={}, actual={}", expected, actual),
+                value: evidence_value,
                 location: None,
                 ..Default::default()
             }],

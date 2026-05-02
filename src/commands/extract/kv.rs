@@ -17,8 +17,11 @@
 //! The emitted paths use the same syntax accepted by `test-match --type kv
 //! --kv-path`, so the output doubles as a discovery tool for authoring kv rules.
 
+use crate::analyzers;
+use crate::analyzers::binary_kv;
 use crate::analyzers::office::office_kv;
 use crate::analyzers::pdf::pdf_kv;
+use crate::analyzers::FileType;
 use crate::cli;
 use crate::composite_rules::evaluators::kv::{
     detect_format, navigate, parse_path, parse_structured_content, StructuredFormat,
@@ -57,12 +60,14 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
         (StructuredFormat::Json, rtf_value)
     } else if let Some(pdf_value) = pdf_kv::extract_pdf_kv(&content) {
         (StructuredFormat::Json, pdf_value)
+    } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content) {
+        (StructuredFormat::Json, binary_value)
     } else {
         let Some((detected, parsed)) = parse_structured_content(path, &content) else {
             let format = detect_format(path, &content);
             if format == StructuredFormat::Unknown {
                 anyhow::bail!(
-                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, or PDF): {}",
+                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, PDF, or PE/ELF/Mach-O binary): {}",
                     target
                 );
             }
@@ -156,6 +161,34 @@ fn format_output(
             Ok(out)
         }
     }
+}
+
+/// Run the appropriate binary analyzer (PE / ELF / Mach-O) end-to-
+/// end and return the synthesized kv tree from `report.kv_tree`.
+/// Returns `None` for non-binary input or when the analyzer fails.
+///
+/// This is heavier than the document kv extractors because the
+/// binary metrics need a structural analysis pass to populate the
+/// fields the kv builder reads — the analyzer crate doesn't yet
+/// expose a metrics-only fast path.  Acceptable for `cleave kv`
+/// (interactive trait-authoring tool); real analysis flows
+/// already go through the same path and pay the cost once.
+fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
+    let detected = analyzers::detect_file_type_from_data(path, content);
+    if !matches!(detected, FileType::Pe | FileType::Elf | FileType::MachO) {
+        return None;
+    }
+    let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
+    let mut report = analyzer.analyze(path).ok()?;
+    // The analyzer's `analyze()` trait method is shorter than the
+    // full lib.rs pipeline — it doesn't run the binary_kv +
+    // binary_extractors hooks.  Invoke them here so `cleave kv`
+    // returns the same kv tree that `cleave analyze` would emit
+    // (including the augmenting `.comment` / sanitizer detections
+    // layered onto the metrics-derived base).
+    binary_kv::attach_to_report(&mut report);
+    analyzers::binary_extractors::augment_report(&mut report, content);
+    report.kv_tree.as_deref().cloned()
 }
 
 fn render_value(value: &Value) -> String {

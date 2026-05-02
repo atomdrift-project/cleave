@@ -80,6 +80,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "behaviors",
     "component",
     "components",
+    "commands",
     "category",   // dumping ground
     "combos",     // vague
     "code",       // vague

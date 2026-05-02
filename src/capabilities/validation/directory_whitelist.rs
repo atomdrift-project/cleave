@@ -284,8 +284,10 @@ const ALLOWED_MB_DYLIB: &[&str] = &["enumerate", "library", "load", "lookup"];
 
 /// Allowed subdirectories in micro-behaviors/fs/
 const ALLOWED_MB_FS: &[&str] = &[
+    "acl",
     "attributes",
     "chmod",
+    "chown",
     "config",
     "delete",
     "device",

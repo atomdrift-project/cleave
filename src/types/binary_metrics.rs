@@ -760,9 +760,40 @@ pub struct PeMetrics {
     /// Number of debug directory entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_directory_entries: u32,
+    /// Sorted, deduplicated list of IMAGE_DEBUG_TYPE_* values present in
+    /// the Debug Directory.  Surfaced verbatim so trait authors / ML can
+    /// learn arbitrary patterns; derived booleans below name the
+    /// supply-chain-relevant ones.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub debug_directory_types: Vec<u32>,
+    /// IMAGE_DEBUG_TYPE_REPRO (16) present — vendor explicitly opted into
+    /// deterministic / reproducible builds. A vendor that previously set
+    /// this and stops is a supply-chain swap signal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_reproducible_build: bool,
+    /// IMAGE_DEBUG_TYPE_POGO (13) present — Profile-Guided Optimization
+    /// trained data leaked into the binary. Characteristic of release
+    /// MSVC builds with `/LTCG /PGO`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_pogo: bool,
+    /// IMAGE_DEBUG_TYPE_ILTCG (14) present — Incremental Link-Time
+    /// Code Generation marker.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_iltcg: bool,
+    /// IMAGE_DEBUG_TYPE_VC_FEATURE (12) present — MSVC feature counts.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_vc_feature: bool,
     /// PDB path from CodeView debug info, if present
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdb_path: Option<String>,
+    /// CodeView PDB GUID (RSDS / NB10) — the per-build identifier that
+    /// links a PE to its PDB. Hex string, no separators. Different per
+    /// build even for the same source; rotates on every link.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codeview_guid: Option<String>,
+    /// CodeView PDB age — incremented per-edit by some toolchains.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub codeview_age: u32,
     /// Number of attribute certificates
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub certificate_count: u32,

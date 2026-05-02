@@ -46,13 +46,14 @@
 //!   signature_valid         bool
 //!   hardened_runtime        bool         (Mach-O)
 //!   allow_jit               bool         (Mach-O)
-//!   catalog                 "authenticode" | "apple_codesign"           (B4)
-//!   type                    "adhoc" | "developer-id" | "platform"       (B4 — Mach-O)
-//!   signer_subject          "CN=Adobe Inc., ..."                        (B4)
-//!   authorities[]           ["Apple Root CA", ...]                      (B4 — Mach-O cert chain)
-//!   signer_issuer           "CN=DigiCert Trusted G4 Code Signing ..."   (planned — PE)
-//!   signer_thumbprint       "<hex>"                                     (planned — PE)
-//!   signing_time            "<ISO 8601>"                                (planned)
+//!   catalog                 "authenticode" | "apple_codesign"
+//!   type                    "adhoc" | "developer-id" | "platform"       (Mach-O)
+//!   signer_subject          "Adobe Inc." | "Microsoft Corporation"      (PE+Mach-O)
+//!   authorities[]           ["Apple Root CA", ...]                      (Mach-O cert chain)
+//!   signing_time            Unix epoch seconds                          (PE Authenticode)
+//!   signed_before_built     bool — re-sign / replay attack flag
+//!   signer_issuer           "CN=DigiCert Trusted G4 Code Signing ..."   (planned)
+//!   signer_thumbprint       "<hex>"                                     (planned)
 //!   countersign_time        "<ISO 8601>"                                (planned)
 //!   team_id                 "9XQGPJ8B7K"                                (B4 — Mach-O)
 //!   bundle_identifier       "com.example.app"                           (B4)
@@ -68,6 +69,21 @@
 //!   comp_dir                "/home/dev/proj/build"                      (B3)
 //!
 //! pe:                       PE-specific
+//!   timestamp               COFF TimeDateStamp (Unix epoch seconds; 0 = deterministic)
+//!   timestamp_is_zero       bool — explicit deterministic-build flag
+//!   checksum                "0x........" — populated only when set
+//!   linker_version          "14.39"
+//!   dll_characteristics:    decoded named flags (only true ones present)
+//!     high_entropy_va, dynamic_base (ASLR), force_integrity,
+//!     nx_compat (DEP), no_isolation, no_seh, no_bind, appcontainer,
+//!     wdm_driver, guard_cf (Control Flow Guard), terminal_server_aware
+//!   debug_directory_types[] [16, 13, ...] — sorted IMAGE_DEBUG_TYPE_* values
+//!   is_reproducible_build   bool — IMAGE_DEBUG_TYPE_REPRO (16) present
+//!   has_pogo                bool — IMAGE_DEBUG_TYPE_POGO (13) present (PGO data)
+//!   has_iltcg               bool — IMAGE_DEBUG_TYPE_ILTCG (14) present
+//!   has_vc_feature          bool — IMAGE_DEBUG_TYPE_VC_FEATURE (12) present
+//!   codeview_guid           "XXXX-XXXX-..." — RSDS PDB age GUID
+//!   codeview_age            integer — PDB age counter
 //!   rich_header.entries[]   [{ product_id, product_name, build_number, use_count }, ...]
 //!   rich_header.xor_key     "0x..."
 //!   version_info.{...}      snake_case'd VS_VERSIONINFO StringTable
@@ -221,6 +237,40 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
             }
         }
     }
+    // PE Authenticode primary signer (Mach-O leaf-cert CN is surfaced
+    // via the `binary_extractors` path; deep_merge gives macho-side
+    // values precedence when both populate the field).
+    if let Some(pe) = metrics.pe.as_ref() {
+        if let Some(signer) = pe.primary_signer.as_deref() {
+            if !signer.is_empty() {
+                out.insert("signer_subject".into(), json!(signer));
+            }
+        } else if let Some(signer) = pe.signer.as_deref() {
+            if !signer.is_empty() {
+                out.insert("signer_subject".into(), json!(signer));
+            }
+        }
+    }
+
+    // PE-specific signing fields: timestamp + before-build sanity flag.
+    if let Some(pe) = metrics.pe.as_ref() {
+        if pe.signing_time != 0 {
+            out.insert("signing_time".into(), json!(pe.signing_time));
+        }
+        if pe.signing_time_before_timestamp {
+            // Signed before linked = re-signed binary or stripped/replayed
+            // signature. Strong supply-chain swap signal.
+            out.insert("signed_before_built".into(), json!(true));
+        }
+        // Cross-format catalog identifier so trait authors can
+        // disambiguate Mach-O vs PE Authenticode without checking
+        // file_type.  PE-side signature presence comes from the
+        // shared `binary.has_signature` flag set above.
+        if metrics.binary.as_ref().is_some_and(|b| b.has_signature) {
+            out.entry("catalog".to_string())
+                .or_insert_with(|| json!("authenticode"));
+        }
+    }
 
     // Mach-O hardened runtime / JIT entitlement live on MachoMetrics
     // as flat booleans; surface them under the unified signing tree
@@ -277,11 +327,114 @@ fn debug_section(report: &AnalysisReport) -> Map<String, Value> {
 fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     let metrics = report.metrics.as_ref()?;
     let pe = metrics.pe.as_ref()?;
-    // Reserved for B2 string-typed additions (VERSIONINFO, Rich
-    // header decoded entries, imphash). Subsystem / characteristics
-    // remain on numeric metrics for now.
-    let _ = pe;
-    None
+    let mut out = Map::new();
+
+    // Decode DLL characteristics into named flags. The raw bitfield is
+    // also kept for ML, but trait authors can target the named bools
+    // directly. Defaults zero across all flags drop the subtree.
+    if pe.dll_characteristics != 0 {
+        let dc = pe.dll_characteristics;
+        let mut flags = Map::new();
+        if dc & 0x0020 != 0 {
+            flags.insert("high_entropy_va".into(), json!(true));
+        }
+        if dc & 0x0040 != 0 {
+            flags.insert("dynamic_base".into(), json!(true));
+        }
+        if dc & 0x0080 != 0 {
+            flags.insert("force_integrity".into(), json!(true));
+        }
+        if dc & 0x0100 != 0 {
+            flags.insert("nx_compat".into(), json!(true));
+        }
+        if dc & 0x0200 != 0 {
+            flags.insert("no_isolation".into(), json!(true));
+        }
+        if dc & 0x0400 != 0 {
+            flags.insert("no_seh".into(), json!(true));
+        }
+        if dc & 0x0800 != 0 {
+            flags.insert("no_bind".into(), json!(true));
+        }
+        if dc & 0x1000 != 0 {
+            flags.insert("appcontainer".into(), json!(true));
+        }
+        if dc & 0x2000 != 0 {
+            flags.insert("wdm_driver".into(), json!(true));
+        }
+        if dc & 0x4000 != 0 {
+            flags.insert("guard_cf".into(), json!(true));
+        }
+        if dc & 0x8000 != 0 {
+            flags.insert("terminal_server_aware".into(), json!(true));
+        }
+        if !flags.is_empty() {
+            out.insert("dll_characteristics".into(), Value::Object(flags));
+        }
+    }
+
+    // Debug Directory metadata. The Reproducible flag is the
+    // supply-chain signal — vendors that previously set it and
+    // stop are visibly tampered. POGO + ILTCG reveal MSVC release
+    // builds with PGO/incremental link-time codegen.
+    if !pe.debug_directory_types.is_empty() {
+        out.insert(
+            "debug_directory_types".into(),
+            json!(pe.debug_directory_types.clone()),
+        );
+    }
+    if pe.is_reproducible_build {
+        out.insert("is_reproducible_build".into(), json!(true));
+    }
+    if pe.has_pogo {
+        out.insert("has_pogo".into(), json!(true));
+    }
+    if pe.has_iltcg {
+        out.insert("has_iltcg".into(), json!(true));
+    }
+    if pe.has_vc_feature {
+        out.insert("has_vc_feature".into(), json!(true));
+    }
+    if let Some(guid) = pe.codeview_guid.as_deref() {
+        if !guid.is_empty() {
+            out.insert("codeview_guid".into(), json!(guid));
+            if pe.codeview_age > 0 {
+                out.insert("codeview_age".into(), json!(pe.codeview_age));
+            }
+        }
+    }
+
+    // Linker version — pair of (major, minor). Composes with Rich
+    // header to identify the exact MSVC link-time toolchain.
+    if pe.linker_major_version > 0 || pe.linker_minor_version > 0 {
+        out.insert(
+            "linker_version".into(),
+            json!(format!(
+                "{}.{}",
+                pe.linker_major_version, pe.linker_minor_version
+            )),
+        );
+    }
+
+    // COFF timestamp — the canonical "when was this linked" field.
+    // Zero / hash-based values indicate deterministic builds.
+    if pe.timestamp != 0 {
+        out.insert("timestamp".into(), json!(pe.timestamp));
+    }
+    if pe.timestamp_is_zero {
+        out.insert("timestamp_is_zero".into(), json!(true));
+    }
+
+    // Optional-header checksum. Most modern compilers leave this 0;
+    // populated values identify Windows-specific link toolchains.
+    if pe.checksum_present {
+        out.insert("checksum".into(), json!(format!("0x{:08x}", pe.checksum)));
+    }
+
+    if out.is_empty() {
+        return None;
+    }
+    Some(out)
 }
 
 fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {

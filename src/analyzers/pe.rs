@@ -378,6 +378,21 @@ fn pdb_filename(bytes: &[u8]) -> Option<String> {
     }
 }
 
+/// Format the 16-byte PDB 7.0 (RSDS) signature as a canonical hyphenated
+/// GUID. The first three groups are little-endian-encoded on disk; the
+/// last two are big-endian. This matches what `dumpbin /headers` and
+/// `pdbcrack` print, and what the PDB itself stores in its age stream.
+fn format_pdb_guid(sig: &[u8; 16]) -> String {
+    format!(
+        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
+        sig[3], sig[2], sig[1], sig[0],
+        sig[5], sig[4],
+        sig[7], sig[6],
+        sig[8], sig[9],
+        sig[10], sig[11], sig[12], sig[13], sig[14], sig[15],
+    )
+}
+
 fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
     const SIGNING_TIME_OID: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
 
@@ -1842,10 +1857,34 @@ impl PEAnalyzer {
                     .iter()
                     .filter(|entry| entry.time_date_stamp != 0)
                     .count() as u32;
+
+                // Sorted, deduplicated list of DEBUG_TYPE_* values.
+                let mut types: Vec<u32> = entries
+                    .iter()
+                    .map(|entry| entry.data_type)
+                    .collect();
+                types.sort_unstable();
+                types.dedup();
+                // Named flags for the supply-chain-relevant types.
+                // PE/COFF spec: 12=VC_FEATURE, 13=POGO, 14=ILTCG, 16=REPRO.
+                metrics.has_vc_feature = types.contains(&12);
+                metrics.has_pogo = types.contains(&13);
+                metrics.has_iltcg = types.contains(&14);
+                metrics.is_reproducible_build = types.contains(&16);
+                metrics.debug_directory_types = types;
+
                 if let Some(info) = debug_data.codeview_pdb70_debug_info {
                     metrics.pdb_path = pdb_filename(info.filename);
+                    // Format the 16-byte signature as a canonical
+                    // hyphenated GUID so trait authors can match it
+                    // directly against the PDB's age GUID.
+                    metrics.codeview_guid = Some(format_pdb_guid(&info.signature));
+                    metrics.codeview_age = info.age;
                 } else if let Some(info) = debug_data.codeview_pdb20_debug_info {
                     metrics.pdb_path = pdb_filename(info.filename);
+                    // PDB 2.0 uses a 32-bit signature, no GUID.
+                    metrics.codeview_guid = Some(format!("{:08x}", info.signature));
+                    metrics.codeview_age = info.age;
                 }
             }
 

@@ -321,11 +321,23 @@ pub(crate) fn extract_version_info(data: &[u8]) -> VersionInfo {
     for key in CANONICAL_VERSION_KEYS {
         let key_utf16 = utf16le(key);
         if let Some(pos) = find_subslice(window, &key_utf16) {
-            // `utf16le()` already appends the U+0000 NUL — walk
-            // straight past the key bytes, then align up to the
-            // next 4-byte boundary before reading the value.
+            // PE/COFF VS_VERSIONINFO String entry layout:
+            //   WORD wLength | WORD wValueLength | WORD wType  (6 bytes)
+            //   WCHAR szKey[]  (NUL-terminated)
+            //   WORD Padding[] aligning the *value* to a 4-byte boundary
+            //   *measured from the start of the String struct, not the
+            //   resource section*.
+            //
+            // The struct starts 6 bytes before the key.  If we align
+            // `after_key` from the window start instead of from the
+            // struct start, we add 2 phantom bytes of padding whenever
+            // the struct happens to begin at an offset where
+            // `(struct_start - window_start) % 4 == 2`, which drops the
+            // first WCHAR of the value (e.g. `WinRT.Runtime.dll` →
+            // `inRT.Runtime.dll`).
+            let struct_start = pos.saturating_sub(6);
             let after_key = pos + key_utf16.len();
-            let aligned = align_up_4(after_key);
+            let aligned = struct_start + align_up_4(after_key - struct_start);
             if aligned + 2 > window.len() {
                 continue;
             }
@@ -492,20 +504,30 @@ mod tests {
     }
 
     /// Build a minimal binary buffer with a UTF-16LE
-    /// `VS_VERSION_INFO\0` anchor + two StringTable entries.
+    /// `VS_VERSION_INFO\0` anchor + StringTable entries laid out per
+    /// the PE/COFF spec: each String entry has a 6-byte header
+    /// (wLength, wValueLength, wType) preceding the key, and the
+    /// value is padded to a 4-byte boundary measured from the start
+    /// of the String struct (NOT from the resource section / window).
     fn build_versioninfo_buffer(pairs: &[(&str, &str)]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(&utf16le("VS_VERSION_INFO"));
         // Some FixedFileInfo padding (52 bytes).
         buf.extend_from_slice(&[0u8; 52]);
         for (k, v) in pairs {
-            // Pad to 4-byte boundary before each key.
+            // Each String struct starts on a 4-byte boundary (relative
+            // to the resource section, which is page-aligned).
             while buf.len() % 4 != 0 {
                 buf.push(0);
             }
+            let struct_start = buf.len();
+            // 6-byte header (wLength, wValueLength, wType) — values
+            // don't matter for the extractor, which navigates by
+            // string anchors.
+            buf.extend_from_slice(&[0u8; 6]);
             buf.extend_from_slice(&utf16le(k));
-            // Pad to 4-byte boundary before value.
-            while buf.len() % 4 != 0 {
+            // Value padded to align it 4-byte from struct_start.
+            while (buf.len() - struct_start) % 4 != 0 {
                 buf.push(0);
             }
             buf.extend_from_slice(&utf16le(v));
@@ -550,6 +572,38 @@ mod tests {
         assert_eq!(
             info.get("CompanyName").map(String::as_str),
             Some("Иван Иванов")
+        );
+    }
+
+    #[test]
+    fn extract_version_info_does_not_drop_first_value_char() {
+        // Regression: real Microsoft DLLs were producing
+        // `inRT.Runtime.dll` instead of `WinRT.Runtime.dll` because
+        // the value-padding alignment was computed from the window
+        // start instead of from the String struct start.  Pick keys
+        // whose lengths force the off-by-2 to manifest.
+        let buf = build_versioninfo_buffer(&[
+            ("OriginalFilename", "WinRT.Runtime.dll"),
+            ("LegalCopyright", "Copyright (c) Microsoft Corporation"),
+            ("ProductName", "Windows Runtime"),
+            ("CompanyName", "Microsoft Corporation"),
+        ]);
+        let info = extract_version_info(&buf);
+        assert_eq!(
+            info.get("OriginalFilename").map(String::as_str),
+            Some("WinRT.Runtime.dll")
+        );
+        assert_eq!(
+            info.get("LegalCopyright").map(String::as_str),
+            Some("Copyright (c) Microsoft Corporation")
+        );
+        assert_eq!(
+            info.get("ProductName").map(String::as_str),
+            Some("Windows Runtime")
+        );
+        assert_eq!(
+            info.get("CompanyName").map(String::as_str),
+            Some("Microsoft Corporation")
         );
     }
 

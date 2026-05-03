@@ -132,7 +132,10 @@ pub enum FileStatus {
 }
 
 /// Generic per-scope diff. Every scope produces this shape over its own item
-/// type `T`. ROC is derived from the four counts at format time.
+/// type `T`. The `roc` is computed scope-specifically: traits weight by
+/// `criticality.score_weight() * conf`, metrics and kv weight by relative
+/// magnitude of value change, and symbols/strings/sections use raw counts.
+/// See [`crate::diff::scopes`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ScopeDiff<T> {
     /// Items present only in the new side.
@@ -144,14 +147,34 @@ pub struct ScopeDiff<T> {
     /// Items present on both sides with at least one differing field.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub changed: Vec<Changed<T>>,
-    /// Item count on the old side (total, before truncation).
+    /// Raw item count on the old side (total, before truncation).
     #[serde(default, skip_serializing_if = "super::is_zero_u32")]
     pub old_count: u32,
-    /// Item count on the new side (total, before truncation).
+    /// Raw item count on the new side (total, before truncation).
     #[serde(default, skip_serializing_if = "super::is_zero_u32")]
     pub new_count: u32,
+    /// Scope-specific weight on the old side. Equal to `old_count` for
+    /// scopes whose change is binary (symbols/strings/sections); equal to
+    /// the score-weighted total for traits; equal to `old_count` for
+    /// metrics/kv (where weight is per-change magnitude, not per-item).
+    #[serde(default, skip_serializing_if = "super::is_zero_f32")]
+    pub old_weight: f32,
+    /// Scope-specific weight on the new side; see `old_weight`.
+    #[serde(default, skip_serializing_if = "super::is_zero_f32")]
+    pub new_weight: f32,
+    /// Scope-specific weight summed across all changes. For traits,
+    /// `crit.score_weight() * conf` per added/removed plus the absolute
+    /// score delta for `changed`. For metrics/kv, `|Δ|/max(|old|,|new|)`
+    /// per numeric change, `1.0` for boolean/string flips and add/removes.
+    /// For symbols/strings/sections, `added + removed + changed`.
+    #[serde(default, skip_serializing_if = "super::is_zero_f32")]
+    pub change_weight: f32,
+    /// Rate of change in `[0.0, 1.0]`. `change_weight / max(old_weight, new_weight)`,
+    /// clamped. `0.0` when both weights are zero.
+    #[serde(default, skip_serializing_if = "super::is_zero_f32")]
+    pub roc: f32,
     /// True when one or more of `added`/`removed`/`changed` was capped by
-    /// `--limit-changes`. The counts above remain accurate.
+    /// `--limit-changes`. Counts and weights remain accurate.
     #[serde(default, skip_serializing_if = "super::is_false")]
     pub truncated: bool,
 }
@@ -164,30 +187,22 @@ impl<T> Default for ScopeDiff<T> {
             changed: Vec::new(),
             old_count: 0,
             new_count: 0,
+            old_weight: 0.0,
+            new_weight: 0.0,
+            change_weight: 0.0,
+            roc: 0.0,
             truncated: false,
         }
     }
 }
 
 impl<T> ScopeDiff<T> {
-    /// Total number of changes (`added + removed + changed`), un-capped.
-    /// Counts are taken from the in-memory vectors after any truncation, so
-    /// callers that need pre-truncation totals should consult `old_count`,
-    /// `new_count`, and the `truncated` flag.
+    /// Number of items in `added + removed + changed`. Independent of weight.
+    /// Reflects post-truncation list lengths; consult `old_count`, `new_count`,
+    /// and the `truncated` flag for pre-truncation totals.
     #[must_use]
     pub fn change_count(&self) -> u32 {
         (self.added.len() + self.removed.len() + self.changed.len()) as u32
-    }
-
-    /// Rate of change in `[0.0, 1.0]`. Returns `0.0` when both sides are empty.
-    #[must_use]
-    pub fn roc(&self) -> f32 {
-        let denom = self.old_count.max(self.new_count) as f32;
-        if denom == 0.0 {
-            0.0
-        } else {
-            self.change_count() as f32 / denom
-        }
     }
 
     /// True when the scope has no observed activity on either side.
@@ -200,6 +215,17 @@ impl<T> ScopeDiff<T> {
     #[must_use]
     pub fn has_changes(&self) -> bool {
         self.change_count() > 0
+    }
+
+    /// Recompute `roc` from the three weight fields, clamped to `[0.0, 1.0]`.
+    /// Called by the engine after pooling per-file diffs.
+    pub fn recompute_roc(&mut self) {
+        let denom = self.old_weight.max(self.new_weight);
+        self.roc = if denom <= 0.0 {
+            0.0
+        } else {
+            (self.change_weight / denom).clamp(0.0, 1.0)
+        };
     }
 }
 
@@ -308,38 +334,35 @@ mod tests {
     use super::*;
 
     #[test]
-    fn scope_diff_roc_empty() {
+    fn scope_diff_default_is_zero() {
         let d: ScopeDiff<StringChange> = ScopeDiff::default();
-        assert_eq!(d.roc(), 0.0);
+        assert_eq!(d.roc, 0.0);
         assert!(d.is_empty());
     }
 
     #[test]
-    fn scope_diff_roc_full_replacement() {
-        let mut d: ScopeDiff<StringChange> = ScopeDiff::default();
-        d.added.push(StringChange {
-            value: "a".to_string(),
-        });
-        d.removed.push(StringChange {
-            value: "b".to_string(),
-        });
-        d.old_count = 1;
-        d.new_count = 1;
-        // Two changes against max(1, 1) = 1 → roc = 2.0 / 1.0 = 2.0.
-        // ROC > 1.0 happens when an item is both added and removed against the
-        // same single-element side; this is honest and we don't clamp it.
-        assert_eq!(d.roc(), 2.0);
-    }
+    fn recompute_roc_clamps_and_handles_empty() {
+        let mut d: ScopeDiff<StringChange> = ScopeDiff {
+            old_weight: 0.0,
+            new_weight: 0.0,
+            change_weight: 5.0,
+            ..Default::default()
+        };
+        d.recompute_roc();
+        // Both weights zero ⇒ ROC stays 0 even when change_weight is positive.
+        assert_eq!(d.roc, 0.0);
 
-    #[test]
-    fn scope_diff_roc_partial() {
-        let mut d: ScopeDiff<StringChange> = ScopeDiff::default();
-        d.added.extend((0..10).map(|i| StringChange {
-            value: format!("a{i}"),
-        }));
-        d.old_count = 100;
-        d.new_count = 110;
-        assert!((d.roc() - 10.0 / 110.0).abs() < f32::EPSILON);
+        d.old_weight = 100.0;
+        d.new_weight = 110.0;
+        d.change_weight = 5.0;
+        d.recompute_roc();
+        assert!((d.roc - 5.0 / 110.0).abs() < f32::EPSILON);
+
+        // Clamp: if change_weight exceeds the larger side (transient pool
+        // arithmetic) the ROC pins at 1.0 rather than going negative or wild.
+        d.change_weight = 500.0;
+        d.recompute_roc();
+        assert_eq!(d.roc, 1.0);
     }
 
     #[test]

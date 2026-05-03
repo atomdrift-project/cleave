@@ -203,6 +203,22 @@ pub struct OoxmlMetrics {
     /// `application/vnd.ms-excel.macrosheet+xml` (XLM) declared.
     #[serde(default, skip_serializing_if = "is_false")]
     pub declares_macrosheet: bool,
+    /// Word-document container with macros — `word/vbaProject.bin`
+    /// is present in the package. Distinct from generic
+    /// `office.has_macros` because it's specific to .doc/.docm/.dotm
+    /// (vs Excel/PowerPoint).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_word_vba_document: bool,
+    /// Document references an external template (template-injection
+    /// vector). Distinct from `office.external_template_count > 0`
+    /// because some external-template references are legitimate.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_template_injection: bool,
+    /// Document carries a DDE field that invokes external commands.
+    /// Distinct from generic `office.dde_link_count > 0` because not
+    /// every DDE link is an exec command.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_dde_execution: bool,
 }
 
 /// VBA project aggregate counts.

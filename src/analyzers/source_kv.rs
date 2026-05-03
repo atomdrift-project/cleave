@@ -35,12 +35,21 @@ use crate::types::AnalysisReport;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
 
+/// Maximum string-constant entries to surface. Caps the per-file kv
+/// payload so a script with thousands of literals doesn't bloat the
+/// trait-evaluation cost.
+const MAX_STRING_CONSTANTS: usize = 256;
+
+/// Minimum string length to surface — filters out single-char and
+/// noise strings that aren't useful for trait matching.
+const MIN_STRING_LEN: usize = 6;
+
 /// Build a `source.*` subtree from the imports/exports/functions
-/// already populated on `report`. Returns `None` when none of those
-/// vectors carry data (binary-only reports get `None` here, which is
-/// correct — they have their own format-specific kv subtrees).
+/// already populated on `report`, plus optional string-constant
+/// extraction from `report.strings` and shebang detection from the
+/// raw `content`. Returns `None` when no source data is present.
 #[must_use]
-pub(crate) fn build_source_kv(report: &AnalysisReport) -> Option<Value> {
+pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -> Option<Value> {
     let mut out = Map::new();
 
     // Imports — sorted distinct symbols.
@@ -93,6 +102,32 @@ pub(crate) fn build_source_kv(report: &AnalysisReport) -> Option<Value> {
         }
     }
 
+    // String constants — distinct values from `report.strings`, capped
+    // and length-filtered. Trait authors target via regex.  Raw
+    // structural read; no AST-position filtering (which would require
+    // a per-node walk).
+    if !report.strings.is_empty() {
+        let mut strings: BTreeSet<&str> = BTreeSet::new();
+        for s in &report.strings {
+            if s.value.len() >= MIN_STRING_LEN
+                && strings.len() < MAX_STRING_CONSTANTS
+            {
+                strings.insert(s.value.as_str());
+            }
+        }
+        if !strings.is_empty() {
+            let v: Vec<&&str> = strings.iter().collect();
+            out.insert("strings".into(), json!(v));
+        }
+    }
+
+    // Shebang — first-line interpreter directive, when present.
+    if let Some(bytes) = content {
+        if let Some(shebang) = parse_shebang(bytes) {
+            out.insert("shebang".into(), json!(shebang));
+        }
+    }
+
     if out.is_empty() {
         None
     } else {
@@ -100,11 +135,34 @@ pub(crate) fn build_source_kv(report: &AnalysisReport) -> Option<Value> {
     }
 }
 
+/// Parse a `#!/path/to/interpreter [args]` shebang line, returning
+/// the full directive (without the leading `#!` and trailing newline).
+/// Returns `None` when the file doesn't start with `#!` or the line
+/// is unparseably long.
+fn parse_shebang(content: &[u8]) -> Option<String> {
+    if content.len() < 4 || &content[..2] != b"#!" {
+        return None;
+    }
+    let end = content[2..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|p| 2 + p)
+        .unwrap_or(content.len())
+        .min(2 + 256);
+    let line = &content[2..end];
+    let s = std::str::from_utf8(line).ok()?.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
 /// Stash the synthesized source kv tree on `report.kv_tree`.
 /// Idempotent: when no source data is present (binary-only file),
 /// `report.kv_tree` is left untouched.
-pub(crate) fn attach_to_report(report: &mut AnalysisReport) {
-    let Some(source) = build_source_kv(report) else {
+pub(crate) fn attach_to_report(report: &mut AnalysisReport, content: Option<&[u8]>) {
+    let Some(source) = build_source_kv(report, content) else {
         return;
     };
     let mut root = match report.kv_tree.take().map(|b| *b) {
@@ -142,7 +200,7 @@ mod tests {
     #[test]
     fn empty_report_yields_none() {
         let r = empty_report();
-        assert!(build_source_kv(&r).is_none());
+        assert!(build_source_kv(&r, None).is_none());
     }
 
     #[test]
@@ -151,7 +209,7 @@ mod tests {
         r.imports.push(Import::new("requests", Some("test".into()), "test"));
         r.imports.push(Import::new("os", Some("test".into()), "test"));
         r.imports.push(Import::new("os", Some("test".into()), "test"));
-        let v = build_source_kv(&r).expect("non-empty");
+        let v = build_source_kv(&r, None).expect("non-empty");
         let imports = v["imports"].as_array().unwrap();
         let names: Vec<&str> = imports.iter().filter_map(|x| x.as_str()).collect();
         assert_eq!(names, vec!["os", "requests"]);
@@ -171,7 +229,7 @@ mod tests {
         let mut r = empty_report();
         r.functions.push(make_function("main"));
         r.functions.push(make_function("helper"));
-        let v = build_source_kv(&r).expect("non-empty");
+        let v = build_source_kv(&r, None).expect("non-empty");
         let names: Vec<&str> = v["functions"]
             .as_array()
             .unwrap()
@@ -186,10 +244,24 @@ mod tests {
         let mut r = empty_report();
         r.imports.push(Import::new("requests", None, "test"));
         r.kv_tree = Some(Box::new(json!({"existing": "value"})));
-        attach_to_report(&mut r);
+        attach_to_report(&mut r, None);
         let kv = r.kv_tree.as_ref().unwrap();
         assert_eq!(kv["existing"], "value");
         assert!(kv["source"].is_object());
         assert!(kv["source"]["imports"].is_array());
+    }
+
+    #[test]
+    fn shebang_extracted() {
+        let r = empty_report();
+        let v = build_source_kv(&r, Some(b"#!/usr/bin/env python3\nprint('hi')\n"))
+            .expect("shebang only");
+        assert_eq!(v["shebang"], "/usr/bin/env python3");
+    }
+
+    #[test]
+    fn shebang_absent_returns_none() {
+        let r = empty_report();
+        assert!(build_source_kv(&r, Some(b"print('hi')\n")).is_none());
     }
 }

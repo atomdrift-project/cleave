@@ -117,6 +117,10 @@ impl Default for ScopeMask {
 
 /// All inputs to a per-pair diff for a single logical file. Bundles the
 /// fields each scope needs so scope functions take a single argument.
+///
+/// File size is not stored here separately — the analyze pipeline writes
+/// it to `metrics.file.size`, so it flows through with the rest of the
+/// metrics scope.
 pub(crate) struct DiffUnit {
     pub(crate) path: String,
     pub(crate) findings: Vec<Finding>,
@@ -204,12 +208,12 @@ pub fn diff_paths(
 
     let scopes = aggregate_scopes(&file_diffs, scope_mask, limit_changes);
     summary.scope_roc = ScopeRocs {
-        traits: scopes.traits.as_ref().map_or(0.0, ScopeDiff::roc),
-        metrics: scopes.metrics.as_ref().map_or(0.0, ScopeDiff::roc),
-        kv: scopes.kv.as_ref().map_or(0.0, ScopeDiff::roc),
-        symbols: scopes.symbols.as_ref().map_or(0.0, ScopeDiff::roc),
-        strings: scopes.strings.as_ref().map_or(0.0, ScopeDiff::roc),
-        sections: scopes.sections.as_ref().map_or(0.0, ScopeDiff::roc),
+        traits: scopes.traits.as_ref().map_or(0.0, |s| s.roc),
+        metrics: scopes.metrics.as_ref().map_or(0.0, |s| s.roc),
+        kv: scopes.kv.as_ref().map_or(0.0, |s| s.roc),
+        symbols: scopes.symbols.as_ref().map_or(0.0, |s| s.roc),
+        strings: scopes.strings.as_ref().map_or(0.0, |s| s.roc),
+        sections: scopes.sections.as_ref().map_or(0.0, |s| s.roc),
     };
     summary.overall_roc = mean_nonempty_rocs(&summary.scope_roc, &scopes);
 
@@ -452,12 +456,19 @@ fn aggregate_scopes(files: &[FileDiffEntry], mask: ScopeMask, limit: usize) -> S
                 out.changed.extend(s.changed.iter().cloned());
                 out.old_count += s.old_count;
                 out.new_count += s.new_count;
+                // Weights pool linearly across files; ROC is recomputed below
+                // from the program-level totals (honest pooling, not an
+                // average of per-file ROCs).
+                out.old_weight += s.old_weight;
+                out.new_weight += s.new_weight;
+                out.change_weight += s.change_weight;
                 out.truncated |= s.truncated;
             }
         }
         if !any {
             return None;
         }
+        out.recompute_roc();
         scopes::truncate(&mut out, limit);
         Some(out)
     }

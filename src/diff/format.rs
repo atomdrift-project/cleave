@@ -77,7 +77,7 @@ fn write_scope_line<T>(out: &mut String, name: &str, scope: Option<&ScopeDiff<T>
         format!("{}+", s.added.len()).bright_green(),
         format!("{}-", s.removed.len()).bright_red(),
         format!("{}~", s.changed.len()).bright_yellow(),
-        format_pct(s.roc()).bold(),
+        format_pct(s.roc).bold(),
         s.old_count.max(s.new_count),
         trunc,
     );
@@ -354,7 +354,7 @@ fn roc_tag<T>(scope: &ScopeDiff<T>) -> colored::ColoredString {
         scope.added.len(),
         scope.removed.len(),
         scope.changed.len(),
-        format_pct(scope.roc())
+        format_pct(scope.roc)
     );
     n.dimmed()
 }

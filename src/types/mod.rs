@@ -44,6 +44,7 @@ pub(crate) mod core;
 pub(crate) mod diff;
 pub mod field_paths;
 pub(crate) mod file_analysis;
+pub(crate) mod file_metrics;
 pub(crate) mod image_metrics;
 pub(crate) mod jpeg_metrics;
 pub(crate) mod language_metrics;

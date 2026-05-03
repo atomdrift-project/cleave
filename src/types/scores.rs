@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
+use super::file_metrics::FileMetrics;
 use super::image_metrics::ImageMetrics;
 use super::jpeg_metrics::JpegMetrics;
 use super::language_metrics::{
@@ -29,6 +30,13 @@ use super::{is_zero_f32, is_zero_u32};
 /// Sections are only present when applicable to the file type
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct Metrics {
+    // === Universal file-level metrics (every file type) ===
+    /// File-level metrics that apply to every file regardless of type.
+    /// Populated by the analyze pipeline post-analyzer so consumers (the
+    /// diff command in particular) can rely on `file.size` being present.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<FileMetrics>,
+
     // === Universal text metrics (all text files) ===
     /// Line counts and basic text statistics
     #[serde(skip_serializing_if = "Option::is_none")]

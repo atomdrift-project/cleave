@@ -86,6 +86,13 @@ pub(crate) fn extract_gcc_command_line(data: &[u8]) -> Option<String> {
     }
 }
 
+/// Public re-export of the internal ELF section reader so other
+/// modules (e.g. `go_buildinfo`) can fetch named sections without
+/// duplicating the parser.
+pub(crate) fn read_elf_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    read_section(data, name)
+}
+
 /// Locate a named ELF section and return its byte slice. Lenient
 /// parser — bails on malformed inputs rather than propagating
 /// errors. Caps memory; only reads section header table.
@@ -1949,6 +1956,16 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
     }
     if !info.main_path.is_empty() {
         go.insert("main_path".into(), json!(info.main_path));
+    }
+    if let Some(bid) = info.build_id.as_deref() {
+        if !bid.is_empty() {
+            go.insert("build_id".into(), json!(bid));
+        }
+    }
+    if let Some(gr) = info.go_root.as_deref() {
+        if !gr.is_empty() {
+            go.insert("go_root".into(), json!(gr));
+        }
     }
     if let Some(main) = &info.main_module {
         let mut mm = Map::new();

@@ -64,6 +64,19 @@ pub(crate) struct GoBuildInfo {
     /// time.  Keys preserved verbatim from the buildinfo (e.g.
     /// `-buildmode`, `-compiler`, `GOOS`, `vcs.revision`, `-ldflags`).
     pub build_settings: BTreeMap<String, String>,
+    /// Go's per-build content-derived ID hash from
+    /// `.note.go.buildid` (or its Mach-O / PE equivalent). Distinct
+    /// from `vcs.revision` (the git commit) and from GNU build-id
+    /// (the linker's content hash). Format is the raw action-id /
+    /// content-id pair the Go linker emits, e.g. `"abc.../def..."`.
+    pub build_id: Option<String>,
+    /// GoRoot at compile time — the Go installation path on the
+    /// builder host. Strong attribution leak: distinguishes Homebrew
+    /// (`/opt/homebrew/Cellar/go/...`, `/usr/local/Cellar/go/...`),
+    /// stock install (`/usr/local/go`), distro packages
+    /// (`/builddir/build/.../golang-...`, `/build/golang-...`), and
+    /// custom dev installs.
+    pub go_root: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -88,12 +101,12 @@ const MAX_BUILDINFO_BYTES: usize = 64 * 1024;
 /// non-Go binaries or when the header is missing/malformed.
 #[must_use]
 pub(crate) fn extract(data: &[u8]) -> Option<GoBuildInfo> {
-    let pos = find_magic(data)?;
-    if pos + 0x20 > data.len() {
+    let (buf, pos) = find_magic(data)?;
+    if pos + 0x20 > buf.len() {
         return None;
     }
-    let ptr_size = data[pos + 0x0E];
-    let flags = data[pos + 0x0F];
+    let ptr_size = buf[pos + 0x0E];
+    let flags = buf[pos + 0x0F];
 
     // Modern (Go 1.18+) varint format: flags & 2 == 2.  We don't
     // bother with the old pointer-based format — Go 1.17 has been
@@ -107,8 +120,8 @@ pub(crate) fn extract(data: &[u8]) -> Option<GoBuildInfo> {
     }
 
     let body_start = pos + 0x20;
-    let body_end = (body_start + MAX_BUILDINFO_BYTES).min(data.len());
-    let body = &data[body_start..body_end];
+    let body_end = (body_start + MAX_BUILDINFO_BYTES).min(buf.len());
+    let body = &buf[body_start..body_end];
 
     let mut cursor = 0usize;
     // The version field is always UTF-8.
@@ -173,14 +186,265 @@ pub(crate) fn extract(data: &[u8]) -> Option<GoBuildInfo> {
         }
     }
 
+    // Build ID + GoRoot are not in buildinfo — they live in
+    // separate ELF notes / scattered string-pool patterns.
+    info.build_id = extract_go_build_id(data);
+    info.go_root = extract_go_root(data);
+
     Some(info)
 }
 
-fn find_magic(data: &[u8]) -> Option<usize> {
-    // Magic is 16-byte aligned per Go runtime conventions, but
-    // we don't depend on that — direct slice search keeps us
-    // robust against header packing variations.
-    data.windows(MAGIC.len()).position(|w| w == MAGIC)
+/// Locate the Go build ID. Tries (in order):
+///   1. ELF `.note.go.buildid` section — n_type = 4, name = "Go\0\0",
+///      desc = ASCII string of form "actionID/contentID".
+///   2. The format's read-only data section (`.rodata` ELF / `__rodata`
+///      Mach-O / `.rdata` PE) — scanned for the printable
+///      `Go build ID: "<id>"` marker the Go linker emits.
+///   3. Bounded full-file fallback (first 4 MB) — only reached when
+///      the binary lacks a recognizable rodata section.
+#[must_use]
+fn extract_go_build_id(data: &[u8]) -> Option<String> {
+    if data.len() >= 4 && &data[..4] == b"\x7fELF" {
+        if let Some(id) = read_elf_go_buildid(data) {
+            return Some(id);
+        }
+    }
+    let needle = b"Go build ID: \"";
+    let scan_in = |bytes: &[u8]| -> Option<String> {
+        let pos = memchr::memmem::find(bytes, needle)?;
+        let after = &bytes[pos + needle.len()..];
+        let end = after.iter().take(256).position(|&b| b == b'"')?;
+        let id = std::str::from_utf8(&after[..end]).ok()?;
+        (!id.is_empty()).then(|| id.to_string())
+    };
+    if let Some(rodata) = read_rodata(data) {
+        if let Some(id) = scan_in(rodata) {
+            return Some(id);
+        }
+    }
+    // Last-ditch fallback for unusual layouts. Capped tight (4 MB) —
+    // when present, the marker sits in the linker-emitted runtime
+    // strings near the start of the data segment.
+    let horizon = data.len().min(4 * 1024 * 1024);
+    scan_in(&data[..horizon])
+}
+
+/// Best-effort read of the format's read-only data section. Returns
+/// `None` for unknown formats or stripped binaries; callers fall back
+/// to a bounded raw scan.
+fn read_rodata(data: &[u8]) -> Option<&[u8]> {
+    if data.len() >= 4 && &data[..4] == b"\x7fELF" {
+        return crate::analyzers::binary_extractors::read_elf_section(data, b".rodata");
+    }
+    if is_macho(data) {
+        // Newer toolchains emit `__TEXT,__const`; older `__TEXT,__rodata`.
+        return crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__const")
+            .or_else(|| crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__rodata"));
+    }
+    // PE: `.rdata` is the conventional read-only data section.
+    if data.len() >= 2 && &data[..2] == b"MZ" {
+        return read_pe_section(data, b".rdata");
+    }
+    None
+}
+
+fn is_macho(data: &[u8]) -> bool {
+    if data.len() < 4 {
+        return false;
+    }
+    matches!(
+        u32::from_le_bytes(data[..4].try_into().unwrap_or([0; 4])),
+        0xFEED_FACE | 0xFEED_FACF | 0xCEFA_EDFE | 0xCFFA_EDFE | 0xCAFE_BABE | 0xBEBA_FECA
+    )
+}
+
+/// Read `.note.go.buildid` (ELF). Note layout (LE):
+///   u32 namesz | u32 descsz | u32 type | name (padded 4) | desc (padded 4)
+/// For Go: namesz=4, name="Go\0\0", type=4, desc=ASCII id.
+fn read_elf_go_buildid(data: &[u8]) -> Option<String> {
+    let bytes = crate::analyzers::binary_extractors::read_elf_section(
+        data,
+        b".note.go.buildid",
+    )?;
+    if bytes.len() < 16 {
+        return None;
+    }
+    let namesz = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    let descsz = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let _ntype = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    let name_off = 12usize;
+    let desc_off = name_off + ((namesz + 3) & !3);
+    let desc_end = desc_off.checked_add(descsz)?;
+    if desc_end > bytes.len() {
+        return None;
+    }
+    let desc = bytes[desc_off..desc_end]
+        .split(|&b| b == 0)
+        .next()?;
+    let s = std::str::from_utf8(desc).ok()?;
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
+}
+
+/// Detect GoRoot at compile time by scanning the pclntab (where Go
+/// stores source-file paths used in stack traces) for the canonical
+/// `/src/runtime/` prefix and walking back to find the install root.
+///
+/// Section-targeted: pclntab can sit 60+ MB into a large Go service
+/// binary (kube-apiserver, Kong), so a full-file scan is wasteful.
+/// When the section can't be located (stripped binary, unknown
+/// format) we skip silently — `go_root` is best-effort attribution,
+/// not a load-bearing field.
+#[must_use]
+fn extract_go_root(data: &[u8]) -> Option<String> {
+    let pclntab = read_pclntab(data)?;
+    let needle = b"/src/runtime/";
+    let pos = memchr::memmem::find(pclntab, needle)?;
+    // Walk backwards to find the start of the path (a printable-ASCII
+    // run terminated by a non-path byte). Cap at 256 chars upstream
+    // to avoid pathological scans.
+    let mut start = pos;
+    let lo = pos.saturating_sub(256);
+    while start > lo {
+        let b = pclntab[start - 1];
+        if !is_path_byte(b) {
+            break;
+        }
+        start -= 1;
+    }
+    if start == pos {
+        return None;
+    }
+    let s = std::str::from_utf8(&pclntab[start..pos]).ok()?;
+    (!s.is_empty()).then(|| s.to_string())
+}
+
+/// Locate the Go pclntab section (line-number table — also stores
+/// source file paths). Section names by format:
+///   * ELF:    `.gopclntab`
+///   * Mach-O: `__TEXT,__gopclntab`
+///   * PE:     `.gopclntab`
+fn read_pclntab(data: &[u8]) -> Option<&[u8]> {
+    if data.len() >= 4 && &data[..4] == b"\x7fELF" {
+        return crate::analyzers::binary_extractors::read_elf_section(data, b".gopclntab");
+    }
+    if is_macho(data) {
+        return crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__gopclntab");
+    }
+    if data.len() >= 2 && &data[..2] == b"MZ" {
+        return read_pe_section(data, b".gopclntab");
+    }
+    None
+}
+
+fn is_path_byte(b: u8) -> bool {
+    matches!(b, b'/' | b'.' | b'-' | b'_' | b'+' | b':')
+        || b.is_ascii_alphanumeric()
+}
+
+/// Locate the Go buildinfo magic. Returns the buffer that contains
+/// it (either the format-specific section bytes or the original
+/// data slice) along with the offset of the magic within that
+/// buffer. Caller does all subsequent reads relative to the returned
+/// buffer — the section path avoids any full-file scan, and the
+/// fallback path makes the buffer == data so the offset is the file
+/// offset.
+fn find_magic(data: &[u8]) -> Option<(&[u8], usize)> {
+    // Modern Go (1.18+) always emits a dedicated buildinfo section
+    // for ELF / Mach-O / PE. Look there first; absence of the section
+    // for a recognizable format means this isn't a Go binary, so we
+    // skip the full-file fallback (which on a 78 MB non-Go binary
+    // costs 1+ ms of pointless SIMD scanning).
+    if let Some(format) = recognize_format(data) {
+        let section = read_buildinfo_section_for(data, format)?;
+        let rel = memchr::memmem::find(section, MAGIC)?;
+        return Some((section, rel));
+    }
+    // Raw / unknown formats: SIMD memmem fallback.
+    let pos = memchr::memmem::find(data, MAGIC)?;
+    Some((data, pos))
+}
+
+#[derive(Copy, Clone)]
+enum BinaryFormat {
+    Elf,
+    MachO,
+    Pe,
+}
+
+fn recognize_format(data: &[u8]) -> Option<BinaryFormat> {
+    if data.len() >= 4 && &data[..4] == b"\x7fELF" {
+        return Some(BinaryFormat::Elf);
+    }
+    if is_macho(data) {
+        return Some(BinaryFormat::MachO);
+    }
+    if data.len() >= 2 && &data[..2] == b"MZ" {
+        return Some(BinaryFormat::Pe);
+    }
+    None
+}
+
+fn read_buildinfo_section_for(data: &[u8], fmt: BinaryFormat) -> Option<&[u8]> {
+    match fmt {
+        BinaryFormat::Elf => {
+            crate::analyzers::binary_extractors::read_elf_section(data, b".go.buildinfo")
+        }
+        BinaryFormat::MachO => {
+            crate::analyzers::macho_extractors::find_section(data, "__DATA", "__go_buildinfo")
+                .or_else(|| {
+                    crate::analyzers::macho_extractors::find_section(
+                        data,
+                        "__DATA_CONST",
+                        "__go_buildinfo",
+                    )
+                })
+        }
+        BinaryFormat::Pe => read_pe_section(data, b".go.buildinfo"),
+    }
+}
+
+/// Minimal PE section reader — enough to fetch a named section's raw
+/// bytes without pulling goblin into this module. Returns `None` when
+/// the file isn't a recognizable PE or the named section is absent.
+fn read_pe_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
+    if data.len() < 0x40 || &data[..2] != b"MZ" {
+        return None;
+    }
+    let e_lfanew = u32::from_le_bytes(data[0x3C..0x40].try_into().ok()?) as usize;
+    if e_lfanew + 24 > data.len() || &data[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+        return None;
+    }
+    // COFF header starts at e_lfanew + 4.
+    let coff = e_lfanew + 4;
+    let num_sections = u16::from_le_bytes(data[coff + 2..coff + 4].try_into().ok()?) as usize;
+    let opt_header_size =
+        u16::from_le_bytes(data[coff + 16..coff + 18].try_into().ok()?) as usize;
+    let section_table = coff + 20 + opt_header_size;
+    let table_bytes = num_sections.checked_mul(40)?;
+    if section_table + table_bytes > data.len() {
+        return None;
+    }
+    for i in 0..num_sections {
+        let entry = &data[section_table + i * 40..section_table + (i + 1) * 40];
+        let name_field = &entry[..8];
+        // Section names are null-padded ASCII; strip trailing NULs.
+        let trimmed = name_field.split(|&b| b == 0).next().unwrap_or(&[]);
+        if trimmed != name {
+            continue;
+        }
+        let raw_size = u32::from_le_bytes(entry[16..20].try_into().ok()?) as usize;
+        let raw_ptr = u32::from_le_bytes(entry[20..24].try_into().ok()?) as usize;
+        let end = raw_ptr.checked_add(raw_size)?;
+        if end > data.len() {
+            return None;
+        }
+        return Some(&data[raw_ptr..end]);
+    }
+    None
 }
 
 fn read_varint_string(buf: &[u8], cursor: &mut usize) -> Option<String> {

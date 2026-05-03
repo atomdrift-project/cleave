@@ -537,6 +537,7 @@ impl AnalysisReport {
         file.source_code_metrics = self.source_code_metrics.clone();
         file.overlay_metrics = self.overlay_metrics.clone();
 
+        file.populate_file_metrics();
         file
     }
 
@@ -579,6 +580,7 @@ impl AnalysisReport {
         file.source_code_metrics = self.source_code_metrics;
         file.overlay_metrics = self.overlay_metrics;
 
+        file.populate_file_metrics();
         (file, nested_files, archive_contents)
     }
 }

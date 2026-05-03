@@ -283,6 +283,18 @@ impl FileAnalysis {
             }
         }
     }
+
+    /// Ensure `metrics.file.size` is set from `self.size`. Called by the
+    /// analysis pipeline post-analyzer so every file type carries this
+    /// universal metric, regardless of which analyzer ran.
+    pub(crate) fn populate_file_metrics(&mut self) {
+        let size = self.size;
+        self.metrics
+            .get_or_insert_with(super::scores::Metrics::default)
+            .file
+            .get_or_insert_with(super::file_metrics::FileMetrics::default)
+            .size = size;
+    }
 }
 
 /// Finding counts by criticality

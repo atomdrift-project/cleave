@@ -939,7 +939,7 @@ impl UnifiedSourceAnalyzer {
         // Build the `source.*` kv tree from already-extracted
         // imports/exports/functions before the trait engine runs so
         // `type: kv, path: source.imports, ...` traits can resolve.
-        super::source_kv::attach_to_report(&mut report);
+        super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
 
         // Evaluate all rules (atomic + composite) and merge into report
         self.capability_mapper.evaluate_and_merge_findings(

@@ -1981,6 +1981,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         analysis_start.elapsed(),
     );
 
+    // Universal file-level metrics — guaranteed populated regardless of which
+    // analyzer ran, so consumers (cleave diff in particular) can rely on
+    // `metrics.file.size` for every analyzed file.
+    {
+        let size = report.target.size_bytes;
+        let metrics = report.metrics.get_or_insert_with(types::scores::Metrics::default);
+        metrics
+            .file
+            .get_or_insert_with(types::file_metrics::FileMetrics::default)
+            .size = size;
+    }
+
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {
         let mut fa = report.to_file_analysis(0);

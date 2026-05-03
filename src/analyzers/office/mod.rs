@@ -1314,6 +1314,21 @@ impl OfficeAnalyzer {
             declares_macrosheet: content_types_xml
                 .contains("application/vnd.ms-excel.macrosheet+xml")
                 || content_types_xml.contains("application/vnd.ms-excel.intlmacrosheet"),
+            // word/vbaProject.bin = Word doc with VBA macros.
+            is_word_vba_document: doc
+                .entry_names
+                .iter()
+                .any(|n| n == "word/vbaProject.bin"),
+            // Template-injection: any external ref that targets an
+            // attached-template / oleObject / frame relationship.
+            has_template_injection: doc.external_refs.iter().any(|r| {
+                !r.rel_type.contains("hyperlink")
+                    && (r.rel_type.contains("attachedTemplate")
+                        || r.rel_type.contains("oleObject")
+                        || r.rel_type.contains("frame"))
+            }),
+            // DDE execution: any DDE field code observed.
+            has_dde_execution: !doc.dde_links.is_empty(),
         };
 
         // XLM count vector — only emitted when the doc is actually

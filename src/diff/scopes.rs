@@ -33,26 +33,51 @@ pub(super) fn diff_traits(old: &DiffUnit, new: &DiffUnit, limit: usize) -> Scope
     let mut diff = ScopeDiff::<TraitChange> {
         old_count: old.findings.len() as u32,
         new_count: new.findings.len() as u32,
+        old_weight: old.findings.iter().map(finding_score).sum(),
+        new_weight: new.findings.iter().map(finding_score).sum(),
         ..Default::default()
     };
 
+    let mut change_weight = 0.0_f32;
+
     for f in &new.findings {
         match old_idx.get(f.id.as_str()) {
-            None => diff.added.push(trait_change(f)),
-            Some(prev) if prev.crit != f.crit => diff.changed.push(Changed {
-                old: trait_change(prev),
-                new: trait_change(f),
-            }),
+            None => {
+                change_weight += finding_score(f);
+                diff.added.push(trait_change(f));
+            }
+            Some(prev) if prev.crit != f.crit => {
+                // Promotion or demotion: weight by the absolute score delta so
+                // that baseline → suspicious counts more than baseline → notable.
+                change_weight += (finding_score(f) - finding_score(prev)).abs();
+                diff.changed.push(Changed {
+                    old: trait_change(prev),
+                    new: trait_change(f),
+                });
+            }
             Some(_) => {}
         }
     }
     for f in &old.findings {
         if !new_idx.contains_key(f.id.as_str()) {
+            change_weight += finding_score(f);
             diff.removed.push(trait_change(f));
         }
     }
+
+    diff.change_weight = change_weight;
+    diff.recompute_roc();
     truncate(&mut diff, limit);
     diff
+}
+
+/// Per-finding score weight, mirroring `Criticality::score_weight()` from
+/// the analysis pipeline (hostile=120, suspicious=40, notable=1, others=0)
+/// scaled by confidence. Component traits contribute 0.3·conf only when
+/// referenced, but at diff time we don't have the full reference graph;
+/// 0 is the safe under-counting choice.
+fn finding_score(f: &Finding) -> f32 {
+    f.crit.score_weight() as f32 * f.conf
 }
 
 fn trait_change(f: &Finding) -> TraitChange {
@@ -77,6 +102,9 @@ pub(super) fn diff_metrics(
     new: &DiffUnit,
     limit: usize,
 ) -> ScopeDiff<MetricChange> {
+    // The analyze pipeline populates `metrics.file.size` for every file
+    // regardless of analyzer, so size shows up here naturally without any
+    // diff-time synthesis.
     let old_flat = flatten_metrics(old.metrics.as_ref());
     let new_flat = flatten_metrics(new.metrics.as_ref());
     diff_flat_paths(
@@ -98,8 +126,16 @@ fn flatten_metrics(m: Option<&crate::types::scores::Metrics>) -> Vec<(String, Va
     flatten_dotted(&value)
 }
 
-/// Flatten a JSON value into `parent.child` paths for metrics. Arrays are
-/// joined with `[i]` so paths stay matcher-syntax compatible.
+/// Flatten a JSON value into `parent.child` paths for metrics. For arrays,
+/// the representation depends on the contents:
+///
+/// * **All leaves** (numbers / strings / bools): emitted as `parent[]=<value>`
+///   entries — value-keyed so identity is *membership*. Inserting an item at
+///   the start of `imports` no longer fabricates a "change" at every shifted
+///   index; only the genuine add/remove shows up.
+/// * **Heterogeneous or nested**: fall back to indexed paths `parent[i]`.
+///   Object arrays don't have a natural member key in v1; their indices
+///   remain stable across most analyzer outputs (e.g. `needed_versions[i]`).
 fn flatten_dotted(value: &Value) -> Vec<(String, Value)> {
     let mut out = Vec::new();
     walk(value, "", &mut out);
@@ -119,14 +155,35 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
             }
         }
         Value::Array(arr) if !arr.is_empty() => {
-            for (i, v) in arr.iter().enumerate() {
-                let next = format!("{prefix}[{i}]");
-                walk(v, &next, out);
+            if arr.iter().all(is_leaf) {
+                for v in arr {
+                    out.push((format!("{prefix}[]={}", leaf_key(v)), v.clone()));
+                }
+            } else {
+                for (i, v) in arr.iter().enumerate() {
+                    let next = format!("{prefix}[{i}]");
+                    walk(v, &next, out);
+                }
             }
         }
         Value::Null => {}
         _ if prefix.is_empty() => {}
         _ => out.push((prefix.to_string(), value.clone())),
+    }
+}
+
+fn is_leaf(v: &Value) -> bool {
+    matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_))
+}
+
+/// Render a JSON leaf as a stable, path-safe string for membership encoding.
+/// Strings keep their content; numbers and bools use their canonical form.
+fn leaf_key(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        _ => String::new(),
     }
 }
 
@@ -155,7 +212,10 @@ pub(super) fn diff_kv(old: &DiffUnit, new: &DiffUnit, limit: usize) -> ScopeDiff
     )
 }
 
-/// Shared engine for path-keyed diffs (metrics, KV).
+/// Shared engine for path-keyed diffs (metrics, KV). Per-change weight is
+/// `value_change_weight`: numeric values weight by relative magnitude so that
+/// 8 bytes off a multi-megabyte field counts as ~0, while a boolean flip or
+/// add/remove counts as 1.0.
 fn diff_flat_paths<T, F>(
     old: &[(String, Value)],
     new: &[(String, Value)],
@@ -171,26 +231,72 @@ where
     let mut diff = ScopeDiff::<T> {
         old_count: old.len() as u32,
         new_count: new.len() as u32,
+        // For path-keyed scopes the denominator is the total number of paths
+        // on the larger side — every path is one "slot" of potential change.
+        old_weight: old.len() as f32,
+        new_weight: new.len() as f32,
         ..Default::default()
     };
 
+    let mut change_weight = 0.0_f32;
+
     for (path, value) in new {
         match old_idx.get(path.as_str()) {
-            None => diff.added.push(make(path, value)),
-            Some(prev) if json_neq(prev, value) => diff.changed.push(Changed {
-                old: make(path, prev),
-                new: make(path, value),
-            }),
+            None => {
+                change_weight += 1.0; // new path: full slot of change
+                diff.added.push(make(path, value));
+            }
+            Some(prev) if json_neq(prev, value) => {
+                change_weight += value_change_weight(prev, value);
+                diff.changed.push(Changed {
+                    old: make(path, prev),
+                    new: make(path, value),
+                });
+            }
             Some(_) => {}
         }
     }
     for (path, value) in old {
         if !new_idx.contains_key(path.as_str()) {
+            change_weight += 1.0; // path removed: full slot of change
             diff.removed.push(make(path, value));
         }
     }
+
+    diff.change_weight = change_weight;
+    diff.recompute_roc();
     truncate(&mut diff, limit);
     diff
+}
+
+/// Per-value change weight in `[0.0, 1.0]`.
+///
+/// - **Numbers**: relative magnitude `|new - old| / max(|old|, |new|)`.
+///   8 bytes off a 1 MB field ⇒ 1e-5; doubling a counter ⇒ ~0.5.
+/// - **Bools**: `1.0` if flipped, else `0.0`.
+/// - **Strings / arrays / objects**: `1.0` if not equal, else `0.0`. We do
+///   not edit-distance these in v1 — false zeros would be misleading.
+/// - **Null**: handled as missing by the engine; this function is only
+///   called when both sides have a value.
+fn value_change_weight(old: &Value, new: &Value) -> f32 {
+    match (old, new) {
+        (Value::Number(a), Value::Number(b)) => {
+            let av = a.as_f64().unwrap_or(0.0);
+            let bv = b.as_f64().unwrap_or(0.0);
+            let denom = av.abs().max(bv.abs());
+            if denom <= 0.0 {
+                0.0
+            } else {
+                (((av - bv).abs()) / denom).clamp(0.0, 1.0) as f32
+            }
+        }
+        (Value::Bool(a), Value::Bool(b)) => {
+            if a == b { 0.0 } else { 1.0 }
+        }
+        _ => {
+            if old == new { 0.0 } else { 1.0 }
+        }
+    }
 }
 
 /// JSON inequality with epsilon tolerance for floating-point numbers so
@@ -293,6 +399,8 @@ pub(super) fn diff_sections(
     let mut diff = ScopeDiff::<SectionChange> {
         old_count: old.sections.len() as u32,
         new_count: new.sections.len() as u32,
+        old_weight: old.sections.len() as f32,
+        new_weight: new.sections.len() as f32,
         ..Default::default()
     };
 
@@ -311,6 +419,10 @@ pub(super) fn diff_sections(
             diff.removed.push(section_change(s));
         }
     }
+
+    diff.change_weight =
+        (diff.added.len() + diff.removed.len() + diff.changed.len()) as f32;
+    diff.recompute_roc();
     truncate(&mut diff, limit);
     diff
 }
@@ -347,6 +459,8 @@ where
     let mut diff = ScopeDiff::<T> {
         old_count: old.len() as u32,
         new_count: new.len() as u32,
+        old_weight: old.len() as f32,
+        new_weight: new.len() as f32,
         ..Default::default()
     };
 
@@ -360,6 +474,9 @@ where
             diff.removed.push(item.clone());
         }
     }
+
+    diff.change_weight = (diff.added.len() + diff.removed.len()) as f32;
+    diff.recompute_roc();
     truncate(&mut diff, limit);
     diff
 }

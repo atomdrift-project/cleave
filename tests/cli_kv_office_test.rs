@@ -22,8 +22,8 @@ fn build_minimal_docx(creator: &str, created: &str, modified: &str) -> Vec<u8> {
     {
         let cursor = std::io::Cursor::new(&mut buf);
         let mut zip = zip::ZipWriter::new(cursor);
-        let opts: zip::write::SimpleFileOptions =
-            zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        let opts: zip::write::SimpleFileOptions = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
 
         zip.start_file("[Content_Types].xml", opts).unwrap();
         zip.write_all(
@@ -119,14 +119,22 @@ fn paths_in(value: &serde_json::Value) -> Vec<String> {
 fn cleave_kv_emits_office_schema_for_ooxml() {
     let dir = tempfile::TempDir::new().unwrap();
     let path = dir.path().join("evil.docx");
-    let content = build_minimal_docx("Иван Иванов", "2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z");
+    let content = build_minimal_docx(
+        "Иван Иванов",
+        "2030-01-01T00:00:00Z",
+        "2030-01-02T00:00:00Z",
+    );
     std::fs::write(&path, &content).unwrap();
 
     let entries = run_kv(&path, None);
     let paths = paths_in(&entries);
 
     // Schema keys we promised trait authors.
-    assert!(paths.iter().any(|p| p == "core.creator"), "paths: {:?}", paths);
+    assert!(
+        paths.iter().any(|p| p == "core.creator"),
+        "paths: {:?}",
+        paths
+    );
     assert!(paths.iter().any(|p| p == "core.last_modified_by"));
     assert!(paths.iter().any(|p| p == "core.created"));
     assert!(paths.iter().any(|p| p == "core.modified"));

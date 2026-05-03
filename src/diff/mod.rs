@@ -1,721 +1,591 @@
-//! Binary and package version comparison.
+//! Differential analysis — supply-chain attack detection.
 //!
-//! This module performs differential analysis between two versions of a file,
-//! identifying added/removed/modified capabilities, functions, and metrics.
+//! `diff_paths` compares two analysis trees (file-vs-file, dir-vs-dir) across
+//! six scopes — traits, metrics, KV, symbols, strings, and binary sections —
+//! and returns an [`AnalysisReport`] whose [`AnalysisReport::diff`] field
+//! carries a [`DiffReportV1`] with per-scope and per-file change sets plus a
+//! pooled rate-of-change summary.
 //!
-//! # Architecture
-//! - `utils`: Rename detection and file similarity scoring
-//! - `formatting`: Terminal output formatting
-//! - `risk`: Risk assessment for capability changes
+//! # Pipeline
 //!
-//! # Use Cases
-//! - Supply chain attack detection (xz-utils scenario)
-//! - Version comparison for packages
-//! - Security regression analysis
+//! 1. Each side is walked into a flat [`DiffUnit`] list using the cached
+//!    [`crate::analyze_file`] pipeline; archive members are flattened to
+//!    units with `archive!!member` paths.
+//! 2. Units are paired by relative path (rename detection deferred).
+//! 3. [`scopes`] computes per-pair `ScopeDiff`s; results are pooled per scope
+//!    and folded into the report summary.
+//!
+//! Performance comes from the SQLite-backed analysis cache: re-running a diff
+//! after an analyze is essentially free per file.
 
-mod formatting;
-mod risk;
-mod utils;
+mod scopes;
 
-#[allow(unused_imports)]
-pub(crate) use formatting::format_diff_terminal;
+pub mod format;
 
-// Internal imports
-use utils::{compute_added_removed, detect_renames};
-
-use crate::analyzers::{archive::ArchiveAnalyzer, detect_file_type, Analyzer};
-use crate::capabilities::CapabilityMapper;
-use crate::types::{
-    AnalysisMetadata, AnalysisReport, DiffCounts, DiffReport, FileChanges, FileDiff,
-    FileRenameInfo, Finding, FullDiffReport, MetricsDelta, ModifiedFileAnalysis,
-};
-use anyhow::{Context, Result};
-use chrono::Utc;
-use std::collections::{HashMap, HashSet};
-use std::fs;
+use anyhow::{anyhow, Context, Result};
+use rayon::prelude::*;
+use rustc_hash::FxHashMap;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use walkdir::WalkDir;
 
-/// Diff analyzer for detecting supply chain attacks (xz-utils scenario)
-#[derive(Debug)]
-pub struct DiffAnalyzer {
-    baseline_path: PathBuf,
-    target_path: PathBuf,
-    capability_mapper: Arc<CapabilityMapper>,
+use crate::types::binary::{Export, Import, Section, StringInfo};
+use crate::types::file_analysis::FileAnalysis;
+use crate::types::scores::Metrics;
+use crate::types::traits_findings::Finding;
+use crate::types::{
+    AnalysisReport, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, ScopeDiff, ScopeDiffs,
+    ScopeRocs, TargetInfo,
+};
+use crate::AnalysisOptions;
+
+/// Default limit for the size of each scope's `added` / `removed` / `changed`
+/// list. Counts and ROCs are unaffected. `0` removes the cap.
+pub const DEFAULT_LIMIT_CHANGES: usize = 100;
+
+/// Selection of diff scopes to compute. All scopes are enabled by default.
+#[derive(Debug, Clone, Copy)]
+pub struct ScopeMask {
+    /// Trait (Finding ID) diff.
+    pub traits: bool,
+    /// Flattened metric paths.
+    pub metrics: bool,
+    /// Flattened KV-tree paths.
+    pub kv: bool,
+    /// Imported and exported symbols.
+    pub symbols: bool,
+    /// String literals.
+    pub strings: bool,
+    /// Binary sections (ELF / Mach-O / PE).
+    pub sections: bool,
 }
-impl DiffAnalyzer {
-    /// Create a new diff analyzer comparing baseline to target.
-    ///
-    /// Uses the shared global `CapabilityMapper` singleton when available,
-    /// avoiding the ~800ms cost of loading and compiling trait definitions
-    /// on every call.
-    pub fn new(baseline: impl AsRef<Path>, target: impl AsRef<Path>) -> Self {
-        let mapper = crate::shared_resources::capability_mapper()
-            .unwrap_or_else(|_| Arc::new(CapabilityMapper::new()));
+
+impl ScopeMask {
+    /// All six scopes enabled.
+    #[must_use]
+    pub const fn all() -> Self {
         Self {
-            baseline_path: baseline.as_ref().to_path_buf(),
-            target_path: target.as_ref().to_path_buf(),
-            capability_mapper: mapper,
+            traits: true,
+            metrics: true,
+            kv: true,
+            symbols: true,
+            strings: true,
+            sections: true,
         }
     }
 
-    /// Create a new diff analyzer for testing (without validation)
-    #[cfg(test)]
-    pub(crate) fn new_for_test(baseline: impl AsRef<Path>, target: impl AsRef<Path>) -> Self {
-        Self {
-            baseline_path: baseline.as_ref().to_path_buf(),
-            target_path: target.as_ref().to_path_buf(),
-            capability_mapper: Arc::new(CapabilityMapper::new_without_validation()),
+    /// Parse a comma-separated scope list (`traits,kv` etc.). Accepts the
+    /// alias `all` for [`Self::all`]. Empty string maps to `all`.
+    pub fn parse(spec: &str) -> Result<Self> {
+        let spec = spec.trim();
+        if spec.is_empty() || spec.eq_ignore_ascii_case("all") {
+            return Ok(Self::all());
         }
-    }
-
-    /// Run the diff analysis and return a DiffReport
-    pub fn analyze(&self) -> Result<DiffReport> {
-        // Determine if we're comparing files or directories
-        let is_baseline_dir = self.baseline_path.is_dir();
-        let is_target_dir = self.target_path.is_dir();
-
-        let diff_report = if is_baseline_dir && is_target_dir {
-            self.analyze_directories()?
-        } else if !is_baseline_dir && !is_target_dir {
-            self.analyze_files()?
-        } else {
-            anyhow::bail!("Baseline and target must both be files or both be directories");
+        let mut mask = Self {
+            traits: false,
+            metrics: false,
+            kv: false,
+            symbols: false,
+            strings: false,
+            sections: false,
         };
-
-        Ok(diff_report)
-    }
-
-    fn analyze_files(&self) -> Result<DiffReport> {
-        // Analyze both files
-        let baseline_report = self.analyze_single_file(&self.baseline_path)?;
-        let target_report = self.analyze_single_file(&self.target_path)?;
-
-        // Compare
-        let analysis = self.compare_reports(
-            &self.baseline_path.display().to_string(),
-            &baseline_report,
-            &target_report,
-        );
-
-        let mut modified_analysis = Vec::new();
-        if !analysis.new_capabilities.is_empty() || !analysis.removed_capabilities.is_empty() {
-            modified_analysis.push(analysis);
-        }
-
-        Ok(DiffReport {
-            schema_version: "1.0".to_string(),
-            analysis_timestamp: Utc::now(),
-            diff_mode: true,
-            baseline: self.baseline_path.display().to_string(),
-            target: self.target_path.display().to_string(),
-            changes: FileChanges {
-                added: vec![],
-                removed: vec![],
-                modified: if modified_analysis.is_empty() {
-                    vec![]
-                } else {
-                    vec![self.target_path.display().to_string()]
-                },
-                renamed: vec![],
-            },
-            modified_analysis,
-            metadata: AnalysisMetadata {
-                analysis_duration_ms: 0,
-                tools_used: vec!["diff_analyzer".to_string()],
-                errors: vec![],
-            },
-        })
-    }
-
-    fn analyze_directories(&self) -> Result<DiffReport> {
-        // Get all files in both directories
-        let baseline_files = self.collect_files(&self.baseline_path)?;
-        let target_files = self.collect_files(&self.target_path)?;
-
-        // Determine what changed
-        let baseline_set: HashSet<_> = baseline_files.keys().collect();
-        let target_set: HashSet<_> = target_files.keys().collect();
-
-        let mut added: Vec<String> = target_set
-            .difference(&baseline_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-        let mut removed: Vec<String> = baseline_set
-            .difference(&target_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-        let modified_candidates: Vec<String> = baseline_set
-            .intersection(&target_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-
-        // Detect renames using similarity scoring
-        let renames = detect_renames(&removed, &added);
-
-        if !renames.is_empty() {
-            // Remove renamed files from added/removed lists
-            let renamed_baseline: HashSet<String> =
-                renames.iter().map(|r| r.baseline_path.clone()).collect();
-            let renamed_target: HashSet<String> =
-                renames.iter().map(|r| r.target_path.clone()).collect();
-
-            removed.retain(|f| !renamed_baseline.contains(f));
-            added.retain(|f| !renamed_target.contains(f));
-        }
-
-        // Analyze modified files
-        let mut modified_analysis = Vec::new();
-        let mut actually_modified = Vec::new();
-
-        for relative_path in modified_candidates {
-            let (Some(baseline_file), Some(target_file)) = (
-                baseline_files.get(&relative_path),
-                target_files.get(&relative_path),
-            ) else {
-                continue; // Should not happen since these are from intersection
-            };
-
-            // Quick check: if sizes match and content matches, skip
-            if let (Ok(baseline_meta), Ok(target_meta)) =
-                (fs::metadata(baseline_file), fs::metadata(target_file))
-            {
-                if baseline_meta.len() == target_meta.len() {
-                    if let (Ok(baseline_content), Ok(target_content)) =
-                        (fs::read(baseline_file), fs::read(target_file))
-                    {
-                        if baseline_content == target_content {
-                            continue; // Files are identical
-                        }
-                    }
-                }
-            }
-
-            // Files differ - analyze both
-            match (
-                self.analyze_single_file(baseline_file),
-                self.analyze_single_file(target_file),
-            ) {
-                (Ok(baseline_report), Ok(target_report)) => {
-                    let analysis =
-                        self.compare_reports(&relative_path, &baseline_report, &target_report);
-
-                    if !analysis.new_capabilities.is_empty()
-                        || !analysis.removed_capabilities.is_empty()
-                    {
-                        actually_modified.push(relative_path.clone());
-                        modified_analysis.push(analysis);
-                    }
-                }
-                _ => {
-                    // Failed to analyze, skip
+        for tok in spec.split(',') {
+            match tok.trim().to_ascii_lowercase().as_str() {
+                "traits" => mask.traits = true,
+                "metrics" => mask.metrics = true,
+                "kv" => mask.kv = true,
+                "symbols" => mask.symbols = true,
+                "strings" => mask.strings = true,
+                "sections" => mask.sections = true,
+                "all" => return Ok(Self::all()),
+                "" => continue,
+                other => {
+                    return Err(anyhow!(
+                        "unknown scope '{other}'; expected one of: traits, metrics, kv, symbols, strings, sections, all"
+                    ));
                 }
             }
         }
-
-        // Convert renames to FileRenameInfo
-        let renamed_files: Vec<FileRenameInfo> = renames
-            .iter()
-            .map(|r| FileRenameInfo {
-                from: r.baseline_path.clone(),
-                to: r.target_path.clone(),
-                similarity: r.similarity_score,
-            })
-            .collect();
-
-        Ok(DiffReport {
-            schema_version: "1.0".to_string(),
-            analysis_timestamp: Utc::now(),
-            diff_mode: true,
-            baseline: self.baseline_path.display().to_string(),
-            target: self.target_path.display().to_string(),
-            changes: FileChanges {
-                added,
-                removed,
-                modified: actually_modified,
-                renamed: renamed_files,
-            },
-            modified_analysis,
-            metadata: AnalysisMetadata {
-                analysis_duration_ms: 0,
-                tools_used: vec!["diff_analyzer".to_string()],
-                errors: vec![],
-            },
-        })
-    }
-
-    fn collect_files(&self, dir: &Path) -> Result<HashMap<String, PathBuf>> {
-        let mut files = HashMap::new();
-
-        for entry in WalkDir::new(dir)
-            .into_iter()
-            .filter_map(std::result::Result::ok)
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
-            let relative = path
-                .strip_prefix(dir)
-                .context("Failed to get relative path")?
-                .to_string_lossy()
-                .to_string();
-
-            files.insert(relative, path.to_path_buf());
-        }
-
-        Ok(files)
-    }
-
-    fn analyze_single_file(&self, path: &Path) -> Result<AnalysisReport> {
-        let file_type = detect_file_type(path)?;
-
-        // Handle archives specially since they need ArchiveAnalyzer with depth config
-        if file_type.is_archive() {
-            let analyzer =
-                ArchiveAnalyzer::new().with_capability_mapper_arc(self.capability_mapper.clone());
-            return analyzer.analyze(path);
-        }
-
-        // Use the centralized factory for all other file types
-        if let Some(analyzer) = crate::analyzers::analyzer_for_file_type_arc(
-            &file_type,
-            Some(self.capability_mapper.clone()),
-        ) {
-            analyzer.analyze(path)
-        } else {
-            anyhow::bail!("Unsupported file type for diff analysis: {:?}", file_type)
-        }
-    }
-
-    fn compare_reports(
-        &self,
-        file_path: &str,
-        baseline: &AnalysisReport,
-        target: &AnalysisReport,
-    ) -> ModifiedFileAnalysis {
-        let baseline_cap_ids: HashSet<String> =
-            baseline.findings.iter().map(|c| c.id.clone()).collect();
-
-        let target_cap_ids: HashSet<String> =
-            target.findings.iter().map(|c| c.id.clone()).collect();
-
-        // Get IDs of new and removed capabilities
-        let new_cap_ids: HashSet<&String> = target_cap_ids.difference(&baseline_cap_ids).collect();
-        let removed_cap_ids: HashSet<&String> =
-            baseline_cap_ids.difference(&target_cap_ids).collect();
-
-        // Get full capability objects for new capabilities (from target)
-        let new_capabilities: Vec<Finding> = target
-            .findings
-            .iter()
-            .filter(|c| new_cap_ids.contains(&c.id))
-            .cloned()
-            .collect();
-
-        // Get full capability objects for removed capabilities (from baseline)
-        let removed_capabilities: Vec<Finding> = baseline
-            .findings
-            .iter()
-            .filter(|c| removed_cap_ids.contains(&c.id))
-            .cloned()
-            .collect();
-
-        // Score delta
-        let score_delta = Self::compute_score_delta(&new_capabilities, &removed_capabilities);
-
-        ModifiedFileAnalysis {
-            file: file_path.to_string(),
-            new_capabilities,
-            removed_capabilities,
-            capability_delta: target_cap_ids.len() as i32 - baseline_cap_ids.len() as i32,
-            score_delta,
-        }
-    }
-
-    /// Create a comprehensive diff suitable for ML analysis
-    /// Treats the delta as a "virtual program" with all field differences
-    #[allow(dead_code)] // Used by binary target
-    fn create_full_diff(
-        &self,
-        file_path: &str,
-        baseline: &AnalysisReport,
-        target: &AnalysisReport,
-    ) -> FileDiff {
-        // Compute all collection deltas
-        let (added_findings, removed_findings) =
-            compute_added_removed(&baseline.findings, &target.findings, |f| f.id.clone());
-
-        let (added_traits, removed_traits) =
-            compute_added_removed(&baseline.traits, &target.traits, |t| {
-                format!("{:?}:{}", t.kind, t.value)
-            });
-
-        let (added_strings, removed_strings) =
-            compute_added_removed(&baseline.strings, &target.strings, |s| s.value.clone());
-
-        let (added_imports, removed_imports) =
-            compute_added_removed(&baseline.imports, &target.imports, |i| {
-                format!("{}:{}", i.source, i.symbol)
-            });
-
-        let (added_exports, removed_exports) =
-            compute_added_removed(&baseline.exports, &target.exports, |e| e.symbol.clone());
-
-        let (added_functions, removed_functions) =
-            compute_added_removed(&baseline.functions, &target.functions, |f| f.name.clone());
-
-        let (added_syscalls, removed_syscalls) =
-            compute_added_removed(&baseline.syscalls, &target.syscalls, |s| s.name.clone());
-
-        let (added_paths, removed_paths) =
-            compute_added_removed(&baseline.paths, &target.paths, |p| p.path.clone());
-
-        let (added_env_vars, removed_env_vars) =
-            compute_added_removed(&baseline.env_vars, &target.env_vars, |e| e.name.clone());
-
-        let (added_yara_matches, removed_yara_matches) =
-            compute_added_removed(&baseline.yara_matches, &target.yara_matches, |y| {
-                format!("{}:{}", y.namespace, y.rule)
-            });
-
-        // Compute metrics deltas
-        let metrics_delta = self.compute_metrics_delta(baseline, target);
-
-        // Compute counts summary
-        let counts = DiffCounts {
-            findings_added: added_findings.len() as i32,
-            findings_removed: removed_findings.len() as i32,
-            traits_added: added_traits.len() as i32,
-            traits_removed: removed_traits.len() as i32,
-            strings_added: added_strings.len() as i32,
-            strings_removed: removed_strings.len() as i32,
-            imports_added: added_imports.len() as i32,
-            imports_removed: removed_imports.len() as i32,
-            exports_added: added_exports.len() as i32,
-            exports_removed: removed_exports.len() as i32,
-            functions_added: added_functions.len() as i32,
-            functions_removed: removed_functions.len() as i32,
-            syscalls_added: added_syscalls.len() as i32,
-            syscalls_removed: removed_syscalls.len() as i32,
-            paths_added: added_paths.len() as i32,
-            paths_removed: removed_paths.len() as i32,
-            env_vars_added: added_env_vars.len() as i32,
-            env_vars_removed: removed_env_vars.len() as i32,
-        };
-
-        // Score delta
-        let score_delta = Self::compute_score_delta(&added_findings, &removed_findings);
-
-        FileDiff {
-            file: file_path.to_string(),
-            added_findings,
-            removed_findings,
-            added_traits,
-            removed_traits,
-            added_strings,
-            removed_strings,
-            added_imports,
-            removed_imports,
-            added_exports,
-            removed_exports,
-            added_functions,
-            removed_functions,
-            added_syscalls,
-            removed_syscalls,
-            added_paths,
-            removed_paths,
-            added_env_vars,
-            removed_env_vars,
-            added_yara_matches,
-            removed_yara_matches,
-            metrics_delta: Some(metrics_delta),
-            counts: Some(counts),
-            score_delta,
-        }
-    }
-
-    /// Compute numeric deltas between baseline and target metrics
-    #[allow(dead_code)] // Used by binary target
-    fn compute_metrics_delta(
-        &self,
-        baseline: &AnalysisReport,
-        target: &AnalysisReport,
-    ) -> MetricsDelta {
-        let mut delta = MetricsDelta {
-            size_bytes: target.target.size_bytes as i64 - baseline.target.size_bytes as i64,
-            ..Default::default()
-        };
-
-        // Source code metrics
-        if let (Some(b), Some(t)) = (&baseline.source_code_metrics, &target.source_code_metrics) {
-            delta.total_lines = t.total_lines as i32 - b.total_lines as i32;
-            delta.code_lines = t.code_lines as i32 - b.code_lines as i32;
-            delta.comment_lines = t.comment_lines as i32 - b.comment_lines as i32;
-            delta.blank_lines = t.blank_lines as i32 - b.blank_lines as i32;
-            delta.string_count = t.string_count as i32 - b.string_count as i32;
-            delta.avg_string_length = t.avg_string_length - b.avg_string_length;
-            delta.avg_string_entropy = t.avg_string_entropy - b.avg_string_entropy;
-        }
-
-        // Binary code metrics
-        if let (Some(b), Some(t)) = (&baseline.code_metrics, &target.code_metrics) {
-            delta.total_functions = t.total_functions as i32 - b.total_functions as i32;
-            delta.total_basic_blocks = t.total_basic_blocks as i32 - b.total_basic_blocks as i32;
-            delta.avg_complexity = t.avg_complexity - b.avg_complexity;
-            delta.max_complexity = t.max_complexity as i32 - b.max_complexity as i32;
-            delta.total_instructions = t.total_instructions as i32 - b.total_instructions as i32;
-            delta.code_density = t.code_density - b.code_density;
-        }
-
-        // Unified metrics
-        if let (Some(b_metrics), Some(t_metrics)) = (&baseline.metrics, &target.metrics) {
-            if let (Some(b), Some(t)) = (&b_metrics.text, &t_metrics.text) {
-                delta.total_lines = t.total_lines as i32 - b.total_lines as i32;
-            }
-            if let (Some(b), Some(t)) = (&b_metrics.comments, &t_metrics.comments) {
-                delta.comment_lines = t.lines as i32 - b.lines as i32;
-            }
-            if let (Some(b), Some(t)) = (&b_metrics.identifiers, &t_metrics.identifiers) {
-                delta.unique_identifiers = t.unique_count as i32 - b.unique_count as i32;
-                delta.avg_identifier_length = t.avg_length - b.avg_length;
-            }
-            if let (Some(b), Some(t)) = (&b_metrics.strings, &t_metrics.strings) {
-                delta.string_count = t.total as i32 - b.total as i32;
-                delta.avg_string_length = t.avg_length - b.avg_length;
-                delta.avg_string_entropy = t.avg_entropy - b.avg_entropy;
-            }
-            if let (Some(b), Some(t)) = (&b_metrics.functions, &t_metrics.functions) {
-                delta.total_functions = t.total as i32 - b.total as i32;
-            }
-        }
-
-        delta
-    }
-
-    /// Create a full diff report with comprehensive analysis for ML pipelines
-    #[allow(dead_code)] // Used by binary target
-    pub(crate) fn analyze_full(&self) -> Result<FullDiffReport> {
-        let is_baseline_dir = self.baseline_path.is_dir();
-        let is_target_dir = self.target_path.is_dir();
-
-        if is_baseline_dir && is_target_dir {
-            self.analyze_directories_full()
-        } else if !is_baseline_dir && !is_target_dir {
-            self.analyze_files_full()
-        } else {
-            anyhow::bail!("Baseline and target must both be files or both be directories");
-        }
-    }
-
-    #[allow(dead_code)] // Used by binary target
-    fn analyze_files_full(&self) -> Result<FullDiffReport> {
-        let baseline_report = self.analyze_single_file(&self.baseline_path)?;
-        let target_report = self.analyze_single_file(&self.target_path)?;
-
-        let file_diff = self.create_full_diff(
-            &self.target_path.display().to_string(),
-            &baseline_report,
-            &target_report,
-        );
-
-        let modified_analysis = self.compare_reports(
-            &self.baseline_path.display().to_string(),
-            &baseline_report,
-            &target_report,
-        );
-
-        let aggregate_counts = file_diff.counts.clone();
-        let mut file_diffs = Vec::new();
-        let mut modified_analysis_vec = Vec::new();
-
-        if file_diff.added_findings.len() + file_diff.removed_findings.len() > 0
-            || file_diff.added_strings.len() + file_diff.removed_strings.len() > 0
-            || file_diff.added_imports.len() + file_diff.removed_imports.len() > 0
-        {
-            file_diffs.push(file_diff);
-            modified_analysis_vec.push(modified_analysis);
-        }
-
-        Ok(FullDiffReport {
-            schema_version: "2.0".to_string(),
-            analysis_timestamp: Utc::now(),
-            diff_mode: true,
-            baseline: self.baseline_path.display().to_string(),
-            target: self.target_path.display().to_string(),
-            changes: FileChanges {
-                added: vec![],
-                removed: vec![],
-                modified: if file_diffs.is_empty() {
-                    vec![]
-                } else {
-                    vec![self.target_path.display().to_string()]
-                },
-                renamed: vec![],
-            },
-            file_diffs,
-            modified_analysis: modified_analysis_vec,
-            aggregate_counts,
-            metadata: AnalysisMetadata {
-                analysis_duration_ms: 0,
-                tools_used: vec!["diff_analyzer".to_string()],
-                errors: vec![],
-            },
-        })
-    }
-
-    #[allow(dead_code)] // Used by binary target
-    fn analyze_directories_full(&self) -> Result<FullDiffReport> {
-        let baseline_files = self.collect_files(&self.baseline_path)?;
-        let target_files = self.collect_files(&self.target_path)?;
-
-        let baseline_set: HashSet<_> = baseline_files.keys().collect();
-        let target_set: HashSet<_> = target_files.keys().collect();
-
-        let mut added: Vec<String> = target_set
-            .difference(&baseline_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-        let mut removed: Vec<String> = baseline_set
-            .difference(&target_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-        let modified_candidates: Vec<String> = baseline_set
-            .intersection(&target_set)
-            .map(std::string::ToString::to_string)
-            .collect();
-
-        let renames = detect_renames(&removed, &added);
-
-        if !renames.is_empty() {
-            let renamed_baseline: HashSet<String> =
-                renames.iter().map(|r| r.baseline_path.clone()).collect();
-            let renamed_target: HashSet<String> =
-                renames.iter().map(|r| r.target_path.clone()).collect();
-
-            removed.retain(|f| !renamed_baseline.contains(f));
-            added.retain(|f| !renamed_target.contains(f));
-        }
-
-        let mut file_diffs = Vec::new();
-        let mut modified_analysis = Vec::new();
-        let mut actually_modified = Vec::new();
-
-        // Aggregate counts
-        let mut aggregate = DiffCounts::default();
-
-        for relative_path in modified_candidates {
-            let (Some(baseline_file), Some(target_file)) = (
-                baseline_files.get(&relative_path),
-                target_files.get(&relative_path),
-            ) else {
-                continue; // Should not happen since these are from intersection
-            };
-
-            if let (Ok(baseline_meta), Ok(target_meta)) =
-                (fs::metadata(baseline_file), fs::metadata(target_file))
-            {
-                if baseline_meta.len() == target_meta.len() {
-                    if let (Ok(baseline_content), Ok(target_content)) =
-                        (fs::read(baseline_file), fs::read(target_file))
-                    {
-                        if baseline_content == target_content {
-                            continue;
-                        }
-                    }
-                }
-            }
-
-            if let (Ok(baseline_report), Ok(target_report)) = (
-                self.analyze_single_file(baseline_file),
-                self.analyze_single_file(target_file),
-            ) {
-                let file_diff =
-                    self.create_full_diff(&relative_path, &baseline_report, &target_report);
-
-                // Only include if there are actual changes
-                if let Some(ref counts) = file_diff.counts {
-                    if counts.findings_added != 0
-                        || counts.findings_removed != 0
-                        || counts.strings_added != 0
-                        || counts.strings_removed != 0
-                        || counts.imports_added != 0
-                        || counts.imports_removed != 0
-                    {
-                        // Accumulate aggregate counts
-                        aggregate.findings_added += counts.findings_added;
-                        aggregate.findings_removed += counts.findings_removed;
-                        aggregate.traits_added += counts.traits_added;
-                        aggregate.traits_removed += counts.traits_removed;
-                        aggregate.strings_added += counts.strings_added;
-                        aggregate.strings_removed += counts.strings_removed;
-                        aggregate.imports_added += counts.imports_added;
-                        aggregate.imports_removed += counts.imports_removed;
-                        aggregate.exports_added += counts.exports_added;
-                        aggregate.exports_removed += counts.exports_removed;
-                        aggregate.functions_added += counts.functions_added;
-                        aggregate.functions_removed += counts.functions_removed;
-                        aggregate.syscalls_added += counts.syscalls_added;
-                        aggregate.syscalls_removed += counts.syscalls_removed;
-                        aggregate.paths_added += counts.paths_added;
-                        aggregate.paths_removed += counts.paths_removed;
-                        aggregate.env_vars_added += counts.env_vars_added;
-                        aggregate.env_vars_removed += counts.env_vars_removed;
-
-                        actually_modified.push(relative_path.clone());
-                        file_diffs.push(file_diff);
-
-                        let analysis =
-                            self.compare_reports(&relative_path, &baseline_report, &target_report);
-                        modified_analysis.push(analysis);
-                    }
-                }
-            }
-        }
-
-        let renamed_files: Vec<FileRenameInfo> = renames
-            .iter()
-            .map(|r| FileRenameInfo {
-                from: r.baseline_path.clone(),
-                to: r.target_path.clone(),
-                similarity: r.similarity_score,
-            })
-            .collect();
-
-        Ok(FullDiffReport {
-            schema_version: "2.0".to_string(),
-            analysis_timestamp: Utc::now(),
-            diff_mode: true,
-            baseline: self.baseline_path.display().to_string(),
-            target: self.target_path.display().to_string(),
-            changes: FileChanges {
-                added,
-                removed,
-                modified: actually_modified,
-                renamed: renamed_files,
-            },
-            file_diffs,
-            modified_analysis,
-            aggregate_counts: Some(aggregate),
-            metadata: AnalysisMetadata {
-                analysis_duration_ms: 0,
-                tools_used: vec!["diff_analyzer".to_string()],
-                errors: vec![],
-            },
-        })
-    }
-
-    fn compute_score_delta(added: &[Finding], removed: &[Finding]) -> i32 {
-        let score = |findings: &[Finding]| -> i32 {
-            let raw: f32 = findings
-                .iter()
-                .map(|f| f.crit.score_weight() as f32 * f.conf)
-                .sum();
-            raw.ceil() as i32
-        };
-        score(added) - score(removed)
+        Ok(mask)
     }
 }
 
-/// Format diff report as human-readable output
+impl Default for ScopeMask {
+    fn default() -> Self {
+        Self::all()
+    }
+}
+
+/// All inputs to a per-pair diff for a single logical file. Bundles the
+/// fields each scope needs so scope functions take a single argument.
+pub(crate) struct DiffUnit {
+    pub(crate) path: String,
+    pub(crate) findings: Vec<Finding>,
+    pub(crate) metrics: Option<Metrics>,
+    pub(crate) kv_tree: Option<Value>,
+    pub(crate) imports: Vec<Import>,
+    pub(crate) exports: Vec<Export>,
+    pub(crate) strings: Vec<StringInfo>,
+    pub(crate) sections: Vec<Section>,
+}
+
+impl DiffUnit {
+    fn empty(path: String) -> Self {
+        Self {
+            path,
+            findings: Vec::new(),
+            metrics: None,
+            kv_tree: None,
+            imports: Vec::new(),
+            exports: Vec::new(),
+            strings: Vec::new(),
+            sections: Vec::new(),
+        }
+    }
+}
+
+/// Compare two paths and return an [`AnalysisReport`] (v3 envelope) whose
+/// `diff` field carries the differential analysis.
+///
+/// Both inputs may be files or directories; archives are decomposed into
+/// their members. Relative paths under the input root are used for pairing.
+///
+/// `scope_mask` selects which of the six scopes to compute; excluded scopes
+/// are absent from the report. `limit_changes` caps the per-scope item lists
+/// for output legibility — the underlying counts and ROCs are unaffected.
+///
+/// # Errors
+///
+/// Returns an error if either path does not exist or analysis fails for a
+/// reason the cache cannot mask (I/O, malformed input).
+pub fn diff_paths(
+    old: &Path,
+    new: &Path,
+    options: &AnalysisOptions,
+    scope_mask: ScopeMask,
+    limit_changes: usize,
+) -> Result<AnalysisReport> {
+    if !old.exists() {
+        return Err(anyhow!("old path does not exist: {}", old.display()));
+    }
+    if !new.exists() {
+        return Err(anyhow!("new path does not exist: {}", new.display()));
+    }
+
+    // Single-file vs single-file: pair the two roots regardless of filename.
+    // Real supply-chain diffs ship as version-stamped filenames (xz 5.4.5
+    // vs 5.6.0, openssl 3.0.13.tar.gz vs 3.0.14.tar.gz), so pairing by name
+    // would flag everything as add+remove and bury the actual change.
+    // Using a canonical root key collapses both sides onto the same logical
+    // file. Directories still pair by relative path.
+    let canonical_root = old.is_file() && new.is_file();
+    let (old_units, new_units) = rayon::join(
+        || collect_units(old, options, canonical_root),
+        || collect_units(new, options, canonical_root),
+    );
+    let old_units = old_units?;
+    let new_units = new_units?;
+
+    let pairs = pair_units(old_units, new_units);
+
+    let file_diffs: Vec<FileDiffEntry> = pairs
+        .into_par_iter()
+        .map(|pair| diff_pair(pair, scope_mask, limit_changes))
+        .collect();
+
+    let mut summary = DiffSummary::default();
+    for entry in &file_diffs {
+        match entry.status {
+            FileStatus::Added => summary.files_added += 1,
+            FileStatus::Removed => summary.files_removed += 1,
+            FileStatus::Changed => summary.files_changed += 1,
+            FileStatus::Unchanged => summary.files_unchanged += 1,
+        }
+    }
+
+    let scopes = aggregate_scopes(&file_diffs, scope_mask, limit_changes);
+    summary.scope_roc = ScopeRocs {
+        traits: scopes.traits.as_ref().map_or(0.0, ScopeDiff::roc),
+        metrics: scopes.metrics.as_ref().map_or(0.0, ScopeDiff::roc),
+        kv: scopes.kv.as_ref().map_or(0.0, ScopeDiff::roc),
+        symbols: scopes.symbols.as_ref().map_or(0.0, ScopeDiff::roc),
+        strings: scopes.strings.as_ref().map_or(0.0, ScopeDiff::roc),
+        sections: scopes.sections.as_ref().map_or(0.0, ScopeDiff::roc),
+    };
+    summary.overall_roc = mean_nonempty_rocs(&summary.scope_roc, &scopes);
+
+    let visible_files: Vec<FileDiffEntry> = file_diffs
+        .into_iter()
+        .filter(|f| f.status != FileStatus::Unchanged)
+        .collect();
+
+    let old_root = old.display().to_string();
+    let new_root = new.display().to_string();
+    let report = build_envelope(
+        &old_root,
+        &new_root,
+        DiffReportV1 {
+            old_root: old_root.clone(),
+            new_root: new_root.clone(),
+            summary,
+            scopes,
+            files: visible_files,
+        },
+    );
+    Ok(report)
+}
+
+/// Walk an input path and return one [`DiffUnit`] per analyzable file
+/// (including archive members), with paths normalized relative to `root`.
+///
+/// `canonical_root` collapses the root file's name to a fixed `<root>` key
+/// so two single-file inputs with different filenames still pair. Directory
+/// inputs always use the side-relative path.
+fn collect_units(
+    root: &Path,
+    options: &AnalysisOptions,
+    canonical_root: bool,
+) -> Result<Vec<DiffUnit>> {
+    if root.is_file() {
+        let root_rel = if canonical_root {
+            "<root>".to_string()
+        } else {
+            file_name_string(root)
+        };
+        let report = crate::analyze_file(root, options)
+            .with_context(|| format!("failed to analyze {}", root.display()))?;
+        Ok(units_from_report(&report, &root_rel))
+    } else if root.is_dir() {
+        let files = walk_files(root)?;
+        let mut units = files
+            .par_iter()
+            .map(|(path, rel)| -> Result<Vec<DiffUnit>> {
+                let report = crate::analyze_file(path, options)
+                    .with_context(|| format!("failed to analyze {}", path.display()))?;
+                Ok(units_from_report(&report, rel))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(units.drain(..).flatten().collect())
+    } else {
+        Err(anyhow!(
+            "path is neither a file nor a directory: {}",
+            root.display()
+        ))
+    }
+}
+
+/// Recognized analyzable files under `root`, paired with their relative path.
+fn walk_files(root: &Path) -> Result<Vec<(PathBuf, String)>> {
+    use walkdir::WalkDir;
+    let mut out = Vec::new();
+    for entry in WalkDir::new(root)
+        .follow_links(true)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+    {
+        let entry = entry.context("failed to read directory entry")?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let path = entry.path().to_path_buf();
+        let rel = path
+            .strip_prefix(root)
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|_| file_name_string(&path));
+        out.push((path, rel));
+    }
+    Ok(out)
+}
+
+/// Build per-file [`DiffUnit`]s from one analyze report. Returns one unit for
+/// the root (carrying top-level findings/metrics/kv/etc.) plus one per
+/// archive member found in `report.files`.
+fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+
+    let mut out = Vec::with_capacity(1 + report.files.len());
+    out.push(DiffUnit {
+        path: root_rel.to_string(),
+        findings: report.findings.clone(),
+        metrics: report.metrics.clone(),
+        kv_tree: report.kv_tree.as_deref().cloned(),
+        imports: report.imports.clone(),
+        exports: report.exports.clone(),
+        strings: report.strings.clone(),
+        sections: report.sections.clone(),
+    });
+    for fa in &report.files {
+        out.push(unit_from_member(fa, root_rel, ARCHIVE_DELIMITER));
+    }
+    out
+}
+
+fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit {
+    // Pre-finalize FileAnalysis paths inside `report.files` may be either the
+    // bare member name (`inner.so`) or already nested (`a.zip!!b.so`).
+    // Either way, prepending `{root_rel}!!` produces a consistent path that
+    // pairs cleanly across the two diff sides.
+    let path = if fa.path.starts_with(root_rel) {
+        fa.path.clone()
+    } else {
+        format!("{root_rel}{delim}{}", fa.path)
+    };
+    DiffUnit {
+        path,
+        findings: fa.findings.clone(),
+        metrics: fa.metrics.clone(),
+        kv_tree: None,
+        imports: fa.imports.clone(),
+        exports: fa.exports.clone(),
+        strings: fa.strings.clone(),
+        sections: fa.sections.clone(),
+    }
+}
+
+fn file_name_string(p: &Path) -> String {
+    p.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| p.display().to_string())
+}
+
+/// Pairing result: every path that appears on either side, with the unit from
+/// each side. `None` on a side means "absent there".
+struct UnitPair {
+    path: String,
+    old: Option<DiffUnit>,
+    new: Option<DiffUnit>,
+}
+
+/// Pair units from each side by their normalized path. Order is stable
+/// (sorted by path) so the resulting `files[]` array is deterministic.
+fn pair_units(old: Vec<DiffUnit>, new: Vec<DiffUnit>) -> Vec<UnitPair> {
+    let mut by_path: FxHashMap<String, (Option<DiffUnit>, Option<DiffUnit>)> = FxHashMap::default();
+    for u in old {
+        let path = u.path.clone();
+        by_path.entry(path).or_default().0 = Some(u);
+    }
+    for u in new {
+        let path = u.path.clone();
+        by_path.entry(path).or_default().1 = Some(u);
+    }
+    let mut pairs: Vec<UnitPair> = by_path
+        .into_iter()
+        .map(|(path, (old, new))| UnitPair { path, old, new })
+        .collect();
+    pairs.sort_by(|a, b| a.path.cmp(&b.path));
+    pairs
+}
+
+/// Diff one paired unit. Adds, removes, and changes are fully populated when
+/// a side is missing — the missing side contributes an empty unit, so every
+/// item on the other side becomes an "added" or "removed" entry.
+fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
+    let UnitPair { path, old, new } = pair;
+    // pair_units guarantees at least one side is present.
+    let initial_status = match (old.is_some(), new.is_some()) {
+        (true, false) => FileStatus::Removed,
+        (false, true) => FileStatus::Added,
+        _ => FileStatus::Changed, // refined below for (true, true); (false, false) cannot occur
+    };
+    let old = old.unwrap_or_else(|| DiffUnit::empty(path.clone()));
+    let new = new.unwrap_or_else(|| DiffUnit::empty(path.clone()));
+
+    let scopes = ScopeDiffs {
+        traits: mask.traits.then(|| scopes::diff_traits(&old, &new, limit)),
+        metrics: mask
+            .metrics
+            .then(|| scopes::diff_metrics(&old, &new, limit)),
+        kv: mask.kv.then(|| scopes::diff_kv(&old, &new, limit)),
+        symbols: mask
+            .symbols
+            .then(|| scopes::diff_symbols(&old, &new, limit)),
+        strings: mask
+            .strings
+            .then(|| scopes::diff_strings(&old, &new, limit)),
+        sections: mask
+            .sections
+            .then(|| scopes::diff_sections(&old, &new, limit)),
+    };
+
+    let resolved = match initial_status {
+        FileStatus::Added | FileStatus::Removed => initial_status,
+        _ if any_scope_changed(&scopes) => FileStatus::Changed,
+        _ => FileStatus::Unchanged,
+    };
+
+    FileDiffEntry {
+        path,
+        status: resolved,
+        scopes,
+    }
+}
+
+fn any_scope_changed(s: &ScopeDiffs) -> bool {
+    fn changed<T>(d: &Option<ScopeDiff<T>>) -> bool {
+        d.as_ref().is_some_and(ScopeDiff::has_changes)
+    }
+    changed(&s.traits)
+        || changed(&s.metrics)
+        || changed(&s.kv)
+        || changed(&s.symbols)
+        || changed(&s.strings)
+        || changed(&s.sections)
+}
+
+/// Pool per-file diffs into program-level `ScopeDiff`s. Counts and items are
+/// summed; the resulting ROC is honest across mixed-size files.
+///
+/// The aggregated lists are re-truncated to `limit` so output size stays
+/// bounded even when many files each contribute a few changes.
+fn aggregate_scopes(files: &[FileDiffEntry], mask: ScopeMask, limit: usize) -> ScopeDiffs {
+    fn pool<T: Clone>(
+        files: &[FileDiffEntry],
+        get: impl Fn(&ScopeDiffs) -> Option<&ScopeDiff<T>>,
+        limit: usize,
+    ) -> Option<ScopeDiff<T>> {
+        let mut out = ScopeDiff::<T>::default();
+        let mut any = false;
+        for f in files {
+            if let Some(s) = get(&f.scopes) {
+                any = true;
+                out.added.extend(s.added.iter().cloned());
+                out.removed.extend(s.removed.iter().cloned());
+                out.changed.extend(s.changed.iter().cloned());
+                out.old_count += s.old_count;
+                out.new_count += s.new_count;
+                out.truncated |= s.truncated;
+            }
+        }
+        if !any {
+            return None;
+        }
+        scopes::truncate(&mut out, limit);
+        Some(out)
+    }
+
+    ScopeDiffs {
+        traits: mask
+            .traits
+            .then(|| pool(files, |s| s.traits.as_ref(), limit))
+            .flatten(),
+        metrics: mask
+            .metrics
+            .then(|| pool(files, |s| s.metrics.as_ref(), limit))
+            .flatten(),
+        kv: mask
+            .kv
+            .then(|| pool(files, |s| s.kv.as_ref(), limit))
+            .flatten(),
+        symbols: mask
+            .symbols
+            .then(|| pool(files, |s| s.symbols.as_ref(), limit))
+            .flatten(),
+        strings: mask
+            .strings
+            .then(|| pool(files, |s| s.strings.as_ref(), limit))
+            .flatten(),
+        sections: mask
+            .sections
+            .then(|| pool(files, |s| s.sections.as_ref(), limit))
+            .flatten(),
+    }
+}
+
+/// Mean of per-scope ROCs over scopes that have data on at least one side.
+/// Empty-on-both scopes are excluded from the denominator so they do not
+/// drag the overall ROC toward zero.
+fn mean_nonempty_rocs(rocs: &ScopeRocs, scopes: &ScopeDiffs) -> f32 {
+    let mut sum = 0.0;
+    let mut n = 0u32;
+    for (roc, present) in [
+        (
+            rocs.traits,
+            scopes.traits.as_ref().is_some_and(|s| !s.is_empty()),
+        ),
+        (
+            rocs.metrics,
+            scopes.metrics.as_ref().is_some_and(|s| !s.is_empty()),
+        ),
+        (rocs.kv, scopes.kv.as_ref().is_some_and(|s| !s.is_empty())),
+        (
+            rocs.symbols,
+            scopes.symbols.as_ref().is_some_and(|s| !s.is_empty()),
+        ),
+        (
+            rocs.strings,
+            scopes.strings.as_ref().is_some_and(|s| !s.is_empty()),
+        ),
+        (
+            rocs.sections,
+            scopes.sections.as_ref().is_some_and(|s| !s.is_empty()),
+        ),
+    ] {
+        if present {
+            sum += roc;
+            n += 1;
+        }
+    }
+    if n == 0 {
+        0.0
+    } else {
+        sum / n as f32
+    }
+}
+
+/// Build the v3-envelope `AnalysisReport` carrying the diff. The envelope is
+/// minimal: the diff command does not emit per-file analyses (use
+/// `cleave analyze` for those), so `files` is empty and the envelope exists
+/// only to host `diff` and a small `summary` for tooling that reads both
+/// `analyze` and `diff` output through the same parser.
+fn build_envelope(old_path: &str, new_path: &str, diff: DiffReportV1) -> AnalysisReport {
+    let mut report = AnalysisReport::new(TargetInfo {
+        path: format!("{old_path} → {new_path}"),
+        file_type: "diff".to_string(),
+        size_bytes: 0,
+        sha256: String::new(),
+        architectures: None,
+    });
+    report.version = "3".to_string();
+    report.target = TargetInfo::default(); // hidden via skip_serializing_if
+    report.analysis_timestamp = None;
+    report.diff = Some(diff);
+    report
+}
+
 #[cfg(test)]
-mod tests;
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scope_mask_parse_default() {
+        assert!(ScopeMask::parse("").unwrap().traits);
+        assert!(ScopeMask::parse("all").unwrap().sections);
+    }
+
+    #[test]
+    fn scope_mask_parse_subset() {
+        let m = ScopeMask::parse("traits,kv").unwrap();
+        assert!(m.traits);
+        assert!(m.kv);
+        assert!(!m.metrics);
+        assert!(!m.symbols);
+        assert!(!m.strings);
+        assert!(!m.sections);
+    }
+
+    #[test]
+    fn scope_mask_parse_unknown() {
+        assert!(ScopeMask::parse("traits,bogus").is_err());
+    }
+
+    #[test]
+    fn pair_units_orders_by_path() {
+        let old = vec![DiffUnit::empty("b".into()), DiffUnit::empty("a".into())];
+        let new = vec![DiffUnit::empty("c".into())];
+        let pairs = pair_units(old, new);
+        assert_eq!(
+            pairs.iter().map(|p| p.path.as_str()).collect::<Vec<_>>(),
+            vec!["a", "b", "c"]
+        );
+    }
+}

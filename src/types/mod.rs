@@ -87,9 +87,10 @@ pub use binary::{
 };
 
 #[allow(unused_imports)]
-pub(crate) use diff::{
-    DiffCounts, DiffReport, FileChanges, FileDiff, FileRenameInfo, FullDiffReport, MetricsDelta,
-    ModifiedFileAnalysis,
+pub use diff::{
+    Changed, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, KvChange, MetricChange,
+    ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
+    TraitChange,
 };
 
 #[allow(unused_imports)]

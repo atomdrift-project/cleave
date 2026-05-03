@@ -6,6 +6,7 @@ use super::binary::{
     AnalysisMetadata, Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch,
 };
 use super::code_structure::{BinaryProperties, CodeMetrics, OverlayMetrics, SourceCodeMetrics};
+use super::diff::DiffReportV1;
 use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::scores::Metrics;
@@ -174,6 +175,12 @@ pub struct AnalysisReport {
     /// Analysis metadata (tool versions, timing, errors) — merged into summary after finalize
     #[serde(skip_serializing_if = "AnalysisMetadata::is_cleared", default)]
     pub metadata: AnalysisMetadata,
+
+    /// Differential analysis result, present only on the output of `cleave diff`.
+    /// Embedded in the v3 envelope so prism/litmus can consume diff and
+    /// per-file analysis from one document. See [`DiffReportV1`].
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub diff: Option<DiffReportV1>,
 }
 
 impl AnalysisReport {
@@ -214,6 +221,7 @@ impl AnalysisReport {
             files: Vec::new(),
             summary: None,
             metadata: AnalysisMetadata::default(),
+            diff: None,
         }
     }
 

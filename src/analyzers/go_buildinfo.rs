@@ -279,9 +279,11 @@ mod tests {
         write_varint(&mut buf, version.len());
         buf.extend_from_slice(version.as_bytes());
         let mut wrapped = Vec::new();
-        wrapped.extend_from_slice(b"\x30\x77\xaf\x0c\x92\x74\x08\x02\x41\xe1\xc1\x07\xe6\xd6\x18\xe6");
+        wrapped
+            .extend_from_slice(b"\x30\x77\xaf\x0c\x92\x74\x08\x02\x41\xe1\xc1\x07\xe6\xd6\x18\xe6");
         wrapped.extend_from_slice(modinfo.as_bytes());
-        wrapped.extend_from_slice(b"\xf9\x32\x43\x1c\x35\x9c\xb6\x07\x4e\x60\x90\xeb\x05\x14\x49\xfb");
+        wrapped
+            .extend_from_slice(b"\xf9\x32\x43\x1c\x35\x9c\xb6\x07\x4e\x60\x90\xeb\x05\x14\x49\xfb");
         write_varint(&mut buf, wrapped.len());
         buf.extend_from_slice(&wrapped);
         buf

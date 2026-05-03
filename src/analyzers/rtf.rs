@@ -73,10 +73,7 @@ impl RtfAnalyzer {
             Ok(rtf_doc) => {
                 report.metadata.tools_used.push("rtf-parser".to_string());
                 let kv = crate::rtf::rtf_kv::build_rtf_kv(&rtf_doc);
-                if kv
-                    .as_object()
-                    .is_some_and(|m| !m.is_empty())
-                {
+                if kv.as_object().is_some_and(|m| !m.is_empty()) {
                     report.kv_tree = Some(Box::new(kv));
                 }
             }

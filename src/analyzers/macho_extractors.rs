@@ -268,8 +268,7 @@ pub(crate) struct MachoDylib {
 pub(crate) fn extract(data: &[u8]) -> Option<MachoLoadCommands> {
     let (header_off, is_64) = locate_first_macho_slice(data)?;
     let after_header = parse_header(data, header_off, is_64)?;
-    let mut out =
-        parse_load_commands(data, after_header.cmds_offset, after_header.ncmds)?;
+    let mut out = parse_load_commands(data, after_header.cmds_offset, after_header.ncmds)?;
     // LC_CODE_SIGNATURE.dataoff is slice-relative.  Promote to a
     // file-absolute offset so callers (binary_extractors) can pass
     // the raw file bytes without having to track which slice we
@@ -354,11 +353,7 @@ fn parse_header(data: &[u8], off: usize, is_64: bool) -> Option<HeaderInfo> {
     })
 }
 
-fn parse_load_commands(
-    data: &[u8],
-    start: usize,
-    ncmds: usize,
-) -> Option<MachoLoadCommands> {
+fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoLoadCommands> {
     let mut out = MachoLoadCommands::default();
     let mut cursor = start;
     for _ in 0..ncmds {
@@ -399,12 +394,8 @@ fn parse_load_commands(
                     }
                 }
             }
-            LC_LOAD_DYLIB
-            | LC_ID_DYLIB
-            | LC_LOAD_WEAK_DYLIB
-            | LC_LAZY_LOAD_DYLIB
-            | LC_REEXPORT_DYLIB
-            | LC_LOAD_UPWARD_DYLIB => {
+            LC_LOAD_DYLIB | LC_ID_DYLIB | LC_LOAD_WEAK_DYLIB | LC_LAZY_LOAD_DYLIB
+            | LC_REEXPORT_DYLIB | LC_LOAD_UPWARD_DYLIB => {
                 if let Some(d) = parse_dylib(body, cmd) {
                     if cmd == LC_ID_DYLIB {
                         out.id_dylib = Some(d.path);
@@ -603,11 +594,7 @@ fn platform_name(p: u32) -> &'static str {
 /// `("__TEXT", "__entitlements")` for inline entitlements,
 /// `("__DATA_CONST", "__objc_classlist")` for ObjC reflection.
 #[must_use]
-pub(crate) fn find_section<'a>(
-    data: &'a [u8],
-    segname: &str,
-    sectname: &str,
-) -> Option<&'a [u8]> {
+pub(crate) fn find_section<'a>(data: &'a [u8], segname: &str, sectname: &str) -> Option<&'a [u8]> {
     let (header_off, is_64) = locate_first_macho_slice(data)?;
     let after_header = parse_header(data, header_off, is_64)?;
     walk_segments_for_section(data, header_off, after_header, is_64, segname, sectname)
@@ -627,8 +614,7 @@ fn walk_segments_for_section<'a>(
             break;
         }
         let cmd = u32::from_le_bytes(data[cursor..cursor + 4].try_into().ok()?) & !LC_REQ_DYLD;
-        let cmdsize =
-            u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
+        let cmdsize = u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
         if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
             break;
         }
@@ -674,17 +660,13 @@ fn walk_segments_for_section<'a>(
                     if sectname == target_sect {
                         let (offset, size) = if is_64 {
                             (
-                                u32::from_le_bytes(sect_bytes[48..52].try_into().ok()?)
-                                    as usize,
-                                u64::from_le_bytes(sect_bytes[40..48].try_into().ok()?)
-                                    as usize,
+                                u32::from_le_bytes(sect_bytes[48..52].try_into().ok()?) as usize,
+                                u64::from_le_bytes(sect_bytes[40..48].try_into().ok()?) as usize,
                             )
                         } else {
                             (
-                                u32::from_le_bytes(sect_bytes[40..44].try_into().ok()?)
-                                    as usize,
-                                u32::from_le_bytes(sect_bytes[36..40].try_into().ok()?)
-                                    as usize,
+                                u32::from_le_bytes(sect_bytes[40..44].try_into().ok()?) as usize,
+                                u32::from_le_bytes(sect_bytes[36..40].try_into().ok()?) as usize,
                             )
                         };
                         // Section file offset is relative to the
@@ -717,11 +699,7 @@ fn parse_fixed_name(bytes: &[u8]) -> String {
 /// `__` prefix, sorted, deduped). Used to surface the
 /// `__TEXT,__swift5_*` family for Swift detection.
 #[must_use]
-pub(crate) fn list_sections_with_prefix(
-    data: &[u8],
-    segname: &str,
-    prefix: &str,
-) -> Vec<String> {
+pub(crate) fn list_sections_with_prefix(data: &[u8], segname: &str, prefix: &str) -> Vec<String> {
     let Some((header_off, is_64)) = locate_first_macho_slice(data) else {
         return Vec::new();
     };
@@ -757,11 +735,8 @@ pub(crate) fn list_sections_with_prefix(
                 continue;
             }
             let this_segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
-            let (header_size, section_size, nsects_off) = if is_64 {
-                (72, 80, 64)
-            } else {
-                (56, 68, 48)
-            };
+            let (header_size, section_size, nsects_off) =
+                if is_64 { (72, 80, 64) } else { (56, 68, 48) };
             if body.len() < nsects_off + 4 {
                 cursor += cmdsize;
                 continue;
@@ -827,12 +802,7 @@ mod tests {
         out
     }
 
-    fn lc_build_version(
-        platform: u32,
-        minos: u32,
-        sdk: u32,
-        tools: &[(u32, u32)],
-    ) -> Vec<u8> {
+    fn lc_build_version(platform: u32, minos: u32, sdk: u32, tools: &[(u32, u32)]) -> Vec<u8> {
         let cmdsize = 24 + tools.len() * 8;
         let mut out = Vec::with_capacity(cmdsize);
         out.extend_from_slice(&LC_BUILD_VERSION.to_le_bytes());
@@ -937,9 +907,24 @@ mod tests {
     #[test]
     fn extract_load_dylib_kinds() {
         let mut all = Vec::new();
-        all.extend_from_slice(&lc_dylib(LC_LOAD_DYLIB, "/usr/lib/libSystem.B.dylib", 0x0510_0000, 0x0001_0000));
-        all.extend_from_slice(&lc_dylib(LC_LOAD_WEAK_DYLIB, "@rpath/libThing.dylib", 0x0001_0000, 0x0001_0000));
-        all.extend_from_slice(&lc_dylib(LC_REEXPORT_DYLIB | LC_REQ_DYLD, "@rpath/Reex.dylib", 0x0001_0000, 0x0001_0000));
+        all.extend_from_slice(&lc_dylib(
+            LC_LOAD_DYLIB,
+            "/usr/lib/libSystem.B.dylib",
+            0x0510_0000,
+            0x0001_0000,
+        ));
+        all.extend_from_slice(&lc_dylib(
+            LC_LOAD_WEAK_DYLIB,
+            "@rpath/libThing.dylib",
+            0x0001_0000,
+            0x0001_0000,
+        ));
+        all.extend_from_slice(&lc_dylib(
+            LC_REEXPORT_DYLIB | LC_REQ_DYLD,
+            "@rpath/Reex.dylib",
+            0x0001_0000,
+            0x0001_0000,
+        ));
         let mut buf = build_macho_header_64(3, all.len() as u32);
         buf.extend_from_slice(&all);
         let lc = extract(&buf).expect("present");

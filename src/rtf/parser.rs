@@ -734,8 +734,7 @@ mod tests {
     /// `\fonttbl` entry count.
     #[test]
     fn count_fonttbl_entries_basic() {
-        let body =
-            r"{\rtf1{\fonttbl{\f0\fnil Arial;}{\f1\froman Times;}{\f2\fswiss Helvetica;}}}";
+        let body = r"{\rtf1{\fonttbl{\f0\fnil Arial;}{\f1\froman Times;}{\f2\fswiss Helvetica;}}}";
         assert_eq!(count_fonttbl_entries(body), 3);
     }
 

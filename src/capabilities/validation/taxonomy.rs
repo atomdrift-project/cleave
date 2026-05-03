@@ -100,12 +100,12 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "kinds",  // too vague
     "method", // everything is a method
     "methods",
-    "misc",       // dumping ground
-    "modes",      // dumping ground
-    "new",        // temporal, will rot
-    "notable",    // dumping ground
-    "old",        // temporal, will rot
-    "other",      // dumping ground
+    "misc",    // dumping ground
+    "modes",   // dumping ground
+    "new",     // temporal, will rot
+    "notable", // dumping ground
+    "old",     // temporal, will rot
+    "other",   // dumping ground
     "operations",
     "operation",
     "pattern",    // vague

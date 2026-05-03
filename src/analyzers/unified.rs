@@ -936,6 +936,11 @@ impl UnifiedSourceAnalyzer {
             report.findings.extend(plain_findings);
         }
 
+        // Build the `source.*` kv tree from already-extracted
+        // imports/exports/functions before the trait engine runs so
+        // `type: kv, path: source.imports, ...` traits can resolve.
+        super::source_kv::attach_to_report(&mut report);
+
         // Evaluate all rules (atomic + composite) and merge into report
         self.capability_mapper.evaluate_and_merge_findings(
             &mut report,
@@ -1146,7 +1151,11 @@ impl UnifiedSourceAnalyzer {
             ..Default::default()
         };
 
-        if let Some(encoding) = self.encoded_context.as_ref().and_then(|chain| chain.first()) {
+        if let Some(encoding) = self
+            .encoded_context
+            .as_ref()
+            .and_then(|chain| chain.first())
+        {
             let mut encoded = EncodedMetrics::default();
             encoded.increment(self.config.file_type, encoding);
             metrics.encoded = Some(encoded);

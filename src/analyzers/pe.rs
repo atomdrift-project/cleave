@@ -423,10 +423,7 @@ fn parse_pkcs7_certificates(pkcs7: &[u8]) -> Vec<x509_parser::certificate::X509C
                         i += 1;
                         continue;
                     }
-                    (
-                        ((pkcs7[i + 2] as usize) << 8) | pkcs7[i + 3] as usize,
-                        4,
-                    )
+                    (((pkcs7[i + 2] as usize) << 8) | pkcs7[i + 3] as usize, 4)
                 }
                 0x83 => {
                     if i + 4 >= pkcs7.len() {
@@ -455,9 +452,7 @@ fn parse_pkcs7_certificates(pkcs7: &[u8]) -> Vec<x509_parser::certificate::X509C
             // so we filter to candidates whose inner first byte is also 0x30.
             if total > 100 && pkcs7[i + len_header] == 0x30 {
                 let candidate = &pkcs7[i..i + total];
-                if let Ok((_, cert)) =
-                    x509_parser::parse_x509_certificate(candidate)
-                {
+                if let Ok((_, cert)) = x509_parser::parse_x509_certificate(candidate) {
                     out.push(cert);
                     i += total;
                     continue;
@@ -491,14 +486,12 @@ fn find_leaf_signer<'a>(
             let subj = c.tbs_certificate.subject.to_string();
             // Leaf: not a root (subject != issuer) AND not pointed to
             // by any other cert as issuer.
-            subj != c.tbs_certificate.issuer.to_string()
-                && !issuer_names.contains(&subj)
+            subj != c.tbs_certificate.issuer.to_string() && !issuer_names.contains(&subj)
         })
         .or_else(|| {
             // Fallback: first non-self-signed cert.
             certs.iter().find(|c| {
-                c.tbs_certificate.subject.to_string()
-                    != c.tbs_certificate.issuer.to_string()
+                c.tbs_certificate.subject.to_string() != c.tbs_certificate.issuer.to_string()
             })
         })
         .or_else(|| certs.first())
@@ -1604,21 +1597,14 @@ impl PEAnalyzer {
                             source_file: None,
                         });
                     }
-                } else if !pe_metrics.has_signature {
-                    report.findings.push(Finding {
-                        id: "metadata/unsigned".to_string(),
-                        kind: FindingKind::Capability,
-                        desc: "Binary is not digitally signed".to_string(),
-                        conf: 1.0,
-                        crit: Criticality::Notable,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: vec![],
-                        evidence: vec![],
-                        match_count: 0,
-                        source_file: None,
-                    });
                 }
+                // The unsigned-PE case is now emitted by the YAML
+                // trait `metadata/signed::unsigned-pe-executable`
+                // (in `metadata/signed/unsigned-pe.yaml`) reading
+                // `kv: signing.is_signed exists: false`. That YAML
+                // version has `unless:` exclusions for .NET, Go,
+                // NSIS, etc. — strictly better than the hardcoded
+                // unconditional `metadata/unsigned` that lived here.
             }
         }
 
@@ -1981,10 +1967,7 @@ impl PEAnalyzer {
                     .count() as u32;
 
                 // Sorted, deduplicated list of DEBUG_TYPE_* values.
-                let mut types: Vec<u32> = entries
-                    .iter()
-                    .map(|entry| entry.data_type)
-                    .collect();
+                let mut types: Vec<u32> = entries.iter().map(|entry| entry.data_type).collect();
                 types.sort_unstable();
                 types.dedup();
                 // Named flags for the supply-chain-relevant types.
@@ -2074,21 +2057,23 @@ impl PEAnalyzer {
                             if let Some(leaf) = find_leaf_signer(&certs) {
                                 metrics.leaf_subject =
                                     dn_common_name(leaf.tbs_certificate.subject());
-                                metrics.leaf_issuer =
-                                    dn_common_name(leaf.tbs_certificate.issuer());
+                                metrics.leaf_issuer = dn_common_name(leaf.tbs_certificate.issuer());
                                 metrics.leaf_serial =
                                     Some(format!("{:x}", leaf.tbs_certificate.serial));
-                                metrics.leaf_not_before =
-                                    leaf.validity().not_before.timestamp();
-                                metrics.leaf_not_after =
-                                    leaf.validity().not_after.timestamp();
+                                metrics.leaf_not_before = leaf.validity().not_before.timestamp();
+                                metrics.leaf_not_after = leaf.validity().not_after.timestamp();
+                                let validity_secs = metrics
+                                    .leaf_not_after
+                                    .saturating_sub(metrics.leaf_not_before);
+                                if validity_secs > 0 {
+                                    metrics.cert_validity_days = (validity_secs / 86_400) as u32;
+                                }
                                 // SHA-1 thumbprint of the full DER —
                                 // what Windows displays as "Thumbprint".
                                 use sha1::{Digest, Sha1};
                                 let mut h = Sha1::new();
                                 h.update(leaf.as_ref());
-                                metrics.leaf_thumbprint_sha1 =
-                                    Some(hex::encode(h.finalize()));
+                                metrics.leaf_thumbprint_sha1 = Some(hex::encode(h.finalize()));
                             }
                         }
                     }
@@ -2266,8 +2251,7 @@ impl PEAnalyzer {
                         type_ids.insert(id as u32);
                     }
                 }
-                let resource_types: Vec<String> =
-                    type_ids.iter().map(|&id| rt_name(id)).collect();
+                let resource_types: Vec<String> = type_ids.iter().map(|&id| rt_name(id)).collect();
                 (
                     count,
                     version_info_present,
@@ -2326,9 +2310,7 @@ impl PEAnalyzer {
         // identical bound timestamps across vendor releases prove
         // they were linked on the same machine. Rare on modern PE.
         if let Some(opt) = pe.header.optional_header {
-            if let Some(Some(bi_entry)) =
-                opt.data_directories.data_directories.get(11)
-            {
+            if let Some(Some(bi_entry)) = opt.data_directories.data_directories.get(11) {
                 let rva = bi_entry.1.virtual_address as usize;
                 let size = bi_entry.1.size as usize;
                 if rva > 0 && size >= 8 {
@@ -2355,9 +2337,7 @@ impl PEAnalyzer {
         // a SolarWinds-class swap signal when these drift across
         // releases of the same vendor binary.
         if let Some(opt) = pe.header.optional_header {
-            if let Some(Some(lcd_entry)) =
-                opt.data_directories.data_directories.get(10)
-            {
+            if let Some(Some(lcd_entry)) = opt.data_directories.data_directories.get(10) {
                 let rva = lcd_entry.1.virtual_address as usize;
                 if rva > 0 {
                     if let Some(off) = rva_to_offset(pe, rva) {

@@ -68,11 +68,14 @@ use analyzers::FileTypeExt;
 pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
-pub use diff::DiffAnalyzer;
 pub use types::binary::StringInfo;
 pub use types::code_structure::{BinaryProperties, SourceCodeMetrics};
 pub use types::core::{AnalysisReport, Criticality, TargetInfo};
-pub use types::diff::{DiffReport, FullDiffReport, ModifiedFileAnalysis};
+pub use types::diff::{
+    Changed, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, KvChange, MetricChange,
+    ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
+    TraitChange,
+};
 pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
@@ -1569,12 +1572,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     if let Some((expected, actual, is_juke)) = mismatch {
         let (desc, evidence_value) = if is_juke {
             (
-                format!("Shebang claims {} but file is {} (extension juke)", actual, expected),
+                format!(
+                    "Shebang claims {} but file is {} (extension juke)",
+                    actual, expected
+                ),
                 format!("file={}, shebang={}", expected, actual),
             )
         } else {
             (
-                format!("File extension claims {} but content is {}", expected, actual),
+                format!(
+                    "File extension claims {} but content is {}",
+                    expected, actual
+                ),
                 format!("expected={}, actual={}", expected, actual),
             )
         };
@@ -2297,24 +2306,20 @@ pub fn formula_from_report(report: &AnalysisReport) -> String {
     malecule_bridge::formula_from_findings(&filtered)
 }
 
-/// Compare two file versions for supply chain attack detection.
+/// Compare two paths (files or directories) for supply-chain attack detection.
 ///
-/// This is useful for detecting malicious changes between package versions.
-pub fn diff_files<P: AsRef<Path>>(old_path: P, new_path: P) -> Result<DiffReport> {
-    let analyzer = DiffAnalyzer::new(old_path, new_path);
-    analyzer.analyze()
-}
-
-/// Compare two files or directories and return the comprehensive diff report.
-pub fn diff_files_full<P: AsRef<Path>>(old_path: P, new_path: P) -> Result<FullDiffReport> {
-    let analyzer = DiffAnalyzer::new(old_path, new_path);
-    analyzer.analyze_full()
-}
-
-/// Format a diff report for terminal output.
-#[must_use]
-pub fn format_diff_terminal(report: &DiffReport) -> String {
-    diff::format_diff_terminal(report)
+/// This is a thin convenience wrapper around [`diff::diff_paths`] using the
+/// default [`AnalysisOptions`] and a 100-item per-scope cap. Callers that
+/// need to tune analysis options or scope selection should call
+/// [`diff::diff_paths`] directly.
+pub fn diff_files<P: AsRef<Path>>(old: P, new: P) -> Result<AnalysisReport> {
+    diff::diff_paths(
+        old.as_ref(),
+        new.as_ref(),
+        &AnalysisOptions::default(),
+        diff::ScopeMask::all(),
+        diff::DEFAULT_LIMIT_CHANGES,
+    )
 }
 
 /// Validate the configured traits directory with full validation enabled.

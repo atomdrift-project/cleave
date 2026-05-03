@@ -240,11 +240,7 @@ pub(crate) fn compute_imphash(imports: &[Import]) -> Option<String> {
     }
     let mut entries: Vec<String> = Vec::with_capacity(imports.len());
     for imp in imports {
-        let dll = imp
-            .library
-            .as_deref()
-            .unwrap_or("")
-            .to_ascii_lowercase();
+        let dll = imp.library.as_deref().unwrap_or("").to_ascii_lowercase();
         let dll_stem = strip_dll_extension(&dll);
         let func = imp.symbol.to_ascii_lowercase();
         if dll_stem.is_empty() || func.is_empty() {

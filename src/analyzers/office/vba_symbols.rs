@@ -255,7 +255,10 @@ fn extract_declares(prep: &Prepared, out: &mut VbaSymbols) {
         // Prefer the Alias when present — that's the actual exported name
         // in the DLL. Otherwise the local declared name is the import name.
         let alias = cap.get(4).map(|m| m.as_str().to_string());
-        let local = cap.get(2).map(|m| m.as_str().to_string()).unwrap_or_default();
+        let local = cap
+            .get(2)
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default();
         let import_name = alias.unwrap_or(local);
         if import_name.is_empty() {
             continue;
@@ -649,8 +652,7 @@ fn extract_subs_and_functions(prep: &Prepared, out: &mut VbaSymbols) {
         let offset = prep.original_offset(m.start()) as u64;
 
         if is_trigger_name(&name) {
-            out.stats.trigger_handler_count =
-                out.stats.trigger_handler_count.saturating_add(1);
+            out.stats.trigger_handler_count = out.stats.trigger_handler_count.saturating_add(1);
         }
 
         out.functions.push(Function {
@@ -806,7 +808,8 @@ mod tests {
     /// Multiple distinct triggers bump the count once each.
     #[test]
     fn trigger_handler_count_aggregates_distinct_triggers() {
-        let src = "Sub Document_Open()\nEnd Sub\nSub Workbook_Open()\nEnd Sub\nSub helper()\nEnd Sub\n";
+        let src =
+            "Sub Document_Open()\nEnd Sub\nSub Workbook_Open()\nEnd Sub\nSub helper()\nEnd Sub\n";
         let r = extract_vba_symbols(src);
         assert_eq!(r.stats.trigger_handler_count, 2);
     }

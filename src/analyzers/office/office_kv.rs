@@ -96,9 +96,21 @@ pub(crate) fn build_ole_kv(doc: &ole2::Ole2Document) -> Value {
     let mut summary = Map::new();
     insert_str(&mut summary, "title", doc.metadata.title.as_deref());
     insert_str(&mut summary, "author", doc.metadata.author.as_deref());
-    insert_str(&mut summary, "last_author", doc.metadata.last_author.as_deref());
-    insert_str(&mut summary, "application", doc.metadata.application.as_deref());
-    insert_str(&mut summary, "create_time", doc.metadata.create_time.as_deref());
+    insert_str(
+        &mut summary,
+        "last_author",
+        doc.metadata.last_author.as_deref(),
+    );
+    insert_str(
+        &mut summary,
+        "application",
+        doc.metadata.application.as_deref(),
+    );
+    insert_str(
+        &mut summary,
+        "create_time",
+        doc.metadata.create_time.as_deref(),
+    );
     insert_str(
         &mut summary,
         "last_save_time",
@@ -135,11 +147,19 @@ pub(crate) fn build_ooxml_kv(doc: &ooxml::OoxmlDocument) -> Value {
     );
     insert_str(&mut core, "created", doc.metadata.created.as_deref());
     insert_str(&mut core, "modified", doc.metadata.modified.as_deref());
-    insert_str(&mut core, "application", doc.metadata.application.as_deref());
+    insert_str(
+        &mut core,
+        "application",
+        doc.metadata.application.as_deref(),
+    );
     insert_str(&mut core, "company", doc.metadata.company.as_deref());
     insert_str(&mut core, "title", doc.metadata.title.as_deref());
     insert_str(&mut core, "subject", doc.metadata.subject.as_deref());
-    insert_str(&mut core, "description", doc.metadata.description.as_deref());
+    insert_str(
+        &mut core,
+        "description",
+        doc.metadata.description.as_deref(),
+    );
     insert_str(&mut core, "keywords", doc.metadata.keywords.as_deref());
     insert_str(&mut core, "category", doc.metadata.category.as_deref());
     if !core.is_empty() {
@@ -226,8 +246,7 @@ fn insert_str(map: &mut Map<String, Value>, key: &str, value: Option<&str>) {
 mod tests {
     use super::*;
     use crate::analyzers::office::ole2::{
-        ClsidMatch, CompObjData, DocumentMetadata, Ole10NativeInfo, Ole2Document,
-        Ole2Subtype,
+        ClsidMatch, CompObjData, DocumentMetadata, Ole10NativeInfo, Ole2Document, Ole2Subtype,
     };
     use crate::analyzers::office::ooxml::{
         ExternalRef, OoxmlDocument, OoxmlMetadata, OoxmlSubtype,
@@ -295,7 +314,10 @@ mod tests {
             ..Default::default()
         };
         let kv = build_ole_kv(&doc);
-        assert_eq!(kv["ole"]["compobj"]["user_type"], "Microsoft Office Excel Worksheet");
+        assert_eq!(
+            kv["ole"]["compobj"]["user_type"],
+            "Microsoft Office Excel Worksheet"
+        );
         assert_eq!(kv["ole"]["compobj"]["clipboard_format"], "Biff8");
         assert_eq!(kv["ole"]["compobj"]["app_version"], "Excel.Sheet.8");
         assert_eq!(kv["summary"]["title"], "Q4 Report");
@@ -350,8 +372,8 @@ mod tests {
         doc.external_refs.push(ExternalRef {
             source: "word/_rels/document.xml.rels".into(),
             target: "https://example.com/pixel.gif".into(),
-            rel_type:
-                "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image".into(),
+            rel_type: "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
+                .into(),
         });
         let kv = build_ooxml_kv(&doc);
         assert_eq!(kv["core"]["creator"], "John Doe");

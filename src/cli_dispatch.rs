@@ -373,7 +373,12 @@ pub(crate) fn dispatch_command(
             validate_command()?;
             return Ok(None);
         }
-        Some(cli::Command::Diff { old, new }) => diff_command(&old, &new, ctx.format)?,
+        Some(cli::Command::Diff {
+            old,
+            new,
+            scope,
+            limit_changes,
+        }) => diff_command(&old, &new, &scope, limit_changes, ctx.format)?,
         Some(cli::Command::Strings {
             target,
             min_length,

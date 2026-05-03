@@ -21,8 +21,8 @@
 //! we need for supply-chain swap detection.
 
 use gimli::{
-    DebugAbbrev, DebugInfo, DebugLine, DebugLineStr, DebugStr, DwLang, EndianSlice,
-    LittleEndian, Reader, RunTimeEndian,
+    DebugAbbrev, DebugInfo, DebugLine, DebugLineStr, DebugStr, DwLang, EndianSlice, LittleEndian,
+    Reader, RunTimeEndian,
 };
 use std::collections::BTreeSet;
 
@@ -117,24 +117,18 @@ pub(crate) fn extract(data: &[u8]) -> Option<DwarfMetadata> {
         while let Ok(Some(attr)) = attrs.next() {
             match attr.name() {
                 gimli::DW_AT_producer => {
-                    if let Some(s) =
-                        attr_string(&attr, &header, &debug_str, &debug_line_str)
-                    {
+                    if let Some(s) = attr_string(&attr, &header, &debug_str, &debug_line_str) {
                         producers.insert(s);
                     }
                 }
                 gimli::DW_AT_comp_dir => {
-                    if let Some(s) =
-                        attr_string(&attr, &header, &debug_str, &debug_line_str)
-                    {
+                    if let Some(s) = attr_string(&attr, &header, &debug_str, &debug_line_str) {
                         cu_comp_dir = Some(s.clone());
                         comp_dirs.insert(s);
                     }
                 }
                 gimli::DW_AT_name => {
-                    if let Some(s) =
-                        attr_string(&attr, &header, &debug_str, &debug_line_str)
-                    {
+                    if let Some(s) = attr_string(&attr, &header, &debug_str, &debug_line_str) {
                         cu_name = Some(s);
                     }
                 }
@@ -349,10 +343,7 @@ mod tests {
         assert_eq!(language_name(gimli::DW_LANG_C99), "c");
         assert_eq!(language_name(gimli::DW_LANG_Rust), "rust");
         assert_eq!(language_name(gimli::DW_LANG_Go), "go");
-        assert_eq!(
-            language_name(gimli::DW_LANG_C_plus_plus_14),
-            "cpp"
-        );
+        assert_eq!(language_name(gimli::DW_LANG_C_plus_plus_14), "cpp");
     }
 
     #[test]

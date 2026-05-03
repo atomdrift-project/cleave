@@ -1019,6 +1019,12 @@ pub struct PeMetrics {
     /// Total cert count in the Authenticode SignedData certificates SET.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cert_chain_depth: u32,
+    /// Leaf cert validity window in days
+    /// (`leaf_not_after - leaf_not_before` / 86400). Derived count →
+    /// metric. Useful for spotting anomalously long-validity code-
+    /// signing certs (typical CSR is 1-3 years; >5 years is unusual).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cert_validity_days: u32,
 
     // === Load Config Directory ===
     /// Address of the /GS security cookie variable (0 if absent).
@@ -1111,6 +1117,14 @@ pub struct ConsistencyMetrics {
     /// mixed state almost always means tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub macho_slice_signing_divergence: bool,
+    /// PE Authenticode signing cert was *issued* after the binary's
+    /// COFF build timestamp (`leaf_not_before > pe.timestamp`).
+    /// Almost always means an older binary was repackaged and re-
+    /// signed with a newer cert — supply-chain swap signal. Filtered
+    /// against deterministic-build (REPRO) timestamps which can
+    /// legitimately appear in the future.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cert_issued_after_build: bool,
 }
 
 /// One PE Bound Import Descriptor — names a linked DLL plus the

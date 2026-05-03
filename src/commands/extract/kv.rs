@@ -54,7 +54,9 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
     // falling through to the generic structured-content parser. The
     // returned trees use snake_case schemas — see
     // `analyzers::office::office_kv` and `rtf::rtf_kv`.
-    let (detected, parsed) = if let Some(office_value) = office_kv::extract_office_kv(path, &content) {
+    let (detected, parsed) = if let Some(office_value) =
+        office_kv::extract_office_kv(path, &content)
+    {
         (StructuredFormat::Json, office_value)
     } else if let Some(rtf_value) = rtf_kv::extract_rtf_kv(&content) {
         (StructuredFormat::Json, rtf_value)

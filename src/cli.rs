@@ -280,14 +280,28 @@ pub enum Command {
     /// Can also enable validation during scans via CLEAVE_VALIDATE=1.
     Validate,
 
-    /// Compare two versions (diff mode) for supply chain attack detection
-    #[command(hide = true)]
+    /// Compare two versions for supply-chain attack detection.
+    ///
+    /// Computes a differential analysis across six scopes — traits, metrics,
+    /// kv, symbols, strings, sections — between an old and new file or
+    /// directory. Both inputs are run through the cached analyze pipeline,
+    /// so a re-run after a fresh analyze is essentially free.
     Diff {
         /// Old/baseline version (file or directory)
         old: String,
 
         /// New/target version (file or directory)
         new: String,
+
+        /// Comma-separated list of scopes to include
+        /// (`traits`, `metrics`, `kv`, `symbols`, `strings`, `sections`, or `all`).
+        #[arg(long, default_value = "all")]
+        scope: String,
+
+        /// Maximum number of items per `added`/`removed`/`changed` list.
+        /// `0` disables the cap. Counts and rates of change are unaffected.
+        #[arg(long, default_value_t = 100)]
+        limit_changes: usize,
     },
 
     /// Extract language-specific strings from a binary
@@ -732,9 +746,41 @@ mod tests {
         let args = Args::try_parse_from(["cleave", "diff", "old.bin", "new.bin"]).unwrap();
 
         assert!(matches!(args.command, Some(Command::Diff { .. })));
-        if let Some(Command::Diff { old, new }) = args.command {
+        if let Some(Command::Diff {
+            old,
+            new,
+            scope,
+            limit_changes,
+        }) = args.command
+        {
             assert_eq!(old, "old.bin");
             assert_eq!(new, "new.bin");
+            assert_eq!(scope, "all");
+            assert_eq!(limit_changes, 100);
+        }
+    }
+
+    #[test]
+    fn test_parse_diff_command_with_scope() {
+        let args = Args::try_parse_from([
+            "cleave",
+            "diff",
+            "--scope=traits,kv",
+            "--limit-changes=0",
+            "a",
+            "b",
+        ])
+        .unwrap();
+        if let Some(Command::Diff {
+            scope,
+            limit_changes,
+            ..
+        }) = args.command
+        {
+            assert_eq!(scope, "traits,kv");
+            assert_eq!(limit_changes, 0);
+        } else {
+            panic!("expected diff command");
         }
     }
 

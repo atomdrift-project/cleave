@@ -367,9 +367,7 @@ fn detect_subtype(stream_names: &[String]) -> Ole2Subtype {
         // after the leading "/" and excluding the SummaryInformation control
         // stream) is composed entirely of codepoints in that range is an MSI
         // table/storage entry — see the MSI streamname encoding in [MS-MSI].
-        let payload = name
-            .trim_start_matches('/')
-            .trim_start_matches('\u{0005}');
+        let payload = name.trim_start_matches('/').trim_start_matches('\u{0005}');
         if !payload.is_empty()
             && payload
                 .chars()
@@ -979,8 +977,7 @@ mod tests {
         }
         // Patch section_size.
         let section_size = (out.len() - section_start) as u32;
-        out[section_size_pos..section_size_pos + 4]
-            .copy_from_slice(&section_size.to_le_bytes());
+        out[section_size_pos..section_size_pos + 4].copy_from_slice(&section_size.to_le_bytes());
         let _ = payload_offsets; // for debugging
         out
     }

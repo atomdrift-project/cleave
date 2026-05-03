@@ -64,10 +64,8 @@ fn corpus_root() -> PathBuf {
 
 fn load_manifest() -> Manifest {
     let path = corpus_root().join("manifest.yaml");
-    let body = fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    serde_yaml::from_str(&body)
-        .unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
+    let body = fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    serde_yaml::from_str(&body).unwrap_or_else(|e| panic!("parse {}: {e}", path.display()))
 }
 
 /// Materialize a sample to a path the analyzer can read. XOR-encoded
@@ -78,8 +76,7 @@ fn stage_sample(sample: &Sample, staging: &Path) -> PathBuf {
     if !sample.xor_encoded {
         return raw;
     }
-    let bytes = fs::read(&raw)
-        .unwrap_or_else(|e| panic!("read {}: {e}", raw.display()));
+    let bytes = fs::read(&raw).unwrap_or_else(|e| panic!("read {}: {e}", raw.display()));
     let decoded = xor_decode(&bytes);
     // Strip the _xor_0x42_encoded suffix when staging
     let stem = raw

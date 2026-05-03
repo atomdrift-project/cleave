@@ -930,12 +930,7 @@ impl ElfAnalyzer {
         report
     }
 
-    fn analyze_structure<'a>(
-        &self,
-        elf: &Elf<'a>,
-        data: &[u8],
-        report: &mut AnalysisReport,
-    ) {
+    fn analyze_structure<'a>(&self, elf: &Elf<'a>, data: &[u8], report: &mut AnalysisReport) {
         // Binary format
         report.structure.push(StructuralFeature {
             id: "binary/format/elf".to_string(),

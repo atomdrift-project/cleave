@@ -6,7 +6,6 @@ use serde::{Deserialize, Serialize};
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
 use super::image_metrics::ImageMetrics;
-use super::{is_zero_f32, is_zero_u32};
 use super::jpeg_metrics::JpegMetrics;
 use super::language_metrics::{
     CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -20,6 +19,7 @@ use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
     StringMetrics, TextMetrics,
 };
+use super::{is_zero_f32, is_zero_u32};
 
 // =============================================================================
 // UNIFIED METRICS SYSTEM

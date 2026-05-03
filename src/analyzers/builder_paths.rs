@@ -57,15 +57,29 @@ const MAX_SCAN_BYTES: usize = 32 * 1024 * 1024;
 /// emit the path itself, but skip the name so trait authors don't
 /// false-positive on commodity GitHub Actions builds.
 const GENERIC_USERNAMES: &[&str] = &[
-    "root", "user", "ubuntu", "debian", "alpine", "fedora",
-    "runner",   // GitHub Actions
-    "builder",  // GitLab / generic CI
-    "build",    // generic
-    "circleci", "travis", "jenkins", "buildkite", "gitlab-runner",
-    "vsts", "vstsadmin", "azpcontainer", "agent", // Azure Pipelines
-    "container", "docker",
+    "root",
+    "user",
+    "ubuntu",
+    "debian",
+    "alpine",
+    "fedora",
+    "runner",  // GitHub Actions
+    "builder", // GitLab / generic CI
+    "build",   // generic
+    "circleci",
+    "travis",
+    "jenkins",
+    "buildkite",
+    "gitlab-runner",
+    "vsts",
+    "vstsadmin",
+    "azpcontainer",
+    "agent", // Azure Pipelines
+    "container",
+    "docker",
     "Administrator",
-    "DefaultAccount", "Public",
+    "DefaultAccount",
+    "Public",
 ];
 
 /// Recovered builder-path data.
@@ -126,8 +140,7 @@ pub(crate) fn extract(data: &[u8]) -> BuilderPaths {
             // Pull the username (the path component immediately
             // after the prefix).
             let after_prefix = &path_str[needle.len()..];
-            if let Some((user, _rest)) = split_first_component(after_prefix, prefix.separator)
-            {
+            if let Some((user, _rest)) = split_first_component(after_prefix, prefix.separator) {
                 if !user.is_empty() && is_valid_username(user) {
                     raw_user_set.insert(user.to_string());
                     if !is_generic_username(user) {
@@ -190,7 +203,11 @@ pub(crate) fn find_build_root(paths: &[String]) -> Option<String> {
     }
 
     // Multi-path: longest common prefix, then trim to last separator.
-    let separator = if candidates[0].contains('\\') { '\\' } else { '/' };
+    let separator = if candidates[0].contains('\\') {
+        '\\'
+    } else {
+        '/'
+    };
     let mut prefix = candidates[0];
     for c in &candidates[1..] {
         let common = common_prefix_len(prefix, c);
@@ -218,10 +235,7 @@ fn parent_dir(p: &str) -> Option<&str> {
 }
 
 fn common_prefix_len(a: &str, b: &str) -> usize {
-    a.bytes()
-        .zip(b.bytes())
-        .take_while(|(x, y)| x == y)
-        .count()
+    a.bytes().zip(b.bytes()).take_while(|(x, y)| x == y).count()
 }
 
 /// Best-effort username recovery from a Microsoft PDB path.  Returns
@@ -332,15 +346,12 @@ fn is_valid_username(s: &str) -> bool {
     // Usernames are alphanum + . _ - + @ in practice.  Reject
     // anything with characters that suggest we glommed onto a
     // non-path string (`%`, `$`).
-    s.chars().all(|c| {
-        c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@')
-    })
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-' | '+' | '@'))
 }
 
 fn is_generic_username(s: &str) -> bool {
-    GENERIC_USERNAMES
-        .iter()
-        .any(|g| g.eq_ignore_ascii_case(s))
+    GENERIC_USERNAMES.iter().any(|g| g.eq_ignore_ascii_case(s))
 }
 
 #[cfg(test)]
@@ -403,8 +414,7 @@ mod tests {
 
     #[test]
     fn extract_handles_multiple_users() {
-        let data =
-            b"\x00/home/alice/proj\x00/home/bob/proj\x00/Users/carol/proj\x00";
+        let data = b"\x00/home/alice/proj\x00/home/bob/proj\x00/Users/carol/proj\x00";
         let bp = extract(data);
         assert_eq!(bp.usernames, vec!["alice", "bob", "carol"]);
     }
@@ -421,24 +431,19 @@ mod tests {
 
     #[test]
     fn extract_username_from_pdb_canonical() {
-        let user = extract_username_from_pdb(
-            "C:\\Users\\dev\\projects\\sample\\sample.pdb",
-        );
+        let user = extract_username_from_pdb("C:\\Users\\dev\\projects\\sample\\sample.pdb");
         assert_eq!(user.as_deref(), Some("dev"));
     }
 
     #[test]
     fn extract_username_from_pdb_forward_slashes() {
-        let user = extract_username_from_pdb(
-            "C:/Users/alice/Documents/sample/sample.pdb",
-        );
+        let user = extract_username_from_pdb("C:/Users/alice/Documents/sample/sample.pdb");
         assert_eq!(user.as_deref(), Some("alice"));
     }
 
     #[test]
     fn extract_username_from_pdb_filters_generic() {
-        let user =
-            extract_username_from_pdb("C:\\Users\\Administrator\\projects\\sample.pdb");
+        let user = extract_username_from_pdb("C:\\Users\\Administrator\\projects\\sample.pdb");
         assert!(user.is_none());
     }
 

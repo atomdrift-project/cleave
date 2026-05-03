@@ -43,6 +43,8 @@ pub(crate) mod utils;
 
 // Cross-format binary metadata kv-tree synthesis (B0 foundation).
 pub(crate) mod binary_kv;
+// Source-code kv-tree synthesis (imports/exports/functions).
+pub(crate) mod source_kv;
 // B0.5 quick-win extractors: ELF .comment, sanitizer detection, etc.
 pub(crate) mod binary_extractors;
 // B1: Go buildinfo extractor (cross-format PE/ELF/Mach-O/raw).

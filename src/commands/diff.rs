@@ -1,45 +1,43 @@
-//! Diff command for comparing analysis results between two files.
+//! `cleave diff` — differential analysis for supply-chain attack detection.
 //!
-//! The diff command analyzes two binary files and produces a detailed comparison
-//! of their differences in terms of capabilities, traits, and other analysis metrics.
-//!
-//! # Output Formats
-//!
-//! - **JSONL**: Comprehensive ML-ready output with full differential analysis
-//! - **Terminal**: Human-readable diff summary optimized for terminal display
+//! Both inputs run through the cached analyze pipeline, so a re-diff after a
+//! fresh analyze is effectively free. The output envelope is the v3
+//! [`cleave::AnalysisReport`] with `diff` populated; JSON consumers
+//! (prism, litmus) read `diff.scopes` and `diff.files` directly, terminal
+//! consumers go through [`cleave::diff::format::format_terminal`].
+use std::path::Path;
 
-use crate::cli;
 use anyhow::Result;
 
-/// Run the diff analysis command.
+use crate::cli;
+
+/// Run the diff subcommand.
 ///
-/// Compares two binary files and generates a differential analysis report.
-/// The output format determines whether to generate comprehensive or simple diff output.
-///
-/// # Arguments
-///
-/// * `old` - Path to the original/old file to compare
-/// * `new` - Path to the new file to compare
-/// * `format` - Output format (Jsonl for comprehensive, Terminal for simple)
-///
-/// # Returns
-///
-/// A string containing the formatted diff analysis results.
-pub fn run(old: &str, new: &str, format: &cli::OutputFormat) -> Result<String> {
+/// `old` and `new` may each be a file or a directory. `scope_spec` is a
+/// comma-separated list parsed by [`cleave::diff::ScopeMask::parse`];
+/// `limit_changes` caps the per-scope item lists for legibility
+/// (`0` disables the cap).
+pub fn run(
+    old: &str,
+    new: &str,
+    scope_spec: &str,
+    limit_changes: usize,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    let mask = cleave::diff::ScopeMask::parse(scope_spec)?;
+    let options = cleave::AnalysisOptions::default();
+    let report = cleave::diff::diff_paths(
+        Path::new(old),
+        Path::new(new),
+        &options,
+        mask,
+        limit_changes,
+    )?;
+
     match format {
-        cli::OutputFormat::Json => {
-            let report = cleave::diff_files_full(old, new)?;
-            Ok(serde_json::to_string_pretty(&report)?)
-        }
-        cli::OutputFormat::Jsonl => {
-            // Use full diff for JSONL - comprehensive ML-ready output
-            let report = cleave::diff_files_full(old, new)?;
-            Ok(serde_json::to_string_pretty(&report)?)
-        }
+        cli::OutputFormat::Json | cli::OutputFormat::Jsonl => Ok(serde_json::to_string(&report)?),
         cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
-            // Use simple diff for terminal display
-            let report = cleave::diff_files(old, new)?;
-            Ok(cleave::format_diff_terminal(&report))
+            Ok(cleave::diff::format::format_terminal(&report))
         }
     }
 }

@@ -1059,6 +1059,7 @@ mod tests {
                 tools_used: vec!["test".to_string()],
                 errors: vec![],
             },
+            diff: None,
         };
         // Finalize to populate files array
         report.finalize();

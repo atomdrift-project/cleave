@@ -114,7 +114,12 @@ fn read_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         let shentsize = u16::from_le_bytes(data[0x3a..0x3c].try_into().ok()?);
         let shnum = u16::from_le_bytes(data[0x3c..0x3e].try_into().ok()?);
         let shstrndx = u16::from_le_bytes(data[0x3e..0x40].try_into().ok()?);
-        (shoff as usize, shentsize as usize, shnum as usize, shstrndx as usize)
+        (
+            shoff as usize,
+            shentsize as usize,
+            shnum as usize,
+            shstrndx as usize,
+        )
     } else {
         if data.len() < 0x34 {
             return None;
@@ -123,7 +128,12 @@ fn read_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
         let shentsize = u16::from_le_bytes(data[0x2e..0x30].try_into().ok()?);
         let shnum = u16::from_le_bytes(data[0x30..0x32].try_into().ok()?);
         let shstrndx = u16::from_le_bytes(data[0x32..0x34].try_into().ok()?);
-        (shoff as usize, shentsize as usize, shnum as usize, shstrndx as usize)
+        (
+            shoff as usize,
+            shentsize as usize,
+            shnum as usize,
+            shstrndx as usize,
+        )
     };
 
     if e_shentsize == 0 || e_shnum == 0 || e_shstrndx >= e_shnum {
@@ -357,11 +367,9 @@ pub(crate) fn extract_needed_versions(data: &[u8]) -> Option<Vec<SymbolVersionRe
             // Elf_Vernaux: u32 vna_hash, u16 vna_flags, u16 vna_other,
             // u32 vna_name, u32 vna_next (total 16 bytes).
             let vna_name =
-                u32::from_le_bytes(verneed[aux_off + 8..aux_off + 12].try_into().ok()?)
-                    as usize;
+                u32::from_le_bytes(verneed[aux_off + 8..aux_off + 12].try_into().ok()?) as usize;
             let vna_next =
-                u32::from_le_bytes(verneed[aux_off + 12..aux_off + 16].try_into().ok()?)
-                    as usize;
+                u32::from_le_bytes(verneed[aux_off + 12..aux_off + 16].try_into().ok()?) as usize;
             if let Some(name) = read_strtab_string(dynstr, vna_name) {
                 if !name.is_empty() {
                     versions.push(name);
@@ -464,7 +472,9 @@ fn read_strtab_string(strtab: &[u8], offset: usize) -> Option<String> {
     if end == offset {
         return None;
     }
-    std::str::from_utf8(&strtab[offset..end]).ok().map(str::to_string)
+    std::str::from_utf8(&strtab[offset..end])
+        .ok()
+        .map(str::to_string)
 }
 
 // ---------------------------------------------------------------------------
@@ -538,9 +548,7 @@ pub(crate) fn extract_note_package(data: &[u8]) -> Option<serde_json::Value> {
     }
     // Trim trailing NULs from the desc — the section may pad up to
     // 4 bytes with zeros.
-    let desc = bytes[desc_start..desc_end]
-        .split(|&b| b == 0)
-        .next()?;
+    let desc = bytes[desc_start..desc_end].split(|&b| b == 0).next()?;
     let text = std::str::from_utf8(desc).ok()?;
     let val: serde_json::Value = serde_json::from_str(text).ok()?;
     if val.is_null() {
@@ -698,10 +706,7 @@ pub(crate) fn detect_sanitizers(imports: &[Import]) -> Vec<String> {
         // `__asan_init` is stored as `asan_init`). Match against the
         // post-normalization form by stripping any remaining leading
         // underscores defensively.
-        let s = imp
-            .symbol
-            .as_str()
-            .trim_start_matches('_');
+        let s = imp.symbol.as_str().trim_start_matches('_');
         if s.starts_with("asan_") {
             out.insert("asan".to_string());
         } else if s.starts_with("tsan_") {
@@ -936,21 +941,27 @@ pub(crate) fn parse_comment_fingerprint(comment: &str) -> CommentFingerprint {
             let token = after_paren
                 .split([';', ',', ' '])
                 .find(|t| t.chars().next().is_some_and(|c| c.is_ascii_digit()));
-            fp.toolchain_version = token.map(|t| t.trim().to_string()).filter(|s| !s.is_empty());
+            fp.toolchain_version = token
+                .map(|t| t.trim().to_string())
+                .filter(|s| !s.is_empty());
         }
     } else if comment.contains("Apple LLVM") || comment.contains("Apple clang") {
         fp.toolchain_family = Some("apple_clang".into());
         if let Some(pos) = comment.find("version ") {
             let rest = &comment[pos + "version ".len()..];
             let token = rest.split([' ', '(', ')']).next();
-            fp.toolchain_version = token.map(|t| t.trim().to_string()).filter(|s| !s.is_empty());
+            fp.toolchain_version = token
+                .map(|t| t.trim().to_string())
+                .filter(|s| !s.is_empty());
         }
     } else if comment.contains("clang version") {
         fp.toolchain_family = Some("clang".into());
         if let Some(pos) = comment.find("clang version ") {
             let rest = &comment[pos + "clang version ".len()..];
             let token = rest.split([' ', '(', ')']).next();
-            fp.toolchain_version = token.map(|t| t.trim().to_string()).filter(|s| !s.is_empty());
+            fp.toolchain_version = token
+                .map(|t| t.trim().to_string())
+                .filter(|s| !s.is_empty());
         }
     }
 
@@ -978,8 +989,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     let mut augment = serde_json::Map::new();
 
     // PE Rich header / imphash / VERSIONINFO.
-    let is_pe = raw_data.len() > 0x40
-        && raw_data.get(..2) == Some(b"MZ".as_ref());
+    let is_pe = raw_data.len() > 0x40 && raw_data.get(..2) == Some(b"MZ".as_ref());
     if is_pe {
         let mut pe_extra = serde_json::Map::new();
         let mut hashes_extra = serde_json::Map::new();
@@ -1051,10 +1061,8 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             if let Some(family) = fp.toolchain_family {
                 build_extra.insert("toolchain_family".into(), json!(family.clone()));
                 if let Some(version) = fp.toolchain_version {
-                    build_extra.insert(
-                        "toolchain".into(),
-                        json!(format!("{} {}", family, version)),
-                    );
+                    build_extra
+                        .insert("toolchain".into(), json!(format!("{} {}", family, version)));
                 }
             }
         }
@@ -1341,9 +1349,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             let mut cdhash_for_hashes: Option<String> = None;
             let mut codesign_notarized = false;
             if let Some((cs_off, cs_size)) = lc.code_signature {
-                if let Ok(cs) = super::macho_codesign::parse_code_signature(
-                    raw_data, cs_off, cs_size,
-                ) {
+                if let Ok(cs) =
+                    super::macho_codesign::parse_code_signature(raw_data, cs_off, cs_size)
+                {
                     cdhash_for_hashes = cs.cdhash_sha256.clone();
                     codesign_notarized = cs.is_notarized;
                     let signing_extra = augment
@@ -1364,10 +1372,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                             obj.insert("signer_subject".into(), json!(signer));
                         }
                         if !cs.authorities.is_empty() {
-                            obj.insert(
-                                "authorities".into(),
-                                json!(cs.authorities.clone()),
-                            );
+                            obj.insert("authorities".into(), json!(cs.authorities.clone()));
                         }
                         if cs.is_notarized {
                             obj.insert("notarized".into(), json!(true));
@@ -1412,11 +1417,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             // built outside Xcode (e.g. from a tampered swiftc) often
             // shows section drift.
             let swift_sections =
-                super::macho_extractors::list_sections_with_prefix(
-                    raw_data,
-                    "__TEXT",
-                    "__swift5_",
-                );
+                super::macho_extractors::list_sections_with_prefix(raw_data, "__TEXT", "__swift5_");
             if !swift_sections.is_empty() {
                 macho_extra.insert("swift_sections".into(), json!(swift_sections.clone()));
                 // Set the metric for trait min/max queries.
@@ -1436,20 +1437,16 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             // signals: the launchd plist names the daemon and its
             // ProgramArguments; Info.plist mismatch with code signature
             // bundle_identifier is a tampering signal.
-            if let Some(bytes) = super::macho_extractors::find_section(
-                raw_data,
-                "__TEXT",
-                "__info_plist",
-            ) {
+            if let Some(bytes) =
+                super::macho_extractors::find_section(raw_data, "__TEXT", "__info_plist")
+            {
                 if let Some(parsed) = parse_plist_to_json(bytes) {
                     macho_extra.insert("info_plist".into(), parsed);
                 }
             }
-            if let Some(bytes) = super::macho_extractors::find_section(
-                raw_data,
-                "__TEXT",
-                "__launchd_plist",
-            ) {
+            if let Some(bytes) =
+                super::macho_extractors::find_section(raw_data, "__TEXT", "__launchd_plist")
+            {
                 if let Some(parsed) = parse_plist_to_json(bytes) {
                     macho_extra.insert("launchd_plist".into(), parsed);
                 }
@@ -1523,10 +1520,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
             obj.insert("toolchain_family".into(), json!("rustc"));
             if !rust_symbols.is_empty() {
-                obj.insert(
-                    "rust_runtime_symbols".into(),
-                    json!(rust_symbols),
-                );
+                obj.insert("rust_runtime_symbols".into(), json!(rust_symbols));
             }
             if let Some(m) = rust_mangling {
                 obj.insert("rust_mangling".into(), json!(m));
@@ -1563,10 +1557,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // target one or the other based on cardinality; the
     // `username_from` field carries provenance.
     let bp = super::builder_paths::extract(raw_data);
-    if !bp.usernames.is_empty()
-        || !bp.source_dirs.is_empty()
-        || !bp.full_paths.is_empty()
-    {
+    if !bp.usernames.is_empty() || !bp.source_dirs.is_empty() || !bp.full_paths.is_empty() {
         let build_extra = augment
             .entry(String::from("build"))
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
@@ -1654,7 +1645,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // live on `report.metrics.consistency` rather than in the kv
     // tree. Trait authors target them via
     // `type: metrics, field: consistency.<name>, min: 1`.
-    let consistency = compute_consistency(&augment);
+    let consistency = compute_consistency_with_metrics(&augment, report.metrics.as_ref());
     if !consistency_is_default(&consistency) {
         let metrics = report
             .metrics
@@ -1709,9 +1700,7 @@ fn plist_to_json(v: &plist::Value) -> serde_json::Value {
             .map(Value::Number)
             .unwrap_or(Value::Null),
         plist::Value::Date(d) => Value::String(format!("{:?}", d)),
-        plist::Value::Array(arr) => {
-            Value::Array(arr.iter().map(plist_to_json).collect())
-        }
+        plist::Value::Array(arr) => Value::Array(arr.iter().map(plist_to_json).collect()),
         plist::Value::Dictionary(d) => {
             // Preserve plist keys verbatim — `CFBundleIdentifier`,
             // `LSMinimumSystemVersion`, `ProgramArguments`, etc. —
@@ -1741,7 +1730,35 @@ fn plist_to_json(v: &plist::Value) -> serde_json::Value {
 fn compute_consistency(
     augment: &serde_json::Map<String, serde_json::Value>,
 ) -> crate::types::binary_metrics::ConsistencyMetrics {
+    compute_consistency_with_metrics(augment, None)
+}
+
+/// Same as `compute_consistency` but with access to the per-format
+/// metrics structs for checks that need typed numeric fields (vs the
+/// kv tree's serialized JSON form).
+fn compute_consistency_with_metrics(
+    augment: &serde_json::Map<String, serde_json::Value>,
+    metrics: Option<&crate::types::scores::Metrics>,
+) -> crate::types::binary_metrics::ConsistencyMetrics {
     let mut out = crate::types::binary_metrics::ConsistencyMetrics::default();
+
+    // PE Authenticode cert issued after build. The leaf cert's
+    // not_before is when the cert was *issued*; if that's after the
+    // binary's COFF timestamp, the binary was created/repackaged
+    // before the signing cert existed — only possible if it was
+    // re-signed with a newer cert later.
+    //
+    // Filter out deterministic-build cases where pe.timestamp is a
+    // content hash that can legitimately appear in the future
+    // (`pe.is_reproducible_build`). Also skip when timestamp is 0
+    // (also a deterministic marker).
+    if let Some(m) = metrics.and_then(|m| m.pe.as_ref()) {
+        let cert_issued = m.leaf_not_before;
+        let build_ts = m.timestamp as i64;
+        if cert_issued > 0 && build_ts > 0 && !m.is_reproducible_build && cert_issued > build_ts {
+            out.cert_issued_after_build = true;
+        }
+    }
 
     // Mach-O code-sig CodeDirectory identifier vs embedded Info.plist
     // CFBundleIdentifier. Vendors set them in lockstep; divergence
@@ -1845,14 +1862,13 @@ fn consistency_is_default(c: &crate::types::binary_metrics::ConsistencyMetrics) 
         && !c.dwarf_mixed_producers
         && !c.dwarf_mixed_comp_dirs
         && !c.macho_slice_signing_divergence
+        && !c.cert_issued_after_build
 }
 
 /// Compare two dotted version strings, treating trailing zeros as
 /// equivalent (`"1.2.3"` == `"1.2.3.0"` == `"1.2.3.0.0"`).
 fn versions_equivalent(a: &str, b: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> {
-        s.split('.').filter_map(|c| c.parse().ok()).collect()
-    };
+    let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|c| c.parse().ok()).collect() };
     let mut va = parse(a);
     let mut vb = parse(b);
     while va.last().copied() == Some(0) {
@@ -1908,10 +1924,7 @@ fn looks_like_macho(data: &[u8]) -> bool {
         Ok(b) => u32::from_be_bytes(b),
         Err(_) => return false,
     };
-    m == 0xFEED_FACE
-        || m == 0xFEED_FACF
-        || m_be == 0xCAFE_BABE
-        || m_be == 0xCAFE_BABF
+    m == 0xFEED_FACE || m == 0xFEED_FACF || m_be == 0xCAFE_BABE || m_be == 0xCAFE_BABF
 }
 
 /// Serialize a parsed Go buildinfo into the kv-tree shape
@@ -1987,10 +2000,7 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
         let key = raw_key.as_str();
         // VCS sub-tree.
         if let Some(suffix) = key.strip_prefix("vcs.") {
-            vcs.insert(
-                suffix.to_string(),
-                go_value_for(suffix, raw_val),
-            );
+            vcs.insert(suffix.to_string(), go_value_for(suffix, raw_val));
             continue;
         }
         if key == "vcs" {
@@ -2017,11 +2027,9 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
             "GOARM" => Some("goarm"),
             "GO386" => Some("go386"),
             "CGO_ENABLED" => Some("cgo"),
-            "CGO_CFLAGS"
-            | "CGO_CPPFLAGS"
-            | "CGO_CXXFLAGS"
-            | "CGO_FFLAGS"
-            | "CGO_LDFLAGS" => Some("cgo_flags"),
+            "CGO_CFLAGS" | "CGO_CPPFLAGS" | "CGO_CXXFLAGS" | "CGO_FFLAGS" | "CGO_LDFLAGS" => {
+                Some("cgo_flags")
+            }
             _ => None,
         };
         if let Some(name) = canonical {
@@ -2147,8 +2155,7 @@ mod tests {
 
     #[test]
     fn parse_comment_chainguard_gcc() {
-        let fp =
-            parse_comment_fingerprint("GCC: (Chainguard 13.2.0-r5) 13.2.0");
+        let fp = parse_comment_fingerprint("GCC: (Chainguard 13.2.0-r5) 13.2.0");
         assert_eq!(fp.distro.as_deref(), Some("chainguard"));
     }
 
@@ -2156,9 +2163,7 @@ mod tests {
     fn parse_comment_wolfi_takes_precedence_over_alpine() {
         // Defensive: ensure Wolfi wins even if "alpine" appears later
         // in the same banner (e.g. via a multi-tool comment join).
-        let fp = parse_comment_fingerprint(
-            "GCC: (Wolfi 14.2.0-r8) 14.2.0; alpine reference",
-        );
+        let fp = parse_comment_fingerprint("GCC: (Wolfi 14.2.0-r8) 14.2.0; alpine reference");
         assert_eq!(fp.distro.as_deref(), Some("wolfi"));
     }
 
@@ -2174,8 +2179,7 @@ mod tests {
 
     #[test]
     fn parse_comment_apple_llvm() {
-        let fp =
-            parse_comment_fingerprint("Apple LLVM version 14.0.0 (clang-1400.0.29.202)");
+        let fp = parse_comment_fingerprint("Apple LLVM version 14.0.0 (clang-1400.0.29.202)");
         assert_eq!(fp.toolchain_family.as_deref(), Some("apple_clang"));
         assert_eq!(fp.toolchain_version.as_deref(), Some("14.0.0"));
     }
@@ -2510,10 +2514,7 @@ mod tests {
 
     #[test]
     fn extract_gnu_property_aarch64_pac_only() {
-        let desc = property_entry(
-            GNU_PROPERTY_AARCH64_FEATURE_1_AND,
-            &2u32.to_le_bytes(),
-        );
+        let desc = property_entry(GNU_PROPERTY_AARCH64_FEATURE_1_AND, &2u32.to_le_bytes());
         let elf = build_minimal_elf_with_gnu_property(&desc);
         let p = extract_gnu_property(&elf).expect("present");
         assert!(p.pac);

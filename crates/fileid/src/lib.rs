@@ -680,8 +680,11 @@ mod tests {
     #[test]
     fn js_extension_overrides_bash_shebang_juke() {
         // npm xmlrpc / xmrdropper pattern.
-        let det = detect(Path::new("validator.js"), b"#!/bin/bash\nconst fs = require('fs');\n")
-            .unwrap();
+        let det = detect(
+            Path::new("validator.js"),
+            b"#!/bin/bash\nconst fs = require('fs');\n",
+        )
+        .unwrap();
         assert_eq!(det.file_type, FileType::JavaScript);
         assert!(det.extension_mismatch());
         assert_eq!(det.extension_type(), Some(FileType::Shell));

@@ -397,8 +397,8 @@ fn skip_array(body: &[u8], start: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 fn parse_stream_meta(body: &[u8]) -> (bool, Vec<String>) {
-    let has_stream = find_subslice(body, b"stream").is_some()
-        && find_subslice(body, b"endstream").is_some();
+    let has_stream =
+        find_subslice(body, b"stream").is_some() && find_subslice(body, b"endstream").is_some();
     let dict = parse_top_level_dict(body);
     let mut filters = Vec::new();
     if let Some(filter_value) = dict.get("Filter") {
@@ -628,11 +628,7 @@ fn compute_structural(
     }
     // Filter / annotation scan.
     for obj in objects {
-        if obj
-            .stream_filters
-            .iter()
-            .any(|f| f == "JBIG2Decode")
-        {
+        if obj.stream_filters.iter().any(|f| f == "JBIG2Decode") {
             s.jbig2_filter_count = s.jbig2_filter_count.saturating_add(1);
         }
         if obj.dict.get("Subtype").map(|v| v.contains("/3D")) == Some(true) {
@@ -756,12 +752,7 @@ fn push_action_from_value(
     }
 }
 
-fn push_actions_from_aa(
-    aa: &str,
-    source: &str,
-    out: &mut Vec<PdfAction>,
-    objects: &[PdfObject],
-) {
+fn push_actions_from_aa(aa: &str, source: &str, out: &mut Vec<PdfAction>, objects: &[PdfObject]) {
     // /AA dict like `<< /WC 12 0 R /WS 13 0 R >>` — capture each ref.
     let mut chars = aa.chars();
     let mut buf = String::new();
@@ -843,11 +834,7 @@ fn extract_action_snippet(
     }
 }
 
-fn extract_inline_snippet(
-    dict_value: &str,
-    kind: PdfActionKind,
-    objects: &[PdfObject],
-) -> String {
+fn extract_inline_snippet(dict_value: &str, kind: PdfActionKind, objects: &[PdfObject]) -> String {
     let key = match kind {
         PdfActionKind::JavaScript => "JS",
         PdfActionKind::Launch => "F",
@@ -1172,7 +1159,11 @@ trailer\n<<>>\n%%EOF\n";
             .iter()
             .find(|a| a.kind == PdfActionKind::Launch)
             .expect("launch action present");
-        assert!(launch.snippet.contains("cmd.exe"), "snippet: {}", launch.snippet);
+        assert!(
+            launch.snippet.contains("cmd.exe"),
+            "snippet: {}",
+            launch.snippet
+        );
     }
 
     /// JBIG2 filter on a stream is captured.

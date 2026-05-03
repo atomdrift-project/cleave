@@ -5,9 +5,9 @@
 //! for analysis through the standard pipeline, and detects Office-specific
 //! malware techniques (template injection, DDE, embedded executables).
 
+pub(crate) mod office_kv;
 pub(crate) mod ole2;
 pub(crate) mod ooxml;
-pub(crate) mod office_kv;
 pub(crate) mod vba;
 pub(crate) mod vba_symbols;
 
@@ -144,11 +144,7 @@ impl OfficeAnalyzer {
         // kv evaluator can consult it (`type: kv path: summary.author`
         // etc.). Empty/null trees are dropped so JSON output stays
         // clean for non-office or unparsable files.
-        if !kv_tree.is_null()
-            && kv_tree
-                .as_object()
-                .is_none_or(|m| !m.is_empty())
-        {
+        if !kv_tree.is_null() && kv_tree.as_object().is_none_or(|m| !m.is_empty()) {
             report.kv_tree = Some(Box::new(kv_tree));
         }
 
@@ -254,8 +250,17 @@ impl OfficeAnalyzer {
             {
                 office.is_macro_enabled_extension = matches!(
                     ext.as_str(),
-                    "docm" | "xlsm" | "pptm" | "dotm" | "xltm" | "potm"
-                        | "xla" | "xlam" | "xll" | "xlsb" | "ppam"
+                    "docm"
+                        | "xlsm"
+                        | "pptm"
+                        | "dotm"
+                        | "xltm"
+                        | "potm"
+                        | "xla"
+                        | "xlam"
+                        | "xll"
+                        | "xlsb"
+                        | "ppam"
                 );
                 office.doc_type = ext;
             }
@@ -266,9 +271,7 @@ impl OfficeAnalyzer {
         }
 
         office.has_macros = true;
-        office.vba_module_count = office
-            .vba_module_count
-            .saturating_add(modules.len() as u32);
+        office.vba_module_count = office.vba_module_count.saturating_add(modules.len() as u32);
 
         let mut vba_source_size: u64 = 0;
         let mut agg = crate::types::office_metrics::VbaMetrics::default();
@@ -283,16 +286,12 @@ impl OfficeAnalyzer {
             // Module-name shape: random-looking names are a strong
             // obfuscation signal. Heuristic in `looks_random_module_name`.
             if vba_symbols::looks_random_module_name(&module.name) {
-                agg.random_named_module_count = agg
-                    .random_named_module_count
-                    .saturating_add(1);
+                agg.random_named_module_count = agg.random_named_module_count.saturating_add(1);
             }
 
             // Per-module logical-line / comment-line counts.
             let shape = vba_symbols::compute_module_shape(&module.source_code);
-            agg.total_logical_lines = agg
-                .total_logical_lines
-                .saturating_add(shape.logical_lines);
+            agg.total_logical_lines = agg.total_logical_lines.saturating_add(shape.logical_lines);
             agg.comment_lines = agg.comment_lines.saturating_add(shape.comment_lines);
 
             let extracted = vba_symbols::extract_vba_symbols(&module.source_code);
@@ -303,40 +302,33 @@ impl OfficeAnalyzer {
                     // distinct_dll_count tracks Declare-imported native
                     // DLLs only; CreateObject's pseudo-library `com` is
                     // counted separately via distinct_progid_count.
-                    if imp.source == "vba-declare"
-                        && lib != vba_symbols::NON_LITERAL_SENTINEL
-                    {
+                    if imp.source == "vba-declare" && lib != vba_symbols::NON_LITERAL_SENTINEL {
                         distinct_libs.insert(lib.clone());
                     }
                     match lib.as_str() {
                         "kernel32" | "kernelbase" => {
-                            agg.kernel32_ref_count =
-                                agg.kernel32_ref_count.saturating_add(1);
+                            agg.kernel32_ref_count = agg.kernel32_ref_count.saturating_add(1);
                         }
                         "user32" => {
                             agg.user32_ref_count = agg.user32_ref_count.saturating_add(1);
                         }
                         "advapi32" => {
-                            agg.advapi32_ref_count =
-                                agg.advapi32_ref_count.saturating_add(1);
+                            agg.advapi32_ref_count = agg.advapi32_ref_count.saturating_add(1);
                         }
                         "urlmon" => {
                             agg.urlmon_ref_count = agg.urlmon_ref_count.saturating_add(1);
                         }
                         "wininet" | "winhttp" => {
-                            agg.wininet_ref_count =
-                                agg.wininet_ref_count.saturating_add(1);
+                            agg.wininet_ref_count = agg.wininet_ref_count.saturating_add(1);
                         }
                         "ws2_32" => {
-                            agg.ws2_32_ref_count =
-                                agg.ws2_32_ref_count.saturating_add(1);
+                            agg.ws2_32_ref_count = agg.ws2_32_ref_count.saturating_add(1);
                         }
                         "ole32" | "oleaut32" => {
                             agg.ole32_ref_count = agg.ole32_ref_count.saturating_add(1);
                         }
                         "shell32" | "shlwapi" => {
-                            agg.shell32_ref_count =
-                                agg.shell32_ref_count.saturating_add(1);
+                            agg.shell32_ref_count = agg.shell32_ref_count.saturating_add(1);
                         }
                         _ => {}
                     }
@@ -358,7 +350,9 @@ impl OfficeAnalyzer {
                 ident_stats.record(&imp.symbol);
             }
 
-            agg.declare_count = agg.declare_count.saturating_add(extracted.stats.declare_count);
+            agg.declare_count = agg
+                .declare_count
+                .saturating_add(extracted.stats.declare_count);
             agg.declare_non_literal_count = agg
                 .declare_non_literal_count
                 .saturating_add(extracted.stats.declare_non_literal_count);
@@ -839,11 +833,16 @@ impl OfficeAnalyzer {
         // `max_stream_size` is populated by the CompObj/SummaryInfo
         // pass that has access to per-entry sizes — left at 0 here so
         // the field stays empty in JSON until that pass lands.
-        let (compobj_user_type, compobj_clipboard_format, compobj_app_version) =
-            doc.compobj.as_ref().map_or(
-                (String::new(), String::new(), String::new()),
-                |c| (c.user_type.clone(), c.clipboard_format.clone(), c.app_version.clone()),
-            );
+        let (compobj_user_type, compobj_clipboard_format, compobj_app_version) = doc
+            .compobj
+            .as_ref()
+            .map_or((String::new(), String::new(), String::new()), |c| {
+                (
+                    c.user_type.clone(),
+                    c.clipboard_format.clone(),
+                    c.app_version.clone(),
+                )
+            });
         let ole_metrics = OleMetrics {
             stream_count,
             storage_count,
@@ -1027,7 +1026,13 @@ impl OfficeAnalyzer {
             // The counts themselves remain on `office.xlm.*` for any
             // future tuning. Keeping the locals named/used so the
             // capability mapper has consistent values to reference.
-            let _ = (xlm_formula_fill, xlm_run, xlm_char, xlm_get_cell, xlm_day_now);
+            let _ = (
+                xlm_formula_fill,
+                xlm_run,
+                xlm_char,
+                xlm_get_cell,
+                xlm_day_now,
+            );
         }
 
         let mut has_concealed_script = false;
@@ -1274,12 +1279,8 @@ impl OfficeAnalyzer {
         let mut suspicious_extension_count: u32 = 0;
         for name in &doc.entry_names {
             if let Some(ext) = name.rsplit('.').next() {
-                if suspicious_exts
-                    .iter()
-                    .any(|s| ext.eq_ignore_ascii_case(s))
-                {
-                    suspicious_extension_count =
-                        suspicious_extension_count.saturating_add(1);
+                if suspicious_exts.iter().any(|s| ext.eq_ignore_ascii_case(s)) {
+                    suspicious_extension_count = suspicious_extension_count.saturating_add(1);
                 }
             }
         }
@@ -1305,8 +1306,7 @@ impl OfficeAnalyzer {
             suspicious_extension_count,
             declares_macro_enabled: content_types_xml
                 .contains("application/vnd.ms-word.document.macroEnabled")
-                || content_types_xml
-                    .contains("application/vnd.ms-excel.sheet.macroEnabled")
+                || content_types_xml.contains("application/vnd.ms-excel.sheet.macroEnabled")
                 || content_types_xml
                     .contains("application/vnd.ms-powerpoint.presentation.macroEnabled"),
             declares_vba_project: content_types_xml
@@ -1321,8 +1321,15 @@ impl OfficeAnalyzer {
         // benign .docx/.pptx files don't carry an empty `office.xlm`
         // sub-object.
         let xlm_metrics = if doc.doc_subtype == ooxml::OoxmlSubtype::Excel
-            && (xlm_formula_fill | xlm_run | xlm_char | xlm_get_cell | xlm_day_now
-                | xlm_exec | xlm_register | xlm_call | xlm_very_hidden
+            && (xlm_formula_fill
+                | xlm_run
+                | xlm_char
+                | xlm_get_cell
+                | xlm_day_now
+                | xlm_exec
+                | xlm_register
+                | xlm_call
+                | xlm_very_hidden
                 | xlm_auto_open)
                 != 0
         {
@@ -1350,12 +1357,10 @@ impl OfficeAnalyzer {
         for ext_ref in &doc.external_refs {
             cross.external_ref_count = cross.external_ref_count.saturating_add(1);
             if ext_ref.rel_type.contains("attachedTemplate") {
-                cross.external_template_count =
-                    cross.external_template_count.saturating_add(1);
+                cross.external_template_count = cross.external_template_count.saturating_add(1);
             }
             if ext_ref.rel_type.contains("oleObject") {
-                cross.external_oleobject_count =
-                    cross.external_oleobject_count.saturating_add(1);
+                cross.external_oleobject_count = cross.external_oleobject_count.saturating_add(1);
             }
             if ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument") {
                 cross.external_frame_count = cross.external_frame_count.saturating_add(1);
@@ -1535,16 +1540,14 @@ mod tests {
         );
 
         // Imports surface on the parent report so type:symbol traits hit.
-        let imp_names: Vec<&str> =
-            report.imports.iter().map(|i| i.symbol.as_str()).collect();
+        let imp_names: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
         assert!(imp_names.contains(&"VirtualAlloc"));
         assert!(imp_names.contains(&"WScript.Shell"));
         // f's Alias is missing → its declared name is used as the symbol.
         assert!(imp_names.contains(&"f"));
 
         // Functions surface so trigger-handler `type: symbol` traits hit.
-        let fn_names: Vec<&str> =
-            report.functions.iter().map(|f| f.name.as_str()).collect();
+        let fn_names: Vec<&str> = report.functions.iter().map(|f| f.name.as_str()).collect();
         assert!(fn_names.contains(&"Document_Open"));
 
         // OfficeMetrics is populated and threaded under metrics.office.
@@ -1561,7 +1564,10 @@ mod tests {
         assert_eq!(vba.createobject_count, 2);
         assert_eq!(vba.createobject_non_literal_count, 1);
         assert!(vba.kernel32_ref_count >= 1);
-        assert_eq!(vba.distinct_dll_count, 1, "kernel32 only — non-literal lib excluded");
+        assert_eq!(
+            vba.distinct_dll_count, 1,
+            "kernel32 only — non-literal lib excluded"
+        );
         assert_eq!(vba.distinct_progid_count, 1, "WScript.Shell only");
         assert_eq!(vba.distinct_trigger_count, 1, "Document_Open only");
         assert!(vba.trigger_handler_count >= 1);

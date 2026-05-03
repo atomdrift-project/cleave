@@ -310,7 +310,6 @@ impl MachOAnalyzer {
 
         // Always compute basic binary metrics (even if radare2 fails)
         let binary_metrics = crate::types::BinaryMetrics {
-            file_size: data.len() as u64,
             segment_count: macho
                 .load_commands
                 .iter()
@@ -401,7 +400,6 @@ impl MachOAnalyzer {
                     } else {
                         // Fallback: set full radare2 metrics if binary metrics somehow missing
                         let mut full_metrics = r2_binary_metrics;
-                        full_metrics.file_size = data.len() as u64;
                         full_metrics.segment_count = macho
                             .load_commands
                             .iter()
@@ -558,7 +556,7 @@ impl MachOAnalyzer {
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate(&report.target.path);
+                binary.validate(&report.target.path, report.target.size_bytes);
             }
         }
 
@@ -1439,14 +1437,12 @@ impl MachOAnalyzer {
                             e
                         );
                         crate::types::BinaryMetrics {
-                            file_size: data.len() as u64,
                             ..Default::default()
                         }
                     }
                 }
             } else {
                 crate::types::BinaryMetrics {
-                    file_size: data.len() as u64,
                     ..Default::default()
                 }
             };

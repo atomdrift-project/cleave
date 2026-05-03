@@ -150,6 +150,20 @@ pub struct FileAnalysis {
     /// Generated from findings using the malecule library
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+
+    /// Flat structural-kv map. Path → leaf value, using the same
+    /// `a.b[0].c` notation as `cleave kv`. Auto-populated at
+    /// `finalize()` time from the analyzer's `kv_tree`. Type-default
+    /// leaves (`false` / `0` / `""` / `null` / empty containers) are
+    /// skipped — collimator-style ML pipelines treat absent features
+    /// as default, so omitting them halves the per-file payload
+    /// without losing signal.
+    #[serde(
+        rename = "k",
+        default,
+        skip_serializing_if = "std::collections::BTreeMap::is_empty"
+    )]
+    pub kv: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl FileAnalysis {
@@ -188,6 +202,7 @@ impl FileAnalysis {
             env_vars: Vec::new(),
             extracted_path: None,
             formula: None,
+            kv: std::collections::BTreeMap::new(),
         }
     }
 

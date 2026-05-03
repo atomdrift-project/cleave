@@ -1225,14 +1225,15 @@ impl PEAnalyzer {
 
             // When goblin succeeded, override r2 metrics with more accurate goblin values
             if let Some(pe) = pe {
+                let file_size = original_data.len() as u64;
                 let mut code_size = goblin_code_size;
-                if code_size > binary_metrics.file_size {
+                if code_size > file_size {
                     tracing::warn!(
                         "code_size ({}) > file_size ({}) — capping",
                         code_size,
-                        binary_metrics.file_size
+                        file_size
                     );
-                    code_size = binary_metrics.file_size;
+                    code_size = file_size;
                 }
                 binary_metrics.code_size = code_size;
 
@@ -1256,8 +1257,8 @@ impl PEAnalyzer {
                 binary_metrics.wx_sections = wx;
 
                 // Recalculate ratios with correct code_size
-                if binary_metrics.file_size > 0 {
-                    let data_size = binary_metrics.file_size.saturating_sub(code_size);
+                if file_size > 0 {
+                    let data_size = file_size.saturating_sub(code_size);
                     if data_size > 0 {
                         binary_metrics.code_to_data_ratio = code_size as f32 / data_size as f32;
                     }
@@ -1626,7 +1627,7 @@ impl PEAnalyzer {
 
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate(&report.target.path);
+                binary.validate(&report.target.path, report.target.size_bytes);
             }
         }
 

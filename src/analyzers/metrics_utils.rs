@@ -215,9 +215,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         binary.aliased_exports = addr_counts.values().filter(|&&c| c > 1).copied().sum();
     }
 
-    if binary.file_size == 0 {
-        binary.file_size = data.len() as u64;
-    }
+    let file_size = data.len() as u64;
 
     // Calculate string metrics
     if !report.strings.is_empty() {
@@ -426,8 +424,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         }
 
         binary.avg_section_size = total_size as f32 / report.sections.len() as f32;
-        if binary.file_size > 0 {
-            let file_size_f32 = binary.file_size as f32;
+        if file_size > 0 {
+            let file_size_f32 = file_size as f32;
             binary.largest_section_ratio = max_section_size as f32 / file_size_f32;
             binary.text_to_file_ratio = text_size as f32 / file_size_f32;
             binary.data_to_file_ratio = data_size as f32 / file_size_f32;

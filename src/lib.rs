@@ -1986,12 +1986,20 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // `metrics.file.size` for every analyzed file.
     {
         let size = report.target.size_bytes;
-        let metrics = report.metrics.get_or_insert_with(types::scores::Metrics::default);
+        let metrics = report
+            .metrics
+            .get_or_insert_with(types::scores::Metrics::default);
         metrics
             .file
             .get_or_insert_with(types::file_metrics::FileMetrics::default)
             .size = size;
     }
+
+    // Collapse duplicate findings (same id) before anything downstream sees
+    // the report. Some analyzers emit one finding per match site; consumers
+    // (diff, ML feature extraction, JSON viewers) want one logical finding
+    // per id with merged evidence.
+    report.dedupe_findings();
 
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {

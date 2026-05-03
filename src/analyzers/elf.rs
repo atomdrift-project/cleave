@@ -486,17 +486,18 @@ impl ElfAnalyzer {
                     // Override code_size with goblin-based calculation (more accurate)
                     // In ELF, only sections with SHF_EXECINSTR flag contain executable code
                     if let Some(mut cs) = code_size {
+                        let file_size = data.len() as u64;
                         // Sanity check: code_size should never exceed file size
-                        if cs > binary_metrics.file_size {
-                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", cs, binary_metrics.file_size);
-                            cs = binary_metrics.file_size; // Cap at file_size to prevent invalid ratio
+                        if cs > file_size {
+                            eprintln!("WARNING: code_size ({}) > file_size ({}) - this indicates a bug in section classification", cs, file_size);
+                            cs = file_size; // Cap at file_size to prevent invalid ratio
                         }
 
                         binary_metrics.code_size = cs;
 
                         // Recalculate code_to_data_ratio with correct code_size
-                        if binary_metrics.file_size > 0 {
-                            let data_size = binary_metrics.file_size.saturating_sub(cs);
+                        if file_size > 0 {
+                            let data_size = file_size.saturating_sub(cs);
                             if data_size > 0 {
                                 binary_metrics.code_to_data_ratio = cs as f32 / data_size as f32;
 
@@ -752,14 +753,12 @@ impl ElfAnalyzer {
                                 e
                             );
                             crate::types::BinaryMetrics {
-                                file_size: data.len() as u64,
                                 ..Default::default()
                             }
                         }
                     }
                 } else {
                     crate::types::BinaryMetrics {
-                        file_size: data.len() as u64,
                         ..Default::default()
                     }
                 };
@@ -917,7 +916,7 @@ impl ElfAnalyzer {
         // Validate metric ranges to catch calculation bugs
         if let Some(ref metrics) = report.metrics {
             if let Some(ref binary) = metrics.binary {
-                binary.validate(&report.target.path);
+                binary.validate(&report.target.path, report.target.size_bytes);
             }
         }
 

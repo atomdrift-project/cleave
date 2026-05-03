@@ -80,6 +80,14 @@ pub struct CompactFile {
     /// Metrics (nested structure, floats rounded to 2dp)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ms: Option<RoundedMetrics>,
+    /// Flat structural-kv map. Path → leaf value (`a.b[0].c`
+    /// notation). Auto-populated from `FileAnalysis.kv`; type-default
+    /// leaves already filtered out upstream so the map is always
+    /// minimal. Surfaces `go.go_root`, `jar.manifest.built_by`,
+    /// `png.has_trailing_bytes`, etc. for ML pipelines without
+    /// requiring a separate extraction pass.
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub k: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 /// A finding/trait in compact form
@@ -326,6 +334,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         ss: str_tuples,
         is: imports,
         ms: metrics,
+        k: file.kv.clone(),
     }
 }
 

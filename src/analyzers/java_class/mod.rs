@@ -77,8 +77,32 @@ impl JavaClassAnalyzer {
 
         self.detect_capabilities(&class_info, &mut report);
 
+        // Structural kv subtree (`class.*`) — version, hierarchy,
+        // SourceFile attribute. Cheap, complementary to the
+        // capability/string analysis above.
+        if let Some(kv) = super::class_kv::extract(data) {
+            attach_class_kv(&mut report, kv);
+        }
+
         Ok(report)
     }
+}
+
+/// Attach the synthesized `class.*` subtree to `report.kv_tree`,
+/// preserving any pre-existing tree.
+fn attach_class_kv(report: &mut AnalysisReport, class_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("class".into(), class_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
 }
 
 impl Analyzer for JavaClassAnalyzer {

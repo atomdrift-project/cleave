@@ -77,6 +77,22 @@ pub(crate) struct GoBuildInfo {
     /// (`/builddir/build/.../golang-...`, `/build/golang-...`), and
     /// custom dev installs.
     pub go_root: Option<String>,
+    /// Developer's local source-tree root, recovered from non-GoRoot
+    /// non-module-cache paths in the pclntab. Empty when the binary
+    /// was built with `-trimpath` (which itself is a useful signal).
+    /// Leaks the developer's working directory — strong attribution.
+    pub main_root: Option<String>,
+    /// Per-package count of standard-library dependencies (path has
+    /// no dot in its first segment, e.g. `fmt`, `crypto/sha256`).
+    pub deps_std: u32,
+    /// Per-package count of replaced (`=>` form) dependencies.
+    pub deps_replaced: u32,
+    /// Per-package count of vendored dependencies (heuristic: path
+    /// contains `/vendor/`).
+    pub deps_vendored: u32,
+    /// Per-package count of third-party module dependencies (any
+    /// dep that isn't std/replaced/vendored).
+    pub deps_thirdparty: u32,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -190,8 +206,40 @@ pub(crate) fn extract(data: &[u8]) -> Option<GoBuildInfo> {
     // separate ELF notes / scattered string-pool patterns.
     info.build_id = extract_go_build_id(data);
     info.go_root = extract_go_root(data);
+    info.main_root = extract_go_main_root(data, info.go_root.as_deref());
+    classify_dependencies(&mut info);
 
     Some(info)
+}
+
+/// Tally dependency provenance from the parsed module list. Cheap —
+/// runs over the already-parsed `dependencies` vec, no extra scanning.
+fn classify_dependencies(info: &mut GoBuildInfo) {
+    for dep in &info.dependencies {
+        if dep.replaced_by.is_some() {
+            info.deps_replaced += 1;
+            continue;
+        }
+        if dep.path.contains("/vendor/") {
+            info.deps_vendored += 1;
+            continue;
+        }
+        if is_stdlib_path(&dep.path) {
+            info.deps_std += 1;
+            continue;
+        }
+        info.deps_thirdparty += 1;
+    }
+}
+
+/// Heuristic: a Go stdlib package path has no dot in its first path
+/// segment. Third-party module paths are domain-rooted (`github.com/…`,
+/// `golang.org/x/…`, `k8s.io/…`) so the first segment always contains
+/// a dot. False-positive risk is negligible — every public Go module
+/// goes through a domain-rooted import path.
+fn is_stdlib_path(path: &str) -> bool {
+    let first = path.split('/').next().unwrap_or("");
+    !first.is_empty() && !first.contains('.')
 }
 
 /// Locate the Go build ID. Tries (in order):
@@ -239,7 +287,9 @@ fn read_rodata(data: &[u8]) -> Option<&[u8]> {
     if is_macho(data) {
         // Newer toolchains emit `__TEXT,__const`; older `__TEXT,__rodata`.
         return crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__const")
-            .or_else(|| crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__rodata"));
+            .or_else(|| {
+                crate::analyzers::macho_extractors::find_section(data, "__TEXT", "__rodata")
+            });
     }
     // PE: `.rdata` is the conventional read-only data section.
     if data.len() >= 2 && &data[..2] == b"MZ" {
@@ -262,10 +312,7 @@ fn is_macho(data: &[u8]) -> bool {
 ///   u32 namesz | u32 descsz | u32 type | name (padded 4) | desc (padded 4)
 /// For Go: namesz=4, name="Go\0\0", type=4, desc=ASCII id.
 fn read_elf_go_buildid(data: &[u8]) -> Option<String> {
-    let bytes = crate::analyzers::binary_extractors::read_elf_section(
-        data,
-        b".note.go.buildid",
-    )?;
+    let bytes = crate::analyzers::binary_extractors::read_elf_section(data, b".note.go.buildid")?;
     if bytes.len() < 16 {
         return None;
     }
@@ -278,9 +325,7 @@ fn read_elf_go_buildid(data: &[u8]) -> Option<String> {
     if desc_end > bytes.len() {
         return None;
     }
-    let desc = bytes[desc_off..desc_end]
-        .split(|&b| b == 0)
-        .next()?;
+    let desc = bytes[desc_off..desc_end].split(|&b| b == 0).next()?;
     let s = std::str::from_utf8(desc).ok()?;
     if s.is_empty() {
         None
@@ -322,6 +367,98 @@ fn extract_go_root(data: &[u8]) -> Option<String> {
     (!s.is_empty()).then(|| s.to_string())
 }
 
+/// Recover the developer's local source-tree root. Scans the pclntab
+/// for source-file paths (`*.go`) that are neither under `go_root`
+/// nor in the Go module cache (`/pkg/mod/`), then takes their longest
+/// common directory prefix. Empty when the binary was built with
+/// `-trimpath` (which strips developer paths) — that absence is itself
+/// a signal worth recording differentially.
+#[must_use]
+fn extract_go_main_root(data: &[u8], go_root: Option<&str>) -> Option<String> {
+    let pclntab = read_pclntab(data)?;
+    // Cap candidate count to keep the longest-common-prefix walk
+    // bounded on huge binaries — pclntab on Kong has ~12k file paths.
+    const MAX_CANDIDATES: usize = 4096;
+    let mut candidates: Vec<&str> = Vec::new();
+    let finder = memchr::memmem::Finder::new(b".go\0");
+    for rel in finder.find_iter(pclntab) {
+        if candidates.len() >= MAX_CANDIDATES {
+            break;
+        }
+        // Walk backwards from the `.go` match to the path start.
+        let mut start = rel;
+        let lo = rel.saturating_sub(512);
+        while start > lo {
+            let b = pclntab[start - 1];
+            if !is_path_byte(b) && b != b'/' {
+                break;
+            }
+            start -= 1;
+        }
+        if start == rel {
+            continue;
+        }
+        // Need an absolute-ish path — relative module paths like
+        // `github.com/foo/bar.go` (emitted under -trimpath) don't
+        // identify a developer source tree.
+        if pclntab[start] != b'/' {
+            continue;
+        }
+        let path_bytes = &pclntab[start..rel + 3]; // include ".go"
+        let Ok(s) = std::str::from_utf8(path_bytes) else {
+            continue;
+        };
+        if let Some(root) = go_root {
+            if s.starts_with(root) {
+                continue;
+            }
+        }
+        if s.contains("/pkg/mod/") || s.contains("/src/runtime/") {
+            continue;
+        }
+        candidates.push(s);
+    }
+    if candidates.is_empty() {
+        return None;
+    }
+    let prefix = longest_common_dir_prefix(&candidates)?;
+    // Require at least one path component beyond `/` — otherwise the
+    // "common prefix" is the filesystem root, which carries no signal.
+    if prefix.is_empty() || prefix == "/" {
+        return None;
+    }
+    Some(prefix)
+}
+
+/// Longest common directory prefix across `paths`, ending without a
+/// trailing slash (or `/` for filesystem-root-only commonality).
+fn longest_common_dir_prefix(paths: &[&str]) -> Option<String> {
+    let first = paths.first()?;
+    let mut max = first.len();
+    for &p in &paths[1..] {
+        let common = first
+            .as_bytes()
+            .iter()
+            .zip(p.as_bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if common < max {
+            max = common;
+        }
+        if max == 0 {
+            return None;
+        }
+    }
+    let truncated = &first[..max];
+    // Trim back to the last `/` so we end on a directory boundary.
+    let cut = truncated.rfind('/')?;
+    Some(if cut == 0 {
+        "/".to_string()
+    } else {
+        truncated[..cut].to_string()
+    })
+}
+
 /// Locate the Go pclntab section (line-number table — also stores
 /// source file paths). Section names by format:
 ///   * ELF:    `.gopclntab`
@@ -341,8 +478,7 @@ fn read_pclntab(data: &[u8]) -> Option<&[u8]> {
 }
 
 fn is_path_byte(b: u8) -> bool {
-    matches!(b, b'/' | b'.' | b'-' | b'_' | b'+' | b':')
-        || b.is_ascii_alphanumeric()
+    matches!(b, b'/' | b'.' | b'-' | b'_' | b'+' | b':') || b.is_ascii_alphanumeric()
 }
 
 /// Locate the Go buildinfo magic. Returns the buffer that contains
@@ -421,8 +557,7 @@ fn read_pe_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
     // COFF header starts at e_lfanew + 4.
     let coff = e_lfanew + 4;
     let num_sections = u16::from_le_bytes(data[coff + 2..coff + 4].try_into().ok()?) as usize;
-    let opt_header_size =
-        u16::from_le_bytes(data[coff + 16..coff + 18].try_into().ok()?) as usize;
+    let opt_header_size = u16::from_le_bytes(data[coff + 16..coff + 18].try_into().ok()?) as usize;
     let section_table = coff + 20 + opt_header_size;
     let table_bytes = num_sections.checked_mul(40)?;
     if section_table + table_bytes > data.len() {

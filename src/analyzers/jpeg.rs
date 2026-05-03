@@ -67,10 +67,22 @@ impl JpegAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("jpeg-analyzer".to_string());
 
-        if let Some((image_metrics, jpeg_metrics)) = analyze_jpeg_data(data) {
+        // Structural marker walk → kv tree + segment counts. Cheap
+        // (no pixel decode) and complementary to the entropy pass.
+        let structural = super::jpeg_kv::extract(data);
+
+        if let Some((image_metrics, mut jpeg_metrics)) = analyze_jpeg_data(data) {
+            if let Some((_, ref counts)) = structural {
+                jpeg_metrics.segment_count = counts.segment_count;
+                jpeg_metrics.app_segment_count = counts.app_segment_count;
+                jpeg_metrics.com_count = counts.com_count;
+                jpeg_metrics.dqt_count = counts.dqt_count;
+                jpeg_metrics.dht_count = counts.dht_count;
+                jpeg_metrics.soi_count = counts.soi_count;
+                jpeg_metrics.maker_note_bytes = counts.maker_note_bytes;
+            }
             report.metrics = Some(Metrics {
                 binary: Some(BinaryMetrics {
-                    file_size: data.len() as u64,
                     overall_entropy: calculate_entropy(data) as f32,
                     ..Default::default()
                 }),
@@ -78,6 +90,23 @@ impl JpegAnalyzer {
                 jpeg: Some(jpeg_metrics),
                 ..Default::default()
             });
+        } else if let Some((_, ref counts)) = structural {
+            report.metrics = Some(Metrics {
+                jpeg: Some(crate::types::JpegMetrics {
+                    segment_count: counts.segment_count,
+                    app_segment_count: counts.app_segment_count,
+                    com_count: counts.com_count,
+                    dqt_count: counts.dqt_count,
+                    dht_count: counts.dht_count,
+                    soi_count: counts.soi_count,
+                    maker_note_bytes: counts.maker_note_bytes,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        if let Some((kv_value, _)) = structural {
+            attach_jpeg_kv(&mut report, kv_value);
         }
 
         if let Some(strings) = stng_strings {
@@ -202,6 +231,23 @@ fn scan_jpeg_markers(data: &[u8]) -> (u64, u64, u64) {
 }
 
 /// Analyze JPEG data and extract steganography-relevant metrics
+/// Stash the synthesized `jpeg.*` kv subtree on `report.kv_tree`,
+/// preserving any pre-existing tree.
+fn attach_jpeg_kv(report: &mut AnalysisReport, jpeg_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("jpeg".into(), jpeg_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
+}
+
 fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
     use jpeg_decoder::Decoder;
     use std::io::Cursor;
@@ -251,6 +297,7 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
             appended_bytes,
             comment_bytes,
             exif_size,
+            ..Default::default()
         },
     ))
 }

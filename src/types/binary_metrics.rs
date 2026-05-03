@@ -69,10 +69,6 @@ pub struct BinaryMetrics {
     pub high_entropy_regions: u32,
 
     // === Size ===
-    /// Total file size in bytes
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub file_size: u64,
-
     /// Total executable code size in bytes (sum of all executable sections)
     /// - Mach-O: __text + __stubs + __stub_helper
     /// - ELF: sections with SHF_EXECINSTR flag
@@ -385,7 +381,7 @@ pub struct BinaryMetrics {
 impl BinaryMetrics {
     /// Validate metric ranges and log warnings for out-of-range values.
     /// `path` is included in messages to identify which file triggered the warning.
-    pub(crate) fn validate(&self, path: &str) {
+    pub(crate) fn validate(&self, path: &str, file_size: u64) {
         // Entropy checks (valid range: 0-8 bits)
         if self.overall_entropy > 8.0 || self.overall_entropy < 0.0 {
             tracing::warn!(
@@ -418,19 +414,19 @@ impl BinaryMetrics {
 
         // Size checks — inflated section headers are a common anti-analysis trick,
         // so these are INFO (expected for tampered PEs), not WARN.
-        if self.code_size > self.file_size {
+        if self.code_size > file_size {
             tracing::info!(
                 path,
                 code_size = self.code_size,
-                file_size = self.file_size,
+                file_size,
                 "code_size > file_size (inflated section headers)"
             );
         }
-        if self.overlay_size > self.file_size {
+        if self.overlay_size > file_size {
             tracing::info!(
                 path,
                 overlay_size = self.overlay_size,
-                file_size = self.file_size,
+                file_size,
                 "overlay_size > file_size"
             );
         }

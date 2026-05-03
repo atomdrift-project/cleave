@@ -242,6 +242,23 @@ impl AnalysisReport {
         }
     }
 
+    /// Collapse duplicate findings (same `id`) into one entry, both at the
+    /// report top level and inside every `files[]` entry. Some analyzers
+    /// emit multiple findings for the same trait — once per match site, or
+    /// once per evidence shard — and downstream consumers (the diff
+    /// renderer in particular) want one logical finding per id.
+    ///
+    /// When merging duplicates the surviving entry takes the *max*
+    /// criticality and confidence, *sums* `match_count`, and *concatenates*
+    /// `evidence` (capped at [`MAX_EVIDENCE_PER_TRAIT`]) and `trait_refs`
+    /// (deduplicated). Order of first appearance is preserved.
+    pub fn dedupe_findings(&mut self) {
+        dedupe_finding_list(&mut self.findings);
+        for file in &mut self.files {
+            dedupe_finding_list(&mut file.findings);
+        }
+    }
+
     /// Push a finding to the report, enforcing a hard limit of 8192 findings.
     ///
     /// If the limit is reached, the finding is discarded and a final warning
@@ -538,6 +555,9 @@ impl AnalysisReport {
         file.overlay_metrics = self.overlay_metrics.clone();
 
         file.populate_file_metrics();
+        if let Some(tree) = self.kv_tree.as_deref() {
+            flatten_kv_for_output(tree, &mut file.kv);
+        }
         file
     }
 
@@ -581,7 +601,113 @@ impl AnalysisReport {
         file.overlay_metrics = self.overlay_metrics;
 
         file.populate_file_metrics();
+        if let Some(tree) = self.kv_tree.as_deref() {
+            flatten_kv_for_output(tree, &mut file.kv);
+        }
         (file, nested_files, archive_contents)
+    }
+}
+
+/// Flatten a JSON kv tree into the per-file output map. Nested
+/// objects become `parent.child`, arrays become `parent[0]`, leaves
+/// land as their underlying value. Type-default leaves are skipped
+/// because the output schema already omits other zero/empty/false
+/// fields via `skip_serializing_if` — keeping kv consistent halves
+/// the JSON payload on stripped binaries without losing signal
+/// (consumers treat absent features as default).
+fn flatten_kv_for_output(
+    value: &serde_json::Value,
+    out: &mut std::collections::BTreeMap<String, serde_json::Value>,
+) {
+    fn walk(
+        value: &serde_json::Value,
+        prefix: &str,
+        out: &mut std::collections::BTreeMap<String, serde_json::Value>,
+    ) {
+        match value {
+            serde_json::Value::Object(map) => {
+                for (key, v) in map {
+                    let child = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    walk(v, &child, out);
+                }
+            }
+            serde_json::Value::Array(arr) => {
+                for (i, v) in arr.iter().enumerate() {
+                    let child = format!("{prefix}[{i}]");
+                    walk(v, &child, out);
+                }
+            }
+            serde_json::Value::Null => {}
+            serde_json::Value::Bool(false) => {}
+            serde_json::Value::String(s) if s.is_empty() => {}
+            serde_json::Value::Number(n) if n.as_i64() == Some(0) => {}
+            serde_json::Value::Number(n) if n.as_f64().is_some_and(|f| f == 0.0) && !n.is_i64() => {
+            }
+            _ => {
+                if !prefix.is_empty() {
+                    out.insert(prefix.to_string(), value.clone());
+                }
+            }
+        }
+    }
+    walk(value, "", out);
+}
+
+/// Collapse duplicate findings in-place by `id`. The surviving entry takes
+/// the max criticality and confidence; `match_count` is summed; `evidence`
+/// is concatenated and re-deduplicated through
+/// [`super::traits_findings::deduplicate_evidence`]; `trait_refs` is unioned.
+/// First appearance order is preserved.
+fn dedupe_finding_list(findings: &mut Vec<Finding>) {
+    use rustc_hash::FxHashMap;
+    if findings.len() <= 1 {
+        return;
+    }
+    let original = std::mem::take(findings);
+    let mut id_to_index: FxHashMap<String, usize> = FxHashMap::default();
+    for f in original {
+        match id_to_index.get(&f.id) {
+            None => {
+                id_to_index.insert(f.id.clone(), findings.len());
+                findings.push(f);
+            }
+            Some(&idx) => merge_finding(&mut findings[idx], f),
+        }
+    }
+    // After concatenation each surviving finding may carry redundant evidence;
+    // run the existing evidence dedup pass once.
+    for f in findings {
+        if f.evidence.len() > 1 {
+            let ev = std::mem::take(&mut f.evidence);
+            f.evidence = super::traits_findings::deduplicate_evidence(ev);
+            if f.evidence.len() > super::traits_findings::MAX_EVIDENCE_PER_TRAIT {
+                f.evidence
+                    .truncate(super::traits_findings::MAX_EVIDENCE_PER_TRAIT);
+            }
+        }
+    }
+}
+
+fn merge_finding(existing: &mut Finding, new: Finding) {
+    if new.crit > existing.crit {
+        existing.crit = new.crit;
+    }
+    if new.conf > existing.conf {
+        existing.conf = new.conf;
+    }
+    existing.match_count = existing.match_count.saturating_add(new.match_count);
+    existing.evidence.extend(new.evidence);
+    for r in new.trait_refs {
+        if !existing.trait_refs.contains(&r) {
+            existing.trait_refs.push(r);
+        }
+    }
+    if existing.desc.is_empty() && !new.desc.is_empty() {
+        existing.desc = new.desc;
     }
 }
 

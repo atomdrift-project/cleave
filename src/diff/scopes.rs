@@ -291,10 +291,18 @@ fn value_change_weight(old: &Value, new: &Value) -> f32 {
             }
         }
         (Value::Bool(a), Value::Bool(b)) => {
-            if a == b { 0.0 } else { 1.0 }
+            if a == b {
+                0.0
+            } else {
+                1.0
+            }
         }
         _ => {
-            if old == new { 0.0 } else { 1.0 }
+            if old == new {
+                0.0
+            } else {
+                1.0
+            }
         }
     }
 }
@@ -322,26 +330,9 @@ pub(super) fn diff_symbols(
     new: &DiffUnit,
     limit: usize,
 ) -> ScopeDiff<SymbolChange> {
-    let to_changes = |imports: &[Import], exports: &[Export]| -> Vec<SymbolChange> {
-        let mut v: Vec<SymbolChange> = imports
-            .iter()
-            .map(|i| SymbolChange {
-                symbol: i.symbol.clone(),
-                kind: SymbolKind::Import,
-                library: i.library.clone(),
-            })
-            .collect();
-        v.extend(exports.iter().map(|e| SymbolChange {
-            symbol: e.symbol.clone(),
-            kind: SymbolKind::Export,
-            library: None,
-        }));
-        v
-    };
-
-    let old_v = to_changes(&old.imports, &old.exports);
-    let new_v = to_changes(&new.imports, &new.exports);
-
+    // Some upstream extractors emit the same symbol multiple times (e.g.
+    // each call site of an import). Dedupe by `(kind, library, symbol)`
+    // before diffing so the output doesn't repeat the same entry.
     let key = |c: &SymbolChange| -> String {
         format!(
             "{:?}:{}:{}",
@@ -350,6 +341,35 @@ pub(super) fn diff_symbols(
             c.symbol
         )
     };
+    let to_changes = |imports: &[Import], exports: &[Export]| -> Vec<SymbolChange> {
+        let mut seen: FxHashSet<String> = FxHashSet::default();
+        let mut v: Vec<SymbolChange> = Vec::new();
+        for i in imports {
+            let c = SymbolChange {
+                symbol: i.symbol.clone(),
+                kind: SymbolKind::Import,
+                library: i.library.clone(),
+            };
+            if seen.insert(key(&c)) {
+                v.push(c);
+            }
+        }
+        for e in exports {
+            let c = SymbolChange {
+                symbol: e.symbol.clone(),
+                kind: SymbolKind::Export,
+                library: None,
+            };
+            if seen.insert(key(&c)) {
+                v.push(c);
+            }
+        }
+        v
+    };
+
+    let old_v = to_changes(&old.imports, &old.exports);
+    let new_v = to_changes(&new.imports, &new.exports);
+
     set_diff(&old_v, &new_v, key, limit)
 }
 
@@ -420,8 +440,7 @@ pub(super) fn diff_sections(
         }
     }
 
-    diff.change_weight =
-        (diff.added.len() + diff.removed.len() + diff.changed.len()) as f32;
+    diff.change_weight = (diff.added.len() + diff.removed.len() + diff.changed.len()) as f32;
     diff.recompute_roc();
     truncate(&mut diff, limit);
     diff

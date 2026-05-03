@@ -14,6 +14,23 @@ use std::path::Path;
 use std::sync::Arc;
 use tree_sitter::Language;
 
+/// Attach a `pyc.*` kv subtree to `report.kv_tree`, preserving any
+/// pre-existing tree.
+fn attach_pyc_kv(report: &mut AnalysisReport, pyc_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("pyc".into(), pyc_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
+}
+
 /// Generic analyzer that works with any text file.
 ///
 /// For languages with tree-sitter support, extracts symbols via AST.
@@ -145,6 +162,17 @@ impl GenericAnalyzer {
         tracing::debug!("GenericAnalyzer: Target created in {:?}", start.elapsed());
 
         let mut report = AnalysisReport::new(target);
+
+        // PythonBytecode (.pyc) — surface header + co_filename as
+        // `pyc.*` kv. Only fires when we have the original bytes
+        // (the analyzer is otherwise text-shaped).
+        if matches!(self.file_type, FileType::PythonBytecode) {
+            if let Some(bytes) = original_bytes {
+                if let Some(kv) = super::pyc_kv::extract(bytes) {
+                    attach_pyc_kv(&mut report, kv);
+                }
+            }
+        }
 
         // Add structural feature
         let (parser_name, description) = if let Some((_, _)) = self.treesitter_config() {
@@ -455,7 +483,6 @@ impl GenericAnalyzer {
             // non-printable bytes to U+FFFD and tanks the entropy score.
             let bytes = original_bytes.unwrap_or(content.as_bytes());
             Some(crate::types::BinaryMetrics {
-                file_size: bytes.len() as u64,
                 overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,
                 ..Default::default()
             })

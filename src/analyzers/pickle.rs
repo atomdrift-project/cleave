@@ -84,12 +84,36 @@ impl PickleAnalyzer {
             });
         }
 
+        // Structural kv subtree (`pickle.*`) — protocol + modules +
+        // distinct opcode set. Cheap; complementary to the
+        // import/string extraction above.
+        if let Some(kv) = super::pickle_kv::extract(data) {
+            attach_pickle_kv(&mut report, kv);
+        }
+
         // Evaluate trait rules
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
 
         report
     }
+}
+
+/// Attach the synthesized `pickle.*` subtree to `report.kv_tree`,
+/// preserving any pre-existing tree.
+fn attach_pickle_kv(report: &mut AnalysisReport, pickle_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("pickle".into(), pickle_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
 }
 
 impl Default for PickleAnalyzer {

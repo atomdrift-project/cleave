@@ -1315,10 +1315,7 @@ impl OfficeAnalyzer {
                 .contains("application/vnd.ms-excel.macrosheet+xml")
                 || content_types_xml.contains("application/vnd.ms-excel.intlmacrosheet"),
             // word/vbaProject.bin = Word doc with VBA macros.
-            is_word_vba_document: doc
-                .entry_names
-                .iter()
-                .any(|n| n == "word/vbaProject.bin"),
+            is_word_vba_document: doc.entry_names.iter().any(|n| n == "word/vbaProject.bin"),
             // Template-injection: any external ref that targets an
             // attached-template / oleObject / frame relationship.
             has_template_injection: doc.external_refs.iter().any(|r| {

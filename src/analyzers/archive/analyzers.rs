@@ -597,6 +597,10 @@ impl ArchiveAnalyzer {
             debug!("Main-Class: {}", mc);
         }
 
+        // JAR kv subtree (manifest attribution + structural signals).
+        // Cheap single walk; surfaces `jar.*` paths for trait authors.
+        crate::analyzers::jar_kv::attach_to_report(report, temp_dir);
+
         // Collect all files
         let all_files: Vec<_> = walkdir::WalkDir::new(temp_dir)
             .min_depth(1)

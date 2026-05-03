@@ -941,9 +941,6 @@ impl<'a> RuleDebugger<'a> {
                         "  binary.avg_complexity: {:.2}",
                         binary.avg_complexity
                     ));
-                    result
-                        .details
-                        .push(format!("  binary.file_size: {}", binary.file_size));
                 }
                 if let Some(text) = &metrics.text {
                     result

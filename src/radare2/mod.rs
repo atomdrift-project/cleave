@@ -1153,7 +1153,6 @@ impl Radare2Analyzer {
 
         let mut metrics = BinaryMetrics {
             section_count: batched.sections.len() as u32,
-            file_size, // Use actual file size from caller
             function_analysis_depth: batched.function_analysis_depth,
             ..Default::default()
         };
@@ -1361,14 +1360,16 @@ impl Radare2Analyzer {
         let _ = edge_counts;
 
         // Compute ratio metrics (these depend on multiple fields)
-        Self::compute_ratio_metrics(&mut metrics);
+        Self::compute_ratio_metrics(&mut metrics, file_size);
 
         metrics
     }
 
-    /// Compute ratio and normalized metrics from already-populated base metrics
-    /// This should be called after all base counters are set
-    pub(crate) fn compute_ratio_metrics(metrics: &mut BinaryMetrics) {
+    /// Compute ratio and normalized metrics from already-populated base metrics.
+    /// Call after all base counters are set; `file_size` is the on-disk file
+    /// size (BinaryMetrics no longer stores it — use the universal
+    /// `metrics.file.size` instead).
+    pub(crate) fn compute_ratio_metrics(metrics: &mut BinaryMetrics, file_size: u64) {
         let code_kb = metrics.code_size as f32 / 1024.0;
 
         // Density ratios (per KB of code)
@@ -1387,12 +1388,12 @@ impl Radare2Analyzer {
         }
 
         // Normalized metrics (size-independent)
-        if metrics.file_size > 0 {
-            let file_size_sqrt = (metrics.file_size as f32).sqrt();
+        if file_size > 0 {
+            let file_size_sqrt = (file_size as f32).sqrt();
             metrics.normalized_import_count = metrics.import_count as f32 / file_size_sqrt;
             metrics.normalized_export_count = metrics.export_count as f32 / file_size_sqrt;
 
-            let file_size_log = (metrics.file_size as f32).log2();
+            let file_size_log = (file_size as f32).log2();
             if file_size_log > 0.0 {
                 metrics.normalized_section_count = metrics.section_count as f32 / file_size_log;
             }
@@ -1481,24 +1482,18 @@ mod tests {
         let file_size = 1800u64;
         let metrics = analyzer.compute_metrics_from_batched(&batched, file_size, "macho");
 
-        // file_size should match what was passed in
-        assert_eq!(
-            metrics.file_size, file_size,
-            "file_size should equal the passed parameter"
-        );
-
         // code_size should be the size of executable sections only
         assert_eq!(
             metrics.code_size, 1000,
             "code_size should equal size of .text section"
         );
 
-        // code_size should never exceed file_size
+        // code_size should never exceed the passed-in file_size
         assert!(
-            metrics.code_size <= metrics.file_size,
+            metrics.code_size <= file_size,
             "code_size ({}) should never exceed file_size ({})",
             metrics.code_size,
-            metrics.file_size
+            file_size
         );
     }
 

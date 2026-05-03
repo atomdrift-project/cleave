@@ -1967,6 +1967,19 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
             go.insert("go_root".into(), json!(gr));
         }
     }
+    if let Some(mr) = info.main_root.as_deref() {
+        if !mr.is_empty() {
+            go.insert("main_root".into(), json!(mr));
+        }
+    }
+    if info.deps_std + info.deps_thirdparty + info.deps_replaced + info.deps_vendored > 0 {
+        let mut deps_breakdown = Map::new();
+        deps_breakdown.insert("std".into(), json!(info.deps_std));
+        deps_breakdown.insert("thirdparty".into(), json!(info.deps_thirdparty));
+        deps_breakdown.insert("replaced".into(), json!(info.deps_replaced));
+        deps_breakdown.insert("vendored".into(), json!(info.deps_vendored));
+        go.insert("deps_breakdown".into(), Value::Object(deps_breakdown));
+    }
     if let Some(main) = &info.main_module {
         let mut mm = Map::new();
         if !main.path.is_empty() {

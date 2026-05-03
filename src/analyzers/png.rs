@@ -70,11 +70,24 @@ impl PngAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("png-analyzer".to_string());
 
+        // Structural pass — chunk-table walk for kv tree + counts.
+        // Cheap (no zlib) and complementary to the pixel-statistic
+        // pass below.  Runs first so the resulting counts can fold
+        // into the PngMetrics that the pixel pass populates.
+        let structural = super::png_kv::extract(data);
+
         // Parse and analyze PNG
-        if let Some((image_metrics, png_metrics)) = analyze_png_data(data) {
+        if let Some((image_metrics, mut png_metrics)) = analyze_png_data(data) {
+            if let Some((_, ref counts)) = structural {
+                png_metrics.chunks_total = counts.chunks_total;
+                png_metrics.chunks_idat = counts.chunks_idat;
+                png_metrics.chunks_after_iend = counts.chunks_after_iend;
+                png_metrics.trailing_bytes = counts.trailing_bytes;
+                png_metrics.text_chunks_total_bytes = counts.text_chunks_total_bytes;
+                png_metrics.unknown_chunks_count = counts.unknown_chunks_count;
+            }
             report.metrics = Some(Metrics {
                 binary: Some(BinaryMetrics {
-                    file_size: data.len() as u64,
                     overall_entropy: calculate_entropy(data) as f32,
                     ..Default::default()
                 }),
@@ -82,6 +95,28 @@ impl PngAnalyzer {
                 png: Some(png_metrics),
                 ..Default::default()
             });
+        } else if let Some((_, ref counts)) = structural {
+            // Pixel decode failed (truncated/corrupt) but we can still
+            // emit the structural counts — useful for stego cases
+            // where the IDAT is intentionally invalid.
+            report.metrics = Some(Metrics {
+                png: Some(crate::types::PngMetrics {
+                    chunks_total: counts.chunks_total,
+                    chunks_idat: counts.chunks_idat,
+                    chunks_after_iend: counts.chunks_after_iend,
+                    trailing_bytes: counts.trailing_bytes,
+                    text_chunks_total_bytes: counts.text_chunks_total_bytes,
+                    unknown_chunks_count: counts.unknown_chunks_count,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+
+        // Attach the kv subtree last so it survives whichever metric
+        // path above ran (or didn't).  Namespaced under `png.*`.
+        if let Some((kv_value, _)) = structural {
+            attach_png_kv(&mut report, kv_value);
         }
 
         if let Some(strings) = stng_strings {
@@ -119,6 +154,25 @@ impl Analyzer for PngAnalyzer {
             false
         }
     }
+}
+
+/// Stash the synthesized `png.*` kv subtree on `report.kv_tree`,
+/// preserving any pre-existing tree (defensive — currently the PNG
+/// analyzer is the first kv writer for this format, but later passes
+/// like `binary_extractors::augment_report` may also contribute).
+fn attach_png_kv(report: &mut AnalysisReport, png_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("png".into(), png_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
 }
 
 /// Analyze PNG data and extract steganography-relevant metrics
@@ -191,6 +245,7 @@ fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
             bit_depth,
             compression_ratio,
             a_entropy,
+            ..Default::default()
         },
     ))
 }

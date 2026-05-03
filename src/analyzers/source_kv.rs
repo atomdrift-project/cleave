@@ -77,8 +77,7 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
 
     // Exports — sorted distinct names.
     if !report.exports.is_empty() {
-        let symbols: BTreeSet<&str> =
-            report.exports.iter().map(|e| e.symbol.as_str()).collect();
+        let symbols: BTreeSet<&str> = report.exports.iter().map(|e| e.symbol.as_str()).collect();
         if !symbols.is_empty() {
             let v: Vec<&&str> = symbols.iter().collect();
             out.insert("exports".into(), json!(v));
@@ -109,9 +108,7 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
     if !report.strings.is_empty() {
         let mut strings: BTreeSet<&str> = BTreeSet::new();
         for s in &report.strings {
-            if s.value.len() >= MIN_STRING_LEN
-                && strings.len() < MAX_STRING_CONSTANTS
-            {
+            if s.value.len() >= MIN_STRING_LEN && strings.len() < MAX_STRING_CONSTANTS {
                 strings.insert(s.value.as_str());
             }
         }
@@ -206,9 +203,12 @@ mod tests {
     #[test]
     fn imports_surface_sorted_and_distinct() {
         let mut r = empty_report();
-        r.imports.push(Import::new("requests", Some("test".into()), "test"));
-        r.imports.push(Import::new("os", Some("test".into()), "test"));
-        r.imports.push(Import::new("os", Some("test".into()), "test"));
+        r.imports
+            .push(Import::new("requests", Some("test".into()), "test"));
+        r.imports
+            .push(Import::new("os", Some("test".into()), "test"));
+        r.imports
+            .push(Import::new("os", Some("test".into()), "test"));
         let v = build_source_kv(&r, None).expect("non-empty");
         let imports = v["imports"].as_array().unwrap();
         let names: Vec<&str> = imports.iter().filter_map(|x| x.as_str()).collect();

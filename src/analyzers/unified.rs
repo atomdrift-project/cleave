@@ -24,6 +24,23 @@ use anyhow::Result;
 use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Attach a `pyc.*` kv subtree to `report.kv_tree`, preserving any
+/// pre-existing tree.
+fn attach_pyc_kv(report: &mut AnalysisReport, pyc_value: serde_json::Value) {
+    use serde_json::{Map, Value};
+    let mut root = match report.kv_tree.take().map(|b| *b) {
+        Some(Value::Object(m)) => m,
+        Some(other) => {
+            let mut m = Map::new();
+            m.insert("_legacy".into(), other);
+            m
+        }
+        None => Map::new(),
+    };
+    root.insert("pyc".into(), pyc_value);
+    report.kv_tree = Some(Box::new(Value::Object(root)));
+}
 use tree_sitter::{Language, Parser};
 
 /// Keep indentation-sensitive external scanners below Tree-sitter's 1024-byte
@@ -475,6 +492,16 @@ impl UnifiedSourceAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+
+        // PythonBytecode (.pyc) — surface header + co_filename as
+        // `pyc.*` kv. The unified analyzer is otherwise text-shaped
+        // (tree-sitter source parsing) and won't decode bytecode, so
+        // this is the only place the kv tree gets populated.
+        if matches!(self.file_type, FileType::PythonBytecode) {
+            if let Some(kv) = super::pyc_kv::extract(original_bytes) {
+                attach_pyc_kv(&mut report, kv);
+            }
+        }
 
         // Add structural feature
         report

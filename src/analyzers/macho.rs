@@ -560,7 +560,11 @@ impl MachOAnalyzer {
             }
         }
 
-        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        // Round up to 1ms when the work completed in <1ms so the
+        // recorded duration is always distinguishable from the
+        // "never set" sentinel (0). Avoids spurious test flakes on
+        // fast machines without lying about long analyses.
+        report.metadata.analysis_duration_ms = (start.elapsed().as_millis() as u64).max(1);
         report.metadata.tools_used = tools_used;
 
         report

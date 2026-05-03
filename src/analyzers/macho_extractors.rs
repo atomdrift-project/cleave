@@ -362,38 +362,35 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
         }
         let cmd_raw = u32::from_le_bytes(data[cursor..cursor + 4].try_into().ok()?);
         let cmdsize = u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
-        if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
+        if !(8..=MAX_LC_PAYLOAD).contains(&cmdsize) || cursor + cmdsize > data.len() {
             break;
         }
         let cmd = cmd_raw & !LC_REQ_DYLD;
         let body = &data[cursor..cursor + cmdsize];
 
         match cmd {
-            LC_UUID => {
-                if body.len() >= 24 {
+            LC_UUID
+                if body.len() >= 24 => {
                     let uuid_bytes = &body[8..24];
                     out.uuid = Some(format_uuid(uuid_bytes));
                 }
-            }
             LC_BUILD_VERSION => {
                 if let Some(bv) = parse_build_version(body) {
                     out.build_version = Some(bv);
                 }
             }
-            LC_SOURCE_VERSION => {
-                if body.len() >= 16 {
+            LC_SOURCE_VERSION
+                if body.len() >= 16 => {
                     let raw = u64::from_le_bytes(body[8..16].try_into().ok()?);
                     out.source_version = Some(decode_source_version(raw));
                 }
-            }
-            LC_RPATH => {
-                if body.len() >= 12 {
+            LC_RPATH
+                if body.len() >= 12 => {
                     let off = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
                     if let Some(s) = read_lc_string(body, off) {
                         out.rpath.push(s);
                     }
                 }
-            }
             LC_LOAD_DYLIB | LC_ID_DYLIB | LC_LOAD_WEAK_DYLIB | LC_LAZY_LOAD_DYLIB
             | LC_REEXPORT_DYLIB | LC_LOAD_UPWARD_DYLIB => {
                 if let Some(d) = parse_dylib(body, cmd) {
@@ -404,17 +401,16 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
                     }
                 }
             }
-            LC_CODE_SIGNATURE => {
-                if body.len() >= 16 {
+            LC_CODE_SIGNATURE
+                if body.len() >= 16 => {
                     let off = u32::from_le_bytes(body[8..12].try_into().ok()?);
                     let sz = u32::from_le_bytes(body[12..16].try_into().ok()?);
                     if sz > 0 {
                         out.code_signature = Some((off, sz));
                     }
                 }
-            }
-            LC_LINKER_OPTION => {
-                if body.len() >= 12 {
+            LC_LINKER_OPTION
+                if body.len() >= 12 => {
                     let count = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
                     let mut p = 12;
                     for _ in 0..count.min(64) {
@@ -435,7 +431,6 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
                         p = nul + 1;
                     }
                 }
-            }
             _ => {}
         }
         cursor += cmdsize;
@@ -615,7 +610,7 @@ fn walk_segments_for_section<'a>(
         }
         let cmd = u32::from_le_bytes(data[cursor..cursor + 4].try_into().ok()?) & !LC_REQ_DYLD;
         let cmdsize = u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
-        if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
+        if !(8..=MAX_LC_PAYLOAD).contains(&cmdsize) || cursor + cmdsize > data.len() {
             break;
         }
         let body = &data[cursor..cursor + cmdsize];
@@ -721,7 +716,7 @@ pub(crate) fn list_sections_with_prefix(data: &[u8], segname: &str, prefix: &str
         };
         let cmd = u32::from_le_bytes(cmd_bytes) & !LC_REQ_DYLD;
         let cmdsize = u32::from_le_bytes(size_bytes) as usize;
-        if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
+        if !(8..=MAX_LC_PAYLOAD).contains(&cmdsize) || cursor + cmdsize > data.len() {
             break;
         }
         let body = &data[cursor..cursor + cmdsize];

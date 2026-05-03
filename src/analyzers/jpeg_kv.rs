@@ -170,15 +170,14 @@ fn handle_segment(
             }
         }
         // APP0 — JFIF (thumbnail dims) or JFXX.
-        0xE0 => {
-            if body.starts_with(b"JFIF\0") && body.len() >= 14 {
+        0xE0
+            if body.starts_with(b"JFIF\0") && body.len() >= 14 => {
                 let tw = body[12];
                 let th = body[13];
                 if tw != 0 && th != 0 {
                     out.insert("has_jfif_thumbnail".into(), json!(true));
                 }
             }
-        }
         // APP1 — EXIF (Exif\0\0) or XMP.
         0xE1 => {
             if body.starts_with(b"Exif\0\0") {
@@ -191,8 +190,8 @@ fn handle_segment(
             }
         }
         // APP2 — ICC profile when prefix matches.
-        0xE2 => {
-            if body.starts_with(b"ICC_PROFILE\0") && body.len() >= 14 + 84 {
+        0xE2
+            if body.starts_with(b"ICC_PROFILE\0") && body.len() >= 14 + 84 => {
                 // ICC profile descriptor at offset 14+84 holds the
                 // profile-name (after fields). Simplest reliable
                 // signal: the profile description tag string. Skip
@@ -201,10 +200,9 @@ fn handle_segment(
                 // detection actually wants.
                 out.insert("has_icc_profile".into(), json!(true));
             }
-        }
         // APP13 — Adobe Photoshop IRB (often carrying IPTC).
-        0xED => {
-            if body.starts_with(b"Photoshop 3.0\0") {
+        0xED
+            if body.starts_with(b"Photoshop 3.0\0") => {
                 out.insert("has_photoshop_irb".into(), json!(true));
                 // 8BIM blocks for IPTC live inside; surface as a
                 // bool rather than parsing the full IRB chain.
@@ -212,13 +210,11 @@ fn handle_segment(
                     out.insert("has_iptc".into(), json!(true));
                 }
             }
-        }
         // APP14 — Adobe color transform (1 byte at offset 11).
-        0xEE => {
-            if body.starts_with(b"Adobe\0") && body.len() >= 12 {
+        0xEE
+            if body.starts_with(b"Adobe\0") && body.len() >= 12 => {
                 out.insert("adobe_color_transform".into(), json!(body[11]));
             }
-        }
         _ => {}
     }
 }
@@ -339,8 +335,12 @@ fn walk_ifd(
                     .maker_note_bytes
                     .saturating_add(total_bytes.min(u32::MAX as usize) as u32);
             }
-            0x8769 if is_root => exif_ifd_off = Some(read_u32(value_off_field).unwrap_or(0) as usize),
-            0x8825 if is_root => gps_ifd_off = Some(read_u32(value_off_field).unwrap_or(0) as usize),
+            0x8769 if is_root => {
+                exif_ifd_off = Some(read_u32(value_off_field).unwrap_or(0) as usize)
+            }
+            0x8825 if is_root => {
+                gps_ifd_off = Some(read_u32(value_off_field).unwrap_or(0) as usize)
+            }
             _ => {}
         }
     }
@@ -357,7 +357,9 @@ fn walk_ifd(
 
 fn insert_ascii(out: &mut Map<String, Value>, key: &str, bytes: Option<&[u8]>) {
     let Some(b) = bytes else { return };
-    let Ok(s) = std::str::from_utf8(b) else { return };
+    let Ok(s) = std::str::from_utf8(b) else {
+        return;
+    };
     let trimmed = s.trim_end_matches(|c: char| c == '\0' || c.is_whitespace());
     if !trimmed.is_empty() {
         out.insert(key.into(), json!(trimmed));
@@ -421,13 +423,13 @@ mod tests {
         tiff.extend_from_slice(b"II"); // little-endian
         tiff.extend_from_slice(&0x002Au16.to_le_bytes());
         tiff.extend_from_slice(&8u32.to_le_bytes()); // IFD0 at offset 8
-        // IFD0: 3 entries
+                                                     // IFD0: 3 entries
         tiff.extend_from_slice(&3u16.to_le_bytes());
         let mut data_blob: Vec<u8> = Vec::new();
         let strings = [
-            (0x010Fu16, "Canon\0"),  // Make
-            (0x0110, "EOS R5\0"),    // Model
-            (0x0131, "Adobe LR\0"),  // Software
+            (0x010Fu16, "Canon\0"), // Make
+            (0x0110, "EOS R5\0"),   // Model
+            (0x0131, "Adobe LR\0"), // Software
         ];
         // Reserve 14 bytes per IFD entry (12 each × 3 = 36) + 4 next-IFD
         let strings_offset_base = 8 + 2 + 12 * strings.len() + 4;

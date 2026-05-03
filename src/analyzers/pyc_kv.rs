@@ -64,7 +64,10 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
     let mut out = Map::new();
     out.insert(
         "magic".into(),
-        json!(format!("{:08x}", u32::from_le_bytes([data[0], data[1], data[2], data[3]]))),
+        json!(format!(
+            "{:08x}",
+            u32::from_le_bytes([data[0], data[1], data[2], data[3]])
+        )),
     );
     if let Some(version) = python_version_for_magic(magic_word) {
         out.insert("python_version".into(), json!(version));
@@ -130,13 +133,10 @@ fn scan_source_files(body: &[u8]) -> Vec<String> {
         }
         // Look for ".py" / ".pyx" / ".pyw" / ".pyi" then a non-path
         // boundary byte (NUL, control char, or another length byte).
-        let suffix_len = match body.get(i..i + 3).and_then(|s| {
-            if s == b".py" {
-                Some(3)
-            } else {
-                None
-            }
-        }) {
+        let suffix_len = match body
+            .get(i..i + 3)
+            .and_then(|s| if s == b".py" { Some(3) } else { None })
+        {
             Some(n) => {
                 let extra = match body.get(i + 3) {
                     Some(b) if matches!(*b, b'x' | b'w' | b'i') => 1,
@@ -193,8 +193,7 @@ fn scan_source_files(body: &[u8]) -> Vec<String> {
 }
 
 fn is_path_byte(b: u8) -> bool {
-    matches!(b, b'/' | b'\\' | b'.' | b'-' | b'_' | b':' | b'+')
-        || b.is_ascii_alphanumeric()
+    matches!(b, b'/' | b'\\' | b'.' | b'-' | b'_' | b':' | b'+') || b.is_ascii_alphanumeric()
 }
 
 #[cfg(test)]

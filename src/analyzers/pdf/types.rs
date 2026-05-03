@@ -41,22 +41,16 @@ pub(crate) struct PdfDocument {
 pub(crate) struct PdfHeader {
     /// Version string after the dash (e.g. `"1.7"`, `"2.0"`).
     pub version: String,
-    /// Byte offset where this header starts.
-    pub offset: usize,
 }
 
 /// One indirect object as recovered between an `obj` and `endobj` token.
 #[derive(Debug, Clone)]
 pub(crate) struct PdfObject {
     pub id: u32,
-    pub gen: u16,
-    pub offset: usize,
     /// Top-level dict keys → raw value bytes (verbatim text, not
     /// re-parsed). Trait authors that need finer-grained values can
     /// extract via regex on the `value`.
     pub dict: BTreeMap<String, String>,
-    /// True when an `endstream` keyword followed the dict.
-    pub has_stream: bool,
     /// Filter names in `/Filter` order. A multi-element list means
     /// chained decompression (e.g. `[FlateDecode ASCIIHexDecode]`).
     pub stream_filters: Vec<String>,
@@ -118,7 +112,6 @@ pub(crate) enum PdfActionKind {
     Sound,
     Rendition,
     ImportData,
-    Other,
 }
 
 impl PdfActionKind {
@@ -135,7 +128,6 @@ impl PdfActionKind {
             Self::Sound => "sound",
             Self::Rendition => "rendition",
             Self::ImportData => "importdata",
-            Self::Other => "other",
         }
     }
 }

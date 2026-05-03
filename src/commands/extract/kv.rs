@@ -19,13 +19,13 @@
 
 use crate::analyzers;
 use crate::analyzers::binary_kv;
+use crate::analyzers::class_kv;
 use crate::analyzers::jar_kv;
+use crate::analyzers::jpeg_kv;
 use crate::analyzers::office::office_kv;
 use crate::analyzers::pdf::pdf_kv;
-use crate::analyzers::class_kv;
-use crate::analyzers::jpeg_kv;
-use crate::analyzers::png_kv;
 use crate::analyzers::pickle_kv;
+use crate::analyzers::png_kv;
 use crate::analyzers::pyc_kv;
 use crate::analyzers::FileType;
 use crate::cli;

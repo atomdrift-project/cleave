@@ -100,10 +100,7 @@ fn scan_headers(data: &[u8]) -> Vec<PdfHeader> {
             }
         }
         let version = String::from_utf8_lossy(&data[abs + needle.len()..end]).to_string();
-        out.push(PdfHeader {
-            version,
-            offset: abs,
-        });
+        out.push(PdfHeader { version });
         start = abs + needle.len();
     }
     out
@@ -139,7 +136,7 @@ fn scan_objects(data: &[u8]) -> Vec<PdfObject> {
         // Parse `<id> <gen> obj` backwards from obj_pos. The id and
         // gen are the two whitespace-separated decimals immediately
         // preceding `obj`. We back up past whitespace and digits.
-        let (id, gen, header_start) = match parse_object_header(&data[..obj_pos]) {
+        let id = match parse_object_header(&data[..obj_pos]) {
             Some(t) => t,
             None => {
                 start = obj_pos + 3;
@@ -166,10 +163,7 @@ fn scan_objects(data: &[u8]) -> Vec<PdfObject> {
 
         out.push(PdfObject {
             id,
-            gen,
-            offset: header_start,
             dict,
-            has_stream,
             stream_filters,
             stream_bytes,
         });
@@ -183,28 +177,19 @@ fn scan_objects(data: &[u8]) -> Vec<PdfObject> {
 }
 
 /// Walk back from a slice end to recover `<id> <gen>`. Returns
-/// `(id, gen, header_offset)` where `header_offset` points to the
-/// start of the id digits.
-fn parse_object_header(prefix: &[u8]) -> Option<(u32, u16, usize)> {
-    // Skip trailing whitespace before `obj`.
+/// Parse the `<id> <gen> obj` header backwards from just before the
+/// `obj` keyword. Returns the object id; gen and header offset are
+/// not consumed by any caller and are dropped.
+fn parse_object_header(prefix: &[u8]) -> Option<u32> {
+    // Skip trailing whitespace before `obj`, then the gen digits, then
+    // the inter-token whitespace, then the id digits.
     let mut end = prefix.len();
     while end > 0 && is_ws(prefix[end - 1]) {
         end -= 1;
     }
-    // Read gen digits.
-    let gen_end = end;
     while end > 0 && prefix[end - 1].is_ascii_digit() {
         end -= 1;
     }
-    let gen_start = end;
-    if gen_start == gen_end {
-        return None;
-    }
-    let gen: u16 = std::str::from_utf8(&prefix[gen_start..gen_end])
-        .ok()?
-        .parse()
-        .ok()?;
-    // Skip ws between id and gen.
     while end > 0 && is_ws(prefix[end - 1]) {
         end -= 1;
     }
@@ -216,11 +201,10 @@ fn parse_object_header(prefix: &[u8]) -> Option<(u32, u16, usize)> {
     if id_start == id_end {
         return None;
     }
-    let id: u32 = std::str::from_utf8(&prefix[id_start..id_end])
+    std::str::from_utf8(&prefix[id_start..id_end])
         .ok()?
         .parse()
-        .ok()?;
-    Some((id, gen, id_start))
+        .ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -446,7 +430,7 @@ fn parse_filter_list(value: &str) -> Vec<String> {
         inner
             .split_whitespace()
             .filter_map(|s| s.strip_prefix('/'))
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
             .collect()
     } else if let Some(name) = trimmed.strip_prefix('/') {
         vec![name.to_string()]
@@ -755,14 +739,12 @@ fn push_action_from_value(
 fn push_actions_from_aa(aa: &str, source: &str, out: &mut Vec<PdfAction>, objects: &[PdfObject]) {
     // /AA dict like `<< /WC 12 0 R /WS 13 0 R >>` — capture each ref.
     let mut chars = aa.chars();
-    let mut buf = String::new();
     while let Some(c) = chars.next() {
         if c == '/' {
             // Read event name then ref.
             let _evt = take_name(&mut chars);
             let ref_text = take_until_slash(&mut chars);
-            buf = ref_text.trim().to_string();
-            push_action_from_value(&buf, source, out, objects);
+            push_action_from_value(ref_text.trim(), source, out, objects);
         }
     }
 }
@@ -1118,8 +1100,8 @@ trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R >>\nstartxref\n0\n%%EOF\n";
         assert_eq!(doc.eof_count, 1);
         assert_eq!(doc.objects.len(), 3);
         assert!(doc.trailer.is_some());
-        assert_eq!(doc.info.get("Author").map(|s| s.as_str()), Some("John Doe"));
-        assert_eq!(doc.info.get("Title").map(|s| s.as_str()), Some("Test"));
+        assert_eq!(doc.info.get("Author").map(std::string::String::as_str), Some("John Doe"));
+        assert_eq!(doc.info.get("Title").map(std::string::String::as_str), Some("Test"));
         // OpenAction with /S /JavaScript should fire as a JS action.
         assert!(doc
             .actions

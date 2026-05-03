@@ -130,7 +130,9 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
 /// Resolve a constant-pool index → fully-qualified class name string.
 fn class_name(cp: &[CpEntry], idx: u16) -> Option<String> {
     let entry = cp.get(idx as usize)?;
-    let CpEntry::Class(name_idx) = entry else { return None };
+    let CpEntry::Class(name_idx) = entry else {
+        return None;
+    };
     if let Some(CpEntry::Utf8(s)) = cp.get(*name_idx as usize) {
         Some(s.clone())
     } else {
@@ -147,10 +149,16 @@ struct ClassAttributes {
 
 fn parse_attributes(data: &[u8], pos: &mut usize, cp: &[CpEntry]) -> ClassAttributes {
     let mut out = ClassAttributes::default();
-    let Some(count) = read_u16(data, pos) else { return out };
+    let Some(count) = read_u16(data, pos) else {
+        return out;
+    };
     for _ in 0..count {
-        let Some(name_idx) = read_u16(data, pos) else { return out };
-        let Some(length) = read_u32(data, pos).map(|v| v as usize) else { return out };
+        let Some(name_idx) = read_u16(data, pos) else {
+            return out;
+        };
+        let Some(length) = read_u32(data, pos).map(|v| v as usize) else {
+            return out;
+        };
         let body_start = *pos;
         let body_end = match body_start.checked_add(length) {
             Some(e) if e <= data.len() => e,
@@ -181,8 +189,7 @@ fn parse_attributes(data: &[u8], pos: &mut usize, cp: &[CpEntry]) -> ClassAttrib
                     if p + 8 > body.len() {
                         break;
                     }
-                    let inner_class_info_idx =
-                        u16::from_be_bytes([body[p], body[p + 1]]);
+                    let inner_class_info_idx = u16::from_be_bytes([body[p], body[p + 1]]);
                     if let Some(name) = class_name(cp, inner_class_info_idx) {
                         if !out.inner_classes.iter().any(|x| x == &name) {
                             out.inner_classes.push(name);
@@ -257,8 +264,12 @@ fn parse_constant_pool(data: &[u8], pos: &mut usize, count: usize) -> Option<Vec
                 cp[i] = CpEntry::Other;
                 i += 1; // longs/doubles take two CP slots
             }
-            CP_FIELDREF | CP_METHODREF | CP_INTERFACE_METHODREF | CP_NAME_AND_TYPE
-            | CP_DYNAMIC | CP_INVOKE_DYNAMIC => {
+            CP_FIELDREF
+            | CP_METHODREF
+            | CP_INTERFACE_METHODREF
+            | CP_NAME_AND_TYPE
+            | CP_DYNAMIC
+            | CP_INVOKE_DYNAMIC => {
                 *pos = pos.checked_add(4)?;
                 cp[i] = CpEntry::Other;
             }
@@ -304,7 +315,7 @@ mod tests {
         out.extend_from_slice(&0xCAFEBABE_u32.to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes()); // minor
         out.extend_from_slice(&major.to_be_bytes()); // major
-        // CP count = 7 (entries 1..6 used)
+                                                     // CP count = 7 (entries 1..6 used)
         out.extend_from_slice(&7u16.to_be_bytes());
         // 1 Utf8 "MyClass"
         out.push(CP_UTF8);
@@ -345,7 +356,7 @@ mod tests {
         // attributes
         if with_source {
             out.extend_from_slice(&1u16.to_be_bytes()); // attributes_count = 1
-            // SourceFile attribute: name_index=3, length=2, sourcefile_index=4
+                                                        // SourceFile attribute: name_index=3, length=2, sourcefile_index=4
             out.extend_from_slice(&3u16.to_be_bytes());
             out.extend_from_slice(&2u32.to_be_bytes());
             out.extend_from_slice(&4u16.to_be_bytes());

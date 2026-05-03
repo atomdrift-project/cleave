@@ -159,6 +159,19 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
                 for v in arr {
                     out.push((format!("{prefix}[]={}", leaf_key(v)), v.clone()));
                 }
+            } else if let Some(id_field) = identity_field_for(arr) {
+                // Array of objects with a stable identity field (e.g.
+                // `lib`, `name`, `path`). Index by the identity value so
+                // reordering doesn't fabricate diffs at every shifted slot.
+                for v in arr {
+                    let id = v
+                        .as_object()
+                        .and_then(|o| o.get(id_field))
+                        .map(leaf_key)
+                        .unwrap_or_default();
+                    let key = format!("{prefix}[{id_field}={id}]");
+                    walk(v, &key, out);
+                }
             } else {
                 for (i, v) in arr.iter().enumerate() {
                     let next = format!("{prefix}[{i}]");
@@ -185,6 +198,24 @@ fn leaf_key(v: &Value) -> String {
         Value::Bool(b) => b.to_string(),
         _ => String::new(),
     }
+}
+
+/// If every element of `arr` is an object that carries the *same* well-known
+/// identity field with a leaf value, return that field name. This lets the
+/// flattener key array entries by member identity rather than by index, so
+/// reordering doesn't fabricate change entries at every shifted slot.
+///
+/// We try a small ranked list of likely identity fields (`name`, `id`,
+/// `lib`, `path`, `key`, `symbol`). The first one carried by *every* element
+/// wins. Returns `None` when no field qualifies — caller falls back to
+/// indexed paths, preserving v1 behavior for arrays without obvious keys.
+fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
+    const CANDIDATES: &[&str] = &["name", "id", "lib", "path", "key", "symbol"];
+    CANDIDATES.iter().find(|&cand| arr.iter().all(|v| {
+            v.as_object()
+                .and_then(|o| o.get(*cand))
+                .is_some_and(is_leaf)
+        })).map(|v| v as _)
 }
 
 // =============================================================================

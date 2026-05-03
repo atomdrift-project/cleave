@@ -181,12 +181,28 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, StructuralCounts)> {
 fn is_standard_chunk(t: &str) -> bool {
     matches!(
         t,
-        "IHDR" | "IDAT" | "IEND" | "PLTE"
-            | "tRNS" | "cHRM" | "gAMA" | "iCCP" | "sBIT" | "sRGB"
-            | "tEXt" | "zTXt" | "iTXt"
-            | "bKGD" | "hIST" | "pHYs" | "sPLT" | "tIME"
+        "IHDR"
+            | "IDAT"
+            | "IEND"
+            | "PLTE"
+            | "tRNS"
+            | "cHRM"
+            | "gAMA"
+            | "iCCP"
+            | "sBIT"
+            | "sRGB"
+            | "tEXt"
+            | "zTXt"
+            | "iTXt"
+            | "bKGD"
+            | "hIST"
+            | "pHYs"
+            | "sPLT"
+            | "tIME"
             | "eXIf"
-            | "acTL" | "fcTL" | "fdAT" // APNG
+            | "acTL"
+            | "fcTL"
+            | "fdAT" // APNG
     )
 }
 
@@ -337,11 +353,7 @@ mod tests {
         let mut body = Vec::new();
         body.extend_from_slice(&2024u16.to_be_bytes());
         body.extend_from_slice(&[3, 14, 9, 26, 53]);
-        let png = build_png(&[
-            (b"IHDR", &ihdr_body()),
-            (b"tIME", &body),
-            (b"IEND", b""),
-        ]);
+        let png = build_png(&[(b"IHDR", &ihdr_body()), (b"tIME", &body), (b"IEND", b"")]);
         let (kv, _) = extract(&png).unwrap();
         assert_eq!(kv["time"], "2024-03-14T09:26:53Z");
     }
@@ -352,11 +364,7 @@ mod tests {
         body.extend_from_slice(b"sRGB IEC61966-2.1\0");
         body.push(0); // compression method
         body.extend_from_slice(b"\x78\x9c"); // dummy zlib stream
-        let png = build_png(&[
-            (b"IHDR", &ihdr_body()),
-            (b"iCCP", &body),
-            (b"IEND", b""),
-        ]);
+        let png = build_png(&[(b"IHDR", &ihdr_body()), (b"iCCP", &body), (b"IEND", b"")]);
         let (kv, _) = extract(&png).unwrap();
         assert_eq!(kv["icc_profile_name"], "sRGB IEC61966-2.1");
     }

@@ -180,15 +180,15 @@ fn attr_string<R: Reader>(
     debug_line_str: &DebugLineStr<R>,
 ) -> Option<String> {
     match attr.value() {
-        gimli::AttributeValue::String(s) => s.to_string_lossy().ok().map(|c| c.into_owned()),
+        gimli::AttributeValue::String(s) => s.to_string_lossy().ok().map(std::borrow::Cow::into_owned),
         gimli::AttributeValue::DebugStrRef(off) => debug_str
             .get_str(off)
             .ok()
-            .and_then(|r| r.to_string_lossy().ok().map(|c| c.into_owned())),
+            .and_then(|r| r.to_string_lossy().ok().map(std::borrow::Cow::into_owned)),
         gimli::AttributeValue::DebugLineStrRef(off) => debug_line_str
             .get_str(off)
             .ok()
-            .and_then(|r| r.to_string_lossy().ok().map(|c| c.into_owned())),
+            .and_then(|r| r.to_string_lossy().ok().map(std::borrow::Cow::into_owned)),
         gimli::AttributeValue::DebugStrRefSup(_) => None,
         _ => {
             let _ = header;

@@ -448,7 +448,7 @@ fn extract_info_group(text: &str) -> (BTreeMap<String, String>, BTreeMap<String,
             // Numeric parameter (signed) right after the name?
             let (param, value_start) = parse_int_prefix(after);
             let value = after[value_start..]
-                .trim_start_matches(|c: char| c == ' ' || c == '\t')
+                .trim_start_matches([' ', '\t'])
                 .trim()
                 .to_string();
 
@@ -685,8 +685,8 @@ mod tests {
     fn extract_info_group_captures_strings_and_numerics() {
         let body = "{\\rtf1\\ansi{\\info{\\title Q4 Audit}{\\author John Doe}{\\nofpages3}}}";
         let (s, n) = extract_info_group(body);
-        assert_eq!(s.get("title").map(|s| s.as_str()), Some("Q4 Audit"));
-        assert_eq!(s.get("author").map(|s| s.as_str()), Some("John Doe"));
+        assert_eq!(s.get("title").map(std::string::String::as_str), Some("Q4 Audit"));
+        assert_eq!(s.get("author").map(std::string::String::as_str), Some("John Doe"));
         assert_eq!(n.get("nofpages"), Some(&3));
     }
 
@@ -696,7 +696,7 @@ mod tests {
     fn extract_info_group_preserves_cyrillic_author() {
         let body = "{\\rtf1{\\info{\\author Иван Иванов}}}";
         let (s, _n) = extract_info_group(body);
-        assert_eq!(s.get("author").map(|s| s.as_str()), Some("Иван Иванов"));
+        assert_eq!(s.get("author").map(std::string::String::as_str), Some("Иван Иванов"));
     }
 
     /// Missing `\info` group is benign — empty maps, no panic.

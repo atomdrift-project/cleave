@@ -672,7 +672,7 @@ impl ArchiveAnalyzer {
     ///
     /// `archive_path` carries the original filename for type detection and
     /// reporting; the actual bytes come from `data`.
-    fn analyze_archive_with_data(
+    pub(super) fn analyze_archive_with_data(
         &self,
         data: &[u8],
         archive_path: &Path,
@@ -687,24 +687,7 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled before archive extraction");
         }
 
-        let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
         let guard = ExtractionGuard::with_cancellation(self.cancelled.clone());
-
-        let extraction_result = self.extract_from_data(data, archive_path, temp_dir.path(), &guard);
-
-        let hostile_reasons = guard.take_reasons();
-
-        if let Err(e) = extraction_result {
-            let extracted_count = walkdir::WalkDir::new(temp_dir.path())
-                .min_depth(1)
-                .into_iter()
-                .filter_map(std::result::Result::ok)
-                .count();
-            if extracted_count == 0 {
-                return Err(e);
-            }
-        }
-
         let file_type = crate::analyzers::detect_file_type_from_data(archive_path, data);
         let archive_type_str = file_type.report_file_type();
 
@@ -725,6 +708,53 @@ impl ArchiveAnalyzer {
                 report.archive_contents.append(&mut seeded_entries);
                 let metrics = report.metrics.get_or_insert_with(Metrics::default);
                 metrics.archive = Some(archive_metrics);
+            }
+        }
+
+        if matches!(file_type, FileType::Zip | FileType::Jar)
+            && !zip_has_encrypted_entries(data).unwrap_or(false)
+        {
+            self.analyze_zip_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            let hostile_reasons = guard.take_reasons();
+            let suppress_path_traversal =
+                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            push_archive_hostile_findings(
+                &mut report,
+                hostile_reasons,
+                "archive_analyzer",
+                suppress_path_traversal,
+            );
+            report.structure.push(StructuralFeature {
+                id: format!("archive/{}", archive_type_str),
+                desc: format!("{} archive", archive_type_str),
+                evidence: vec![Evidence {
+                    method: "extension".to_string(),
+                    source: "archive_analyzer".to_string(),
+                    value: archive_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+            return Ok(report);
+        }
+
+        let temp_dir = tempfile::tempdir().context("Failed to create temporary directory")?;
+        let extraction_result = self.extract_from_data(data, archive_path, temp_dir.path(), &guard);
+
+        let hostile_reasons = guard.take_reasons();
+
+        if let Err(e) = extraction_result {
+            let extracted_count = walkdir::WalkDir::new(temp_dir.path())
+                .min_depth(1)
+                .into_iter()
+                .filter_map(std::result::Result::ok)
+                .count();
+            if extracted_count == 0 {
+                return Err(e);
             }
         }
 
@@ -911,6 +941,18 @@ impl ArchiveAnalyzer {
             _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
     }
+}
+
+fn zip_has_encrypted_entries(data: &[u8]) -> Result<bool> {
+    let mut archive =
+        ZipArchive::new(std::io::Cursor::new(data)).context("Failed to inspect ZIP encryption")?;
+    for i in 0..archive.len() {
+        let entry = archive.by_index(i)?;
+        if entry.encrypted() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 impl Default for ArchiveAnalyzer {

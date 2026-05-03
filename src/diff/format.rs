@@ -162,19 +162,47 @@ impl ScopeKind {
 }
 
 const ALL_SCOPES: [ScopeCol; 6] = [
-    ScopeCol { label: "TRAITS", width: 12, kind: ScopeKind::Traits },
-    ScopeCol { label: "METRICS", width: 12, kind: ScopeKind::Metrics },
-    ScopeCol { label: "KV", width: 9, kind: ScopeKind::Kv },
-    ScopeCol { label: "SYMBOLS", width: 9, kind: ScopeKind::Symbols },
-    ScopeCol { label: "STRINGS", width: 11, kind: ScopeKind::Strings },
-    ScopeCol { label: "SECTIONS", width: 11, kind: ScopeKind::Sections },
+    ScopeCol {
+        label: "TRAITS",
+        width: 12,
+        kind: ScopeKind::Traits,
+    },
+    ScopeCol {
+        label: "METRICS",
+        width: 12,
+        kind: ScopeKind::Metrics,
+    },
+    ScopeCol {
+        label: "KV",
+        width: 9,
+        kind: ScopeKind::Kv,
+    },
+    ScopeCol {
+        label: "SYMBOLS",
+        width: 9,
+        kind: ScopeKind::Symbols,
+    },
+    ScopeCol {
+        label: "STRINGS",
+        width: 11,
+        kind: ScopeKind::Strings,
+    },
+    ScopeCol {
+        label: "SECTIONS",
+        width: 11,
+        kind: ScopeKind::Sections,
+    },
 ];
 
 fn write_ledger(out: &mut String, diff: &DiffReportV1) {
     // Determine which scope columns have at least one non-empty file cell.
     let cols: Vec<&ScopeCol> = ALL_SCOPES
         .iter()
-        .filter(|c| diff.files.iter().any(|f| has_scope_changes(&f.scopes, c.kind)))
+        .filter(|c| {
+            diff.files
+                .iter()
+                .any(|f| has_scope_changes(&f.scopes, c.kind))
+        })
         .collect();
 
     // Files: skip Unchanged + jitter; sort by max-crit then ROC desc.
@@ -315,7 +343,10 @@ fn scope_cell(scopes: &crate::types::ScopeDiffs, kind: ScopeKind, width: usize) 
         let pad = width.saturating_sub(dash.chars().count());
         return format!("{}{}", dash.dimmed(), " ".repeat(pad));
     }
-    let visible: usize = parts.iter().map(|s| visible_chars(s.as_str())).sum::<usize>()
+    let visible: usize = parts
+        .iter()
+        .map(|s| visible_chars(s.as_str()))
+        .sum::<usize>()
         + parts.len().saturating_sub(1); // joining spaces
     let pad = width.saturating_sub(visible);
     format!("{}{}", parts.join(" "), " ".repeat(pad))
@@ -411,27 +442,24 @@ fn write_file_panes(out: &mut String, diff: &DiffReportV1) {
     }
 }
 
+/// Per-file detail pane. Flat layout that visually continues the ledger:
+/// heading line (criticality dot, ROC, path), thin rule, then each scope as
+/// a sub-block with a `name  +A -R ~C` heading and its entries indented.
+/// No left rail, no closing rule — the next file's heading separates them.
 fn write_pane(out: &mut String, file: &FileDiffEntry) {
     let max_roc = file_max_roc(&file.scopes);
-    let title = format!(" [{}] {} ", paint_roc(max_roc), file.path.bold());
-    let visible_len = visible_width(&format!(" [{:.1}%] {} ", max_roc * 100.0, file.path));
-    let dash_n = WIDTH.saturating_sub(visible_len + 4);
+    let max_crit = max_added_crit(file);
+
+    // Heading: ●●  100.0%  models/yolo/model.py
     let _ = writeln!(
         out,
-        "{}{}{}{}",
-        "┌─".bright_blue(),
-        title,
-        "─".repeat(dash_n).bright_blue(),
-        "".clear()
+        "{}  {}  {}",
+        crit_dots(max_crit),
+        paint_roc(max_roc).bold(),
+        file.path.bold(),
     );
+    let _ = writeln!(out, "{}", "─".repeat(WIDTH).dimmed());
 
-    let tally = scope_tally_line(&file.scopes);
-    if !tally.is_empty() {
-        let _ = writeln!(out, "{}  {}", "│".bright_blue(), tally);
-        let _ = writeln!(out, "{}", "│".bright_blue());
-    }
-
-    // Per-scope sections, only when the scope has changes.
     if let Some(t) = &file.scopes.traits {
         if t.has_changes() {
             write_traits_section(out, t);
@@ -462,49 +490,37 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
             write_sections_section(out, e);
         }
     }
-
-    let _ = writeln!(
-        out,
-        "{}",
-        format!("└{}", "─".repeat(WIDTH.saturating_sub(1))).bright_blue()
-    );
 }
 
-/// One-line tally — emit only non-zero counts within each scope, and only
-/// scopes that have any change.
-fn scope_tally_line(scopes: &crate::types::ScopeDiffs) -> String {
-    let mut parts: Vec<String> = Vec::new();
-    push_tally(&mut parts, "traits", scopes.traits.as_ref());
-    push_tally(&mut parts, "metrics", scopes.metrics.as_ref());
-    push_tally(&mut parts, "kv", scopes.kv.as_ref());
-    push_tally(&mut parts, "symbols", scopes.symbols.as_ref());
-    push_tally(&mut parts, "strings", scopes.strings.as_ref());
-    push_tally(&mut parts, "sections", scopes.sections.as_ref());
-    parts.join(&"   ".dimmed().to_string())
-}
-
-fn push_tally<T>(parts: &mut Vec<String>, name: &str, scope: Option<&ScopeDiff<T>>) {
-    let Some(s) = scope else { return };
-    if !s.has_changes() {
-        return;
-    }
+/// Render `traits  +10 -1` as a section heading: scope name in bold, then
+/// dimmed counts. Skips zero counts. Omits the counts entirely if all are
+/// zero (caller already gated on `has_changes`).
+fn scope_heading<T>(scope_name: &str, scope: &ScopeDiff<T>) -> String {
     let mut bits: Vec<String> = Vec::new();
-    if !s.added.is_empty() {
-        bits.push(format!("+{}", s.added.len()).bright_green().to_string());
+    if !scope.added.is_empty() {
+        bits.push(format!("+{}", scope.added.len()).bright_green().to_string());
     }
-    if !s.removed.is_empty() {
-        bits.push(format!("-{}", s.removed.len()).bright_red().to_string());
+    if !scope.removed.is_empty() {
+        bits.push(format!("-{}", scope.removed.len()).bright_red().to_string());
     }
-    if !s.changed.is_empty() {
-        bits.push(format!("~{}", s.changed.len()).bright_yellow().to_string());
+    if !scope.changed.is_empty() {
+        bits.push(
+            format!("~{}", scope.changed.len())
+                .bright_yellow()
+                .to_string(),
+        );
     }
-    parts.push(format!("{} {}", name.dimmed(), bits.join("")));
+    if bits.is_empty() {
+        format!("\n  {}", scope_name.bold())
+    } else {
+        format!("\n  {}  {}", scope_name.bold(), bits.join(" "))
+    }
 }
 
 // ---- traits -----------------------------------------------------------------
 
 fn write_traits_section(out: &mut String, scope: &ScopeDiff<TraitChange>) {
-    let _ = writeln!(out, "{}    {}", "│".bright_blue(), "traits".bold());
+    let _ = writeln!(out, "{}", scope_heading("traits", scope));
 
     // Order: above-baseline first by crit desc, then alphabetical by id.
     let mut visible: Vec<(&'static str, &TraitChange)> = Vec::new();
@@ -540,8 +556,7 @@ fn write_traits_section(out: &mut String, scope: &ScopeDiff<TraitChange>) {
     for (sign, t) in &visible {
         let _ = writeln!(
             out,
-            "{}     {} {} {}",
-            "│".bright_blue(),
+            "    {} {} {}",
             crit_dots(t.crit),
             paint_sign(sign),
             paint_crit(short_id(&t.id), t.crit),
@@ -550,24 +565,21 @@ fn write_traits_section(out: &mut String, scope: &ScopeDiff<TraitChange>) {
     if hidden > 0 {
         let _ = writeln!(
             out,
-            "{}     {}",
-            "│".bright_blue(),
+            "    {}",
             format!("· {} baseline/component traits hidden", hidden).dimmed(),
         );
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 // ---- metrics ----------------------------------------------------------------
 
 fn write_metrics_section(out: &mut String, scope: &ScopeDiff<MetricChange>) {
-    let _ = writeln!(out, "{}    {}", "│".bright_blue(), "metrics".bold());
+    let _ = writeln!(out, "{}", scope_heading("metrics", scope));
 
     for c in &scope.added {
         let _ = writeln!(
             out,
-            "{}     {} {:<40}= {}",
-            "│".bright_blue(),
+            "    {} {:<40} = {}",
             paint_sign("+"),
             c.path,
             format_value(&c.value),
@@ -576,8 +588,7 @@ fn write_metrics_section(out: &mut String, scope: &ScopeDiff<MetricChange>) {
     for c in &scope.removed {
         let _ = writeln!(
             out,
-            "{}     {} {:<40}= {}",
-            "│".bright_blue(),
+            "    {} {:<40} = {}",
             paint_sign("-"),
             c.path,
             format_value(&c.value),
@@ -587,8 +598,7 @@ fn write_metrics_section(out: &mut String, scope: &ScopeDiff<MetricChange>) {
         let arrow = numeric_direction(&old.value, &new.value);
         let _ = writeln!(
             out,
-            "{}     {} {:<40}: {} {} {}",
-            "│".bright_blue(),
+            "    {} {:<40} : {} {} {}",
             arrow,
             new.path,
             format_value(&old.value).dimmed(),
@@ -596,7 +606,6 @@ fn write_metrics_section(out: &mut String, scope: &ScopeDiff<MetricChange>) {
             format_value(&new.value),
         );
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 /// `↑` for numeric increase, `↓` for numeric decrease, `~` for everything
@@ -617,7 +626,7 @@ fn numeric_direction(old: &Value, new: &Value) -> colored::ColoredString {
 // ---- kv ---------------------------------------------------------------------
 
 fn write_kv_section(out: &mut String, scope: &ScopeDiff<KvChange>) {
-    let _ = writeln!(out, "{}    {}", "│".bright_blue(), "kv".bold());
+    let _ = writeln!(out, "{}", scope_heading("kv", scope));
 
     for c in &scope.added {
         write_kv_row(out, "+", &c.path, None, &c.value);
@@ -628,7 +637,6 @@ fn write_kv_section(out: &mut String, scope: &ScopeDiff<KvChange>) {
     for Changed { old, new } in &scope.changed {
         write_kv_row(out, "~", &new.path, Some(&old.value), &new.value);
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 /// One kv row. Membership-encoded paths (`prefix[]=value`, produced by the
@@ -653,8 +661,7 @@ fn write_kv_row(
         // here because paths are value-keyed, but render conservatively.
         let _ = writeln!(
             out,
-            "{}     {} {:<40}  {}",
-            "│".bright_blue(),
+            "    {} {:<40}   {}",
             paint_sign(sign),
             truncate(&display_path, 40),
             format_value(value),
@@ -662,8 +669,7 @@ fn write_kv_row(
     } else if let Some(old) = old_value {
         let _ = writeln!(
             out,
-            "{}     {} {:<40}: {} {} {}",
-            "│".bright_blue(),
+            "    {} {:<40} : {} {} {}",
             paint_sign(sign),
             truncate(&display_path, 40),
             format_value(old).dimmed(),
@@ -673,8 +679,7 @@ fn write_kv_row(
     } else {
         let _ = writeln!(
             out,
-            "{}     {} {:<40}= {}",
-            "│".bright_blue(),
+            "    {} {:<40} = {}",
             paint_sign(sign),
             truncate(&display_path, 40),
             format_value(value),
@@ -685,27 +690,14 @@ fn write_kv_row(
 // ---- symbols ----------------------------------------------------------------
 
 fn write_symbols_section(out: &mut String, scope: &ScopeDiff<SymbolChange>) {
-    let _ = writeln!(out, "{}    {}", "│".bright_blue(), "symbols".bold());
+    let _ = writeln!(out, "{}", scope_heading("symbols", scope));
 
     for c in &scope.added {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("+"),
-            symbol_label(c)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("+"), symbol_label(c));
     }
     for c in &scope.removed {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("-"),
-            symbol_label(c)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("-"), symbol_label(c));
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 fn symbol_label(c: &SymbolChange) -> String {
@@ -726,10 +718,9 @@ const STRING_TAIL: usize = 25;
 fn write_strings_section(out: &mut String, scope: &ScopeDiff<StringChange>) {
     let _ = writeln!(
         out,
-        "{}    {}    {}",
-        "│".bright_blue(),
-        "strings".bold(),
-        format!("(last {} in file)", STRING_TAIL).dimmed(),
+        "{}    {}",
+        scope_heading("strings", scope),
+        format!("(last {STRING_TAIL} in file)").dimmed(),
     );
 
     let added_tail = tail(&scope.added, STRING_TAIL);
@@ -739,49 +730,33 @@ fn write_strings_section(out: &mut String, scope: &ScopeDiff<StringChange>) {
     if let Some(hidden) = added_tail.hidden {
         let _ = writeln!(
             out,
-            "{}     {}",
-            "│".bright_blue(),
-            format!("· {} earlier added strings hidden", hidden).dimmed()
+            "    {}",
+            format!("· {hidden} earlier added strings hidden").dimmed()
         );
     }
     for s in added_tail.items {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("+"),
-            truncate(&s.value, 200)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("+"), truncate(&s.value, 200));
     }
     if let Some(hidden) = removed_tail.hidden {
         let _ = writeln!(
             out,
-            "{}     {}",
-            "│".bright_blue(),
-            format!("· {} earlier removed strings hidden", hidden).dimmed()
+            "    {}",
+            format!("· {hidden} earlier removed strings hidden").dimmed()
         );
     }
     for s in removed_tail.items {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("-"),
-            truncate(&s.value, 200)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("-"), truncate(&s.value, 200));
     }
     for c in changed_tail.items {
         let _ = writeln!(
             out,
-            "{}     {} {} {} {}",
-            "│".bright_blue(),
+            "    {} {} {} {}",
             paint_sign("~"),
             truncate(&c.old.value, 80).dimmed(),
             "→".dimmed(),
             truncate(&c.new.value, 80),
         );
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 struct Tail<'a, T> {
@@ -807,31 +782,18 @@ fn tail<T>(items: &[T], n: usize) -> Tail<'_, T> {
 // ---- sections (binary) ------------------------------------------------------
 
 fn write_sections_section(out: &mut String, scope: &ScopeDiff<SectionChange>) {
-    let _ = writeln!(out, "{}    {}", "│".bright_blue(), "sections".bold());
+    let _ = writeln!(out, "{}", scope_heading("sections", scope));
 
     for s in &scope.added {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("+"),
-            section_label(s)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("+"), section_label(s));
     }
     for s in &scope.removed {
-        let _ = writeln!(
-            out,
-            "{}     {} {}",
-            "│".bright_blue(),
-            paint_sign("-"),
-            section_label(s)
-        );
+        let _ = writeln!(out, "    {} {}", paint_sign("-"), section_label(s));
     }
     for Changed { old, new } in &scope.changed {
         let _ = writeln!(
             out,
-            "{}     {} {} : size {} {} {}, entropy {:.2} {} {:.2}",
-            "│".bright_blue(),
+            "    {} {} : size {} {} {}, entropy {:.2} {} {:.2}",
             paint_sign("~"),
             new.name,
             old.size,
@@ -842,7 +804,6 @@ fn write_sections_section(out: &mut String, scope: &ScopeDiff<SectionChange>) {
             new.entropy
         );
     }
-    let _ = writeln!(out, "{}", "│".bright_blue());
 }
 
 fn section_label(s: &SectionChange) -> String {
@@ -977,12 +938,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
     let kept: String = s.chars().take(max.saturating_sub(1)).collect();
     format!("{kept}…")
-}
-
-/// Approximate visible width — strips a leading `[NN.N%]` ROC bracket if
-/// present, since we color it but the brackets remain visible.
-fn visible_width(s: &str) -> usize {
-    s.chars().count()
 }
 
 #[cfg(test)]
@@ -1196,12 +1151,10 @@ mod tests {
                 ..Default::default()
             },
         };
-        let files = vec![
-            mk("low.py", Criticality::Notable, 0.9),
+        let files = [mk("low.py", Criticality::Notable, 0.9),
             mk("med.py", Criticality::Suspicious, 0.1),
             mk("high.py", Criticality::Hostile, 0.05),
-            mk("susp_high_roc.py", Criticality::Suspicious, 0.5),
-        ];
+            mk("susp_high_roc.py", Criticality::Suspicious, 0.5)];
         let mut refs: Vec<&FileDiffEntry> = files.iter().collect();
         sort_in_place(&mut refs);
         let order: Vec<&str> = refs.iter().map(|f| f.path.as_str()).collect();

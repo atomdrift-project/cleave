@@ -332,11 +332,10 @@ impl OfficeAnalyzer {
                         }
                         _ => {}
                     }
-                    if lib == "com" || lib == "com-getobject" {
-                        if imp.symbol != vba_symbols::NON_LITERAL_SENTINEL {
+                    if (lib == "com" || lib == "com-getobject")
+                        && imp.symbol != vba_symbols::NON_LITERAL_SENTINEL {
                             distinct_progids.insert(imp.symbol.clone());
                         }
-                    }
                 }
             }
 

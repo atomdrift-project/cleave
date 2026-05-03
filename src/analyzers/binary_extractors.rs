@@ -290,7 +290,7 @@ pub(crate) fn extract_dynamic_flags(data: &[u8]) -> Option<DynamicFlags> {
         if tag == 30 {
             raw_flags = val as u32;
             found_any = true;
-        } else if tag as i64 == 0x6fff_fffb_i64 {
+        } else if tag == 0x6fff_fffb_i64 {
             raw_flags_1 = val as u32;
             found_any = true;
         }
@@ -1055,7 +1055,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     }
 
     // ELF .comment / .interp / .GCC.command.line
-    if &raw_data.get(..4) == &Some(b"\x7fELF".as_ref()) {
+    if raw_data.get(..4) == Some(b"\x7fELF".as_ref()) {
         let mut elf_extra = serde_json::Map::new();
         let mut build_extra = serde_json::Map::new();
 
@@ -1733,16 +1733,8 @@ fn plist_to_json(v: &plist::Value) -> serde_json::Value {
 /// fields populated from independent sources within the same binary
 /// and they disagreed. Conservative — only fires when both compared
 /// fields are present and obviously incompatible, never on absence
-/// alone.
-fn compute_consistency(
-    augment: &serde_json::Map<String, serde_json::Value>,
-) -> crate::types::binary_metrics::ConsistencyMetrics {
-    compute_consistency_with_metrics(augment, None)
-}
-
-/// Same as `compute_consistency` but with access to the per-format
-/// metrics structs for checks that need typed numeric fields (vs the
-/// kv tree's serialized JSON form).
+/// alone. The optional `metrics` argument unlocks checks that need
+/// typed numeric fields (vs the kv tree's serialized JSON form).
 fn compute_consistency_with_metrics(
     augment: &serde_json::Map<String, serde_json::Value>,
     metrics: Option<&crate::types::scores::Metrics>,
@@ -1849,7 +1841,7 @@ fn compute_consistency_with_metrics(
     {
         let signed: Vec<bool> = slices
             .iter()
-            .filter_map(|s| s.get("has_code_signature").and_then(|v| v.as_bool()))
+            .filter_map(|s| s.get("has_code_signature").and_then(serde_json::Value::as_bool))
             .collect();
         if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
             out.macho_slice_signing_divergence = true;
@@ -2393,7 +2385,7 @@ mod tests {
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.attacker.payload"}}),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(c.bundle_identifier_mismatch);
     }
 
@@ -2409,7 +2401,7 @@ mod tests {
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.apple.ls"}}),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(!c.bundle_identifier_mismatch);
         assert!(consistency_is_default(&c));
     }
@@ -2425,7 +2417,7 @@ mod tests {
                 "version_info": {"product_version": "9.9.9.9"},
             }),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(c.manifest_product_version_mismatch);
     }
 
@@ -2440,7 +2432,7 @@ mod tests {
                 "version_info": {"product_version": "1.2.3"},
             }),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(!c.manifest_product_version_mismatch);
     }
 
@@ -2452,7 +2444,7 @@ mod tests {
             "dwarf".into(),
             json!({"producers": ["GNU C 13.2.0", "clang 17.0.0"]}),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(c.dwarf_mixed_producers);
     }
 
@@ -2467,7 +2459,7 @@ mod tests {
                 {"arch": "arm64",  "has_code_signature": false},
             ]}),
         );
-        let c = compute_consistency(&aug);
+        let c = compute_consistency_with_metrics(&aug, None);
         assert!(c.macho_slice_signing_divergence);
     }
 

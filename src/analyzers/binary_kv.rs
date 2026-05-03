@@ -217,8 +217,9 @@ use serde_json::{json, Map, Value};
 /// Build the cross-format binary kv tree from data already
 /// populated on `report.metrics` and `report.target`.  Specialized
 /// extractors (Go buildinfo, VERSIONINFO strings, ELF interpreter,
-/// Mach-O LC_UUID) inject additional sections via [`extend_with`]
-/// before the analyzer stashes the result on `report.kv_tree`.
+/// Mach-O LC_UUID) merge additional sections directly into the kv
+/// tree via the binary-extractors augment pass before the analyzer
+/// stashes the result on `report.kv_tree`.
 #[must_use]
 pub(crate) fn build_binary_kv(report: &AnalysisReport) -> Value {
     let mut root = Map::new();
@@ -665,29 +666,6 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     Some(out)
 }
 
-/// Merge a partial value into the binary kv root in place.  Used by
-/// the format-specific extractors (Go buildinfo, VERSIONINFO,
-/// `.comment`, LC_UUID, etc.) to layer their data without re-walking
-/// the whole structure.  Empty objects/arrays are dropped.
-pub(crate) fn extend_with(root: &mut Value, key: &str, value: Value) {
-    if value.is_null() {
-        return;
-    }
-    if let Some(obj) = value.as_object() {
-        if obj.is_empty() {
-            return;
-        }
-    }
-    if let Some(arr) = value.as_array() {
-        if arr.is_empty() {
-            return;
-        }
-    }
-    if let Some(obj) = root.as_object_mut() {
-        obj.insert(key.to_string(), value);
-    }
-}
-
 /// Stash the synthesized binary kv tree on `report.kv_tree`.  Drops
 /// when the tree comes back empty so non-binary file types and
 /// minimal stub binaries don't carry an empty `kv_tree` field.
@@ -695,18 +673,6 @@ pub(crate) fn attach_to_report(report: &mut AnalysisReport) {
     let kv = build_binary_kv(report);
     if kv.as_object().is_some_and(|m| !m.is_empty()) {
         report.kv_tree = Some(Box::new(kv));
-    }
-}
-
-/// `cleave kv` dispatcher entry — takes a parsed binary report and
-/// returns its kv tree. Used by the kv command after the analyzer
-/// has run; not a parser-from-bytes entry.
-pub(crate) fn extract_binary_kv(report: &AnalysisReport) -> Option<Value> {
-    let kv = build_binary_kv(report);
-    if kv.as_object().is_some_and(|m| !m.is_empty()) {
-        Some(kv)
-    } else {
-        None
     }
 }
 
@@ -863,16 +829,5 @@ mod tests {
         });
         let kv = build_binary_kv(&r);
         assert_eq!(kv, json!({}));
-    }
-
-    #[test]
-    fn extend_with_drops_empty() {
-        let mut root = json!({});
-        extend_with(&mut root, "go", json!({}));
-        extend_with(&mut root, "elf", json!([]));
-        extend_with(&mut root, "macho", json!({"uuid": "abc"}));
-        assert!(root.get("go").is_none());
-        assert!(root.get("elf").is_none());
-        assert_eq!(root["macho"]["uuid"], "abc");
     }
 }

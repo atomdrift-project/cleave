@@ -169,23 +169,47 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
                 }
                 i += 1;
             }
-            // Single-byte opcodes — skip without payload.
-            0x29 | 0x28 | 0x2E | 0x30 | 0x31 | 0x32 | 0x33 | 0x52 | 0x5D | 0x61 | 0x62 | 0x65
-            | 0x68 | 0x69 | 0x6F | 0x70 | 0x71 | 0x72 | 0x73 | 0x74 | 0x75 | 0x76 | 0x77 | 0x78
-            | 0x79 | 0x7D | 0x81 | 0x82 | 0x83 | 0x84 | 0x85 | 0x86 | 0x87 | 0x88 | 0x89 | 0x8E
-            | 0x8F | 0x90 | 0x91 | 0x92 | 0x94 => {
+            // Single-byte opcodes — skip without payload. Excludes
+            // bytes whose ASCII value collides with payload-bearing
+            // opcodes handled below (`b'h'`, `b'p'`, `b'q'`, `b'r'`,
+            // INST `i` which has a variable-length module/name pair).
+            0x28 | 0x29 | 0x2E | 0x30 | 0x31 | 0x32 | 0x33 | 0x52 | 0x5D | 0x61 | 0x62 | 0x65
+            | 0x6C | 0x6F | 0x73 | 0x74 | 0x75 | 0x7D | 0x81 | 0x85 | 0x86 | 0x87 | 0x88 | 0x89
+            | 0x8E | 0x8F | 0x90 | 0x91 | 0x92 | 0x94 | 0x97 | 0x98 => {
                 i += 1;
+            }
+            // EXT1 / EXT2 / EXT4 — extension-registry indices with
+            // 1 / 2 / 4-byte payloads.
+            0x82 => i += 2,
+            0x83 => i += 3,
+            0x84 => i += 5,
+            // INST `i` — module\nattr\n, like GLOBAL but creates an
+            // instance instead of resolving a callable. Walk the two
+            // newlines to skip past it.
+            b'i' => {
+                let after = i + 1;
+                let nl1 = scan
+                    .get(after..)
+                    .and_then(|s| s.iter().position(|&b| b == b'\n'))?;
+                let nl2 = scan
+                    .get(after + nl1 + 1..)
+                    .and_then(|s| s.iter().position(|&b| b == b'\n'))?;
+                i = after + nl1 + 1 + nl2 + 1;
             }
             // Length-prefixed payloads with known sizes.
             b'I' | b'L' | b'F' | b'V' | b'S' => {
                 // Text-form integer/long/float/unicode/string — skip
                 // to next newline.
-                let nl = scan.get(i + 1..).and_then(|s| s.iter().position(|&b| b == b'\n'))?;
+                let nl = scan
+                    .get(i + 1..)
+                    .and_then(|s| s.iter().position(|&b| b == b'\n'))?;
                 i += 2 + nl;
             }
             b'g' | b'p' => {
                 // GET <int>\n / PUT <int>\n
-                let nl = scan.get(i + 1..).and_then(|s| s.iter().position(|&b| b == b'\n'))?;
+                let nl = scan
+                    .get(i + 1..)
+                    .and_then(|s| s.iter().position(|&b| b == b'\n'))?;
                 i += 2 + nl;
             }
             b'h' | b'q' | b'r' => {

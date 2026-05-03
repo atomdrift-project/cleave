@@ -47,9 +47,9 @@ fn test_macho_binary_metrics_always_populated() {
 
     // Basic metrics that should ALWAYS be populated (even without radare2):
     assert!(
-        binary_metrics.file_size > 0,
+        binary_metrics.code_size > 0,
         "file_size should be populated: {}",
-        binary_metrics.file_size
+        binary_metrics.code_size
     );
     assert!(
         binary_metrics.segment_count > 0,
@@ -67,7 +67,7 @@ fn test_macho_binary_metrics_always_populated() {
     // Boolean fields should be set
     // Note: is_stripped and is_pie depend on the file, but they should be evaluated
     eprintln!("Binary metrics successfully populated:");
-    eprintln!("  file_size: {}", binary_metrics.file_size);
+    eprintln!("  file_size: {}", binary_metrics.code_size);
     eprintln!("  segment_count: {}", binary_metrics.segment_count);
     eprintln!("  string_count: {}", binary_metrics.string_count);
     eprintln!("  is_stripped: {}", binary_metrics.is_stripped);
@@ -143,7 +143,7 @@ fn test_metrics_accessible_to_rules() {
 
     let binary_metrics = report.metrics.unwrap().binary.unwrap();
     eprintln!("Metrics successfully accessible to rules:");
-    eprintln!("  binary.file_size: {}", binary_metrics.file_size);
+    eprintln!("  binary.code_size: {}", binary_metrics.code_size);
     eprintln!("  binary.string_count: {}", binary_metrics.string_count);
     eprintln!(
         "  binary.code_to_data_ratio: {:.2}",
@@ -225,13 +225,13 @@ fn test_radare2_failure_handling() {
     let binary_metrics = metrics.binary.unwrap();
 
     // These are computed WITHOUT radare2, so they must always be present
-    assert!(binary_metrics.file_size > 0);
+    assert!(binary_metrics.code_size > 0);
     // segment_count and string_count are unsigned, so no need to check >= 0
 
     eprintln!("Basic metrics populated regardless of radare2 status:");
     eprintln!(
         "  file_size: {} (from file metadata)",
-        binary_metrics.file_size
+        binary_metrics.code_size
     );
     eprintln!(
         "  segment_count: {} (from goblin)",

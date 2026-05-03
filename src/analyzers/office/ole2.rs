@@ -772,7 +772,7 @@ fn read_filetime_minutes(section: &[u8], offset: usize) -> Option<u64> {
 /// junk like "12.0" → 12). Used for `PIDSI_REVNUMBER` which Word stores
 /// as a string.
 fn parse_leading_u32(s: &str) -> Option<u32> {
-    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let digits: String = s.chars().take_while(char::is_ascii_digit).collect();
     digits.parse().ok()
 }
 
@@ -825,7 +825,6 @@ mod tests {
     /// `clipboard_marker` controls whether the clipboard slot is a
     /// registered ID, absent, or a length-prefixed string.
     enum ClipboardSlot {
-        None,
         RegisteredId(u32),
         AnsiString(&'static str),
     }
@@ -846,9 +845,6 @@ mod tests {
 
         // AnsiClipboardFormat
         match clipboard {
-            ClipboardSlot::None => {
-                buf.extend_from_slice(&0u32.to_le_bytes());
-            }
             ClipboardSlot::RegisteredId(id) => {
                 buf.extend_from_slice(&id.to_le_bytes());
             }

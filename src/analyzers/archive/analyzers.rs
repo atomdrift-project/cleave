@@ -23,9 +23,13 @@
 //! concurrent archives compete for the same rayon threads, so individual
 //! member analyses must be bounded to avoid stalling the entire pool.
 
+use super::guards::{
+    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
+    LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+};
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
 use super::ArchiveAnalyzer;
-use crate::analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType, FileTypeExt};
+use crate::analyzers::{detect_file_type, AnalysisInput, FileType, FileTypeExt};
 use crate::types::{
     encode_archive_path, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, StringInfo,
     StringType, TargetInfo, YaraMatch,
@@ -33,6 +37,7 @@ use crate::types::{
 use anyhow::Result;
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::io::Read;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tracing::{debug, trace};
@@ -71,6 +76,13 @@ struct MemberAnalysisResult {
     entry_metadata: ArchiveEntry,
     extracted_path: Option<String>,
     report: Option<AnalysisReport>,
+}
+
+struct MemoryArchiveMember {
+    relative_path: String,
+    data: Vec<u8>,
+    file_type: FileType,
+    sha256: String,
 }
 
 /// Total number of successful archive member analyses (cumulative, for logging)
@@ -306,7 +318,7 @@ impl ArchiveAnalyzer {
                         file_size_bytes = data.len(),
                         "Analyzing nested archive in-place on rayon worker"
                     );
-                    nested.analyze(&path).map(Some)
+                    nested.analyze_archive_with_data(data, &path).map(Some)
                 } else {
                     // Truncate relative_path in the thread name so it fits in
                     // the 15-char pthread limit on Linux — but keep enough
@@ -330,10 +342,11 @@ impl ArchiveAnalyzer {
                         thread_name = %thread_name,
                         "Spawning nested archive analyzer thread (off-pool caller)"
                     );
+                    let nested_data = data.to_vec();
                     std::thread::Builder::new()
                         .name(thread_name)
                         .stack_size(8 * 1024 * 1024)
-                        .spawn(move || nested.analyze(&path))
+                        .spawn(move || nested.analyze_archive_with_data(&nested_data, &path))
                         .map_err(|e| anyhow::anyhow!("Failed to spawn nested archive thread: {e}"))?
                         .join()
                         .map_err(|e| {
@@ -569,6 +582,323 @@ impl ArchiveAnalyzer {
         }
 
         result
+    }
+
+    /// Analyze ZIP/JAR-style archives without materializing the whole archive
+    /// tree under `/tmp`. Members are read into bounded in-memory buffers and
+    /// handed to the same member analyzers used by the extracted-directory path.
+    pub(super) fn analyze_zip_archive_in_memory(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+    ) -> Result<()> {
+        let mut archive = ::zip::ZipArchive::new(std::io::Cursor::new(data))
+            .map_err(|e| anyhow::anyhow!("Failed to read ZIP archive: {e}"))?;
+        if archive.len() > super::MAX_ZIP_ENTRIES {
+            anyhow::bail!(
+                "ZIP central directory claims {} entries (max {})",
+                archive.len(),
+                super::MAX_ZIP_ENTRIES
+            );
+        }
+
+        let fake_root = Path::new("/__cleave_archive__");
+        let mut members = Vec::with_capacity(archive.len().min(10_000));
+
+        for i in 0..archive.len() {
+            if self.is_cancelled() {
+                anyhow::bail!("Analysis cancelled during ZIP member read");
+            }
+            if !guard.check_file_count() {
+                anyhow::bail!(
+                    "Exceeded maximum file count ({})",
+                    super::guards::MAX_FILE_COUNT
+                );
+            }
+
+            let mut entry = archive.by_index(i)?;
+            let entry_name = entry.name().to_string();
+            if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                    len: entry_name.len(),
+                    preview: entry_name.chars().take(80).collect(),
+                });
+            }
+
+            let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
+                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
+                continue;
+            };
+            let relative_path = outpath
+                .strip_prefix(fake_root)
+                .unwrap_or(&outpath)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if let Some(mode) = entry.unix_mode() {
+                if mode & 0o170000 == 0o120000 {
+                    let mut target_buf = Vec::new();
+                    let mut limited = LimitedReader::new(&mut entry, 4096);
+                    if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
+                        if read_size > 0 && read_size < 4096 {
+                            if let Ok(target_str) = String::from_utf8(target_buf) {
+                                if symlink_escapes(&outpath, &target_str, fake_root) {
+                                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(
+                                        format!("{} -> {}", entry_name, target_str),
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
+
+            if entry.is_dir() {
+                continue;
+            }
+            if entry.encrypted() {
+                anyhow::bail!("Password required to decrypt file");
+            }
+
+            let compressed = entry.compressed_size();
+            let uncompressed = entry.size();
+            if !guard.check_compression_ratio(compressed, uncompressed) {
+                continue;
+            }
+            if uncompressed > MAX_FILE_SIZE {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: entry_name,
+                    size: uncompressed,
+                });
+                continue;
+            }
+
+            let mut file_data = Vec::with_capacity(uncompressed.min(16 * 1024 * 1024) as usize);
+            let written = if let Some(c) = guard.cancellation() {
+                let mut cancellable = CancellableReader::new(&mut entry, c);
+                let mut limited = LimitedReader::new(&mut cancellable, MAX_FILE_SIZE);
+                let n = limited.read_to_end(&mut file_data)? as u64;
+                if limited.is_limited() {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: relative_path.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                n
+            } else {
+                let mut limited = LimitedReader::new(&mut entry, MAX_FILE_SIZE);
+                let n = limited.read_to_end(&mut file_data)? as u64;
+                if limited.is_limited() {
+                    guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                        file: relative_path.clone(),
+                        size: MAX_FILE_SIZE,
+                    });
+                    continue;
+                }
+                n
+            };
+            if !guard.check_bytes(written, &relative_path) {
+                anyhow::bail!("Exceeded maximum total extraction size");
+            }
+
+            let logical_path = Path::new(&relative_path);
+            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+            let sha256 = calculate_sha256(&file_data);
+            members.push(MemoryArchiveMember {
+                relative_path,
+                data: file_data,
+                file_type,
+                sha256,
+            });
+        }
+
+        let total_files = members.len();
+        tracing::debug!(
+            archive = %archive_path.display(),
+            file_count = total_files,
+            "Starting in-memory ZIP member analysis"
+        );
+
+        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(&members, |member| {
+            let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
+            if self.is_cancelled() {
+                return None;
+            }
+
+            let entry_path = self.format_entry_path(&member.relative_path);
+            let archive_location = self.format_evidence_location(&member.relative_path);
+            let entry_metadata = ArchiveEntry {
+                path: entry_path.clone(),
+                file_type: member.file_type.report_file_type(),
+                sha256: member.sha256.clone(),
+                size_bytes: member.data.len() as u64,
+            };
+            let member_start = std::time::Instant::now();
+            let logical_path = Path::new(&member.relative_path);
+
+            let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.analyze_extracted_member(
+                    logical_path,
+                    &member.relative_path,
+                    &member.data,
+                    &member.file_type,
+                    &member.sha256,
+                )
+            })) {
+                Ok(Ok(Some(r))) => Some(r),
+                Ok(Ok(None)) => None,
+                Ok(Err(e)) => {
+                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                    None
+                }
+                Err(_) => {
+                    tracing::error!(path = %entry_path, "panic during archive member analysis (caught)");
+                    FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
+                    None
+                }
+            };
+
+            let elapsed = member_start.elapsed();
+            if elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
+                tracing::warn!(
+                    relative_path = %member.relative_path,
+                    file_type = %member.file_type.report_file_type(),
+                    size_bytes = member.data.len(),
+                    elapsed_ms = elapsed.as_millis() as u64,
+                    rayon_thread = ?rayon::current_thread_index(),
+                    "Slow archive member analysis (memory ZIP)",
+                );
+            }
+
+            let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
+                let extract_relative_path = match &self.archive_path_prefix {
+                    Some(prefix) => {
+                        format!("{}/{}", prefix.replace('!', "/"), member.relative_path)
+                    }
+                    None => member.relative_path.clone(),
+                };
+                config
+                    .extract(&member.sha256, &extract_relative_path, &member.data)
+                    .map(|path| path.display().to_string())
+            });
+
+            Some(MemberAnalysisResult {
+                entry_path,
+                archive_location,
+                entry_metadata,
+                extracted_path,
+                report: member_report,
+            })
+        });
+
+        let mut total_capabilities = HashSet::new();
+        let mut total_traits = HashSet::new();
+        let mut collected_traits = HashMap::<String, Finding>::with_capacity(total_files.min(500));
+        let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
+        let mut collected_strings = Vec::<StringInfo>::with_capacity((total_files * 2).min(200));
+        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
+        let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
+        let mut files_analyzed = 0usize;
+
+        for result in results {
+            collected_archive_entries.push(result.entry_metadata);
+            let Some(file_report) = result.report else {
+                continue;
+            };
+            files_analyzed += 1;
+
+            let (mut file_entry, nested_files, archive_contents) =
+                file_report.into_file_analysis(0);
+            file_entry.path = result.entry_path.clone();
+            file_entry.depth = 1;
+            file_entry.compute_summary();
+            file_entry.extracted_path = result.extracted_path.clone();
+
+            for f in &file_entry.findings {
+                total_traits.insert(f.id.clone());
+                total_capabilities.insert(f.id.clone());
+                let mut new_finding = f.clone();
+                for evidence in &mut new_finding.evidence {
+                    match &evidence.location {
+                        None => evidence.location = Some(result.archive_location.clone()),
+                        Some(loc) if !loc.starts_with("archive:") => {
+                            evidence.location =
+                                Some(format!("{}:{}", result.archive_location, loc));
+                        }
+                        _ => {}
+                    }
+                }
+                collected_traits
+                    .entry(new_finding.id.clone())
+                    .and_modify(|existing| {
+                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
+                            > (existing.crit, std::cmp::Ordering::Equal)
+                        {
+                            *existing = new_finding.clone();
+                        }
+                    })
+                    .or_insert(new_finding);
+            }
+
+            for yara_match in &file_entry.yara_matches {
+                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
+                    && collected_yara.len() < 1_000
+                {
+                    collected_yara.push(yara_match.clone());
+                }
+            }
+
+            for string in &file_entry.strings {
+                if matches!(
+                    string.string_type,
+                    Some(StringType::Url | StringType::IP | StringType::Base64)
+                ) && collected_strings.len() < 10_000
+                {
+                    collected_strings.push(string.clone());
+                }
+            }
+
+            collected_files.push(file_entry);
+            collected_archive_entries.extend(archive_contents);
+            for mut nested_file in nested_files {
+                if !nested_file.path.contains("!!") {
+                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
+                }
+                nested_file.depth += 1;
+                collected_files.push(nested_file);
+            }
+        }
+
+        for (_, t) in collected_traits {
+            if !report.findings.iter().any(|existing| existing.id == t.id) {
+                report.findings.push(t);
+            }
+        }
+        for ym in collected_yara {
+            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
+                report.yara_matches.push(ym);
+            }
+        }
+        report.strings.extend(collected_strings);
+        report.archive_contents.extend(collected_archive_entries);
+        report.files.extend(collected_files);
+        report.metadata.errors.push(format!(
+            "ZIP archive: {} members, {} analyzed, {} traits and {} capabilities detected",
+            total_files,
+            files_analyzed,
+            total_traits.len(),
+            total_capabilities.len()
+        ));
+        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        report.metadata.tools_used =
+            vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()];
+
+        Ok(())
     }
 
     /// Analyze JAR-like archives (JAR, WAR, EAR, APK, AAR) with optimized class file handling.

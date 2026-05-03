@@ -35,30 +35,37 @@
 //!   username_from           "pdb_path" | "byte_scan"
 //!   source_paths[]          ["/Users/.../main.go", ...]  (capped, in scan order)
 //!   build_root              "/Users/alice/projects/sample"  (longest common ancestor)
-//!   is_pie                  bool
-//!   is_stripped             bool
-//!   has_debug_info          bool
+//!   is_pie                  bool   (mirrors `binary.is_pie` metric)
+//!   is_stripped             bool   (mirrors `binary.is_stripped` metric)
+//!   has_debug_info          bool   (mirrors `binary.has_debug_info` metric)
 //!   ci_environment          "github-actions" | "gitlab-ci" | ...   (planned)
-//!   linker                  "ld" | "gold" | "lld" | "mold" | ...   (planned)
+//!   linker                  "gold" | "lld" | "mold" | "bfd"        (B7 — ELF only)
+//!   rust_runtime_symbols[]  ["rust_alloc", "rust_panic", ...]      (B7.5 — Rust ABI markers)
+//!   rust_mangling           "v0" | "legacy"                        (B7.5 — Rust symbol mangling style)
+//!   has_rustc_section       bool — `.rustc` ELF section present    (B7.5 — Rust crate metadata)
 //!
 //! signing:                  cross-format signing metadata
-//!   is_signed               bool
+//!   is_signed               bool   (mirrors `binary.has_signature` metric)
 //!   signature_valid         bool
-//!   hardened_runtime        bool         (Mach-O)
-//!   allow_jit               bool         (Mach-O)
+//!   hardened_runtime        bool   (Mach-O — mirrors `macho.hardened_runtime`)
+//!   allow_jit               bool   (Mach-O — mirrors `macho.allow_jit`)
+//!   notarized               bool   (Mach-O — mirrors `macho.is_notarized`)
 //!   catalog                 "authenticode" | "apple_codesign"
 //!   type                    "adhoc" | "developer-id" | "platform"       (Mach-O)
-//!   signer_subject          "Adobe Inc." | "Microsoft Corporation"      (PE+Mach-O)
+//!   subject                 leaf cert Subject CN                        (PE+Mach-O)
+//!   issuer                  leaf cert Issuer CN (immediate CA above leaf)  (PE)
+//!   thumbprint_sha1         SHA-1 of leaf cert DER (lowercase hex)      (PE)
+//!   serial                  leaf cert serial number (lowercase hex)     (PE)
+//!   not_before              Unix epoch seconds — cert validity start    (PE)
+//!   not_after               Unix epoch seconds — cert validity end      (PE)
 //!   authorities[]           ["Apple Root CA", ...]                      (Mach-O cert chain)
 //!   signing_time            Unix epoch seconds                          (PE Authenticode)
-//!   signed_before_built     bool — re-sign / replay attack flag
-//!   signer_issuer           "CN=DigiCert Trusted G4 Code Signing ..."   (planned)
-//!   signer_thumbprint       "<hex>"                                     (planned)
 //!   countersign_time        "<ISO 8601>"                                (planned)
 //!   team_id                 "9XQGPJ8B7K"                                (B4 — Mach-O)
 //!   bundle_identifier       "com.example.app"                           (B4)
-//!   notarized               bool                                        (B4)
 //!   cs_flags[]              ["host", "runtime", "library_validation"]   (planned)
+//!   requirements_sha256     SHA-256 of the embedded Requirements blob   (Mach-O)
+//!   requirements_slot_count u32 — count of designated/host/guest slots  (Mach-O)
 //!   entitlements            { entitlement_key: bool|string|[string] }   (B4)
 //!
 //! debug:                    cross-format debug metadata
@@ -92,6 +99,23 @@
 //!                                 product_version, legal_copyright,
 //!                                 legal_trademarks, comments, private_build,
 //!                                 special_build
+//!   manifest.assembly_identity.{name, version, processor_architecture, type, public_key_token, language}
+//!   manifest.description
+//!   manifest.requested_execution_level   "asInvoker" | "requireAdministrator" | "highestAvailable"
+//!   manifest.ui_access                   bool
+//!   manifest.auto_elevate                bool — UAC-bypass tooling marker
+//!   manifest.dpi_aware / dpi_awareness   bool | string
+//!   manifest.long_path_aware             bool
+//!   manifest.supported_os[]              [{ guid, name }]   names: vista|win7|win8|win8.1|win10
+//!   manifest.dependencies[]              [{ name, version, processor_architecture, public_key_token, ... }]
+//!   manifest.windows_settings.{...}      remaining settings not hoisted above
+//!   resource_types[]                     ["RT_ICON", "RT_VERSION", "RT_MANIFEST", ...]
+//!   bound_imports[]                      [{ name, time_date_stamp, forwarder_ref_count }]
+//!                                        — build-host WinSxS state fingerprint
+//!   load_config.security_cookie          "0x140295040" — /GS cookie address
+//!   load_config.cfg_check_function       "0x140287418" — CFG check fn pointer
+//!   load_config.cfg_guard_flags          "0x10500" — raw CFG guard-flags bitfield
+//!   load_config.cfg_flags.{...}          decoded named CFG flags
 //!
 //! elf:                      ELF-specific
 //!   entry_section           ".text" | ".init" | ".init_array" | ...
@@ -108,6 +132,27 @@
 //!   runpath[]                                                     (B3)
 //!   needed[]                ["libc.so.6", ...]                    (B3)
 //!   gnu_property.{ibt,shstk,pac,bti,x86_isa_level}                (B3)
+//!   dt_flags.{raw, raw_1, bind_now, textrel, symbolic, static_tls,
+//!             now, nodelete, initfirst, noopen, nodeflib, nodump,
+//!             pie, global, group, interpose, direct}              (B7)
+//!   needed_versions[]       [{ lib: "libc.so.6", versions: ["GLIBC_2.34", ...] }]  (B7)
+//!   provided_versions[]     versions this .so itself defines               (B7)
+//!
+//! dwarf:                    DWARF debug-info attribution (unstripped ELF only)
+//!   producers[]             ["GNU C17 13.2.0 -O2 -mtune=generic ...", ...]
+//!   comp_dirs[]             ["/builddir/build/BUILD/glibc-2.34/...", ...]
+//!   languages[]             ["c", "cpp", "rust", ...]
+//!   source_files[]          ["/build/glibc/elf/dl-init.c", ...] (capped at 32)
+//!   cu_count                u32 — total compilation units (also on `elf.dwarf_cu_count` metric)
+//!
+//! package:                  FDO `.note.package` self-attestation (ELF; opt-in)
+//!   type                    "rpm" | "deb" | "apk" | "pacman" | ...
+//!   name                    "<package-name>"
+//!   version                 "<package-version>"
+//!   architecture            "<arch>"
+//!   os, osVersion           "<distro>" / "<release>"
+//!   license                 "<spdx>"
+//!   buildId, url, vcs, cpe  attestation provenance fields
 //!
 //! macho:                    Mach-O specific
 //!   uuid                    "<hex>"                               (B4)
@@ -121,6 +166,12 @@
 //!   load_dylibs[]           [{ path, kind, current_version, compatibility_version }]
 //!   rpath[]                                                       (B4)
 //!   linker_options[]                                              (B4)
+//!   info_plist              { Info.plist tree, PascalCase keys }  (B4.5 — __TEXT,__info_plist)
+//!   launchd_plist           { launchd plist tree, PascalCase keys}(B4.5 — __TEXT,__launchd_plist)
+//!   is_fat                  bool — multi-arch universal binary
+//!   slice_count             u32 — number of slices when fat (also on `macho.slice_count` metric)
+//!   slices[]                [{ arch, uuid, file_offset, has_code_signature }]
+//!   swift_sections[]        ["__swift5_proto", "__swift5_types", ...]   (B7.5 — Swift code marker)
 //!
 //! go:                       Go-specific (cross-binary)
 //!   version                 "go1.26.2"
@@ -137,12 +188,26 @@
 //!     asmflags, gcflags     "..."
 //!   vcs.{type, revision, time, modified}                             (was vcs.* keys)
 //!
+//! Note: derived booleans (cross-format consistency flags, "is_zero"
+//! checks, "mismatch" comparisons) and derived counts (chain_depth,
+//! number-of-mixed-producers) live on metrics structs, not in the kv
+//! tree. Trait authors target them via
+//! `type: metrics, field: <path>, min:/max:`. Examples:
+//!   - `consistency.{bundle_identifier_mismatch, dwarf_mixed_producers, ...}` (boolean)
+//!   - `pe.cert_chain_depth` (u32)
+//!   - `pe.signing_time_before_timestamp` (boolean — signed-before-built)
+//!
+//! The kv tree carries only raw structural reads: strings, names,
+//! identities, hex digests, raw bit-flag values lifted directly from
+//! the binary.
+//!
 //! hashes:                   fuzzy / similarity / cluster hashes
 //!   imphash                 "<md5>"                                  (PE)
 //!   rich_header_hash        "<sha256>"                               (PE — single canonical location)
 //!   ssdeep, tlsh            "..."                                    (cross-format)  (planned)
 //!   authentihash            "..."                                    (PE)            (planned)
 //!   cdhash                  "..."                                    (Mach-O)        (planned)
+//!   cdhash_sha256           "<sha256-hex>"                                            (Mach-O)
 //!   gimphash                "..."                                    (Go)            (planned)
 //! ```
 
@@ -193,10 +258,6 @@ pub(crate) fn build_binary_kv(report: &AnalysisReport) -> Value {
 
 fn build_section(report: &AnalysisReport) -> Map<String, Value> {
     let mut out = Map::new();
-    let metrics = match report.metrics.as_ref() {
-        Some(m) => m,
-        None => return out,
-    };
 
     // Architecture is on TargetInfo, not metrics.
     if let Some(arches) = report.target.architectures.as_ref() {
@@ -205,7 +266,9 @@ fn build_section(report: &AnalysisReport) -> Map<String, Value> {
         }
     }
 
-    if let Some(bin) = metrics.binary.as_ref() {
+    // Mirror raw structural bools from `binary.*` metrics into kv so
+    // ML pipelines and trait authors can read either path freely.
+    if let Some(bin) = report.metrics.as_ref().and_then(|m| m.binary.as_ref()) {
         if bin.is_pie {
             out.insert("is_pie".into(), json!(true));
         }
@@ -215,8 +278,6 @@ fn build_section(report: &AnalysisReport) -> Map<String, Value> {
         if bin.has_debug_info {
             out.insert("has_debug_info".into(), json!(true));
         }
-        // signing flag lives on `signing.*` only (avoid duplicating
-        // the same boolean across two namespaces).
     }
 
     out
@@ -229,6 +290,8 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
         None => return out,
     };
 
+    // Mirror cross-format signing bools from metrics for ML
+    // pipelines and trait ergonomics.
     if let Some(bin) = metrics.binary.as_ref() {
         if bin.has_signature {
             out.insert("is_signed".into(), json!(true));
@@ -237,18 +300,20 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
             }
         }
     }
-    // PE Authenticode primary signer (Mach-O leaf-cert CN is surfaced
-    // via the `binary_extractors` path; deep_merge gives macho-side
-    // values precedence when both populate the field).
+    // Cross-format signer identity. PE side prefers the leaf cert's
+    // own CN (most accurate); falls back to primary_signer (org name
+    // with CA filtering) then signer (raw Authenticode CN list).
+    // Mach-O side is populated separately in `binary_extractors`;
+    // deep_merge there gives macho the final say.
     if let Some(pe) = metrics.pe.as_ref() {
-        if let Some(signer) = pe.primary_signer.as_deref() {
-            if !signer.is_empty() {
-                out.insert("signer_subject".into(), json!(signer));
-            }
-        } else if let Some(signer) = pe.signer.as_deref() {
-            if !signer.is_empty() {
-                out.insert("signer_subject".into(), json!(signer));
-            }
+        let subject = pe
+            .leaf_subject
+            .as_deref()
+            .or(pe.primary_signer.as_deref())
+            .or(pe.signer.as_deref())
+            .filter(|s| !s.is_empty());
+        if let Some(s) = subject {
+            out.insert("subject".into(), json!(s));
         }
     }
 
@@ -257,11 +322,9 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
         if pe.signing_time != 0 {
             out.insert("signing_time".into(), json!(pe.signing_time));
         }
-        if pe.signing_time_before_timestamp {
-            // Signed before linked = re-signed binary or stripped/replayed
-            // signature. Strong supply-chain swap signal.
-            out.insert("signed_before_built".into(), json!(true));
-        }
+        // `signed_before_built` is a derived comparison (signing_time
+        // < timestamp), not a raw structural read — lives on the
+        // metric `pe.signing_time_before_timestamp`, not in kv.
         // Cross-format catalog identifier so trait authors can
         // disambiguate Mach-O vs PE Authenticode without checking
         // file_type.  PE-side signature presence comes from the
@@ -270,17 +333,44 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
             out.entry("catalog".to_string())
                 .or_insert_with(|| json!("authenticode"));
         }
+        // Leaf cert details (PE Authenticode). `subject` is set above
+        // by the cross-format identity path.
+        if let Some(s) = pe.leaf_issuer.as_deref() {
+            if !s.is_empty() {
+                out.insert("issuer".into(), json!(s));
+            }
+        }
+        if let Some(s) = pe.leaf_thumbprint_sha1.as_deref() {
+            if !s.is_empty() {
+                out.insert("thumbprint_sha1".into(), json!(s));
+            }
+        }
+        if let Some(s) = pe.leaf_serial.as_deref() {
+            if !s.is_empty() {
+                out.insert("serial".into(), json!(s));
+            }
+        }
+        if pe.leaf_not_before != 0 {
+            out.insert("not_before".into(), json!(pe.leaf_not_before));
+        }
+        if pe.leaf_not_after != 0 {
+            out.insert("not_after".into(), json!(pe.leaf_not_after));
+        }
+        // `chain_depth` is a derived count — lives on
+        // `pe.cert_chain_depth` metric, not in kv.
     }
 
-    // Mach-O hardened runtime / JIT entitlement live on MachoMetrics
-    // as flat booleans; surface them under the unified signing tree
-    // alongside the cross-format keys.
+    // Mirror Mach-O hardened_runtime / allow_jit from
+    // `macho.*` metrics for ML pipelines and trait ergonomics.
     if let Some(macho) = metrics.macho.as_ref() {
         if macho.hardened_runtime {
             out.insert("hardened_runtime".into(), json!(true));
         }
         if macho.allow_jit {
             out.insert("allow_jit".into(), json!(true));
+        }
+        if macho.is_notarized {
+            out.insert("notarized".into(), json!(true));
         }
     }
 
@@ -373,10 +463,6 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
         }
     }
 
-    // Debug Directory metadata. The Reproducible flag is the
-    // supply-chain signal — vendors that previously set it and
-    // stop are visibly tampered. POGO + ILTCG reveal MSVC release
-    // builds with PGO/incremental link-time codegen.
     if !pe.debug_directory_types.is_empty() {
         out.insert(
             "debug_directory_types".into(),
@@ -403,9 +489,6 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             }
         }
     }
-
-    // Linker version — pair of (major, minor). Composes with Rich
-    // header to identify the exact MSVC link-time toolchain.
     if pe.linker_major_version > 0 || pe.linker_minor_version > 0 {
         out.insert(
             "linker_version".into(),
@@ -415,20 +498,84 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             )),
         );
     }
-
-    // COFF timestamp — the canonical "when was this linked" field.
-    // Zero / hash-based values indicate deterministic builds.
     if pe.timestamp != 0 {
         out.insert("timestamp".into(), json!(pe.timestamp));
     }
     if pe.timestamp_is_zero {
         out.insert("timestamp_is_zero".into(), json!(true));
     }
-
-    // Optional-header checksum. Most modern compilers leave this 0;
-    // populated values identify Windows-specific link toolchains.
     if pe.checksum_present {
         out.insert("checksum".into(), json!(format!("0x{:08x}", pe.checksum)));
+    }
+    // Resource types present (sorted, distinct RT_* names).
+    if !pe.resource_types.is_empty() {
+        out.insert("resource_types".into(), json!(pe.resource_types.clone()));
+    }
+
+    // Bound imports — DLL+timestamp pairs that fingerprint the
+    // build-host's WinSxS state at link time. Identical timestamps
+    // across vendor releases prove same-machine link.
+    if !pe.bound_imports.is_empty() {
+        let arr: Vec<Value> = pe
+            .bound_imports
+            .iter()
+            .map(|b| {
+                json!({
+                    "name": b.name,
+                    "time_date_stamp": b.time_date_stamp,
+                    "forwarder_ref_count": b.forwarder_ref_count,
+                })
+            })
+            .collect();
+        out.insert("bound_imports".into(), Value::Array(arr));
+    }
+
+    // Load Config + TLS — security cookie + CFG/SafeSEH addresses are
+    // raw structural reads (RVA-style integers). Counts live on
+    // metrics. Hex-formatted addresses for trait readability.
+    if pe.security_cookie != 0 {
+        let mut lc = Map::new();
+        lc.insert(
+            "security_cookie".into(),
+            json!(format!("0x{:x}", pe.security_cookie)),
+        );
+        if pe.cfg_check_function != 0 {
+            lc.insert(
+                "cfg_check_function".into(),
+                json!(format!("0x{:x}", pe.cfg_check_function)),
+            );
+        }
+        if pe.cfg_guard_flags != 0 {
+            lc.insert(
+                "cfg_guard_flags".into(),
+                json!(format!("0x{:x}", pe.cfg_guard_flags)),
+            );
+            // Decoded named flags for trait ergonomics.
+            let mut named = Map::new();
+            let f = pe.cfg_guard_flags;
+            if f & 0x100 != 0 {
+                named.insert("instrumented".into(), json!(true));
+            }
+            if f & 0x200 != 0 {
+                named.insert("write_instrumented".into(), json!(true));
+            }
+            if f & 0x400 != 0 {
+                named.insert("function_table_present".into(), json!(true));
+            }
+            if f & 0x800 != 0 {
+                named.insert("export_suppression_info".into(), json!(true));
+            }
+            if f & 0x4000 != 0 {
+                named.insert("longjump_table_present".into(), json!(true));
+            }
+            if f & 0x10000 != 0 {
+                named.insert("rf_instrumented".into(), json!(true));
+            }
+            if !named.is_empty() {
+                lc.insert("cfg_flags".into(), Value::Object(named));
+            }
+        }
+        out.insert("load_config".into(), Value::Object(lc));
     }
 
     if out.is_empty() {
@@ -453,8 +600,6 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     if elf.has_soname {
         out.insert("has_soname".into(), json!(true));
     }
-    // build-id / debuglink flags are cross-format debug metadata —
-    // exposed once under `debug.*` and not duplicated here.
     if elf.stack_canary {
         out.insert("has_canary".into(), json!(true));
     }

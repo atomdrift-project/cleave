@@ -109,6 +109,10 @@ pub struct Metrics {
     /// Mach-O-specific metrics (only for Mach-O files)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub macho: Option<MachoMetrics>,
+    /// Cross-format consistency / sanity-check flags. Booleans only;
+    /// numeric/string fields live on the per-format structs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub consistency: Option<crate::types::binary_metrics::ConsistencyMetrics>,
     /// Java class file-specific metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java_class: Option<JavaClassMetrics>,

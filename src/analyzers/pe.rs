@@ -393,6 +393,128 @@ fn format_pdb_guid(sig: &[u8; 16]) -> String {
     )
 }
 
+/// Walk the PKCS#7 SignedData blob looking for embedded X.509
+/// certificate DERs. Returns the parsed certs in document order.
+/// The first-non-CA cert is typically the leaf signer.
+///
+/// Strategy: scan for ASN.1 SEQUENCE tags (0x30) at byte boundaries,
+/// attempt to parse each as an X.509 certificate. Real certs are
+/// embedded inside the SignedData.certificates field as a SET OF;
+/// scanning for parseable cert prefixes recovers them without
+/// implementing full PKCS#7 navigation. Bounded to 16 candidates.
+fn parse_pkcs7_certificates(pkcs7: &[u8]) -> Vec<x509_parser::certificate::X509Certificate<'_>> {
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i + 4 < pkcs7.len() && out.len() < 16 {
+        // ASN.1 SEQUENCE tag.
+        if pkcs7[i] == 0x30 {
+            // Read DER length (short or long form).
+            let (len_total, len_header) = match pkcs7[i + 1] {
+                n if n < 0x80 => (n as usize, 2),
+                0x81 => {
+                    if i + 2 >= pkcs7.len() {
+                        i += 1;
+                        continue;
+                    }
+                    (pkcs7[i + 2] as usize, 3)
+                }
+                0x82 => {
+                    if i + 3 >= pkcs7.len() {
+                        i += 1;
+                        continue;
+                    }
+                    (
+                        ((pkcs7[i + 2] as usize) << 8) | pkcs7[i + 3] as usize,
+                        4,
+                    )
+                }
+                0x83 => {
+                    if i + 4 >= pkcs7.len() {
+                        i += 1;
+                        continue;
+                    }
+                    (
+                        ((pkcs7[i + 2] as usize) << 16)
+                            | ((pkcs7[i + 3] as usize) << 8)
+                            | pkcs7[i + 4] as usize,
+                        5,
+                    )
+                }
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            };
+            let total = len_header + len_total;
+            if i + total > pkcs7.len() {
+                i += 1;
+                continue;
+            }
+            // Try to parse the candidate as an X.509 certificate.
+            // Real certs always start with SEQUENCE { SEQUENCE { version-tagged-int ... } }
+            // so we filter to candidates whose inner first byte is also 0x30.
+            if total > 100 && pkcs7[i + len_header] == 0x30 {
+                let candidate = &pkcs7[i..i + total];
+                if let Ok((_, cert)) =
+                    x509_parser::parse_x509_certificate(candidate)
+                {
+                    out.push(cert);
+                    i += total;
+                    continue;
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// Find the leaf signer in a list of recovered certs.  The leaf is
+/// the cert whose subject differs from its own issuer (i.e. it's not
+/// self-signed root) and which isn't itself the issuer of any other
+/// cert in the chain. Falls back to the first non-self-signed cert.
+fn find_leaf_signer<'a>(
+    certs: &'a [x509_parser::certificate::X509Certificate<'a>],
+) -> Option<&'a x509_parser::certificate::X509Certificate<'a>> {
+    if certs.is_empty() {
+        return None;
+    }
+    // Build set of issuer DNs to find which subject DNs *are* used as
+    // issuers (those are intermediate CAs / roots, not leaves).
+    let issuer_names: std::collections::HashSet<String> = certs
+        .iter()
+        .map(|c| c.tbs_certificate.issuer.to_string())
+        .collect();
+    certs
+        .iter()
+        .find(|c| {
+            let subj = c.tbs_certificate.subject.to_string();
+            // Leaf: not a root (subject != issuer) AND not pointed to
+            // by any other cert as issuer.
+            subj != c.tbs_certificate.issuer.to_string()
+                && !issuer_names.contains(&subj)
+        })
+        .or_else(|| {
+            // Fallback: first non-self-signed cert.
+            certs.iter().find(|c| {
+                c.tbs_certificate.subject.to_string()
+                    != c.tbs_certificate.issuer.to_string()
+            })
+        })
+        .or_else(|| certs.first())
+}
+
+/// Extract the first Common Name attribute from an X.509
+/// distinguished name. Uses x509-parser's purpose-built helper which
+/// handles all the ASN.1 string encodings (UTF8String, PrintableString,
+/// BMPString, IA5String, ...) that DN values may use.
+fn dn_common_name<'a>(name: &'a x509_parser::x509::X509Name<'a>) -> Option<String> {
+    name.iter_common_name()
+        .next()
+        .and_then(|cn| cn.as_str().ok())
+        .map(str::to_string)
+}
+
 fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
     const SIGNING_TIME_OID: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
 
@@ -1940,6 +2062,34 @@ impl PEAnalyzer {
                                     .or_else(|| signers.iter().find(|s| !is_ca_identity(s)))
                                     .cloned();
                             }
+
+                            // Cert-chain analysis via x509-parser:
+                            // recover the leaf signer's full identity
+                            // (subject CN, issuer CN, thumbprint,
+                            // serial, validity).  These are the
+                            // canonical "is this the same publisher"
+                            // anchors for cross-release comparison.
+                            let certs = parse_pkcs7_certificates(pkcs7_data);
+                            metrics.cert_chain_depth = certs.len() as u32;
+                            if let Some(leaf) = find_leaf_signer(&certs) {
+                                metrics.leaf_subject =
+                                    dn_common_name(leaf.tbs_certificate.subject());
+                                metrics.leaf_issuer =
+                                    dn_common_name(leaf.tbs_certificate.issuer());
+                                metrics.leaf_serial =
+                                    Some(format!("{:x}", leaf.tbs_certificate.serial));
+                                metrics.leaf_not_before =
+                                    leaf.validity().not_before.timestamp();
+                                metrics.leaf_not_after =
+                                    leaf.validity().not_after.timestamp();
+                                // SHA-1 thumbprint of the full DER —
+                                // what Windows displays as "Thumbprint".
+                                use sha1::{Digest, Sha1};
+                                let mut h = Sha1::new();
+                                h.update(leaf.as_ref());
+                                metrics.leaf_thumbprint_sha1 =
+                                    Some(hex::encode(h.finalize()));
+                            }
                         }
                     }
                 }
@@ -2107,16 +2257,34 @@ impl PEAnalyzer {
                     .filter_map(Result::ok)
                     .filter(|entry| matches!(entry.id(), Some(RT_ICON | RT_GROUP_ICON)))
                     .count() as u32;
+                // Distinct RT_* type IDs present in the directory.
+                // BTreeSet so output is sorted + deduped.
+                let mut type_ids: std::collections::BTreeSet<u32> =
+                    std::collections::BTreeSet::new();
+                for entry in resource_data.entries().filter_map(Result::ok) {
+                    if let Some(id) = entry.id() {
+                        type_ids.insert(id as u32);
+                    }
+                }
+                let resource_types: Vec<String> =
+                    type_ids.iter().map(|&id| rt_name(id)).collect();
                 (
                     count,
                     version_info_present,
                     manifest_present,
                     resource_timestamp,
                     icon_count,
+                    resource_types,
                 )
             });
-            if let Some((count, version_info_present, manifest_present, ts, icon_count)) =
-                resource_outcome.ok()
+            if let Some((
+                count,
+                version_info_present,
+                manifest_present,
+                ts,
+                icon_count,
+                resource_types,
+            )) = resource_outcome.ok()
             {
                 metrics.resource_count = count;
                 metrics.version_info_present = version_info_present;
@@ -2130,6 +2298,7 @@ impl PEAnalyzer {
                     &mut metrics.resource_timestamp_day,
                 );
                 metrics.icon_count = icon_count;
+                metrics.resource_types = resource_types;
             } else {
                 tracing::debug!("PE resource directory walker panicked, metrics left at defaults");
                 lazy_walker_panicked = true;
@@ -2149,6 +2318,53 @@ impl PEAnalyzer {
 
         if let Some(tls_data) = &pe.tls_data {
             metrics.tls_callbacks = tls_data.callbacks.len() as u32;
+        }
+
+        // Bound Import Directory (IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT=11).
+        // Pre-resolves DLL imports against the linker host's specific
+        // DLL file timestamps. Effectively a build-host fingerprint —
+        // identical bound timestamps across vendor releases prove
+        // they were linked on the same machine. Rare on modern PE.
+        if let Some(opt) = pe.header.optional_header {
+            if let Some(Some(bi_entry)) =
+                opt.data_directories.data_directories.get(11)
+            {
+                let rva = bi_entry.1.virtual_address as usize;
+                let size = bi_entry.1.size as usize;
+                if rva > 0 && size >= 8 {
+                    // Bound Import directory entries store offsets
+                    // RELATIVE TO THE DIRECTORY START. The directory
+                    // RVA itself is usually a file offset directly
+                    // (it lives in headers), so prefer that, falling
+                    // back to rva_to_offset for outliers.
+                    let off = if rva + size <= data.len() {
+                        rva
+                    } else if let Some(o) = rva_to_offset(pe, rva) {
+                        o
+                    } else {
+                        rva
+                    };
+                    parse_bound_imports(data, off, size, &mut metrics);
+                }
+            }
+        }
+
+        // Load Config Directory (IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG=10).
+        // Carries the /GS security cookie, SafeSEH handler table, and
+        // CFG (Control Flow Guard) metadata. Stable per build pipeline;
+        // a SolarWinds-class swap signal when these drift across
+        // releases of the same vendor binary.
+        if let Some(opt) = pe.header.optional_header {
+            if let Some(Some(lcd_entry)) =
+                opt.data_directories.data_directories.get(10)
+            {
+                let rva = lcd_entry.1.virtual_address as usize;
+                if rva > 0 {
+                    if let Some(off) = rva_to_offset(pe, rva) {
+                        parse_load_config(data, off, pe.is_64, &mut metrics);
+                    }
+                }
+            }
         }
 
         (metrics, lazy_walker_panicked)
@@ -2522,6 +2738,195 @@ fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> 
 }
 
 /// Convert a PE RVA to a file offset using section headers.
+/// Parse the IMAGE_BOUND_IMPORT_DESCRIPTOR array starting at `off`.
+/// Each descriptor is 8 bytes: u32 timestamp, u16 module-name offset
+/// (relative to the directory start, NOT the file), u16 forwarder
+/// count. The array is terminated by a descriptor with timestamp = 0.
+/// Forwarder refs (8 bytes each) immediately follow each descriptor;
+/// we skip them but record the count.
+fn parse_bound_imports(
+    data: &[u8],
+    dir_off: usize,
+    dir_size: usize,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    use crate::types::binary_metrics::BoundImportDescriptor;
+    if dir_off + dir_size > data.len() {
+        return;
+    }
+    let dir = &data[dir_off..dir_off + dir_size];
+    let mut cursor = 0usize;
+    let mut out = Vec::new();
+    while cursor + 8 <= dir.len() && out.len() < 64 {
+        let Ok(ts_bytes) = dir[cursor..cursor + 4].try_into() else {
+            break;
+        };
+        let timestamp = u32::from_le_bytes(ts_bytes);
+        if timestamp == 0 {
+            break; // sentinel
+        }
+        let Ok(name_off_bytes) = dir[cursor + 4..cursor + 6].try_into() else {
+            break;
+        };
+        let Ok(fwd_count_bytes) = dir[cursor + 6..cursor + 8].try_into() else {
+            break;
+        };
+        let name_off = u16::from_le_bytes(name_off_bytes) as usize;
+        let fwd_count = u16::from_le_bytes(fwd_count_bytes) as u32;
+
+        // Module name is a NUL-terminated ASCII string at directory
+        // offset `name_off`. Bound to 256 bytes for adversarial input.
+        let mut name = String::new();
+        if name_off < dir.len() {
+            let bytes = &dir[name_off..dir.len().min(name_off + 256)];
+            if let Some(end) = bytes.iter().position(|&b| b == 0) {
+                if end > 0 {
+                    name = String::from_utf8_lossy(&bytes[..end]).into_owned();
+                }
+            }
+        }
+        if !name.is_empty() {
+            out.push(BoundImportDescriptor {
+                name,
+                time_date_stamp: timestamp,
+                forwarder_ref_count: fwd_count,
+            });
+        }
+        cursor += 8 + (fwd_count as usize) * 8;
+    }
+    if !out.is_empty() {
+        // CRC-32 of the canonical-serialized bound-import set, sorted
+        // by DLL name so order variance from the linker doesn't
+        // change the fingerprint. Non-crypto; only used for
+        // equality / clustering — two binaries linked on the same
+        // host within seconds get the same value.
+        let mut sorted = out.clone();
+        sorted.sort_by(|a, b| a.name.cmp(&b.name));
+        let mut hasher = crc32fast::Hasher::new();
+        for d in &sorted {
+            hasher.update(d.name.as_bytes());
+            hasher.update(&[0]);
+            hasher.update(&d.time_date_stamp.to_le_bytes());
+            hasher.update(&d.forwarder_ref_count.to_le_bytes());
+        }
+        metrics.bound_imports_checksum = hasher.finalize();
+        metrics.bound_imports = out;
+    }
+}
+
+/// Read fields from IMAGE_LOAD_CONFIG_DIRECTORY{32,64} at a known
+/// file offset and populate the corresponding `PeMetrics` slots.
+/// Lenient — partial reads stop early instead of erroring.
+///
+/// Field offsets within the structure (PE/COFF spec):
+///   PE32 (32-bit pointers):
+///     0x00  DWORD Size
+///     0x40  DWORD SecurityCookie
+///     0x44  DWORD SEHandlerTable
+///     0x48  DWORD SEHandlerCount
+///     0x4C  DWORD GuardCFCheckFunctionPointer
+///     0x54  DWORD GuardCFFunctionTable
+///     0x58  DWORD GuardCFFunctionCount
+///     0x5C  DWORD GuardFlags
+///   PE32+ (64-bit pointers):
+///     0x00  DWORD Size
+///     0x58  ULONGLONG SecurityCookie
+///     0x60  ULONGLONG SEHandlerTable
+///     0x68  ULONGLONG SEHandlerCount  (ULONGLONG even on 64-bit)
+///     0x70  ULONGLONG GuardCFCheckFunctionPointer
+///     0x80  ULONGLONG GuardCFFunctionTable
+///     0x88  ULONGLONG GuardCFFunctionCount
+///     0x90  DWORD     GuardFlags
+fn parse_load_config(
+    data: &[u8],
+    off: usize,
+    is_64: bool,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    if off + 8 > data.len() {
+        return;
+    }
+    let Ok(size_bytes) = data[off..off + 4].try_into() else {
+        return;
+    };
+    let size = u32::from_le_bytes(size_bytes) as usize;
+    if size < 0x40 || off + size > data.len() {
+        return;
+    }
+    let body = &data[off..off + size];
+
+    if is_64 {
+        if body.len() >= 0x60 {
+            metrics.security_cookie = read_u64(body, 0x58).unwrap_or(0);
+        }
+        if body.len() >= 0x70 {
+            metrics.se_handler_count = read_u64(body, 0x68).unwrap_or(0) as u32;
+        }
+        if body.len() >= 0x78 {
+            metrics.cfg_check_function = read_u64(body, 0x70).unwrap_or(0);
+        }
+        if body.len() >= 0x90 {
+            metrics.cfg_function_count = read_u64(body, 0x88).unwrap_or(0) as u32;
+        }
+        if body.len() >= 0x94 {
+            metrics.cfg_guard_flags = read_u32(body, 0x90).unwrap_or(0);
+        }
+    } else {
+        if body.len() >= 0x44 {
+            metrics.security_cookie = read_u32(body, 0x40).unwrap_or(0) as u64;
+        }
+        if body.len() >= 0x4C {
+            metrics.se_handler_count = read_u32(body, 0x48).unwrap_or(0);
+        }
+        if body.len() >= 0x50 {
+            metrics.cfg_check_function = read_u32(body, 0x4C).unwrap_or(0) as u64;
+        }
+        if body.len() >= 0x5C {
+            metrics.cfg_function_count = read_u32(body, 0x58).unwrap_or(0);
+        }
+        if body.len() >= 0x60 {
+            metrics.cfg_guard_flags = read_u32(body, 0x5C).unwrap_or(0);
+        }
+    }
+}
+
+fn read_u32(data: &[u8], off: usize) -> Option<u32> {
+    Some(u32::from_le_bytes(data.get(off..off + 4)?.try_into().ok()?))
+}
+
+fn read_u64(data: &[u8], off: usize) -> Option<u64> {
+    Some(u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?))
+}
+
+/// Map a Windows RT_* resource-type ID to its canonical short name.
+/// Numeric fallback for vendor-specific (>23) IDs.
+fn rt_name(id: u32) -> String {
+    match id {
+        1 => "RT_CURSOR".into(),
+        2 => "RT_BITMAP".into(),
+        3 => "RT_ICON".into(),
+        4 => "RT_MENU".into(),
+        5 => "RT_DIALOG".into(),
+        6 => "RT_STRING".into(),
+        7 => "RT_FONTDIR".into(),
+        8 => "RT_FONT".into(),
+        9 => "RT_ACCELERATOR".into(),
+        10 => "RT_RCDATA".into(),
+        11 => "RT_MESSAGETABLE".into(),
+        12 => "RT_GROUP_CURSOR".into(),
+        14 => "RT_GROUP_ICON".into(),
+        16 => "RT_VERSION".into(),
+        17 => "RT_DLGINCLUDE".into(),
+        19 => "RT_PLUGPLAY".into(),
+        20 => "RT_VXD".into(),
+        21 => "RT_ANICURSOR".into(),
+        22 => "RT_ANIICON".into(),
+        23 => "RT_HTML".into(),
+        24 => "RT_MANIFEST".into(),
+        other => format!("RT_{}", other),
+    }
+}
+
 fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
     for section in &pe.sections {
         let vaddr = section.virtual_address as usize;

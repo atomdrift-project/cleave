@@ -670,6 +670,10 @@ pub struct ElfMetrics {
     /// Surfaced under the cross-format `debug.build_id` kv path.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_id: Option<String>,
+    /// DWARF compilation-unit count (`.debug_info`). Derived count →
+    /// lives on metrics; trait authors target `elf.dwarf_cu_count`.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dwarf_cu_count: u32,
     /// .gnu_debuglink section present
     #[serde(default, skip_serializing_if = "is_false")]
     pub debuglink_present: bool,
@@ -988,6 +992,139 @@ pub struct PeMetrics {
     /// intermediate CAs that appear alongside it in the certificate chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_signer: Option<String>,
+    /// Subject CN of the leaf cert (the one at the bottom of the
+    /// Authenticode chain — the cert that actually signed the binary,
+    /// distinct from issuer CAs above it).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_subject: Option<String>,
+    /// Issuer CN of the leaf cert — names the immediate CA above the
+    /// leaf. Stable across a vendor's releases; a sudden change is
+    /// a reliable supply-chain swap signal.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_issuer: Option<String>,
+    /// SHA-1 thumbprint of the leaf cert DER (lowercase hex, no
+    /// separators). What `certutil -hashfile <pfx>` and Windows'
+    /// "View Certificate" dialog show in the "Thumbprint" field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_thumbprint_sha1: Option<String>,
+    /// Leaf cert serial number (lowercase hex, no separators).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_serial: Option<String>,
+    /// Leaf cert NotBefore as Unix epoch seconds.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub leaf_not_before: i64,
+    /// Leaf cert NotAfter as Unix epoch seconds.
+    #[serde(default, skip_serializing_if = "is_zero_i64")]
+    pub leaf_not_after: i64,
+    /// Total cert count in the Authenticode SignedData certificates SET.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cert_chain_depth: u32,
+
+    // === Load Config Directory ===
+    /// Address of the /GS security cookie variable (0 if absent).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub security_cookie: u64,
+    /// SafeSEH handler-table count (32-bit only; 0 on x64).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub se_handler_count: u32,
+    /// CFG (Control Flow Guard) target-function table count.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cfg_function_count: u32,
+    /// CFG GuardFlags raw bitfield. Common bits:
+    /// 0x100 = INSTRUMENTED, 0x200 = WRITE_INSTRUMENTED,
+    /// 0x400 = FUNCTION_TABLE_PRESENT, 0x800 = EXPORT_SUPPRESSION_INFO,
+    /// 0x4000 = LONGJUMP_TABLE_PRESENT, 0x10000 = RF_INSTRUMENTED.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub cfg_guard_flags: u32,
+    /// CFG check-function pointer (the `__guard_check_icall_fptr`).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub cfg_check_function: u64,
+
+    // === Resource Directory tree ===
+    /// Sorted, deduplicated list of canonical RT_* resource type
+    /// names present in the .rsrc directory. Useful for
+    /// visual-identity diffing (icons vs. versioninfo vs. dialogs vs.
+    /// HTML resources etc.).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_types: Vec<String>,
+
+    // === Bound Import Directory ===
+    /// Bound-import descriptors: each maps a DLL to the timestamp of
+    /// the DLL file it was bound against on the build host. The
+    /// closest thing to a build-host hardware fingerprint in any
+    /// binary format — pre-resolved against the linker host's
+    /// specific WinSxS state. Rare on modern PE; more common on
+    /// legacy MSVC and embedded Windows tools.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bound_imports: Vec<BoundImportDescriptor>,
+    /// CRC-32 of the canonical-serialized bound-import set (sorted
+    /// by DLL name to be order-independent). Single u32 fingerprint
+    /// for "same build-host WinSxS state" diffing — equality test
+    /// across binaries replaces a per-element compare. Non-crypto;
+    /// only meant for clustering / equality, not security.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub bound_imports_checksum: u32,
+}
+
+#[allow(dead_code)]
+const fn is_zero_i64(v: &i64) -> bool {
+    *v == 0
+}
+
+/// Cross-format internal-consistency flags. Each boolean is a
+/// derived interpretation: cleave compared two fields populated
+/// from independent sources within the same binary and they
+/// disagreed. Raw structural reads stay in the kv tree; these
+/// derived judgments live here so trait authors can target them
+/// uniformly via `type: metrics, field: consistency.<name>, min: 1`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
+pub struct ConsistencyMetrics {
+    /// Mach-O code-signature CodeDirectory identifier doesn't match
+    /// the embedded `__TEXT,__info_plist` `CFBundleIdentifier`.
+    /// Indicates the binary was re-signed with a different identity
+    /// (replay attack / supply-chain swap).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub bundle_identifier_mismatch: bool,
+    /// PE side-by-side manifest assembly version disagrees with the
+    /// VERSIONINFO ProductVersion. Indicates manifest tampering.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub manifest_product_version_mismatch: bool,
+    /// `build.distro` plus observed `build.toolchain` is a
+    /// combination that doesn't exist as default in any released
+    /// distro version. Strong "the .comment was tampered with"
+    /// signal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub distro_toolchain_implausible: bool,
+    /// More than one distinct DW_AT_producer string in the binary —
+    /// multiple compilers contributed to a single output. Normal in
+    /// some legitimate cases (Rust calling C); suspicious for vendor
+    /// release binaries.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dwarf_mixed_producers: bool,
+    /// More than one distinct DW_AT_comp_dir directory in the binary —
+    /// CUs were compiled from different source roots. Suspicious in
+    /// vendor releases that should have a single canonical build root.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dwarf_mixed_comp_dirs: bool,
+    /// Mach-O fat binary where some slices carry an LC_CODE_SIGNATURE
+    /// blob and others don't. Vendors sign all slices uniformly; a
+    /// mixed state almost always means tampering.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub macho_slice_signing_divergence: bool,
+}
+
+/// One PE Bound Import Descriptor — names a linked DLL plus the
+/// build-host timestamp the linker pre-bound it against. Build-host
+/// fingerprint when present.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct BoundImportDescriptor {
+    /// Linked DLL name (e.g. `"KERNEL32.DLL"`).
+    pub name: String,
+    /// Unix epoch seconds — matches the timestamp of the DLL file on
+    /// the build host at link time.
+    pub time_date_stamp: u32,
+    /// Number of bound forwarder references following this descriptor.
+    pub forwarder_ref_count: u32,
 }
 
 /// Mach-O specific metrics
@@ -1151,6 +1288,16 @@ pub struct MachoMetrics {
     /// Allow unsigned executable memory
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_jit: bool,
+    /// Notarized by Apple — derived as
+    /// `has_entitlements && has_hardened_runtime` (proxy for the
+    /// notarization ticket presence; the ticket itself isn't always
+    /// embedded). Boolean interpretation lives on metrics.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_notarized: bool,
+    /// Number of `__TEXT,__swift5_*` sections present. >0 indicates
+    /// Swift code; the specific subset present narrows Swift version.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub swift_section_count: u32,
 }
 
 /// Java class file metrics

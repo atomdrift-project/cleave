@@ -173,6 +173,20 @@ cbc = { version = "0.1", features = ["alloc"] }
 # Utilities
 sha2 = { version = "0.10", features = ["asm-aarch64"] }
 md-5 = "0.10"
+# DWARF debug-info reader — surfaces DW_AT_producer (full compile
+# command line per CU) and DW_AT_comp_dir from unstripped ELF
+# binaries. Already a transitive dep via addr2line.
+gimli = { version = "0.32", default-features = false, features = ["read", "std"] }
+# X.509 certificate parsing — surfaces PE Authenticode cert chain
+# details (issuer, validity, thumbprint, serial). Already a transitive
+# dep via macho_codesign's roxmltree, so no new download.
+x509-parser = "0.18"
+# SHA-1 — for PE Authenticode cert thumbprint computation. Already a
+# transitive dep via x509-parser.
+sha1 = "0.10"
+# Non-crypto checksum for bound-import / build-host fingerprinting —
+# u32 output fits cleanly into the metric integer model.
+crc32fast = "1.4"
 regex = "1.12"
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns
 memchr = "2.8"

@@ -67,6 +67,22 @@ pub(crate) struct CodeSignature {
     pub has_hardened_runtime: bool,
     /// Bundle or executable identifier extracted from the code directory.
     pub identifier: Option<String>,
+    /// CDHash — SHA-256 of the entire CodeDirectory blob (including
+    /// its 8-byte header). This is what `codesign -d --cdhashes`
+    /// prints; Apple uses it as a per-binary identity for trust
+    /// caches, notarization records, and crash-report linkage.
+    /// Hex-encoded lowercase. Empty when no CodeDirectory present.
+    pub cdhash_sha256: Option<String>,
+    /// SHA-256 of the entire embedded Requirements blob, when
+    /// present. The Requirements blob holds the compiled
+    /// designated-requirement (DR) expression that names which
+    /// authorities are allowed to validate this binary. Stable per
+    /// build pipeline; differs across vendors. Hex-encoded lowercase.
+    pub requirements_sha256: Option<String>,
+    /// Number of requirement slots in the Requirements blob.
+    /// Indexed slots: host=1, guest=2, designated=3, library=4,
+    /// plugin=5. Most binaries carry only the designated requirement.
+    pub requirements_slot_count: u32,
 }
 
 // Magic numbers for Mach-O code signature blobs
@@ -74,6 +90,11 @@ const SUPERBLOB_MAGIC: u32 = 0xFADE0CC0;
 const CODE_DIRECTORY_MAGIC: u32 = 0xFADE0C02;
 const ENTITLEMENTS_BLOB_MAGIC: u32 = 0xFADE7171;
 const CMS_SIGNATURE_MAGIC: u32 = 0xFADE0B01;
+/// Set of compiled requirement blobs, indexed by slot type (host=1,
+/// guest=2, designated=3, library=4, plugin=5). Each slot is itself a
+/// `0xfade0c00`-magic Requirement blob with the compiled opcode
+/// stream of that requirement's expression.
+const REQUIREMENTS_MAGIC: u32 = 0xFADE0C01;
 
 /// Parse code signature from binary data
 pub(crate) fn parse_code_signature(
@@ -129,6 +150,17 @@ pub(crate) fn parse_code_signature(
         None
     };
 
+    // CDHash — SHA-256 over the *full* CodeDirectory blob (including
+    // its 8-byte magic+length header), which `parse_superblob` strips
+    // before storing.  Walk the SuperBlob index a second time to
+    // recover the un-stripped slice.
+    let cdhash_sha256 = compute_cdhash_sha256(cs_data);
+
+    // Requirements blob — fingerprint by SHA-256 of the full blob and
+    // count of slots. Differential anchor for designated-requirement
+    // language tampering.
+    let (requirements_sha256, requirements_slot_count) = compute_requirements_summary(cs_data);
+
     // Determine if notarized (would need notarization ticket blob, for now just check for strictness)
     let is_notarized = !entitlements.is_empty() && has_hardened_runtime;
 
@@ -141,6 +173,9 @@ pub(crate) fn parse_code_signature(
         is_notarized,
         has_hardened_runtime,
         identifier,
+        cdhash_sha256,
+        requirements_sha256,
+        requirements_slot_count,
     })
 }
 
@@ -468,6 +503,129 @@ fn check_hardened_runtime_flag(cd_data: &[u8]) -> bool {
     // CS_RUNTIME (hardened runtime) = 0x00010000
     let flags = u32::from_be_bytes([cd_data[4], cd_data[5], cd_data[6], cd_data[7]]);
     (flags & 0x00010000) != 0
+}
+
+/// Locate the Requirements blob inside the SuperBlob and return
+/// `(SHA-256 of full blob, slot count)`. Returns `(None, 0)` when no
+/// Requirements blob is present (common for adhoc-signed binaries).
+///
+/// The Requirements blob is itself a small SuperBlob: u32 magic
+/// (0xfade0c01), u32 length, u32 count, then count×(u32 slot_index,
+/// u32 offset). Each offset points to a Requirement blob (magic
+/// 0xfade0c00) carrying the compiled requirement bytecode.
+fn compute_requirements_summary(cs_data: &[u8]) -> (Option<String>, u32) {
+    use sha2::{Digest, Sha256};
+
+    if cs_data.len() < 12 {
+        return (None, 0);
+    }
+    let magic = u32::from_be_bytes([cs_data[0], cs_data[1], cs_data[2], cs_data[3]]);
+    if magic != SUPERBLOB_MAGIC {
+        return (None, 0);
+    }
+    let count = u32::from_be_bytes([cs_data[8], cs_data[9], cs_data[10], cs_data[11]]) as usize;
+    if cs_data.len() < 12 + count * 8 {
+        return (None, 0);
+    }
+
+    for i in 0..count {
+        let idx_off = 12 + i * 8;
+        let blob_off = u32::from_be_bytes([
+            cs_data[idx_off + 4],
+            cs_data[idx_off + 5],
+            cs_data[idx_off + 6],
+            cs_data[idx_off + 7],
+        ]) as usize;
+        if blob_off + 12 > cs_data.len() {
+            continue;
+        }
+        let blob_magic = u32::from_be_bytes([
+            cs_data[blob_off],
+            cs_data[blob_off + 1],
+            cs_data[blob_off + 2],
+            cs_data[blob_off + 3],
+        ]);
+        if blob_magic != REQUIREMENTS_MAGIC {
+            continue;
+        }
+        let blob_size = u32::from_be_bytes([
+            cs_data[blob_off + 4],
+            cs_data[blob_off + 5],
+            cs_data[blob_off + 6],
+            cs_data[blob_off + 7],
+        ]) as usize;
+        if blob_off + blob_size > cs_data.len() || blob_size < 12 {
+            continue;
+        }
+        let inner_count = u32::from_be_bytes([
+            cs_data[blob_off + 8],
+            cs_data[blob_off + 9],
+            cs_data[blob_off + 10],
+            cs_data[blob_off + 11],
+        ]);
+        let mut hasher = Sha256::new();
+        hasher.update(&cs_data[blob_off..blob_off + blob_size]);
+        return (Some(hex::encode(hasher.finalize())), inner_count);
+    }
+    (None, 0)
+}
+
+/// Locate the CodeDirectory blob inside a SuperBlob and SHA-256 the
+/// *full* blob (including its 8-byte magic+length header).  This is
+/// the value Apple's `codesign -d --cdhashes` prints under "CDHash"
+/// when the binary uses SHA-256 hashing (the modern default).
+///
+/// Returns `None` if the SuperBlob is malformed or no CodeDirectory
+/// is present. Lenient — bails on bounds errors rather than
+/// propagating them.
+fn compute_cdhash_sha256(cs_data: &[u8]) -> Option<String> {
+    use sha2::{Digest, Sha256};
+
+    if cs_data.len() < 12 {
+        return None;
+    }
+    let magic = u32::from_be_bytes([cs_data[0], cs_data[1], cs_data[2], cs_data[3]]);
+    if magic != SUPERBLOB_MAGIC {
+        return None;
+    }
+    let count = u32::from_be_bytes([cs_data[8], cs_data[9], cs_data[10], cs_data[11]]) as usize;
+    if cs_data.len() < 12 + count * 8 {
+        return None;
+    }
+    for i in 0..count {
+        let idx_off = 12 + i * 8;
+        let blob_off = u32::from_be_bytes([
+            cs_data[idx_off + 4],
+            cs_data[idx_off + 5],
+            cs_data[idx_off + 6],
+            cs_data[idx_off + 7],
+        ]) as usize;
+        if blob_off + 8 > cs_data.len() {
+            continue;
+        }
+        let blob_magic = u32::from_be_bytes([
+            cs_data[blob_off],
+            cs_data[blob_off + 1],
+            cs_data[blob_off + 2],
+            cs_data[blob_off + 3],
+        ]);
+        if blob_magic != CODE_DIRECTORY_MAGIC {
+            continue;
+        }
+        let blob_size = u32::from_be_bytes([
+            cs_data[blob_off + 4],
+            cs_data[blob_off + 5],
+            cs_data[blob_off + 6],
+            cs_data[blob_off + 7],
+        ]) as usize;
+        if blob_off + blob_size > cs_data.len() || blob_size < 8 {
+            continue;
+        }
+        let mut hasher = Sha256::new();
+        hasher.update(&cs_data[blob_off..blob_off + blob_size]);
+        return Some(hex::encode(hasher.finalize()));
+    }
+    None
 }
 
 /// Extract identifier string from code directory.

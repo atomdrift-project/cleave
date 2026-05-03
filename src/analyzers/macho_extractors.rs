@@ -47,11 +47,172 @@ const LC_SOURCE_VERSION: u32 = 0x2A;
 const LC_LINKER_OPTION: u32 = 0x2D;
 const LC_BUILD_VERSION: u32 = 0x32;
 const LC_CODE_SIGNATURE: u32 = 0x1D;
+const LC_SEGMENT: u32 = 0x01;
+const LC_SEGMENT_64: u32 = 0x19;
 
 const LC_REQ_DYLD: u32 = 0x8000_0000;
 
 const MAX_LOAD_COMMANDS: usize = 4096;
 const MAX_LC_PAYLOAD: usize = 1 << 20;
+
+/// One row per slice in a Mach-O fat (universal) binary.  Plain
+/// (non-fat) Mach-Os return a single entry. Used by binary_extractors
+/// to surface `macho.slices[]` for cross-slice consistency checks
+/// (UUID drift across slices is a tamper signal — vendors typically
+/// rebuild all slices simultaneously and they share UUIDs).
+#[derive(Debug, Clone)]
+pub(crate) struct SliceSummary {
+    /// Slice CPU architecture name: `"x86_64"`, `"arm64"`, `"arm64e"`,
+    /// `"i386"`, `"ppc"`, `"ppc64"`, or `"unknown"`.
+    pub arch: String,
+    /// LC_UUID hex (canonical hyphenated form), or `None` if absent.
+    pub uuid: Option<String>,
+    /// File offset where this slice begins (0 for non-fat Mach-O).
+    pub file_offset: u64,
+    /// Whether this slice carries an LC_CODE_SIGNATURE blob.
+    pub has_code_signature: bool,
+}
+
+/// Walk all slices in a Mach-O fat binary, returning one summary
+/// per slice. Plain Mach-O returns a single-element vec. Used to
+/// detect tampering where one slice has a different UUID or signing
+/// state than the rest.
+#[must_use]
+pub(crate) fn extract_all_slices(data: &[u8]) -> Vec<SliceSummary> {
+    let mut out = Vec::new();
+    for (offset, is_64) in iterate_slice_starts(data) {
+        let arch = read_arch_name(data, offset, is_64);
+        let mut uuid = None;
+        let mut has_cs = false;
+        if let Some(after) = parse_header(data, offset, is_64) {
+            if let Some(lc) = parse_load_commands(data, after.cmds_offset, after.ncmds) {
+                uuid = lc.uuid;
+                has_cs = lc.code_signature.is_some();
+            }
+        }
+        out.push(SliceSummary {
+            arch,
+            uuid,
+            file_offset: offset as u64,
+            has_code_signature: has_cs,
+        });
+    }
+    out
+}
+
+/// Yield (offset, is_64) for every Mach-O slice in `data`. Plain
+/// Mach-O returns one entry; FAT_MAGIC fans out to N.
+fn iterate_slice_starts(data: &[u8]) -> Vec<(usize, bool)> {
+    let mut out = Vec::new();
+    if data.len() < 8 {
+        return out;
+    }
+    let magic_le = match data[..4].try_into() {
+        Ok(b) => u32::from_le_bytes(b),
+        Err(_) => return out,
+    };
+    let magic_be = match data[..4].try_into() {
+        Ok(b) => u32::from_be_bytes(b),
+        Err(_) => return out,
+    };
+    if magic_le == MH_MAGIC_64 {
+        out.push((0, true));
+        return out;
+    }
+    if magic_le == MH_MAGIC {
+        out.push((0, false));
+        return out;
+    }
+    if magic_be == FAT_MAGIC || magic_be == FAT_MAGIC_64 {
+        let nfat = match data[4..8].try_into() {
+            Ok(b) => u32::from_be_bytes(b) as usize,
+            Err(_) => return out,
+        };
+        let entry_size = if magic_be == FAT_MAGIC_64 { 32 } else { 20 };
+        for i in 0..nfat.min(32) {
+            let entry_off = 8 + i * entry_size;
+            if entry_off + entry_size > data.len() {
+                break;
+            }
+            let slice_off: usize = if magic_be == FAT_MAGIC_64 {
+                match data[entry_off + 8..entry_off + 16].try_into() {
+                    Ok(b) => u64::from_be_bytes(b) as usize,
+                    Err(_) => continue,
+                }
+            } else {
+                match data[entry_off + 8..entry_off + 12].try_into() {
+                    Ok(b) => u32::from_be_bytes(b) as usize,
+                    Err(_) => continue,
+                }
+            };
+            if slice_off + 4 > data.len() {
+                continue;
+            }
+            let inner = match data[slice_off..slice_off + 4].try_into() {
+                Ok(b) => u32::from_le_bytes(b),
+                Err(_) => continue,
+            };
+            if inner == MH_MAGIC_64 {
+                out.push((slice_off, true));
+            } else if inner == MH_MAGIC {
+                out.push((slice_off, false));
+            }
+        }
+    }
+    out
+}
+
+/// Decode a slice's CPU type / subtype into a canonical arch name.
+/// Falls back to `"unknown"` for unsupported types.
+fn read_arch_name(data: &[u8], header_off: usize, is_64: bool) -> String {
+    if header_off + 12 > data.len() {
+        return "unknown".to_string();
+    }
+    let cputype = match data[header_off + 4..header_off + 8].try_into() {
+        Ok(b) => u32::from_le_bytes(b),
+        Err(_) => return "unknown".to_string(),
+    };
+    let cpusubtype = match data[header_off + 8..header_off + 12].try_into() {
+        Ok(b) => u32::from_le_bytes(b),
+        Err(_) => return "unknown".to_string(),
+    };
+    cputype_name(cputype, cpusubtype, is_64).to_string()
+}
+
+/// Mach-O CPU type constants → canonical arch name. The list mirrors
+/// what `lipo -archs` prints. cpu_subtype is used to disambiguate
+/// arm64 vs arm64e (Apple Silicon PAC-enabled).
+fn cputype_name(cputype: u32, cpusubtype: u32, is_64: bool) -> &'static str {
+    const CPU_TYPE_X86: u32 = 0x7;
+    const CPU_TYPE_X86_64: u32 = 0x01000007;
+    const CPU_TYPE_ARM: u32 = 0xC;
+    const CPU_TYPE_ARM64: u32 = 0x0100000C;
+    const CPU_TYPE_ARM64_32: u32 = 0x0200000C;
+    const CPU_TYPE_PPC: u32 = 0x12;
+    const CPU_TYPE_PPC64: u32 = 0x01000012;
+    // arm64e (Apple Silicon with PAC) carries a specific cpusubtype.
+    const CPU_SUBTYPE_ARM64E: u32 = 2;
+    let cpusubtype_masked = cpusubtype & 0x00FF_FFFF;
+    match cputype {
+        CPU_TYPE_X86_64 => "x86_64",
+        CPU_TYPE_X86 => "i386",
+        CPU_TYPE_ARM64 => {
+            if cpusubtype_masked == CPU_SUBTYPE_ARM64E {
+                "arm64e"
+            } else {
+                "arm64"
+            }
+        }
+        CPU_TYPE_ARM64_32 => "arm64_32",
+        CPU_TYPE_ARM => "arm",
+        CPU_TYPE_PPC64 => "ppc64",
+        CPU_TYPE_PPC => "ppc",
+        _ => {
+            let _ = is_64;
+            "unknown"
+        }
+    }
+}
 
 /// Recovered Mach-O load-command data.  Empty fields drop from the
 /// kv tree.
@@ -428,6 +589,204 @@ fn platform_name(p: u32) -> &'static str {
         10 => "driverkit",
         _ => "unknown",
     }
+}
+
+/// Walk the load commands of the first Mach-O slice looking for a
+/// section named `(segname, sectname)`. Returns the section's byte
+/// slice when found, or `None` for non-Mach-O input or absent
+/// sections. Lenient — bails on malformed inputs rather than
+/// propagating errors.
+///
+/// Used to extract embedded text-segment payloads:
+/// `("__TEXT", "__info_plist")` for command-line tools' Info.plist,
+/// `("__TEXT", "__launchd_plist")` for self-installing daemons,
+/// `("__TEXT", "__entitlements")` for inline entitlements,
+/// `("__DATA_CONST", "__objc_classlist")` for ObjC reflection.
+#[must_use]
+pub(crate) fn find_section<'a>(
+    data: &'a [u8],
+    segname: &str,
+    sectname: &str,
+) -> Option<&'a [u8]> {
+    let (header_off, is_64) = locate_first_macho_slice(data)?;
+    let after_header = parse_header(data, header_off, is_64)?;
+    walk_segments_for_section(data, header_off, after_header, is_64, segname, sectname)
+}
+
+fn walk_segments_for_section<'a>(
+    data: &'a [u8],
+    header_off: usize,
+    after_header: HeaderInfo,
+    is_64: bool,
+    target_seg: &str,
+    target_sect: &str,
+) -> Option<&'a [u8]> {
+    let mut cursor = after_header.cmds_offset;
+    for _ in 0..after_header.ncmds {
+        if cursor + 8 > data.len() {
+            break;
+        }
+        let cmd = u32::from_le_bytes(data[cursor..cursor + 4].try_into().ok()?) & !LC_REQ_DYLD;
+        let cmdsize =
+            u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
+        if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
+            break;
+        }
+        let body = &data[cursor..cursor + cmdsize];
+
+        let want_64 = is_64 && cmd == LC_SEGMENT_64;
+        let want_32 = !is_64 && cmd == LC_SEGMENT;
+        if want_64 || want_32 {
+            // Layout (LE):
+            //   u32 cmd | u32 cmdsize | char segname[16]
+            //   { u64 vmaddr,vmsize,fileoff,filesize ; i32 maxprot,initprot ; u32 nsects,flags } (64)
+            //   or 32-bit equivalents
+            //   followed by section_64[nsects] (each 80 bytes) or section[nsects] (each 68 bytes)
+            let segname_off = 8usize;
+            if body.len() < segname_off + 16 {
+                cursor += cmdsize;
+                continue;
+            }
+            let segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
+            let (header_size, section_size, nsects_off) = if is_64 {
+                (72, 80, 64) // segment header is 72 bytes; nsects at offset 64
+            } else {
+                (56, 68, 48) // segment header is 56 bytes; nsects at offset 48
+            };
+            if body.len() < nsects_off + 4 {
+                cursor += cmdsize;
+                continue;
+            }
+            let nsects =
+                u32::from_le_bytes(body[nsects_off..nsects_off + 4].try_into().ok()?) as usize;
+
+            // Only walk sections if this segment matches the target —
+            // typically only __TEXT carries the inline payloads we care
+            // about, and __LINKEDIT alone has many sections we'd skip.
+            if segname == target_seg {
+                for i in 0..nsects.min(256) {
+                    let s_off = header_size + i * section_size;
+                    if s_off + section_size > body.len() {
+                        break;
+                    }
+                    let sect_bytes = &body[s_off..s_off + section_size];
+                    let sectname = parse_fixed_name(&sect_bytes[..16]);
+                    if sectname == target_sect {
+                        let (offset, size) = if is_64 {
+                            (
+                                u32::from_le_bytes(sect_bytes[48..52].try_into().ok()?)
+                                    as usize,
+                                u64::from_le_bytes(sect_bytes[40..48].try_into().ok()?)
+                                    as usize,
+                            )
+                        } else {
+                            (
+                                u32::from_le_bytes(sect_bytes[40..44].try_into().ok()?)
+                                    as usize,
+                                u32::from_le_bytes(sect_bytes[36..40].try_into().ok()?)
+                                    as usize,
+                            )
+                        };
+                        // Section file offset is relative to the
+                        // file's slice start, which is `header_off`
+                        // for fat binaries and 0 for plain Mach-O.
+                        let abs_off = header_off.checked_add(offset)?;
+                        if abs_off.checked_add(size)? > data.len() || size == 0 {
+                            return None;
+                        }
+                        return Some(&data[abs_off..abs_off + size]);
+                    }
+                }
+            }
+        }
+
+        cursor += cmdsize;
+    }
+    None
+}
+
+/// Decode a 16-byte fixed-length NUL-padded segment/section name
+/// into a Rust string. Stops at the first NUL.
+fn parse_fixed_name(bytes: &[u8]) -> String {
+    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
+    String::from_utf8_lossy(&bytes[..end]).into_owned()
+}
+
+/// Enumerate every section under the given segment whose name starts
+/// with `prefix`. Returns the matching section names (with their
+/// `__` prefix, sorted, deduped). Used to surface the
+/// `__TEXT,__swift5_*` family for Swift detection.
+#[must_use]
+pub(crate) fn list_sections_with_prefix(
+    data: &[u8],
+    segname: &str,
+    prefix: &str,
+) -> Vec<String> {
+    let Some((header_off, is_64)) = locate_first_macho_slice(data) else {
+        return Vec::new();
+    };
+    let Some(after_header) = parse_header(data, header_off, is_64) else {
+        return Vec::new();
+    };
+
+    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut cursor = after_header.cmds_offset;
+    for _ in 0..after_header.ncmds {
+        if cursor + 8 > data.len() {
+            break;
+        }
+        let Ok(cmd_bytes) = data[cursor..cursor + 4].try_into() else {
+            break;
+        };
+        let Ok(size_bytes) = data[cursor + 4..cursor + 8].try_into() else {
+            break;
+        };
+        let cmd = u32::from_le_bytes(cmd_bytes) & !LC_REQ_DYLD;
+        let cmdsize = u32::from_le_bytes(size_bytes) as usize;
+        if cmdsize < 8 || cmdsize > MAX_LC_PAYLOAD || cursor + cmdsize > data.len() {
+            break;
+        }
+        let body = &data[cursor..cursor + cmdsize];
+
+        let want_64 = is_64 && cmd == LC_SEGMENT_64;
+        let want_32 = !is_64 && cmd == LC_SEGMENT;
+        if want_64 || want_32 {
+            let segname_off = 8usize;
+            if body.len() < segname_off + 16 {
+                cursor += cmdsize;
+                continue;
+            }
+            let this_segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
+            let (header_size, section_size, nsects_off) = if is_64 {
+                (72, 80, 64)
+            } else {
+                (56, 68, 48)
+            };
+            if body.len() < nsects_off + 4 {
+                cursor += cmdsize;
+                continue;
+            }
+            let Ok(nsects_bytes) = body[nsects_off..nsects_off + 4].try_into() else {
+                cursor += cmdsize;
+                continue;
+            };
+            let nsects = u32::from_le_bytes(nsects_bytes) as usize;
+            if this_segname == segname {
+                for i in 0..nsects.min(256) {
+                    let s_off = header_size + i * section_size;
+                    if s_off + section_size > body.len() {
+                        break;
+                    }
+                    let sectname = parse_fixed_name(&body[s_off..s_off + 16]);
+                    if sectname.starts_with(prefix) {
+                        out.insert(sectname);
+                    }
+                }
+            }
+        }
+        cursor += cmdsize;
+    }
+    out.into_iter().collect()
 }
 
 fn build_tool_name(t: u32) -> &'static str {

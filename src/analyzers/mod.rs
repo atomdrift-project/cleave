@@ -53,6 +53,10 @@ pub(crate) mod builder_paths;
 pub(crate) mod pe_extractors;
 // B4: Mach-O load command extractors (UUID, build_version, dylibs, rpath, source_version).
 pub(crate) mod macho_extractors;
+// B3.7: DWARF DW_AT_producer / DW_AT_comp_dir for unstripped ELF.
+pub(crate) mod dwarf_extractors;
+// B2.5: PE side-by-side assembly manifest (RT_MANIFEST resource).
+pub(crate) mod pe_manifest;
 
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;

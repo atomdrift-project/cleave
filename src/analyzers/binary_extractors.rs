@@ -200,6 +200,357 @@ fn read_shdr(data: &[u8], shoff: usize, entsize: usize, idx: usize, is_64: bool)
 }
 
 // ---------------------------------------------------------------------------
+// ELF DT_FLAGS / DT_FLAGS_1 — runtime hardening flags
+// ---------------------------------------------------------------------------
+
+/// Decoded named flags from DT_FLAGS (tag 30) and DT_FLAGS_1 (tag
+/// 0x6ffffffb). Set by linker flags like `-Wl,-z,now`,
+/// `-Wl,-z,relro`, `-Wl,-z,nodelete`. Distros are stable in their
+/// flag profiles; drift indicates build-toolchain change.
+///
+/// Returned values are raw bit reads — kv-eligible, no interpretation.
+#[derive(Debug, Default, Clone)]
+pub(crate) struct DynamicFlags {
+    /// DT_FLAGS raw bitfield (debug + ML feature surface).
+    pub raw_flags: u32,
+    /// DT_FLAGS_1 raw bitfield.
+    pub raw_flags_1: u32,
+    /// DF_BIND_NOW — eager symbol resolution (full RELRO).
+    pub bind_now: bool,
+    /// DF_TEXTREL — text-segment relocations (security warning).
+    pub textrel: bool,
+    /// DF_SYMBOLIC — local symbols resolve before global.
+    pub symbolic: bool,
+    /// DF_STATIC_TLS — uses static TLS model.
+    pub static_tls: bool,
+    /// DF_1_NOW — same as DF_BIND_NOW (newer flag).
+    pub now: bool,
+    /// DF_1_NODELETE — refcount permanently raised, never unloaded.
+    pub nodelete: bool,
+    /// DF_1_INITFIRST — initialise this object first.
+    pub initfirst: bool,
+    /// DF_1_NOOPEN — disallow `dlopen()` of this object.
+    pub noopen: bool,
+    /// DF_1_NODEFLIB — ignore default library search paths.
+    pub nodeflib: bool,
+    /// DF_1_NODUMP — skip in `dlinfo()` enumerations.
+    pub nodump: bool,
+    /// DF_1_PIE — position-independent executable (newer than PT_GNU_*).
+    pub pie: bool,
+    /// DF_1_GLOBAL — promoted to global scope on dlopen.
+    pub global: bool,
+    /// DF_1_GROUP — object-group member.
+    pub group: bool,
+    /// DF_1_INTERPOSE — symbols interpose all global ones.
+    pub interpose: bool,
+    /// DF_1_DIRECT — direct symbol bindings.
+    pub direct: bool,
+}
+
+#[must_use]
+pub(crate) fn extract_dynamic_flags(data: &[u8]) -> Option<DynamicFlags> {
+    let dyn_bytes = read_section(data, b".dynamic")?;
+    let is_64 = data.get(4) == Some(&2);
+    let entry_size = if is_64 { 16 } else { 8 };
+    let mut raw_flags = 0u32;
+    let mut raw_flags_1 = 0u32;
+    let mut found_any = false;
+    let mut i = 0usize;
+    while i + entry_size <= dyn_bytes.len() {
+        let tag = if is_64 {
+            u64::from_le_bytes(dyn_bytes[i..i + 8].try_into().ok()?) as i64
+        } else {
+            u32::from_le_bytes(dyn_bytes[i..i + 4].try_into().ok()?) as i64
+        };
+        let val = if is_64 {
+            u64::from_le_bytes(dyn_bytes[i + 8..i + 16].try_into().ok()?)
+        } else {
+            u32::from_le_bytes(dyn_bytes[i + 4..i + 8].try_into().ok()?) as u64
+        };
+        if tag == 0 {
+            break; // DT_NULL terminator
+        }
+        if tag == 30 {
+            raw_flags = val as u32;
+            found_any = true;
+        } else if tag as i64 == 0x6fff_fffb_i64 {
+            raw_flags_1 = val as u32;
+            found_any = true;
+        }
+        i += entry_size;
+    }
+    if !found_any {
+        return None;
+    }
+    Some(DynamicFlags {
+        raw_flags,
+        raw_flags_1,
+        bind_now: raw_flags & 0x8 != 0,
+        textrel: raw_flags & 0x4 != 0,
+        symbolic: raw_flags & 0x2 != 0,
+        static_tls: raw_flags & 0x10 != 0,
+        now: raw_flags_1 & 0x1 != 0,
+        global: raw_flags_1 & 0x2 != 0,
+        group: raw_flags_1 & 0x4 != 0,
+        nodelete: raw_flags_1 & 0x8 != 0,
+        initfirst: raw_flags_1 & 0x20 != 0,
+        noopen: raw_flags_1 & 0x40 != 0,
+        interpose: raw_flags_1 & 0x400 != 0,
+        nodeflib: raw_flags_1 & 0x800 != 0,
+        nodump: raw_flags_1 & 0x1000 != 0,
+        direct: raw_flags_1 & 0x100 != 0,
+        pie: raw_flags_1 & 0x0800_0000 != 0,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// ELF symbol versioning — `.gnu.version_r` (verneed) + `.gnu.version_d` (verdef)
+// ---------------------------------------------------------------------------
+
+/// One library + the list of versioned symbols the binary requires
+/// from it. Sourced from `.gnu.version_r` (SHT_GNU_verneed). E.g.
+/// `{lib: "libc.so.6", versions: ["GLIBC_2.17", "GLIBC_2.34"]}`.
+#[derive(Debug, Clone)]
+pub(crate) struct SymbolVersionRequirement {
+    pub lib: String,
+    pub versions: Vec<String>,
+}
+
+/// Parse `.gnu.version_r` and return per-library versioned-symbol
+/// requirements. Returns `None` for non-ELF or missing section.
+///
+/// This is the xz-class supply-chain detector: a vendor's binary
+/// imports a stable set of glibc symbol versions across releases.
+/// A sudden requirement on a NEW version (e.g. `GLIBC_2.38` appearing
+/// in a release that previously needed only `GLIBC_2.34`) almost
+/// always indicates the build environment changed.
+#[must_use]
+pub(crate) fn extract_needed_versions(data: &[u8]) -> Option<Vec<SymbolVersionRequirement>> {
+    let verneed = read_section(data, b".gnu.version_r")?;
+    let dynstr = read_section(data, b".dynstr")?;
+
+    let mut out = Vec::new();
+    let mut entry_off = 0usize;
+    // Bound iterations to defend against malformed inputs.
+    for _ in 0..256 {
+        if entry_off + 16 > verneed.len() {
+            break;
+        }
+        // Elf{32,64}_Verneed layout (same on both — all 16/32-bit
+        // fields, total 16 bytes):
+        //   u16 vn_version, u16 vn_cnt, u32 vn_file, u32 vn_aux, u32 vn_next
+        let vn_cnt = u16::from_le_bytes(verneed[entry_off + 2..entry_off + 4].try_into().ok()?);
+        let vn_file =
+            u32::from_le_bytes(verneed[entry_off + 4..entry_off + 8].try_into().ok()?) as usize;
+        let vn_aux =
+            u32::from_le_bytes(verneed[entry_off + 8..entry_off + 12].try_into().ok()?) as usize;
+        let vn_next =
+            u32::from_le_bytes(verneed[entry_off + 12..entry_off + 16].try_into().ok()?) as usize;
+
+        let lib = read_strtab_string(dynstr, vn_file).unwrap_or_default();
+        let mut versions = Vec::new();
+        let mut aux_off = entry_off + vn_aux;
+        for _ in 0..vn_cnt.min(64) {
+            if aux_off + 16 > verneed.len() {
+                break;
+            }
+            // Elf_Vernaux: u32 vna_hash, u16 vna_flags, u16 vna_other,
+            // u32 vna_name, u32 vna_next (total 16 bytes).
+            let vna_name =
+                u32::from_le_bytes(verneed[aux_off + 8..aux_off + 12].try_into().ok()?)
+                    as usize;
+            let vna_next =
+                u32::from_le_bytes(verneed[aux_off + 12..aux_off + 16].try_into().ok()?)
+                    as usize;
+            if let Some(name) = read_strtab_string(dynstr, vna_name) {
+                if !name.is_empty() {
+                    versions.push(name);
+                }
+            }
+            if vna_next == 0 {
+                break;
+            }
+            aux_off += vna_next;
+        }
+        if !lib.is_empty() {
+            versions.sort();
+            versions.dedup();
+            out.push(SymbolVersionRequirement { lib, versions });
+        }
+        if vn_next == 0 {
+            break;
+        }
+        entry_off += vn_next;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Parse `.gnu.version_d` and return the list of versions this
+/// binary itself defines (i.e. what symbol versions an ELF .so
+/// exports). Less useful for executables; critical for tracking
+/// shared library version drift.
+#[must_use]
+pub(crate) fn extract_provided_versions(data: &[u8]) -> Option<Vec<String>> {
+    let verdef = read_section(data, b".gnu.version_d")?;
+    let dynstr = read_section(data, b".dynstr")?;
+
+    let mut out = Vec::new();
+    let mut entry_off = 0usize;
+    for _ in 0..256 {
+        if entry_off + 20 > verdef.len() {
+            break;
+        }
+        // Elf_Verdef: u16 vd_version, u16 vd_flags, u16 vd_ndx, u16 vd_cnt,
+        // u32 vd_hash, u32 vd_aux, u32 vd_next (total 20 bytes).
+        let vd_cnt = u16::from_le_bytes(verdef[entry_off + 6..entry_off + 8].try_into().ok()?);
+        let vd_aux =
+            u32::from_le_bytes(verdef[entry_off + 12..entry_off + 16].try_into().ok()?) as usize;
+        let vd_next =
+            u32::from_le_bytes(verdef[entry_off + 16..entry_off + 20].try_into().ok()?) as usize;
+
+        let mut aux_off = entry_off + vd_aux;
+        for _ in 0..vd_cnt.min(8) {
+            if aux_off + 8 > verdef.len() {
+                break;
+            }
+            // Elf_Verdaux: u32 vda_name, u32 vda_next.
+            let vda_name =
+                u32::from_le_bytes(verdef[aux_off..aux_off + 4].try_into().ok()?) as usize;
+            let vda_next =
+                u32::from_le_bytes(verdef[aux_off + 4..aux_off + 8].try_into().ok()?) as usize;
+            if let Some(name) = read_strtab_string(dynstr, vda_name) {
+                // The first verdaux per verdef is the version's own
+                // name; subsequent ones are predecessor links. We want
+                // only the first.
+                if !name.is_empty() && !out.contains(&name) {
+                    out.push(name);
+                    break;
+                }
+            }
+            if vda_next == 0 {
+                break;
+            }
+            aux_off += vda_next;
+        }
+        if vd_next == 0 {
+            break;
+        }
+        entry_off += vd_next;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        out.sort();
+        Some(out)
+    }
+}
+
+/// Read a NUL-terminated string at the given offset within an ELF
+/// string table (`.dynstr` / `.shstrtab`). Returns `None` for
+/// out-of-bounds or non-UTF-8.
+fn read_strtab_string(strtab: &[u8], offset: usize) -> Option<String> {
+    if offset >= strtab.len() {
+        return None;
+    }
+    let end = strtab[offset..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|p| offset + p)
+        .unwrap_or(strtab.len());
+    if end == offset {
+        return None;
+    }
+    std::str::from_utf8(&strtab[offset..end]).ok().map(str::to_string)
+}
+
+// ---------------------------------------------------------------------------
+// ELF linker identification — `.note.gnu.gold-version` etc.
+// ---------------------------------------------------------------------------
+
+/// Identify the link-editor that produced an ELF. Returns the
+/// canonical short name when detectable: `"gold"`, `"lld"`, `"mold"`,
+/// `"bfd"`. Falls back to `None` when no identifying note is present.
+///
+/// Sources, in order:
+///   1. `.note.gnu.gold-version` — gold-specific note (n_type=4)
+///   2. `.note.lld` / lld-specific marker (rare; many lld builds have no note)
+///   3. `.note.mold` — mold sets a custom note in newer versions
+///   4. `.comment` heuristic — sometimes the linker name appears here
+#[must_use]
+pub(crate) fn extract_linker(data: &[u8]) -> Option<String> {
+    if read_section(data, b".note.gnu.gold-version").is_some() {
+        return Some("gold".to_string());
+    }
+    if read_section(data, b".note.lld").is_some() {
+        return Some("lld".to_string());
+    }
+    if read_section(data, b".note.mold").is_some() {
+        return Some("mold".to_string());
+    }
+    // Fallback: scan .comment for the substring. lld and mold sometimes
+    // append themselves to the toolchain banner.
+    let comment = extract_elf_comment(data)?;
+    let lower = comment.to_lowercase();
+    if lower.contains("ld.lld") || lower.contains("lld ") {
+        return Some("lld".to_string());
+    }
+    if lower.contains("mold ") {
+        return Some("mold".to_string());
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
+// .note.package — FDO Package Metadata note
+// ---------------------------------------------------------------------------
+
+/// Read the JSON payload of an FDO Package Metadata note (`.note.package`,
+/// `n_type = 0xCAFE1A7E`, vendor name `"FDO"`).  The desc is a JSON
+/// document with a documented schema (https://systemd.io/COREDUMP_PACKAGE_METADATA/)
+/// — package name + version + type (rpm/deb/apk) + cpe + url + vcs.
+///
+/// This is the cleanest "what package am I from" attestation in any
+/// binary format: distros that ship it (Wolfi, Chainguard, Fedora 36+,
+/// recent systemd builds) embed the package manager's own metadata
+/// directly into the binary at link time. Trait authors can write
+/// e.g. `package.type == "apk"` or `package.cpe ~= "^cpe:.../o:wolfi:"`.
+#[must_use]
+pub(crate) fn extract_note_package(data: &[u8]) -> Option<serde_json::Value> {
+    let bytes = read_section(data, b".note.package")?;
+    if bytes.len() < 16 {
+        return None;
+    }
+    let namesz = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    let descsz = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let ntype = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    if ntype != 0xCAFE_1A7E {
+        return None;
+    }
+    let name_start = 12usize;
+    let desc_start = name_start.checked_add(align_up(namesz, 4))?;
+    let desc_end = desc_start.checked_add(descsz)?;
+    if desc_end > bytes.len() {
+        return None;
+    }
+    // Trim trailing NULs from the desc — the section may pad up to
+    // 4 bytes with zeros.
+    let desc = bytes[desc_start..desc_end]
+        .split(|&b| b == 0)
+        .next()?;
+    let text = std::str::from_utf8(desc).ok()?;
+    let val: serde_json::Value = serde_json::from_str(text).ok()?;
+    if val.is_null() {
+        None
+    } else {
+        Some(val)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // .note.gnu.property — Intel CET / ARM PAC+BTI / x86 ISA level
 // ---------------------------------------------------------------------------
 
@@ -374,6 +725,101 @@ pub(crate) fn detect_sanitizers(imports: &[Import]) -> Vec<String> {
         }
     }
     out.into_iter().collect()
+}
+
+// ---------------------------------------------------------------------------
+// Rust runtime detection
+// ---------------------------------------------------------------------------
+
+/// Detect a Rust binary by looking for the canonical Rust allocator
+/// shim symbols (`__rust_alloc`, `__rust_dealloc`, etc.) and panic
+/// infrastructure (`rust_panic`, `rust_begin_unwind`). These are
+/// emitted by every rustc-built binary and are unmistakeable.
+///
+/// Scans both imports (for ELF/PE where Rust stdlib may be a shared
+/// dep) AND exports (for Mach-O where Rust stdlib is statically
+/// linked and the runtime symbols appear as defined locals).
+///
+/// Returns the list of distinct Rust ABI symbols observed (sorted),
+/// or empty when no Rust signal present.
+#[must_use]
+pub(crate) fn detect_rust_symbols(
+    imports: &[Import],
+    exports: &[crate::types::Export],
+) -> Vec<String> {
+    let mut out = BTreeSet::new();
+    let exact_marks = [
+        "rust_alloc",
+        "rust_dealloc",
+        "rust_realloc",
+        "rust_alloc_zeroed",
+        "rust_alloc_error_handler",
+        "rust_panic",
+        "rust_begin_unwind",
+        "rust_eh_personality",
+    ];
+    let scan_name = |s: &str, out: &mut BTreeSet<String>| {
+        let s = s.trim_start_matches('_');
+        for mark in exact_marks {
+            if s == mark {
+                out.insert(mark.to_string());
+            }
+        }
+    };
+    for imp in imports {
+        scan_name(imp.symbol.as_str(), &mut out);
+    }
+    for exp in exports {
+        scan_name(exp.symbol.as_str(), &mut out);
+    }
+    out.into_iter().collect()
+}
+
+/// Determine Rust symbol-mangling style from observed symbols.
+/// Returns `Some("v0")` when any symbol uses the new v0 mangling
+/// (`_R...`), `Some("legacy")` when the legacy mangling
+/// (`_ZN.*17h<16-hex>E`) is observed exclusively, or `None` when no
+/// Rust mangling is detectable. Scans both imports and exports.
+#[must_use]
+pub(crate) fn detect_rust_mangling(
+    imports: &[Import],
+    exports: &[crate::types::Export],
+) -> Option<&'static str> {
+    use regex::Regex;
+    let legacy_re = Regex::new(r"^_?ZN.*17h[0-9a-f]{16}E$").ok()?;
+    let mut saw_legacy = false;
+    let check = |s: &str, saw_legacy: &mut bool| -> bool {
+        if s.starts_with("_R") && s.len() > 4 {
+            return true; // v0
+        }
+        if legacy_re.is_match(s) {
+            *saw_legacy = true;
+        }
+        false
+    };
+    for imp in imports {
+        if check(imp.symbol.as_str(), &mut saw_legacy) {
+            return Some("v0");
+        }
+    }
+    for exp in exports {
+        if check(exp.symbol.as_str(), &mut saw_legacy) {
+            return Some("v0");
+        }
+    }
+    if saw_legacy {
+        Some("legacy")
+    } else {
+        None
+    }
+}
+
+/// Whether the ELF carries a `.rustc` section. Set on rustc-built
+/// `lib` crates (rlib metadata) and some `bin` crates depending on
+/// build profile. An explicit "this is a Rust artifact" marker.
+#[must_use]
+pub(crate) fn has_rustc_section(data: &[u8]) -> bool {
+    read_section(data, b".rustc").is_some()
 }
 
 // ---------------------------------------------------------------------------
@@ -576,6 +1022,13 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             pe_extra.insert("version_info".into(), Value::Object(version_info));
         }
 
+        // RT_MANIFEST — Windows side-by-side assembly manifest XML.
+        // Surfaces requestedExecutionLevel (UAC), supportedOS GUIDs,
+        // dpiAware/autoElevate, and dependentAssembly references.
+        if let Some(manifest) = super::pe_manifest::extract(raw_data) {
+            pe_extra.insert("manifest".into(), manifest);
+        }
+
         if !pe_extra.is_empty() {
             augment.insert("pe".into(), Value::Object(pe_extra));
         }
@@ -611,6 +1064,119 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         if let Some(cmdline) = extract_gcc_command_line(raw_data) {
             build_extra.insert("command_line".into(), json!(cmdline));
         }
+        // DWARF DW_AT_producer / DW_AT_comp_dir / DW_AT_name —
+        // unstripped ELF binaries leak the FULL compile command line
+        // and build directory per CU. Strongest attribution surface
+        // any binary format offers.
+        if let Some(dw) = super::dwarf_extractors::extract(raw_data) {
+            let mut dwarf_extra = serde_json::Map::new();
+            if !dw.producers.is_empty() {
+                dwarf_extra.insert("producers".into(), json!(dw.producers.clone()));
+                // Also surface the first producer string as the
+                // canonical cross-format `build.toolchain` when the
+                // metrics path didn't already populate it.
+                if let Some(first) = dw.producers.first() {
+                    build_extra
+                        .entry("toolchain_full".to_string())
+                        .or_insert_with(|| json!(first.clone()));
+                }
+            }
+            if !dw.comp_dirs.is_empty() {
+                dwarf_extra.insert("comp_dirs".into(), json!(dw.comp_dirs.clone()));
+                // Single canonical build root → cross-format
+                // `build.build_root`. Multiple comp_dirs = different
+                // CUs from different repos; we don't pick one.
+                if dw.comp_dirs.len() == 1 {
+                    build_extra
+                        .entry("build_root".to_string())
+                        .or_insert_with(|| json!(dw.comp_dirs[0].clone()));
+                }
+            }
+            if !dw.languages.is_empty() {
+                dwarf_extra.insert("languages".into(), json!(dw.languages.clone()));
+            }
+            if !dw.source_files.is_empty() {
+                dwarf_extra.insert("source_files".into(), json!(dw.source_files.clone()));
+            }
+            if dw.cu_count > 0 {
+                dwarf_extra.insert("cu_count".into(), json!(dw.cu_count));
+                // Also expose as a metric for trait min/max queries.
+                let metrics = report
+                    .metrics
+                    .get_or_insert_with(crate::types::scores::Metrics::default);
+                let elf_metrics = metrics
+                    .elf
+                    .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
+                elf_metrics.dwarf_cu_count = dw.cu_count;
+            }
+            if !dwarf_extra.is_empty() {
+                augment.insert("dwarf".into(), Value::Object(dwarf_extra));
+            }
+        }
+
+        // .note.package — FDO Package Metadata. Self-attestation of
+        // the producing distro/package manager. Highest-leverage
+        // attribution signal when present (Wolfi/Chainguard/Fedora).
+        if let Some(pkg) = extract_note_package(raw_data) {
+            augment.insert("package".into(), pkg);
+        }
+
+        // DT_FLAGS / DT_FLAGS_1 — runtime hardening flags. Stable per
+        // distro / link configuration; drift signals build change.
+        if let Some(df) = extract_dynamic_flags(raw_data) {
+            let mut flags = serde_json::Map::new();
+            flags.insert("raw".into(), json!(df.raw_flags));
+            flags.insert("raw_1".into(), json!(df.raw_flags_1));
+            // Only write the bool keys that are actually true to keep
+            // the kv subtree sparse.
+            macro_rules! flag {
+                ($name:literal, $field:ident) => {
+                    if df.$field {
+                        flags.insert($name.into(), json!(true));
+                    }
+                };
+            }
+            flag!("bind_now", bind_now);
+            flag!("textrel", textrel);
+            flag!("symbolic", symbolic);
+            flag!("static_tls", static_tls);
+            flag!("now", now);
+            flag!("nodelete", nodelete);
+            flag!("initfirst", initfirst);
+            flag!("noopen", noopen);
+            flag!("nodeflib", nodeflib);
+            flag!("nodump", nodump);
+            flag!("pie", pie);
+            flag!("global", global);
+            flag!("group", group);
+            flag!("interpose", interpose);
+            flag!("direct", direct);
+            elf_extra.insert("dt_flags".into(), Value::Object(flags));
+        }
+
+        // Symbol-versioning requirements (.gnu.version_r). Each
+        // library + the exact set of versioned symbols this binary
+        // imports from it. THE xz-class supply-chain detector — a
+        // sudden new GLIBC_2.X requirement is almost always tampering.
+        if let Some(needs) = extract_needed_versions(raw_data) {
+            let arr: Vec<Value> = needs
+                .iter()
+                .map(|n| json!({"lib": n.lib, "versions": n.versions}))
+                .collect();
+            elf_extra.insert("needed_versions".into(), Value::Array(arr));
+        }
+        if let Some(provides) = extract_provided_versions(raw_data) {
+            elf_extra.insert("provided_versions".into(), json!(provides));
+        }
+
+        // Linker identification. Cross-format `build.linker` for
+        // ergonomic trait writing alongside `build.toolchain_family`.
+        if let Some(linker) = extract_linker(raw_data) {
+            build_extra
+                .entry("linker".to_string())
+                .or_insert_with(|| json!(linker));
+        }
+
         if let Some(prop) = extract_gnu_property(raw_data) {
             let mut gp = serde_json::Map::new();
             if prop.ibt {
@@ -646,8 +1212,41 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // existing metrics-derived `macho.{min_os_version, sdk_version}`.
     let is_macho = looks_like_macho(raw_data);
     if is_macho {
+        // Per-slice summary (UUIDs + arch + signing presence). Even
+        // for plain Mach-O this returns one entry; for fat binaries
+        // it lets trait authors and ML detect slice-level tampering
+        // (e.g. one slice unsigned, others signed; UUIDs diverging
+        // across slices when they should be co-built).
+        let slices = super::macho_extractors::extract_all_slices(raw_data);
+        // Slice count is a derived count → metric. Populate even for
+        // plain Mach-Os (1) so the field is queryable.
+        if !slices.is_empty() {
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let macho_metrics = metrics
+                .macho
+                .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
+            macho_metrics.slice_count = slices.len() as u32;
+        }
         if let Some(lc) = super::macho_extractors::extract(raw_data) {
             let mut macho_extra = serde_json::Map::new();
+            if slices.len() > 1 {
+                macho_extra.insert("is_fat".into(), json!(true));
+                macho_extra.insert("slice_count".into(), json!(slices.len()));
+                let arr: Vec<Value> = slices
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "arch": s.arch,
+                            "uuid": s.uuid,
+                            "file_offset": s.file_offset,
+                            "has_code_signature": s.has_code_signature,
+                        })
+                    })
+                    .collect();
+                macho_extra.insert("slices".into(), Value::Array(arr));
+            }
 
             if let Some(uuid) = lc.uuid.as_deref() {
                 macho_extra.insert("uuid".into(), json!(uuid));
@@ -739,10 +1338,14 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             // signer, authorities, entitlements, notarized).  Re-uses
             // the existing `macho_codesign` parser; we just feed it the
             // LC_CODE_SIGNATURE blob offset we recovered above.
+            let mut cdhash_for_hashes: Option<String> = None;
+            let mut codesign_notarized = false;
             if let Some((cs_off, cs_size)) = lc.code_signature {
                 if let Ok(cs) = super::macho_codesign::parse_code_signature(
                     raw_data, cs_off, cs_size,
                 ) {
+                    cdhash_for_hashes = cs.cdhash_sha256.clone();
+                    codesign_notarized = cs.is_notarized;
                     let signing_extra = augment
                         .entry(String::from("signing"))
                         .or_insert_with(|| Value::Object(serde_json::Map::new()));
@@ -773,6 +1376,16 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                             obj.entry("hardened_runtime".to_string())
                                 .or_insert_with(|| json!(true));
                         }
+                        if let Some(cdh) = cs.cdhash_sha256.as_deref() {
+                            obj.insert("cdhash_sha256".into(), json!(cdh));
+                        }
+                        if let Some(req) = cs.requirements_sha256.as_deref() {
+                            obj.insert("requirements_sha256".into(), json!(req));
+                            obj.insert(
+                                "requirements_slot_count".into(),
+                                json!(cs.requirements_slot_count),
+                            );
+                        }
                         if !cs.entitlements.is_empty() {
                             let mut ent = serde_json::Map::new();
                             for (k, v) in &cs.entitlements {
@@ -790,8 +1403,85 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 }
             }
 
+            // Swift runtime sections — `__TEXT,__swift5_*` family
+            // contains protocol/type/reflection metadata. Their
+            // presence is the canonical "this is Swift code" signal;
+            // the specific subset present implies Swift version
+            // (acfuncs ≥ 5.5, mpenum newer, etc.). Strong attribution
+            // for Apple-platform supply-chain detection — Swift code
+            // built outside Xcode (e.g. from a tampered swiftc) often
+            // shows section drift.
+            let swift_sections =
+                super::macho_extractors::list_sections_with_prefix(
+                    raw_data,
+                    "__TEXT",
+                    "__swift5_",
+                );
+            if !swift_sections.is_empty() {
+                macho_extra.insert("swift_sections".into(), json!(swift_sections.clone()));
+                // Set the metric for trait min/max queries.
+                let metrics = report
+                    .metrics
+                    .get_or_insert_with(crate::types::scores::Metrics::default);
+                let macho_metrics = metrics
+                    .macho
+                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
+                macho_metrics.swift_section_count = swift_sections.len() as u32;
+            }
+
+            // Embedded plists in __TEXT — Info.plist and launchd_plist.
+            // Command-line tools and self-installing daemons stash these
+            // directly in the text segment instead of carrying a
+            // surrounding bundle. Strong attribution + persistence
+            // signals: the launchd plist names the daemon and its
+            // ProgramArguments; Info.plist mismatch with code signature
+            // bundle_identifier is a tampering signal.
+            if let Some(bytes) = super::macho_extractors::find_section(
+                raw_data,
+                "__TEXT",
+                "__info_plist",
+            ) {
+                if let Some(parsed) = parse_plist_to_json(bytes) {
+                    macho_extra.insert("info_plist".into(), parsed);
+                }
+            }
+            if let Some(bytes) = super::macho_extractors::find_section(
+                raw_data,
+                "__TEXT",
+                "__launchd_plist",
+            ) {
+                if let Some(parsed) = parse_plist_to_json(bytes) {
+                    macho_extra.insert("launchd_plist".into(), parsed);
+                }
+            }
+
             if !macho_extra.is_empty() {
                 augment.insert("macho".into(), Value::Object(macho_extra));
+            }
+
+            // Notarized is a derived bool — store on metric only.
+            if codesign_notarized {
+                let metrics = report
+                    .metrics
+                    .get_or_insert_with(crate::types::scores::Metrics::default);
+                let macho_metrics = metrics
+                    .macho
+                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
+                macho_metrics.is_notarized = true;
+            }
+
+            // Cross-format: mirror CDHash under hashes.* alongside
+            // imphash, rich_header_hash, etc. — `hashes.*` is the
+            // single canonical home for similarity / cluster hashes
+            // regardless of source format.
+            if let Some(cdh) = cdhash_for_hashes {
+                let hashes = augment
+                    .entry(String::from("hashes"))
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Some(h) = hashes.as_object_mut() {
+                    h.entry("cdhash_sha256".to_string())
+                        .or_insert_with(|| json!(cdh));
+                }
             }
         }
     }
@@ -807,6 +1497,43 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 "sanitizers".into(),
                 Value::Array(sanitizers.into_iter().map(Value::String).collect()),
             );
+        }
+    }
+
+    // Rust runtime detection — allocator shim + panic infrastructure
+    // imports are unmistakeable. The `.rustc` section (ELF) is an
+    // explicit "this is a Rust artifact" marker.
+    let rust_symbols = detect_rust_symbols(&report.imports, &report.exports);
+    let rust_mangling = detect_rust_mangling(&report.imports, &report.exports);
+    let rust_section = has_rustc_section(raw_data);
+    if !rust_symbols.is_empty() || rust_mangling.is_some() || rust_section {
+        let build_extra = augment
+            .entry(String::from("build"))
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(obj) = build_extra.as_object_mut() {
+            // Cross-format toolchain attribution: when Rust is detected,
+            // it's the source-language toolchain regardless of which
+            // linker LC_BUILD_VERSION names. Move any prior toolchain_family
+            // value (e.g. `ld` from Mach-O LC_BUILD_VERSION) to `linker`
+            // so both signals are preserved.
+            if let Some(prior) = obj.get("toolchain_family").cloned() {
+                if prior.as_str() != Some("rustc") {
+                    obj.entry("linker".to_string()).or_insert(prior);
+                }
+            }
+            obj.insert("toolchain_family".into(), json!("rustc"));
+            if !rust_symbols.is_empty() {
+                obj.insert(
+                    "rust_runtime_symbols".into(),
+                    json!(rust_symbols),
+                );
+            }
+            if let Some(m) = rust_mangling {
+                obj.insert("rust_mangling".into(), json!(m));
+            }
+            if rust_section {
+                obj.insert("has_rustc_section".into(), json!(true));
+            }
         }
     }
 
@@ -922,6 +1649,19 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
+    // Cross-format consistency checks. These are derived
+    // interpretations (boolean comparisons over kv data), so they
+    // live on `report.metrics.consistency` rather than in the kv
+    // tree. Trait authors target them via
+    // `type: metrics, field: consistency.<name>, min: 1`.
+    let consistency = compute_consistency(&augment);
+    if !consistency_is_default(&consistency) {
+        let metrics = report
+            .metrics
+            .get_or_insert_with(crate::types::scores::Metrics::default);
+        metrics.consistency = Some(consistency);
+    }
+
     if augment.is_empty() {
         return;
     }
@@ -934,6 +1674,224 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
     let merged = deep_merge(existing, Value::Object(augment));
     report.kv_tree = Some(Box::new(merged));
+}
+
+/// Parse a plist (XML or binary) into a serde_json::Value with
+/// snake_cased keys. Handles top-level dicts, arrays, strings, ints,
+/// reals, booleans, and dates (formatted as ISO-8601). Binary data
+/// blobs are dropped (kv tree isn't a useful surface for them).
+/// Returns `None` on parse failure or empty result.
+fn parse_plist_to_json(bytes: &[u8]) -> Option<serde_json::Value> {
+    let val = plist::Value::from_reader(std::io::Cursor::new(bytes)).ok()?;
+    let v = plist_to_json(&val);
+    match &v {
+        serde_json::Value::Null => None,
+        serde_json::Value::Object(m) if m.is_empty() => None,
+        serde_json::Value::Array(a) if a.is_empty() => None,
+        _ => Some(v),
+    }
+}
+
+/// Recursively convert a plist::Value to serde_json::Value.  Object
+/// keys are snake_cased so kv paths stay uniform with the rest of
+/// cleave's kv schema.
+fn plist_to_json(v: &plist::Value) -> serde_json::Value {
+    use serde_json::{Map, Value};
+    match v {
+        plist::Value::String(s) => Value::String(s.clone()),
+        plist::Value::Boolean(b) => Value::Bool(*b),
+        plist::Value::Integer(i) => i
+            .as_signed()
+            .map(Value::from)
+            .or_else(|| i.as_unsigned().map(Value::from))
+            .unwrap_or(Value::Null),
+        plist::Value::Real(r) => serde_json::Number::from_f64(*r)
+            .map(Value::Number)
+            .unwrap_or(Value::Null),
+        plist::Value::Date(d) => Value::String(format!("{:?}", d)),
+        plist::Value::Array(arr) => {
+            Value::Array(arr.iter().map(plist_to_json).collect())
+        }
+        plist::Value::Dictionary(d) => {
+            // Preserve plist keys verbatim — `CFBundleIdentifier`,
+            // `LSMinimumSystemVersion`, `ProgramArguments`, etc. —
+            // matching the existing convention used by macOS plist
+            // traits (see objectives/evasion/masquerade/identity/
+            // plist-identity.yaml). snake_casing them would produce
+            // `c_f_bundle_identifier` and break those traits.
+            let mut m = Map::new();
+            for (k, v) in d {
+                m.insert(k.clone(), plist_to_json(v));
+            }
+            Value::Object(m)
+        }
+        // Drop binary data, UIDs, and unknown types — kv tree is
+        // string/number-shaped and traits can't usefully match raw
+        // blobs.
+        _ => Value::Null,
+    }
+}
+
+/// Compute cross-format consistency flags from already-populated kv
+/// data. Each flag is a derived interpretation: cleave compared two
+/// fields populated from independent sources within the same binary
+/// and they disagreed. Conservative — only fires when both compared
+/// fields are present and obviously incompatible, never on absence
+/// alone.
+fn compute_consistency(
+    augment: &serde_json::Map<String, serde_json::Value>,
+) -> crate::types::binary_metrics::ConsistencyMetrics {
+    let mut out = crate::types::binary_metrics::ConsistencyMetrics::default();
+
+    // Mach-O code-sig CodeDirectory identifier vs embedded Info.plist
+    // CFBundleIdentifier. Vendors set them in lockstep; divergence
+    // typically means the binary was re-signed with a different
+    // identity but the embedded plist wasn't rewritten to match.
+    let signing_bundle = augment
+        .get("signing")
+        .and_then(|v| v.get("bundle_identifier"))
+        .and_then(|v| v.as_str());
+    let plist_bundle = augment
+        .get("macho")
+        .and_then(|v| v.get("info_plist"))
+        .and_then(|v| v.get("CFBundleIdentifier"))
+        .and_then(|v| v.as_str());
+    if let (Some(a), Some(b)) = (signing_bundle, plist_bundle) {
+        if a != b {
+            out.bundle_identifier_mismatch = true;
+        }
+    }
+
+    // PE side-by-side manifest assembly version vs VERSIONINFO
+    // ProductVersion. Tolerate trailing-zero differences.
+    let manifest_ver = augment
+        .get("pe")
+        .and_then(|v| v.get("manifest"))
+        .and_then(|v| v.get("assembly_identity"))
+        .and_then(|v| v.get("version"))
+        .and_then(|v| v.as_str());
+    let info_ver = augment
+        .get("pe")
+        .and_then(|v| v.get("version_info"))
+        .and_then(|v| v.get("product_version"))
+        .and_then(|v| v.as_str());
+    if let (Some(a), Some(b)) = (manifest_ver, info_ver) {
+        if !versions_equivalent(a, b) {
+            out.manifest_product_version_mismatch = true;
+        }
+    }
+
+    // ELF build.distro reports a distro incompatible with the
+    // observed toolchain version (e.g. Ubuntu + gcc 14.x — Ubuntu
+    // 24.04 ships gcc 13.2 max). Conservative — only fires on
+    // (distro, major) pairs known not to exist as default.
+    let distro = augment
+        .get("build")
+        .and_then(|v| v.get("distro"))
+        .and_then(|v| v.as_str());
+    let toolchain = augment
+        .get("build")
+        .and_then(|v| v.get("toolchain"))
+        .and_then(|v| v.as_str());
+    if let (Some(d), Some(t)) = (distro, toolchain) {
+        if distro_toolchain_implausible(d, t) {
+            out.distro_toolchain_implausible = true;
+        }
+    }
+
+    // DWARF: multiple producer strings = mixed toolchains.
+    let n_producers = augment
+        .get("dwarf")
+        .and_then(|v| v.get("producers"))
+        .and_then(|v| v.as_array())
+        .map_or(0, Vec::len);
+    if n_producers > 1 {
+        out.dwarf_mixed_producers = true;
+    }
+    let n_comp_dirs = augment
+        .get("dwarf")
+        .and_then(|v| v.get("comp_dirs"))
+        .and_then(|v| v.as_array())
+        .map_or(0, Vec::len);
+    if n_comp_dirs > 1 {
+        out.dwarf_mixed_comp_dirs = true;
+    }
+
+    // Mach-O fat binary with mixed signing state across slices.
+    if let Some(slices) = augment
+        .get("macho")
+        .and_then(|v| v.get("slices"))
+        .and_then(|v| v.as_array())
+    {
+        let signed: Vec<bool> = slices
+            .iter()
+            .filter_map(|s| s.get("has_code_signature").and_then(|v| v.as_bool()))
+            .collect();
+        if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
+            out.macho_slice_signing_divergence = true;
+        }
+    }
+
+    out
+}
+
+/// True when no consistency flag is set — used to skip allocating
+/// the struct on `report.metrics.consistency` when there's nothing
+/// to surface.
+fn consistency_is_default(c: &crate::types::binary_metrics::ConsistencyMetrics) -> bool {
+    !c.bundle_identifier_mismatch
+        && !c.manifest_product_version_mismatch
+        && !c.distro_toolchain_implausible
+        && !c.dwarf_mixed_producers
+        && !c.dwarf_mixed_comp_dirs
+        && !c.macho_slice_signing_divergence
+}
+
+/// Compare two dotted version strings, treating trailing zeros as
+/// equivalent (`"1.2.3"` == `"1.2.3.0"` == `"1.2.3.0.0"`).
+fn versions_equivalent(a: &str, b: &str) -> bool {
+    let parse = |s: &str| -> Vec<u64> {
+        s.split('.').filter_map(|c| c.parse().ok()).collect()
+    };
+    let mut va = parse(a);
+    let mut vb = parse(b);
+    while va.last().copied() == Some(0) {
+        va.pop();
+    }
+    while vb.last().copied() == Some(0) {
+        vb.pop();
+    }
+    va == vb
+}
+
+/// Conservative distro+toolchain implausibility check. Fires only on
+/// (distro, gcc-major) combinations known not to exist as default in
+/// any released distro version through Q2 2026. Designed for false-
+/// negative tolerance over false-positive risk — a wrong "yes" here
+/// would raise an unfair tampering alarm.
+fn distro_toolchain_implausible(distro: &str, toolchain: &str) -> bool {
+    let lower = toolchain.to_lowercase();
+    let gcc_major = lower
+        .strip_prefix("gcc ")
+        .and_then(|s| s.split('.').next())
+        .and_then(|s| s.parse::<u32>().ok());
+    let Some(major) = gcc_major else {
+        return false;
+    };
+    match distro {
+        // Ubuntu through 24.04 LTS ships gcc 13 max; gcc 14+ would be
+        // unreleased.  When 24.10/25.04 ships gcc 14, raise the bound.
+        "ubuntu" => major >= 14,
+        // Debian 12 (bookworm) ships gcc 12; trixie ships gcc 13.
+        // gcc 14+ would be from sid only and unusual in shipped
+        // binaries.
+        "debian" => major >= 14,
+        // Alpine 3.20 ships gcc 13. gcc 14+ premature.
+        "alpine" => major >= 14,
+        // RHEL/CentOS Stream 9 ships gcc 11; Stream 10 ships gcc 14.
+        // Don't flag rocky/almalinux yet — they track Stream.
+        _ => false,
+    }
 }
 
 /// Mach-O magic (plain, plain-64, fat, fat-64) — checked before
@@ -1361,6 +2319,122 @@ mod tests {
     #[test]
     fn extract_elf_comment_returns_none_for_non_elf() {
         assert!(extract_elf_comment(b"not an elf").is_none());
+    }
+
+    #[test]
+    fn versions_equivalent_basic() {
+        assert!(versions_equivalent("1.2.3", "1.2.3"));
+        assert!(versions_equivalent("1.2.3", "1.2.3.0"));
+        assert!(versions_equivalent("1.2.3.0.0", "1.2.3"));
+        assert!(!versions_equivalent("1.2.3", "1.2.4"));
+        assert!(!versions_equivalent("1.2.3", "1.3.0"));
+        assert!(!versions_equivalent("2.0.0", "1.2.3"));
+        // Tolerate single-segment versions.
+        assert!(versions_equivalent("1", "1.0.0.0"));
+    }
+
+    #[test]
+    fn distro_toolchain_implausible_known_cases() {
+        // Ubuntu has not yet shipped gcc 14+ as default (as of 2026 Q1).
+        assert!(distro_toolchain_implausible("ubuntu", "gcc 14.2.0"));
+        assert!(!distro_toolchain_implausible("ubuntu", "gcc 13.2.0"));
+        // Wolfi tracks bleeding-edge gcc and should NEVER be flagged.
+        assert!(!distro_toolchain_implausible("wolfi", "gcc 14.2.0"));
+        assert!(!distro_toolchain_implausible("wolfi", "gcc 15.0.0"));
+        // Bare clang version doesn't trigger gcc-specific check.
+        assert!(!distro_toolchain_implausible("ubuntu", "clang 17.0.0"));
+        // Unknown distro: never flag (false-positive aversion).
+        assert!(!distro_toolchain_implausible("nixos", "gcc 14.2.0"));
+    }
+
+    #[test]
+    fn consistency_bundle_identifier_mismatch() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "signing".into(),
+            json!({"bundle_identifier": "com.apple.ls"}),
+        );
+        aug.insert(
+            "macho".into(),
+            json!({"info_plist": {"CFBundleIdentifier": "com.attacker.payload"}}),
+        );
+        let c = compute_consistency(&aug);
+        assert!(c.bundle_identifier_mismatch);
+    }
+
+    #[test]
+    fn consistency_no_false_positive_when_matching() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "signing".into(),
+            json!({"bundle_identifier": "com.apple.ls"}),
+        );
+        aug.insert(
+            "macho".into(),
+            json!({"info_plist": {"CFBundleIdentifier": "com.apple.ls"}}),
+        );
+        let c = compute_consistency(&aug);
+        assert!(!c.bundle_identifier_mismatch);
+        assert!(consistency_is_default(&c));
+    }
+
+    #[test]
+    fn consistency_manifest_version_mismatch() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "pe".into(),
+            json!({
+                "manifest": {"assembly_identity": {"version": "1.2.3.4"}},
+                "version_info": {"product_version": "9.9.9.9"},
+            }),
+        );
+        let c = compute_consistency(&aug);
+        assert!(c.manifest_product_version_mismatch);
+    }
+
+    #[test]
+    fn consistency_tolerates_trailing_zero_version() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "pe".into(),
+            json!({
+                "manifest": {"assembly_identity": {"version": "1.2.3.0"}},
+                "version_info": {"product_version": "1.2.3"},
+            }),
+        );
+        let c = compute_consistency(&aug);
+        assert!(!c.manifest_product_version_mismatch);
+    }
+
+    #[test]
+    fn consistency_dwarf_mixed_producers() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "dwarf".into(),
+            json!({"producers": ["GNU C 13.2.0", "clang 17.0.0"]}),
+        );
+        let c = compute_consistency(&aug);
+        assert!(c.dwarf_mixed_producers);
+    }
+
+    #[test]
+    fn consistency_macho_slice_signing_divergence() {
+        use serde_json::json;
+        let mut aug = serde_json::Map::new();
+        aug.insert(
+            "macho".into(),
+            json!({"slices": [
+                {"arch": "x86_64", "has_code_signature": true},
+                {"arch": "arm64",  "has_code_signature": false},
+            ]}),
+        );
+        let c = compute_consistency(&aug);
+        assert!(c.macho_slice_signing_divergence);
     }
 
     /// Build a minimal ELF whose only non-shstrtab section is

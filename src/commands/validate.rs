@@ -111,7 +111,7 @@ fn collect_targets() -> Result<Vec<Target>> {
         // metadata/build/reproducible::macho-uuid trait fire as a new
         // baseline finding (previously unmatched because no UUID was
         // being extracted).
-        ("/bin/ls", 1, 9),
+        ("/bin/ls", 1, 10),
         ("/bin/cp", 1, 11),
         ("/bin/sh", 1, 9),
         ("/usr/bin/curl", 5, 13),

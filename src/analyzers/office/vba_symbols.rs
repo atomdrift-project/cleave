@@ -214,6 +214,7 @@ fn preprocess(source: &str) -> Prepared {
 // Declare extraction
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::expect_used)]
 fn declare_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -298,7 +299,7 @@ fn classify_lib(raw: &str) -> (String, bool) {
 // ---------------------------------------------------------------------------
 // CreateObject / GetObject extraction
 // ---------------------------------------------------------------------------
-
+#[allow(clippy::expect_used)]
 fn createobject_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -311,6 +312,7 @@ fn createobject_re() -> &'static Regex {
     })
 }
 
+#[allow(clippy::expect_used)]
 fn getobject_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -402,6 +404,7 @@ fn classify_arg(raw: &str) -> (String, bool) {
 // Sub / Function declaration extraction
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::expect_used)]
 fn sub_func_re() -> &'static Regex {
     static R: OnceLock<Regex> = OnceLock::new();
     R.get_or_init(|| {
@@ -634,10 +637,7 @@ fn extract_subs_and_functions(prep: &Prepared, out: &mut VbaSymbols) {
         .collect();
 
     for cap in sub_func_re().captures_iter(&prep.text) {
-        let m = match cap.get(0) {
-            Some(m) => m,
-            None => continue,
-        };
+        let Some(m) = cap.get(0) else { continue };
         let inside_declare = declare_spans
             .iter()
             .any(|(s, e)| m.start() >= *s && m.start() < *e);

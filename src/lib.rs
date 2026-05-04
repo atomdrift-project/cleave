@@ -334,9 +334,11 @@ fn extension_content_mismatch_criticality(expected: &str, actual: &str) -> types
     let expected_is_image = expected.ends_with("image");
     let actual_is_image = actual.ends_with("image");
 
-    if expected_is_image && actual_is_image {
-        types::Criticality::Notable
-    } else if expected == "Data" || actual == "TarGz" || actual == "Zip" {
+    let benign = (expected_is_image && actual_is_image)
+        || expected == "Data"
+        || actual == "TarGz"
+        || actual == "Zip";
+    if benign {
         types::Criticality::Notable
     } else {
         types::Criticality::Suspicious

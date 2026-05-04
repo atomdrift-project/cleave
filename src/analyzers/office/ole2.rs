@@ -818,12 +818,14 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
     /// Helper: build a CompObj stream payload with the given strings.
     /// `clipboard_marker` controls whether the clipboard slot is a
     /// registered ID, absent, or a length-prefixed string.
+    #[derive(Clone, Copy)]
     enum ClipboardSlot {
         RegisteredId(u32),
         AnsiString(&'static str),

@@ -196,7 +196,7 @@ fn test_diff_identical_files() {
         .args(["diff", file1.to_str().unwrap(), file2.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains("No capability changes"));
+        .stdout(predicate::str::contains("1 file unchanged"));
 }
 
 /// Test diff command with different files

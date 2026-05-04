@@ -186,7 +186,7 @@ x509-parser = "0.18"
 sha1 = "0.10"
 # Non-crypto checksum for bound-import / build-host fingerprinting —
 # u32 output fits cleanly into the metric integer model.
-crc32fast = "1.4"
+crc32fast = "1.5"
 regex = "1.12"
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns
 memchr = "2.8"
@@ -261,7 +261,7 @@ tikv-jemalloc-ctl = { version = "0.6", optional = true, features = ["stats"] }
 assert_cmd = "2.2"
 criterion = { version = "0.5", features = ["html_reports"] }
 dhat = "0.3.3"
-insta = { version = "1.40", features = ["yaml"] }
+insta = { version = "1.47", features = ["yaml"] }
 once_cell = "1.21"  # For shared test initialization
 predicates = "3.1"
 proptest = "1.11"

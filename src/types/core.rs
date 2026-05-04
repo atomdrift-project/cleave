@@ -641,8 +641,7 @@ fn flatten_kv_for_output(
                     walk(v, &child, out);
                 }
             }
-            serde_json::Value::Null => {}
-            serde_json::Value::Bool(false) => {}
+            serde_json::Value::Null | serde_json::Value::Bool(false) => {}
             serde_json::Value::String(s) if s.is_empty() => {}
             serde_json::Value::Number(n) if n.as_i64() == Some(0) => {}
             serde_json::Value::Number(n) if n.as_f64().is_some_and(|f| f == 0.0) && !n.is_i64() => {

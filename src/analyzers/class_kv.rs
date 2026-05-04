@@ -255,16 +255,14 @@ fn parse_constant_pool(data: &[u8], pos: &mut usize, count: usize) -> Option<Vec
                 *pos = pos.checked_add(2)?;
                 cp[i] = CpEntry::Other;
             }
-            CP_INTEGER | CP_FLOAT => {
-                *pos = pos.checked_add(4)?;
-                cp[i] = CpEntry::Other;
-            }
             CP_LONG | CP_DOUBLE => {
                 *pos = pos.checked_add(8)?;
                 cp[i] = CpEntry::Other;
                 i += 1; // longs/doubles take two CP slots
             }
-            CP_FIELDREF
+            CP_INTEGER
+            | CP_FLOAT
+            | CP_FIELDREF
             | CP_METHODREF
             | CP_INTERFACE_METHODREF
             | CP_NAME_AND_TYPE

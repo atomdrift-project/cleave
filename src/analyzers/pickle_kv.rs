@@ -286,7 +286,6 @@ fn opcode_name(op: u8) -> Option<&'static str> {
         b'd' => "DICT",
         b'}' => "EMPTY_DICT",
         b'e' => "APPENDS",
-        b'f' => "GET",
         b'g' => "GET",
         b'h' => "BINGET",
         b'i' => "INST",

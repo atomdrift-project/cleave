@@ -68,8 +68,10 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, JpegStructuralCounts)> {
     if data.len() < 2 || data[0] != 0xFF || data[1] != 0xD8 {
         return None;
     }
-    let mut counts = JpegStructuralCounts::default();
-    counts.soi_count = 1;
+    let mut counts = JpegStructuralCounts {
+        soi_count: 1,
+        ..Default::default()
+    };
 
     let mut out = Map::new();
     let mut exif: Map<String, Value> = Map::new();
@@ -170,14 +172,13 @@ fn handle_segment(
             }
         }
         // APP0 — JFIF (thumbnail dims) or JFXX.
-        0xE0
-            if body.starts_with(b"JFIF\0") && body.len() >= 14 => {
-                let tw = body[12];
-                let th = body[13];
-                if tw != 0 && th != 0 {
-                    out.insert("has_jfif_thumbnail".into(), json!(true));
-                }
+        0xE0 if body.starts_with(b"JFIF\0") && body.len() >= 14 => {
+            let tw = body[12];
+            let th = body[13];
+            if tw != 0 && th != 0 {
+                out.insert("has_jfif_thumbnail".into(), json!(true));
             }
+        }
         // APP1 — EXIF (Exif\0\0) or XMP.
         0xE1 => {
             if body.starts_with(b"Exif\0\0") {
@@ -190,31 +191,28 @@ fn handle_segment(
             }
         }
         // APP2 — ICC profile when prefix matches.
-        0xE2
-            if body.starts_with(b"ICC_PROFILE\0") && body.len() >= 14 + 84 => {
-                // ICC profile descriptor at offset 14+84 holds the
-                // profile-name (after fields). Simplest reliable
-                // signal: the profile description tag string. Skip
-                // detailed ICC parsing — surface the canonical "is
-                // present" boolean, which is what supply-chain swap
-                // detection actually wants.
-                out.insert("has_icc_profile".into(), json!(true));
-            }
+        0xE2 if body.starts_with(b"ICC_PROFILE\0") && body.len() >= 14 + 84 => {
+            // ICC profile descriptor at offset 14+84 holds the
+            // profile-name (after fields). Simplest reliable
+            // signal: the profile description tag string. Skip
+            // detailed ICC parsing — surface the canonical "is
+            // present" boolean, which is what supply-chain swap
+            // detection actually wants.
+            out.insert("has_icc_profile".into(), json!(true));
+        }
         // APP13 — Adobe Photoshop IRB (often carrying IPTC).
-        0xED
-            if body.starts_with(b"Photoshop 3.0\0") => {
-                out.insert("has_photoshop_irb".into(), json!(true));
-                // 8BIM blocks for IPTC live inside; surface as a
-                // bool rather than parsing the full IRB chain.
-                if body.windows(4).any(|w| w == b"8BIM") {
-                    out.insert("has_iptc".into(), json!(true));
-                }
+        0xED if body.starts_with(b"Photoshop 3.0\0") => {
+            out.insert("has_photoshop_irb".into(), json!(true));
+            // 8BIM blocks for IPTC live inside; surface as a
+            // bool rather than parsing the full IRB chain.
+            if body.windows(4).any(|w| w == b"8BIM") {
+                out.insert("has_iptc".into(), json!(true));
             }
+        }
         // APP14 — Adobe color transform (1 byte at offset 11).
-        0xEE
-            if body.starts_with(b"Adobe\0") && body.len() >= 12 => {
-                out.insert("adobe_color_transform".into(), json!(body[11]));
-            }
+        0xEE if body.starts_with(b"Adobe\0") && body.len() >= 12 => {
+            out.insert("adobe_color_transform".into(), json!(body[11]));
+        }
         _ => {}
     }
 }

@@ -620,6 +620,36 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64) -> Fi
     }
 }
 
+/// Generate automatic encoded-layer metadata for each step in the
+/// encoding chain (`metadata/lang/encoded/<encoding>`). Lets trait
+/// authors and ML pipelines key off "this layer was unwrapped from
+/// hex / base64 / xor / etc." without re-deriving from
+/// `encoding_chain` everywhere.
+fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<Finding> {
+    encoding_chain
+        .iter()
+        .map(|encoding| Finding {
+            id: format!("metadata/lang/encoded/{encoding}"),
+            kind: crate::types::FindingKind::Capability,
+            desc: format!("Code recovered from {encoding}-encoded layer"),
+            conf: 1.0,
+            crit: Criticality::Baseline,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![Evidence {
+                method: "embedded-code-detection".to_string(),
+                source: "encoded-layer".to_string(),
+                value: format!("Decoded layer at offset {:#x}", offset),
+                location: Some(format!("{:#x}", offset)),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        })
+        .collect()
+}
+
 /// Result of analyzing an embedded string
 #[derive(Debug)]
 pub enum EmbeddedAnalysisResult {
@@ -710,6 +740,15 @@ pub fn analyze_embedded_string(
                 ));
             }
         }
+
+        // Auto-generated `metadata/lang/encoded/<encoding>` traits —
+        // one per step in the encoding chain — so trait authors can
+        // target "anything reached via hex" / "anything reached via
+        // base64+gzip" without re-walking `encoding_chain` inline.
+        file_entry.findings.extend(generate_encoded_layer_traits(
+            &string_info.encoding_chain,
+            offset,
+        ));
 
         file_entry.compute_summary();
         Ok(EmbeddedAnalysisResult::EncodedLayer(Box::new(file_entry)))

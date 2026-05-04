@@ -652,8 +652,14 @@ fn parse_module_ref(rest: &str) -> Option<GoModuleRef> {
     if path.is_empty() {
         return None;
     }
-    let version = parts.get(1).map(std::string::ToString::to_string).unwrap_or_default();
-    let sum = parts.get(2).map(std::string::ToString::to_string).unwrap_or_default();
+    let version = parts
+        .get(1)
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default();
+    let sum = parts
+        .get(2)
+        .map(std::string::ToString::to_string)
+        .unwrap_or_default();
     Some(GoModuleRef {
         path,
         version,

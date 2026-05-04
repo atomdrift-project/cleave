@@ -739,6 +739,12 @@ impl ArchiveAnalyzer {
                     ..Default::default()
                 }],
             });
+            // Container-level basename + composite evaluation. The
+            // temp_dir extraction path runs the equivalent further
+            // down; the in-memory short-circuit needs the same pass
+            // or composites like `python-package-with-dll` will never
+            // see member basenames.
+            self.evaluate_container_findings(&mut report);
             return Ok(report);
         }
 
@@ -807,37 +813,44 @@ impl ArchiveAnalyzer {
             );
         }
 
-        if let Some(mapper) = &self.capability_mapper {
-            let mut nested_findings: Vec<Finding> = report
-                .files
-                .iter()
-                .flat_map(|f| f.findings.iter().cloned())
-                .collect();
-            nested_findings.sort_unstable_by(|a, b| {
-                b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf))
-            });
-            nested_findings.truncate(50_000);
-
-            let entry_names: Vec<String> = report
-                .archive_contents
-                .iter()
-                .map(|e| e.path.clone())
-                .collect();
-            if !entry_names.is_empty() {
-                let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
-                nested_findings.extend(basename_findings);
-            }
-
-            let container_findings = mapper.evaluate_container_composites(
-                &report,
-                &nested_findings,
-                &report.target.file_type,
-            );
-
-            report.findings.extend(container_findings);
-        }
+        self.evaluate_container_findings(&mut report);
 
         Ok(report)
+    }
+
+    /// Run container-level basename traits + composite rules and merge
+    /// the results into `report.findings`. Shared between the in-memory
+    /// and temp_dir analysis paths so both produce the same composites
+    /// (e.g. `python-package-with-dll`).
+    fn evaluate_container_findings(&self, report: &mut AnalysisReport) {
+        let Some(mapper) = &self.capability_mapper else {
+            return;
+        };
+        let mut nested_findings: Vec<Finding> = report
+            .files
+            .iter()
+            .flat_map(|f| f.findings.iter().cloned())
+            .collect();
+        nested_findings
+            .sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| b.conf.total_cmp(&a.conf)));
+        nested_findings.truncate(50_000);
+
+        let entry_names: Vec<String> = report
+            .archive_contents
+            .iter()
+            .map(|e| e.path.clone())
+            .collect();
+        if !entry_names.is_empty() {
+            let basename_findings = mapper.evaluate_basename_traits_for_entries(&entry_names);
+            nested_findings.extend(basename_findings);
+        }
+
+        let container_findings = mapper.evaluate_container_composites(
+            report,
+            &nested_findings,
+            &report.target.file_type,
+        );
+        report.findings.extend(container_findings);
     }
 
     /// Extract an archive from in-memory data into `dest_dir`.
@@ -947,9 +960,22 @@ fn zip_has_encrypted_entries(data: &[u8]) -> Result<bool> {
     let mut archive =
         ZipArchive::new(std::io::Cursor::new(data)).context("Failed to inspect ZIP encryption")?;
     for i in 0..archive.len() {
-        let entry = archive.by_index(i)?;
-        if entry.encrypted() {
-            return Ok(true);
+        // `by_index(i)` without a password returns
+        // `UnsupportedArchive(PASSWORD_REQUIRED)` on encrypted entries,
+        // so propagating the `?` here would misclassify encrypted
+        // archives as "not encrypted" once the caller does
+        // `.unwrap_or(false)`. Treat that specific error as a
+        // positive encryption signal; only bail on truly malformed
+        // archives.
+        match archive.by_index(i) {
+            Ok(entry) if entry.encrypted() => return Ok(true),
+            Ok(_) => continue,
+            Err(::zip::result::ZipError::UnsupportedArchive(msg))
+                if msg == ::zip::result::ZipError::PASSWORD_REQUIRED =>
+            {
+                return Ok(true);
+            }
+            Err(e) => return Err(e.into()),
         }
     }
     Ok(false)
@@ -1005,6 +1031,7 @@ mod tests {
         let yaml = r#"
 defaults:
   for: [all]
+  platforms: [unix, windows, macos]
 
 traits:
   - id: "test/archive::package-json-basename"
@@ -2537,17 +2564,6 @@ composite_rules:
                     || f.id.contains("script-package-with-windows-binary")
             })
         });
-
-        // Log findings for debugging
-        eprintln!("Python+DLL test findings:");
-        for finding in &report.findings {
-            if finding.id.contains("supply-chain")
-                || finding.id.contains("python")
-                || finding.id.contains("dll")
-            {
-                eprintln!("  - {} ({:?})", finding.id, finding.crit);
-            }
-        }
 
         assert!(
             has_supply_chain_finding,

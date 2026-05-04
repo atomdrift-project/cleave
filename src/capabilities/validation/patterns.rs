@@ -727,26 +727,26 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
             continue;
         }
 
-        let (exact, substr, regex, word, case_insensitive, is_check) = match &trait_def.r#if {
-            Condition::Text {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                ..
-            }
-            | Condition::Raw {
-                exact,
-                substr,
-                regex,
-                word,
-                case_insensitive,
-                is_check,
-                ..
-            } => (exact, substr, regex, word, case_insensitive, is_check),
-            _ => continue,
+        let (Condition::Text {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            is_check,
+            ..
+        }
+        | Condition::Raw {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            is_check,
+            ..
+        }) = &trait_def.r#if
+        else {
+            continue;
         };
         // Only convertible conditions are in scope. Symbol matches are
         // deterministic, so case folding and is_check validators don't apply.

@@ -71,7 +71,7 @@ fn write_header(out: &mut String, diff: &DiffReportV1) {
         (_, 0) => format!("{total_files} files unchanged"),
         (t, n) if n == t && n == 1 => "1 file changed".to_string(),
         (t, n) if n == t => format!("{n} files changed"),
-        (_, n) if n == 1 => format!("1 of {total_files} files changed"),
+        (_, 1) => format!("1 of {total_files} files changed"),
         (t, n) => format!("{n} of {t} files changed"),
     };
 
@@ -1151,10 +1151,12 @@ mod tests {
                 ..Default::default()
             },
         };
-        let files = [mk("low.py", Criticality::Notable, 0.9),
+        let files = [
+            mk("low.py", Criticality::Notable, 0.9),
             mk("med.py", Criticality::Suspicious, 0.1),
             mk("high.py", Criticality::Hostile, 0.05),
-            mk("susp_high_roc.py", Criticality::Suspicious, 0.5)];
+            mk("susp_high_roc.py", Criticality::Suspicious, 0.5),
+        ];
         let mut refs: Vec<&FileDiffEntry> = files.iter().collect();
         sort_in_place(&mut refs);
         let order: Vec<&str> = refs.iter().map(|f| f.path.as_str()).collect();

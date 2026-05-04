@@ -101,9 +101,8 @@ pub(crate) fn extract(data: &[u8]) -> Option<DwarfMetadata> {
     let mut units = debug_info.units();
     while let Ok(Some(header)) = units.next() {
         out.cu_count = out.cu_count.saturating_add(1);
-        let abbrevs = match header.abbreviations(&debug_abbrev) {
-            Ok(a) => a,
-            Err(_) => continue,
+        let Ok(abbrevs) = header.abbreviations(&debug_abbrev) else {
+            continue;
         };
         let mut entries = header.entries(&abbrevs);
         // The first DIE in each unit is the DW_TAG_compile_unit.
@@ -180,7 +179,9 @@ fn attr_string<R: Reader>(
     debug_line_str: &DebugLineStr<R>,
 ) -> Option<String> {
     match attr.value() {
-        gimli::AttributeValue::String(s) => s.to_string_lossy().ok().map(std::borrow::Cow::into_owned),
+        gimli::AttributeValue::String(s) => {
+            s.to_string_lossy().ok().map(std::borrow::Cow::into_owned)
+        }
         gimli::AttributeValue::DebugStrRef(off) => debug_str
             .get_str(off)
             .ok()
@@ -201,8 +202,11 @@ fn attr_string<R: Reader>(
 /// Unknown values fall through to the raw `DW_LANG_<n>` form.
 fn language_name(lang: DwLang) -> &'static str {
     match lang {
-        gimli::DW_LANG_C89 | gimli::DW_LANG_C99 | gimli::DW_LANG_C11 | gimli::DW_LANG_C17 => "c",
-        gimli::DW_LANG_C => "c",
+        gimli::DW_LANG_C
+        | gimli::DW_LANG_C89
+        | gimli::DW_LANG_C99
+        | gimli::DW_LANG_C11
+        | gimli::DW_LANG_C17 => "c",
         gimli::DW_LANG_C_plus_plus
         | gimli::DW_LANG_C_plus_plus_03
         | gimli::DW_LANG_C_plus_plus_11

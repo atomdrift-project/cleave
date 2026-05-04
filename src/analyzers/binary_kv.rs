@@ -286,9 +286,8 @@ fn build_section(report: &AnalysisReport) -> Map<String, Value> {
 
 fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
     let mut out = Map::new();
-    let metrics = match report.metrics.as_ref() {
-        Some(m) => m,
-        None => return out,
+    let Some(metrics) = report.metrics.as_ref() else {
+        return out;
     };
 
     // Mirror cross-format signing bools from metrics for ML
@@ -380,9 +379,8 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
 
 fn debug_section(report: &AnalysisReport) -> Map<String, Value> {
     let mut out = Map::new();
-    let metrics = match report.metrics.as_ref() {
-        Some(m) => m,
-        None => return out,
+    let Some(metrics) = report.metrics.as_ref() else {
+        return out;
     };
 
     if let Some(pe) = metrics.pe.as_ref() {

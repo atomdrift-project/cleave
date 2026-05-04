@@ -1841,7 +1841,10 @@ fn compute_consistency_with_metrics(
     {
         let signed: Vec<bool> = slices
             .iter()
-            .filter_map(|s| s.get("has_code_signature").and_then(serde_json::Value::as_bool))
+            .filter_map(|s| {
+                s.get("has_code_signature")
+                    .and_then(serde_json::Value::as_bool)
+            })
             .collect();
         if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
             out.macho_slice_signing_divergence = true;
@@ -1893,20 +1896,12 @@ fn distro_toolchain_implausible(distro: &str, toolchain: &str) -> bool {
     let Some(major) = gcc_major else {
         return false;
     };
-    match distro {
-        // Ubuntu through 24.04 LTS ships gcc 13 max; gcc 14+ would be
-        // unreleased.  When 24.10/25.04 ships gcc 14, raise the bound.
-        "ubuntu" => major >= 14,
-        // Debian 12 (bookworm) ships gcc 12; trixie ships gcc 13.
-        // gcc 14+ would be from sid only and unusual in shipped
-        // binaries.
-        "debian" => major >= 14,
-        // Alpine 3.20 ships gcc 13. gcc 14+ premature.
-        "alpine" => major >= 14,
-        // RHEL/CentOS Stream 9 ships gcc 11; Stream 10 ships gcc 14.
-        // Don't flag rocky/almalinux yet — they track Stream.
-        _ => false,
-    }
+    // Ubuntu through 24.04 LTS ships gcc 13 max; Debian bookworm/trixie
+    // tops out at gcc 13; Alpine 3.20 ships gcc 13. Anything claiming
+    // gcc 14+ from these distros is currently anachronistic. RHEL /
+    // CentOS Stream 9 ships gcc 11 (Stream 10 ships gcc 14, so left
+    // out); rocky/almalinux track Stream and aren't flagged either.
+    matches!(distro, "ubuntu" | "debian" | "alpine") && major >= 14
 }
 
 /// Mach-O magic (plain, plain-64, fat, fat-64) — checked before

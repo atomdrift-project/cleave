@@ -333,9 +333,10 @@ impl OfficeAnalyzer {
                         _ => {}
                     }
                     if (lib == "com" || lib == "com-getobject")
-                        && imp.symbol != vba_symbols::NON_LITERAL_SENTINEL {
-                            distinct_progids.insert(imp.symbol.clone());
-                        }
+                        && imp.symbol != vba_symbols::NON_LITERAL_SENTINEL
+                    {
+                        distinct_progids.insert(imp.symbol.clone());
+                    }
                 }
             }
 
@@ -1479,6 +1480,7 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 

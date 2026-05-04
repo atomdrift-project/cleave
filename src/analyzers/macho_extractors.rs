@@ -281,6 +281,7 @@ pub(crate) fn extract(data: &[u8]) -> Option<MachoLoadCommands> {
     Some(out)
 }
 
+#[derive(Clone, Copy)]
 struct HeaderInfo {
     cmds_offset: usize,
     ncmds: usize,
@@ -369,28 +370,25 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
         let body = &data[cursor..cursor + cmdsize];
 
         match cmd {
-            LC_UUID
-                if body.len() >= 24 => {
-                    let uuid_bytes = &body[8..24];
-                    out.uuid = Some(format_uuid(uuid_bytes));
-                }
+            LC_UUID if body.len() >= 24 => {
+                let uuid_bytes = &body[8..24];
+                out.uuid = Some(format_uuid(uuid_bytes));
+            }
             LC_BUILD_VERSION => {
                 if let Some(bv) = parse_build_version(body) {
                     out.build_version = Some(bv);
                 }
             }
-            LC_SOURCE_VERSION
-                if body.len() >= 16 => {
-                    let raw = u64::from_le_bytes(body[8..16].try_into().ok()?);
-                    out.source_version = Some(decode_source_version(raw));
+            LC_SOURCE_VERSION if body.len() >= 16 => {
+                let raw = u64::from_le_bytes(body[8..16].try_into().ok()?);
+                out.source_version = Some(decode_source_version(raw));
+            }
+            LC_RPATH if body.len() >= 12 => {
+                let off = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
+                if let Some(s) = read_lc_string(body, off) {
+                    out.rpath.push(s);
                 }
-            LC_RPATH
-                if body.len() >= 12 => {
-                    let off = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-                    if let Some(s) = read_lc_string(body, off) {
-                        out.rpath.push(s);
-                    }
-                }
+            }
             LC_LOAD_DYLIB | LC_ID_DYLIB | LC_LOAD_WEAK_DYLIB | LC_LAZY_LOAD_DYLIB
             | LC_REEXPORT_DYLIB | LC_LOAD_UPWARD_DYLIB => {
                 if let Some(d) = parse_dylib(body, cmd) {
@@ -401,36 +399,34 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
                     }
                 }
             }
-            LC_CODE_SIGNATURE
-                if body.len() >= 16 => {
-                    let off = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                    let sz = u32::from_le_bytes(body[12..16].try_into().ok()?);
-                    if sz > 0 {
-                        out.code_signature = Some((off, sz));
-                    }
+            LC_CODE_SIGNATURE if body.len() >= 16 => {
+                let off = u32::from_le_bytes(body[8..12].try_into().ok()?);
+                let sz = u32::from_le_bytes(body[12..16].try_into().ok()?);
+                if sz > 0 {
+                    out.code_signature = Some((off, sz));
                 }
-            LC_LINKER_OPTION
-                if body.len() >= 12 => {
-                    let count = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-                    let mut p = 12;
-                    for _ in 0..count.min(64) {
-                        if p >= body.len() {
-                            break;
-                        }
-                        let nul = body[p..]
-                            .iter()
-                            .position(|&b| b == 0)
-                            .map(|n| p + n)
-                            .unwrap_or(body.len());
-                        if nul > p {
-                            let s = String::from_utf8_lossy(&body[p..nul]).into_owned();
-                            if !s.is_empty() {
-                                out.linker_options.push(s);
-                            }
-                        }
-                        p = nul + 1;
+            }
+            LC_LINKER_OPTION if body.len() >= 12 => {
+                let count = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
+                let mut p = 12;
+                for _ in 0..count.min(64) {
+                    if p >= body.len() {
+                        break;
                     }
+                    let nul = body[p..]
+                        .iter()
+                        .position(|&b| b == 0)
+                        .map(|n| p + n)
+                        .unwrap_or(body.len());
+                    if nul > p {
+                        let s = String::from_utf8_lossy(&body[p..nul]).into_owned();
+                        if !s.is_empty() {
+                            out.linker_options.push(s);
+                        }
+                    }
+                    p = nul + 1;
                 }
+            }
             _ => {}
         }
         cursor += cmdsize;
@@ -513,12 +509,13 @@ fn parse_dylib(body: &[u8], cmd: u32) -> Option<MachoDylib> {
 
 fn dylib_kind(cmd: u32) -> &'static str {
     match cmd {
-        LC_LOAD_DYLIB => "load",
         LC_LOAD_WEAK_DYLIB => "weak",
         LC_LAZY_LOAD_DYLIB => "lazy",
         LC_REEXPORT_DYLIB => "reexport",
         LC_LOAD_UPWARD_DYLIB => "upward",
         LC_ID_DYLIB => "id",
+        // LC_LOAD_DYLIB and any unknown future LC_*_DYLIB variant
+        // both default to the standard "load" attachment kind.
         _ => "load",
     }
 }

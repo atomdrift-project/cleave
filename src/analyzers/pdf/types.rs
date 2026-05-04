@@ -17,9 +17,6 @@ pub(crate) struct PdfDocument {
     /// Recovered objects keyed by `<id> <gen>`. Each carries its
     /// top-level dictionary keys and (if present) stream metadata.
     pub objects: Vec<PdfObject>,
-    /// Trailer dict — the most recent one wins when multiple `%%EOF`s
-    /// are present.
-    pub trailer: Option<PdfTrailer>,
     /// Number of `%%EOF` markers; > 1 means incremental updates.
     pub eof_count: u32,
     /// File-level structural flags surfaced for kv/metrics traits.

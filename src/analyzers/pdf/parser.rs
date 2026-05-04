@@ -59,20 +59,29 @@ const MAX_DECODED_BYTES: usize = 1 << 20;
 /// "not a PDF" cleanly.
 #[must_use]
 pub(crate) fn parse(data: &[u8]) -> PdfDocument {
-    let mut doc = PdfDocument::default();
-    doc.headers = scan_headers(data);
-    if doc.headers.is_empty() {
-        return doc;
+    let headers = scan_headers(data);
+    if headers.is_empty() {
+        return PdfDocument {
+            headers,
+            ..Default::default()
+        };
     }
-
-    doc.eof_count = scan_eof_count(data);
-    doc.objects = scan_objects(data);
-    doc.trailer = scan_trailer(data);
-    doc.structural = compute_structural(data, &doc.objects, &doc.trailer);
-    doc.actions = collect_actions(&doc.objects, &doc.trailer);
-    doc.embedded_files = collect_embedded_files(&doc.objects);
-    doc.info = collect_info_dict(&doc.objects, &doc.trailer);
-    doc
+    let objects = scan_objects(data);
+    let trailer = scan_trailer(data);
+    let structural = compute_structural(data, &objects, &trailer);
+    let actions = collect_actions(&objects, &trailer);
+    let embedded_files = collect_embedded_files(&objects);
+    let info = collect_info_dict(&objects, &trailer);
+    let eof_count = scan_eof_count(data);
+    PdfDocument {
+        headers,
+        eof_count,
+        objects,
+        structural,
+        actions,
+        embedded_files,
+        info,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -136,12 +145,9 @@ fn scan_objects(data: &[u8]) -> Vec<PdfObject> {
         // Parse `<id> <gen> obj` backwards from obj_pos. The id and
         // gen are the two whitespace-separated decimals immediately
         // preceding `obj`. We back up past whitespace and digits.
-        let id = match parse_object_header(&data[..obj_pos]) {
-            Some(t) => t,
-            None => {
-                start = obj_pos + 3;
-                continue;
-            }
+        let Some(id) = parse_object_header(&data[..obj_pos]) else {
+            start = obj_pos + 3;
+            continue;
         };
         // Body runs from after `obj` to next `endobj`.
         let body_start = obj_pos + 3;
@@ -1099,9 +1105,14 @@ trailer\n<< /Size 4 /Root 1 0 R /Info 3 0 R >>\nstartxref\n0\n%%EOF\n";
         assert_eq!(doc.headers[0].version, "1.4");
         assert_eq!(doc.eof_count, 1);
         assert_eq!(doc.objects.len(), 3);
-        assert!(doc.trailer.is_some());
-        assert_eq!(doc.info.get("Author").map(std::string::String::as_str), Some("John Doe"));
-        assert_eq!(doc.info.get("Title").map(std::string::String::as_str), Some("Test"));
+        assert_eq!(
+            doc.info.get("Author").map(std::string::String::as_str),
+            Some("John Doe")
+        );
+        assert_eq!(
+            doc.info.get("Title").map(std::string::String::as_str),
+            Some("Test")
+        );
         // OpenAction with /S /JavaScript should fire as a JS action.
         assert!(doc
             .actions

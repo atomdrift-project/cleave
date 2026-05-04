@@ -211,11 +211,16 @@ fn leaf_key(v: &Value) -> String {
 /// indexed paths, preserving v1 behavior for arrays without obvious keys.
 fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
     const CANDIDATES: &[&str] = &["name", "id", "lib", "path", "key", "symbol"];
-    CANDIDATES.iter().find(|&cand| arr.iter().all(|v| {
-            v.as_object()
-                .and_then(|o| o.get(*cand))
-                .is_some_and(is_leaf)
-        })).map(|v| v as _)
+    CANDIDATES
+        .iter()
+        .find(|&cand| {
+            arr.iter().all(|v| {
+                v.as_object()
+                    .and_then(|o| o.get(*cand))
+                    .is_some_and(is_leaf)
+            })
+        })
+        .map(|v| v as _)
 }
 
 // =============================================================================

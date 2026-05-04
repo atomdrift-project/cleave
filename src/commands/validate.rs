@@ -132,20 +132,17 @@ fn collect_targets() -> Result<Vec<Target>> {
 
 /// Every direct file in `testdata/hostile/` must have a hardcoded threshold.
 fn collect_hostile_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
-    const MIN_HOSTILE_FINDINGS: usize = 1;
-    const MIN_SUSPICIOUS_FINDINGS: usize = 2;
-
-    for (name, min_score) in HOSTILE_MIN_SCORES {
+    for expected in HOSTILE_EXPECTATIONS {
         out.push(Target::Hostile {
-            path: dir.join(name),
-            min_score: *min_score,
-            min_hostile: MIN_HOSTILE_FINDINGS,
-            min_suspicious: MIN_SUSPICIOUS_FINDINGS,
+            path: dir.join(expected.name),
+            min_score: expected.min_score,
+            min_hostile: expected.min_hostile,
+            min_suspicious: expected.min_suspicious,
         });
     }
     validate_fixture_table(
         dir,
-        HOSTILE_MIN_SCORES.iter().map(|(name, _)| *name),
+        HOSTILE_EXPECTATIONS.iter().map(|expected| expected.name),
         "hostile",
     )
 }
@@ -367,7 +364,7 @@ fn judge_benign(path: &Path, cap: u32, report: &AnalysisReport) -> bool {
     }
     for (file_path, finding) in misleading {
         eprintln!(
-            "❌ {file_path}: intent/campaign trait on benign fixture: {} ({:?})",
+            "❌ {file_path}: suspicious/hostile intent or campaign trait on benign fixture: {} ({:?})",
             finding.id, finding.crit
         );
     }
@@ -389,31 +386,106 @@ fn misleading_benign_findings(
             file.findings
                 .iter()
                 .filter(|finding| {
-                    finding.id.starts_with("objectives/") || finding.id.starts_with("well-known/")
+                    matches!(finding.crit, Criticality::Hostile | Criticality::Suspicious)
+                        && (finding.id.starts_with("objectives/")
+                            || finding.id.starts_with("well-known/"))
                 })
                 .map(move |finding| (file.path.as_str(), finding))
         })
         .collect()
 }
 
-/// Per-file minimum score for direct files in `testdata/hostile/`.
+struct HostileExpectation {
+    name: &'static str,
+    min_score: u32,
+    min_hostile: usize,
+    min_suspicious: usize,
+}
+
+/// Per-file minimums for direct files in `testdata/hostile/`.
 ///
-/// Finding-count floors are applied uniformly in [`collect_hostile_fixtures`]:
-/// each hostile fixture must produce at least one Hostile and two Suspicious
-/// findings. Scores are the current observed root-file score floors for these
-/// stable fixtures, hardcoded so drift is intentional and reviewable.
-const HOSTILE_MIN_SCORES: &[(&str, u32)] = &[
-    ("LInux_Perl_ClickFix.pl.xz", 122),
-    ("Spisok_na_Zakupivlyu_INIT.xlsx.lnk.xz", 156),
-    ("donutloader.bat.xz", 336),
-    ("dropper.sh.xz", 39),
-    ("index.applescript.xz", 554),
-    ("memdump.py.xz", 73),
-    ("pondrat.xz", 106),
-    ("rand-user-agent.js.xz", 150),
-    ("reverse-shell.cpp.xz", 121),
-    ("shady.php.xz", 1),
-    ("terminal.go.xz", 230),
+/// Scores are the current observed root-file score floors for these stable
+/// fixtures. Finding-count floors are also explicit per fixture so samples that
+/// need a higher bar, such as the fake meeting-app dropper, stay reviewable.
+const HOSTILE_EXPECTATIONS: &[HostileExpectation] = &[
+    HostileExpectation {
+        name: "LInux_Perl_ClickFix.pl.xz",
+        min_score: 122,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "Spisok_na_Zakupivlyu_INIT.xlsx.lnk.xz",
+        min_score: 156,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "donutloader.bat.xz",
+        min_score: 415,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "dropper.sh.xz",
+        min_score: 120,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "fake-zoom.macho.xz",
+        min_score: 305,
+        min_hostile: 2,
+        min_suspicious: 4,
+    },
+    HostileExpectation {
+        name: "index.applescript.xz",
+        min_score: 554,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "memdump.py.xz",
+        min_score: 153,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "package.json.xz",
+        min_score: 193,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "pondrat.elf.xz",
+        min_score: 296,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "rand-user-agent.js.xz",
+        min_score: 309,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "reverse-shell.cpp.xz",
+        min_score: 121,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "shady.php.xz",
+        min_score: 116,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
+    HostileExpectation {
+        name: "terminal.go.xz",
+        min_score: 230,
+        min_hostile: 2,
+        min_suspicious: 2,
+    },
 ];
 
 /// Per-file score caps for direct files in `testdata/benign/`.
@@ -425,9 +497,11 @@ const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
     ("find_git_conflicts.sh.xz", 3),
     ("liblzma.so.5.4.5.xz", 5),
     ("ls.macOS.xz", 9),
-    ("rand-user-agent.js.xz", 39),
-    ("run.bat.xz", 19),
+    ("package.json.xz", 5),
+    ("rand-user-agent.js.xz", 3),
+    ("run.bat.xz", 2),
     ("test_cli.py.xz", 3),
+    ("wp-signup.php.xz", 3),
 ];
 
 /// Default per-file score cap for `testdata/does-nothing/` samples.
@@ -440,8 +514,8 @@ const DOES_NOTHING_DEFAULT_CAP: u32 = 1;
 /// the score past this ceiling. Update when trait improvements legitimately
 /// reduce a score, or when a new sample is added to the corpus.
 const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
-    ("artifacts/sample.apk", 5),
-    ("artifacts/sample.apk!!lib/x86/libsample.so", 5),
+    ("artifacts/sample.apk", 7),
+    ("artifacts/sample.apk!!lib/x86/libsample.so", 7),
     ("artifacts/sample.ipa", 8),
     ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 8),
     ("artifacts/sample.mk", 1),
@@ -452,8 +526,8 @@ const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
         "out/does-nothing-darwin-arm64.xz!!does-nothing-darwin-arm64",
         8,
     ),
-    ("out/does-nothing-linux-386.xz", 5),
-    ("out/does-nothing-linux-386.xz!!does-nothing-linux-386", 5),
+    ("out/does-nothing-linux-386.xz", 7),
+    ("out/does-nothing-linux-386.xz!!does-nothing-linux-386", 7),
     ("out/does-nothing-openbsd-arm64.xz", 7),
     (
         "out/does-nothing-openbsd-arm64.xz!!does-nothing-openbsd-arm64",

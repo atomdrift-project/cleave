@@ -211,6 +211,7 @@ pub fn run(
         FileType::Text => composite_rules::FileType::Text,
         FileType::Data => composite_rules::FileType::Data,
         FileType::PackageJson => composite_rules::FileType::PackageJson,
+        FileType::PackageLockJson => composite_rules::FileType::PackageLockJson,
         FileType::ChromeManifest => composite_rules::FileType::ChromeManifest,
         FileType::VsixManifest => composite_rules::FileType::VsixManifest,
         FileType::SystemdService => composite_rules::FileType::SystemdService,

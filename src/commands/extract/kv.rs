@@ -72,12 +72,14 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
         (StructuredFormat::Json, probe_value)
     } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content) {
         (StructuredFormat::Json, binary_value)
+    } else if let Some(source_value) = extract_source_kv_via_analyzer(path, &content) {
+        (StructuredFormat::Json, source_value)
     } else {
         let Some((detected, parsed)) = parse_structured_content(path, &content) else {
             let format = detect_format(path, &content);
             if format == StructuredFormat::Unknown {
                 anyhow::bail!(
-                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, PDF, or PE/ELF/Mach-O binary): {}",
+                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, PDF, PE/ELF/Mach-O binary, or tree-sitter–supported source code): {}",
                     target
                 );
             }
@@ -317,6 +319,34 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     // layered onto the metrics-derived base).
     binary_kv::attach_to_report(&mut report);
     analyzers::binary_extractors::augment_report(&mut report, content);
+    report.kv_tree.as_deref().cloned()
+}
+
+/// Run the unified source-code analyzer (any tree-sitter–supported
+/// language) and return the synthesized kv tree from `report.kv_tree`,
+/// which the analyzer populates via `source_kv::attach_to_report`.
+/// Returns `None` for non-source input or when the analyzer fails.
+fn extract_source_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
+    let detected = analyzers::detect_file_type_from_data(path, content);
+    // Skip file types already handled upstream — binaries, archives,
+    // structured documents, and the unknown bucket.  Anything else
+    // routes through `UnifiedSourceAnalyzer` (or a generic fallback)
+    // which attaches `source.*` and `metrics.*` to `report.kv_tree`.
+    if matches!(
+        detected,
+        FileType::Pe
+            | FileType::Elf
+            | FileType::MachO
+            | FileType::Unknown
+            | FileType::Pdf
+            | FileType::Rtf
+            | FileType::OleDoc
+            | FileType::Ooxml
+    ) {
+        return None;
+    }
+    let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
+    let report = analyzer.analyze(path).ok()?;
     report.kv_tree.as_deref().cloned()
 }
 

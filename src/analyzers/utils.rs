@@ -33,7 +33,15 @@ pub(crate) fn analyze_embedded_as_child(
     let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
     std::fs::write(temp.path(), bytes).ok()?;
 
-    let child_name = format!("embedded:{}@{:#x}", display_kind, offset);
+    let metadata_name_from_bytes = if kind_str == "pe" {
+        embedded_pe_metadata_name_from_bytes(bytes)
+    } else {
+        None
+    };
+    let child_name = metadata_name_from_bytes
+        .as_deref()
+        .map(|name| format!("embedded:{}:{}@{:#x}", display_kind, name, offset))
+        .unwrap_or_else(|| format!("embedded:{}@{:#x}", display_kind, offset));
     let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
     let child_path_buf = PathBuf::from(&child_path);
 
@@ -70,11 +78,13 @@ pub(crate) fn analyze_embedded_as_child(
 
     let temp_path = temp.path().display().to_string();
     let (mut fa, nested, _) = report.into_file_analysis(0);
-    let metadata_name = if kind_str == "pe" {
-        embedded_pe_metadata_name(&fa)
-    } else {
-        None
-    };
+    let metadata_name = metadata_name_from_bytes.or_else(|| {
+        if kind_str == "pe" {
+            embedded_pe_metadata_name(&fa)
+        } else {
+            None
+        }
+    });
     let child_path = metadata_name
         .as_deref()
         .map(|name| {
@@ -123,12 +133,18 @@ fn embedded_pe_metadata_name(file: &crate::types::FileAnalysis) -> Option<String
     .find_map(sanitize_child_name)
 }
 
+fn embedded_pe_metadata_name_from_bytes(bytes: &[u8]) -> Option<String> {
+    let version_info = crate::analyzers::pe_extractors::extract_version_info(bytes);
+    ["OriginalFilename", "ProductName", "FileDescription"]
+        .iter()
+        .filter_map(|key| version_info.get(*key).map(String::as_str))
+        .find_map(sanitize_child_name)
+}
+
 fn sanitize_child_name(value: &str) -> Option<String> {
     let mut out = String::with_capacity(value.len().min(64));
     for ch in value.chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch);
-        } else if matches!(ch, '.' | '_' | '-') {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '-') {
             out.push(ch);
         } else if ch.is_whitespace() && !out.ends_with('_') {
             out.push('_');

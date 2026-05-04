@@ -55,6 +55,7 @@ pub mod env_mapper;
 pub mod malecule_bridge;
 pub mod output;
 pub mod path_mapper;
+pub mod theme;
 pub mod third_party_config;
 pub mod third_party_yara;
 pub mod types;
@@ -1541,6 +1542,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             analyzer.analyze_input(&input)
         }
         FileType::PackageJson => analyzers::package_json::PackageJsonAnalyzer::new()
+            .with_capability_mapper_arc(mapper_arc.clone())
+            .analyze_input(&input),
+        FileType::PackageLockJson => analyzers::generic::GenericAnalyzer::new(file_type)
             .with_capability_mapper_arc(mapper_arc.clone())
             .analyze_input(&input),
         FileType::VsixManifest => analyzers::vsix_manifest::VsixManifestAnalyzer::new()

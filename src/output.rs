@@ -123,13 +123,14 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
 /// Get risk indicator based on criticality
 #[allow(dead_code)] // Used by binary target
 fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
+    use crate::theme;
     match crit {
         Criticality::Filtered => "   ".normal(),
         Criticality::Component => "  ·".dimmed(),
-        Criticality::Baseline => "  •".bright_green(),
-        Criticality::Notable => "  •".bright_blue(),
-        Criticality::Suspicious => " ••".bright_yellow(),
-        Criticality::Hostile => "•••".bright_red(),
+        Criticality::Baseline => theme::paint_baseline("  •"),
+        Criticality::Notable => theme::paint_notable("  •"),
+        Criticality::Suspicious => theme::paint_suspicious(" ••"),
+        Criticality::Hostile => theme::paint_hostile("•••"),
     }
 }
 
@@ -790,30 +791,34 @@ fn section_pill(ns: &Namespace) -> colored::ColoredString {
     format!(" {name} ").bold().white().on_truecolor(r, g, b)
 }
 
-/// Full-width cyan ━ rule used as a file-boundary marker.
+/// Full-width slate-blue rule used as a file-boundary marker. Routed
+/// through `theme::paint_rule` and `theme::RULE_CHAR` so analyze and
+/// diff share the exact same separator.
 #[allow(dead_code)] // Used by binary target
 fn file_rule(width: usize) -> colored::ColoredString {
-    let rule: String = "━".repeat(width);
-    rule.cyan()
+    let rule: String = crate::theme::RULE_CHAR.to_string().repeat(width);
+    crate::theme::paint_rule(rule)
 }
 
 /// Bullet indicator based on criticality: • notable, •• suspicious, ••• hostile
 #[allow(dead_code)] // Used by binary target
 fn bullet_for_crit(crit: &Criticality) -> colored::ColoredString {
+    use crate::theme;
     match crit {
-        Criticality::Hostile => "•••".bright_red(),
-        Criticality::Suspicious => " ••".bright_yellow(),
-        _ => "  •".bright_green(),
+        Criticality::Hostile => theme::paint_hostile("•••"),
+        Criticality::Suspicious => theme::paint_suspicious(" ••"),
+        _ => theme::paint_baseline("  •"),
     }
 }
 
-/// Colorize text based on criticality (matches traffic light emoji colors)
+/// Colorize text based on criticality.
 #[allow(dead_code)] // Used by binary target
 fn colorize_by_crit(text: &str, crit: &Criticality) -> colored::ColoredString {
+    use crate::theme;
     match crit {
-        Criticality::Hostile => text.bright_red(),
-        Criticality::Suspicious => text.bright_yellow(),
-        _ => text.bright_green(),
+        Criticality::Hostile => theme::paint_hostile(text),
+        Criticality::Suspicious => theme::paint_suspicious(text),
+        _ => theme::paint_baseline(text),
     }
 }
 

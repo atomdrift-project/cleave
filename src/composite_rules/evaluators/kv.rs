@@ -246,6 +246,7 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
 
         // Known JSON manifests
         if name_lower == "package.json"
+            || name_lower == "package-lock.json"
             || name_lower == "manifest.json"
             || name_lower == "composer.json"
         {
@@ -396,7 +397,11 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
         match c {
             '.' => {
                 if !current_key.is_empty() {
-                    segments.push(PathSegment::Key(current_key.clone()));
+                    if current_key == "*" {
+                        segments.push(PathSegment::Wildcard);
+                    } else {
+                        segments.push(PathSegment::Key(current_key.clone()));
+                    }
                     current_key.clear();
                 }
             }
@@ -433,7 +438,11 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     }
 
     if !current_key.is_empty() {
-        segments.push(PathSegment::Key(current_key));
+        if current_key == "*" {
+            segments.push(PathSegment::Wildcard);
+        } else {
+            segments.push(PathSegment::Key(current_key));
+        }
     }
 
     if segments.is_empty() {
@@ -473,9 +482,15 @@ pub(crate) fn navigate<'a>(value: &'a Value, segments: &[PathSegment]) -> Vec<&'
             Vec::new()
         }
         PathSegment::Wildcard => {
+            let mut results = Vec::new();
             if let Value::Array(arr) = value {
-                let mut results = Vec::new();
                 for item in arr {
+                    results.extend(navigate(item, remaining));
+                }
+                return results;
+            }
+            if let Value::Object(obj) = value {
+                for item in obj.values() {
                     results.extend(navigate(item, remaining));
                 }
                 return results;
@@ -1313,6 +1328,7 @@ fn structured_format_from_file_type(
 ) -> StructuredFormat {
     match file_type {
         crate::composite_rules::FileType::PackageJson
+        | crate::composite_rules::FileType::PackageLockJson
         | crate::composite_rules::FileType::ChromeManifest => StructuredFormat::Json,
         crate::composite_rules::FileType::CargoToml
         | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,
@@ -1731,6 +1747,17 @@ mod tests {
     }
 
     #[test]
+    fn test_path_object_wildcard() {
+        assert_eq!(
+            parse_path("dependencies.*").unwrap(),
+            vec![
+                PathSegment::Key("dependencies".to_string()),
+                PathSegment::Wildcard
+            ]
+        );
+    }
+
+    #[test]
     fn test_path_deep_nesting() {
         assert_eq!(
             parse_path("a.b.c.d.e").unwrap(),
@@ -1813,6 +1840,20 @@ mod tests {
         let segments = parse_path("items[*].name").unwrap();
         let values = navigate(&json, &segments);
         assert_eq!(values, vec![&json!("a"), &json!("b"), &json!("c")]);
+    }
+
+    #[test]
+    fn test_navigate_object_wildcard_expands() {
+        let json = json!({
+            "dependencies": {
+                "left-pad": "1.3.0",
+                "tiny-lib": "https://example.invalid/tiny-lib.tgz"
+            }
+        });
+        let segments = parse_path("dependencies.*").unwrap();
+        let values = navigate(&json, &segments);
+        assert!(values.contains(&&json!("1.3.0")));
+        assert!(values.contains(&&json!("https://example.invalid/tiny-lib.tgz")));
     }
 
     #[test]
@@ -2280,6 +2321,10 @@ mod tests {
         );
         assert_eq!(
             detect_format(Path::new("package.json"), b""),
+            StructuredFormat::Json
+        );
+        assert_eq!(
+            detect_format(Path::new("package-lock.json"), b""),
             StructuredFormat::Json
         );
         assert_eq!(

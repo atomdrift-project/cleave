@@ -17,6 +17,7 @@ use super::{
     count_badges, crit_dots, crit_rank, file_max_roc, format_value, is_significant_file,
     max_added_crit, paint_crit, paint_roc, paint_sign, short_id, truncate, WIDTH,
 };
+use crate::theme::{pill_scope, ScopePill};
 
 pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
     let mut files: Vec<&FileDiffEntry> = diff
@@ -61,7 +62,11 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
             file.path.bold(),
         );
     }
-    let _ = writeln!(out, "{}", "─".repeat(WIDTH).dimmed());
+    let _ = writeln!(
+        out,
+        "{}",
+        crate::theme::paint_rule(crate::theme::RULE_CHAR.to_string().repeat(WIDTH))
+    );
 
     if let Some(t) = file.scopes.traits.as_ref().filter(|s| s.has_changes()) {
         write_traits(out, t);
@@ -83,30 +88,26 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     }
 }
 
-/// `traits  [ROC: 98.9%]  +10 -1` heading: scope name in bold,
-/// per-scope ROC tinted by intensity, then add/remove/change badges.
-/// Caller has already gated on `has_changes`, so at least one count
-/// will be present.
-fn scope_heading<T>(scope_name: &str, scope: &ScopeDiff<T>) -> String {
+/// ` traits   [ROC: 98.9%]  +10 -1` heading: scope name as a colored
+/// pill (cool hue family, mirrors analyze's namespace pills), per-scope
+/// ROC tinted by intensity, then add/remove/change badges. Caller has
+/// already gated on `has_changes`, so at least one count will be present.
+fn scope_heading<T>(scope_name: &str, scope_kind: ScopePill, scope: &ScopeDiff<T>) -> String {
     let view: crate::types::ScopeView<'_> = Some(scope).into();
     let bits = count_badges(view);
+    let pill = pill_scope(scope_name, scope_kind);
     let roc_label = format!("[ROC: {}]", paint_roc(scope.roc));
     if bits.is_empty() {
-        format!("\n  {}  {}", scope_name.bold(), roc_label.dimmed())
+        format!("\n  {}  {}", pill, roc_label.dimmed())
     } else {
-        format!(
-            "\n  {}  {}  {}",
-            scope_name.bold(),
-            roc_label.dimmed(),
-            bits.join(" ")
-        )
+        format!("\n  {}  {}  {}", pill, roc_label.dimmed(), bits.join(" "))
     }
 }
 
 // ---- traits -----------------------------------------------------------------
 
 fn write_traits(out: &mut String, scope: &ScopeDiff<TraitChange>) {
-    let _ = writeln!(out, "{}", scope_heading("traits", scope));
+    let _ = writeln!(out, "{}", scope_heading("traits", ScopePill::Traits, scope));
 
     // All trait changes, sorted by criticality desc then id. Baseline /
     // component still render — they're dimmed by `paint_crit` and the
@@ -168,7 +169,11 @@ struct MetricRow<'a> {
 }
 
 fn write_metrics(out: &mut String, scope: &ScopeDiff<MetricChange>) {
-    let _ = writeln!(out, "{}", scope_heading("metrics", scope));
+    let _ = writeln!(
+        out,
+        "{}",
+        scope_heading("metrics", ScopePill::Metrics, scope)
+    );
 
     let mut rows: Vec<MetricRow<'_>> = Vec::new();
     for c in &scope.added {
@@ -397,7 +402,7 @@ fn format_metric_value(v: &Value) -> String {
 /// magnitude at a glance.
 fn numeric_direction(old: &Value, new: &Value) -> colored::ColoredString {
     let (Some(a), Some(b)) = (old.as_f64(), new.as_f64()) else {
-        return "~".bright_blue();
+        return crate::theme::paint_arrow_unchanged();
     };
     let glyph = if b > a {
         "↑"
@@ -412,13 +417,7 @@ fn numeric_direction(old: &Value, new: &Value) -> colored::ColoredString {
     } else {
         (b - a).abs() / denom
     };
-    if rel >= 0.50 {
-        glyph.bright_red()
-    } else if rel >= 0.09 {
-        glyph.bright_yellow()
-    } else {
-        glyph.bright_blue()
-    }
+    crate::theme::paint_intensity_f64(rel, glyph)
 }
 
 // ---- kv ---------------------------------------------------------------------
@@ -433,7 +432,7 @@ struct KvRow<'a> {
 }
 
 fn write_kv(out: &mut String, scope: &ScopeDiff<KvChange>) {
-    let _ = writeln!(out, "{}", scope_heading("kv", scope));
+    let _ = writeln!(out, "{}", scope_heading("kv", ScopePill::Kv, scope));
 
     let mut rows: Vec<KvRow<'_>> = Vec::new();
     for c in &scope.added {
@@ -556,7 +555,11 @@ fn write_kv_row(
 // ---- symbols ----------------------------------------------------------------
 
 fn write_symbols(out: &mut String, scope: &ScopeDiff<SymbolChange>) {
-    let _ = writeln!(out, "{}", scope_heading("symbols", scope));
+    let _ = writeln!(
+        out,
+        "{}",
+        scope_heading("symbols", ScopePill::Symbols, scope)
+    );
 
     // Old/new totals + per-kind breakdown in a dimmed sub-line.
     // ScopeDiff carries the aggregate counts; we re-derive the
@@ -693,7 +696,11 @@ fn write_strings(out: &mut String, scope: &ScopeDiff<StringChange>) {
         + (scope.removed.len() - removed.len())
         + (scope.changed.len() - changed.len());
 
-    let _ = writeln!(out, "{}", scope_heading("strings", scope));
+    let _ = writeln!(
+        out,
+        "{}",
+        scope_heading("strings", ScopePill::Strings, scope)
+    );
 
     if short_dropped > 0 {
         let _ = writeln!(
@@ -792,7 +799,11 @@ where
 // ---- sections (binary) ------------------------------------------------------
 
 fn write_sections(out: &mut String, scope: &ScopeDiff<SectionChange>) {
-    let _ = writeln!(out, "{}", scope_heading("sections", scope));
+    let _ = writeln!(
+        out,
+        "{}",
+        scope_heading("sections", ScopePill::Sections, scope)
+    );
 
     for s in &scope.added {
         let _ = writeln!(out, "    {} {}", paint_sign("+"), section_label(s));
@@ -890,15 +901,19 @@ fn relative_change(old: f64, new: f64) -> f64 {
     (new - old) / denom
 }
 
-/// `↑` / `↓` arrow (yellow); `~` when the sign is exactly zero.
+/// `↑` / `↓` arrow tinted by relative-change magnitude (`~` when the
+/// sign is exactly zero).  Routed through `theme::paint_intensity_f64`
+/// so section-pane arrows share the same severity-tier palette as
+/// metric-pane arrows and ROC% in headings.
 fn section_arrow(pct: f64) -> colored::ColoredString {
-    if pct > 0.0 {
-        "↑".bright_yellow()
+    let glyph = if pct > 0.0 {
+        "↑"
     } else if pct < 0.0 {
-        "↓".bright_yellow()
+        "↓"
     } else {
-        "~".bright_yellow()
-    }
+        "~"
+    };
+    crate::theme::paint_intensity_f64(pct, glyph)
 }
 
 /// Tint a value string by direction: bright-white for an increase,

@@ -54,15 +54,11 @@ pub(super) const WIDTH: usize = 80;
 
 /// Color a ROC percentage by intensity. Returns the printable form
 /// (with ANSI escapes) so callers can drop it straight into a writeln.
+/// Routed through `crate::theme::paint_intensity` so the analyze and
+/// diff surfaces share a single severity palette.
 pub(super) fn paint_roc(roc: f32) -> String {
     let pct = format!("{:.1}%", roc * 100.0);
-    match roc {
-        r if r >= 0.50 => pct.bright_red().to_string(),
-        r if r >= 0.20 => pct.bright_yellow().to_string(),
-        r if r >= 0.05 => pct.bright_blue().to_string(),
-        r if r > 0.0 => pct.normal().to_string(),
-        _ => pct.dimmed().to_string(),
-    }
+    crate::theme::paint_intensity(roc, &pct).to_string()
 }
 
 /// Colored `+N -N ~N` badges for a scope. Each bucket is omitted when
@@ -71,13 +67,13 @@ pub(super) fn paint_roc(roc: f32) -> String {
 pub(super) fn count_badges(view: ScopeView<'_>) -> Vec<String> {
     let mut parts = Vec::with_capacity(3);
     if view.added_len > 0 {
-        parts.push(format!("+{}", view.added_len).bright_green().to_string());
+        parts.push(crate::theme::paint_baseline(format!("+{}", view.added_len)).to_string());
     }
     if view.removed_len > 0 {
-        parts.push(format!("-{}", view.removed_len).bright_red().to_string());
+        parts.push(crate::theme::paint_hostile(format!("-{}", view.removed_len)).to_string());
     }
     if view.changed_len > 0 {
-        parts.push(format!("~{}", view.changed_len).bright_yellow().to_string());
+        parts.push(crate::theme::paint_suspicious(format!("~{}", view.changed_len)).to_string());
     }
     parts
 }
@@ -103,13 +99,14 @@ pub(super) fn crit_rank(c: Criticality) -> i32 {
 }
 
 /// One-glance criticality dot column: ●●● hostile, ●● suspicious,
-/// ● notable, · baseline / component.
+/// ● notable, · baseline / component.  Severity colors come from
+/// `crate::theme` so the diff and analyze surfaces share a palette.
 pub(super) fn crit_dots(c: Criticality) -> colored::ColoredString {
     match c {
-        Criticality::Hostile => "●●●".bright_red().bold(),
-        Criticality::Suspicious => "●● ".bright_yellow().bold(),
-        Criticality::Notable => "●  ".bright_blue(),
-        Criticality::Baseline => "·  ".bright_green(),
+        Criticality::Hostile => crate::theme::paint_hostile("●●●"),
+        Criticality::Suspicious => crate::theme::paint_suspicious("●● "),
+        Criticality::Notable => crate::theme::paint_notable("●  "),
+        Criticality::Baseline => crate::theme::paint_baseline("·  "),
         Criticality::Component | Criticality::Filtered => "·  ".dimmed(),
     }
 }
@@ -118,22 +115,17 @@ pub(super) fn crit_dots(c: Criticality) -> colored::ColoredString {
 pub(super) fn paint_crit<S: AsRef<str>>(text: S, c: Criticality) -> colored::ColoredString {
     let s = text.as_ref();
     match c {
-        Criticality::Hostile => s.bright_red().bold(),
-        Criticality::Suspicious => s.bright_yellow().bold(),
-        Criticality::Notable => s.bright_blue(),
-        Criticality::Baseline => s.bright_green(),
+        Criticality::Hostile => crate::theme::paint_hostile(s),
+        Criticality::Suspicious => crate::theme::paint_suspicious(s),
+        Criticality::Notable => crate::theme::paint_notable(s),
+        Criticality::Baseline => crate::theme::paint_baseline(s),
         Criticality::Component | Criticality::Filtered => s.dimmed(),
     }
 }
 
 /// Colored `+ / - / ~` change-indicator glyph.
 pub(super) fn paint_sign(sign: &str) -> colored::ColoredString {
-    match sign {
-        "+" => "+".bright_green().bold(),
-        "-" => "-".bright_red().bold(),
-        "~" => "~".bright_yellow().bold(),
-        _ => sign.normal(),
-    }
+    crate::theme::paint_sign(sign)
 }
 
 /// Drop the verbose taxonomy prefix from trait IDs for display.

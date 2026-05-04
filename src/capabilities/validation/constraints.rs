@@ -999,6 +999,7 @@ pub(crate) fn find_excessive_file_types(
     ];
     let manifests: &[FileType] = &[
         FileType::PackageJson,
+        FileType::PackageLockJson,
         FileType::ChromeManifest,
         FileType::CargoToml,
         FileType::PyProjectToml,

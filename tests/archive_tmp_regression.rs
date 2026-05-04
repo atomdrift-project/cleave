@@ -52,10 +52,25 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     }
     result?;
 
-    let leftovers: Vec<_> = fs::read_dir(&tmp)?.collect::<Result<Vec<_>, _>>()?;
+    // TMPDIR is process-global; other tests running in parallel may legitimately
+    // leave their own tempdirs under it. We only fail on entries whose name
+    // looks like a zip extraction — i.e., names containing one of the archive
+    // members above, or starting with cleave's archive-extraction prefix.
+    let leftovers: Vec<_> = fs::read_dir(&tmp)?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.contains("Issue3552")
+                || name.contains("ILPretty")
+                || name.contains("package.json")
+                || name.starts_with("cleave-archive")
+        })
+        .collect();
     assert!(
         leftovers.is_empty(),
-        "archive analysis left temp entries under TMPDIR: {:?}",
+        "archive analysis left zip-extraction temp entries under TMPDIR: {:?}",
         leftovers
             .iter()
             .map(std::fs::DirEntry::path)

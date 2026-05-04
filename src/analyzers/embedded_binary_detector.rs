@@ -143,16 +143,14 @@ fn scan_base64_packed(
             // Decode just enough to confirm magic — 256 chars → 192
             // bytes, plenty for header validation.
             let head_chars = trimmed.len().min(256);
-            let head = match base64::Engine::decode(
+            let Ok(head) = base64::Engine::decode(
                 &base64::engine::general_purpose::STANDARD,
                 &trimmed[..head_chars - head_chars % 4],
-            ) {
-                Ok(b) => b,
-                Err(_) => continue,
+            ) else {
+                continue;
             };
-            let kind = match classify_decoded_head(&head) {
-                Some(k) => k,
-                None => continue,
+            let Some(kind) = classify_decoded_head(&head) else {
+                continue;
             };
             // Sanity: the kind we discovered must match what the
             // marker prefix claimed. Otherwise we caught a coincidence.
@@ -260,11 +258,6 @@ fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&At
             pe_results.push(emb);
         }
     }
-    for binary in &mut pe_results {
-        if binary.format_hint.is_some() {
-            binary.estimated_size = data.len().saturating_sub(binary.offset);
-        }
-    }
     results.extend(pe_results);
 }
 
@@ -357,11 +350,15 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
     // Authenticode's security directory stores a file offset, not an RVA.
     // Include it in the physical child span so signed embedded PEs are not
     // carved into malformed unsigned fragments.
-    let data_directory_base = match kind {
-        EmbeddedKind::Pe32 => pe_base + 24 + 96,
-        EmbeddedKind::Pe64 => pe_base + 24 + 112,
-        _ => pe_base + 24 + 96,
+    // PE32 standard fields are 96 bytes; PE32+ are 112. `kind` here is
+    // only ever Pe32 or Pe64 — the optional-header magic check above
+    // rejects everything else — so the non-Pe64 branch is the Pe32 layout.
+    let std_fields_len = if matches!(kind, EmbeddedKind::Pe64) {
+        112
+    } else {
+        96
     };
+    let data_directory_base = pe_base + 24 + std_fields_len;
     if let (Some(cert_offset), Some(cert_size)) = (
         read_u32_le(data, data_directory_base + 4 * 8).map(|v| v as usize),
         read_u32_le(data, data_directory_base + 4 * 8 + 4).map(|v| v as usize),
@@ -405,9 +402,6 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
 }
 
 fn detect_embedded_pe_format(data: &[u8]) -> Option<&'static str> {
-    if memmem::find(data, b"Inno Setup Setup Data").is_some() {
-        return Some("inno");
-    }
     if memmem::find(data, &[0xEF, 0xBE, 0xAD, 0xDE]).is_some()
         && [
             b"Nullsoft Install System".as_slice(),
@@ -420,14 +414,15 @@ fn detect_embedded_pe_format(data: &[u8]) -> Option<&'static str> {
     {
         return Some("nsis");
     }
+    if memmem::find(data, b"Inno Setup Setup Data").is_some() {
+        return Some("inno");
+    }
     None
 }
 
 fn nsis_physical_size(data: &[u8]) -> Option<usize> {
-    let header = memmem::find(data, &[0xEF, 0xBE, 0xAD, 0xDE])?;
-    if data.get(header + 4..header + 16)? != b"NullsoftInst" {
-        return None;
-    }
+    let header = memmem::find_iter(data, &[0xEF, 0xBE, 0xAD, 0xDE])
+        .find(|&pos| data.get(pos + 4..pos + 16) == Some(b"NullsoftInst".as_slice()))?;
 
     let archive_size = read_u32_le(data, header + 20)? as usize;
     // NSIS stores a three-byte tail after the archive body; 7-Zip reports

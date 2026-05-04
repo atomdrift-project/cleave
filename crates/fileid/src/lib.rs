@@ -96,6 +96,8 @@ pub enum FileType {
     C,
     /// npm package.json manifest
     PackageJson,
+    /// npm package-lock.json lockfile
+    PackageLockJson,
     /// VSCode extension manifest (.vsixmanifest)
     VsixManifest,
     /// Chrome extension manifest.json
@@ -871,6 +873,13 @@ mod tests {
     }
 
     #[test]
+    fn package_lock_json() {
+        let det = detect(Path::new("package-lock.json"), b"{}").unwrap();
+        assert_eq!(det.file_type, FileType::PackageLockJson);
+        assert_eq!(det.source, DetectionSource::Filename);
+    }
+
+    #[test]
     fn composer_json() {
         assert_ext("composer.json", FileType::ComposerJson);
     }
@@ -1231,6 +1240,12 @@ mod tests {
     fn package_json_in_temp_dir() {
         let det = detect(Path::new("/tmp/cleave-abc123/package.json"), b"{}").unwrap();
         assert_eq!(det.file_type, FileType::PackageJson);
+    }
+
+    #[test]
+    fn package_lock_json_in_temp_dir() {
+        let det = detect(Path::new("/tmp/cleave-abc123/package-lock.json"), b"{}").unwrap();
+        assert_eq!(det.file_type, FileType::PackageLockJson);
     }
 
     #[test]

@@ -6,14 +6,22 @@
 use anyhow::Result;
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis};
 use rayon::prelude::*;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// A single file to analyze during validation and how to judge its score.
 enum Target {
-    /// Platform utility whose score must fall within `[min, max]`.
-    /// Also rejects any `objectives/*` or `well-known/*` finding.
-    GroundTruth { path: PathBuf, min: u32, max: u32 },
+    /// Known-hostile sample whose root-file score and severe finding counts
+    /// must stay above a per-file floor.
+    Hostile {
+        path: PathBuf,
+        min_score: u32,
+        min_hostile: usize,
+        min_suspicious: usize,
+    },
+    /// Known-benign sample whose root-file score must stay under a per-file cap.
+    Benign { path: PathBuf, cap: u32 },
     /// Does-nothing sample. Its (and any archive-member) score must stay
     /// within the cap returned by [`does_nothing_cap`].
     DoesNothing {
@@ -26,7 +34,9 @@ enum Target {
 impl Target {
     fn path(&self) -> &Path {
         match self {
-            Self::GroundTruth { path, .. } | Self::DoesNothing { path, .. } => path,
+            Self::Hostile { path, .. }
+            | Self::Benign { path, .. }
+            | Self::DoesNothing { path, .. } => path,
         }
     }
 }
@@ -46,9 +56,9 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
     }
 }
 
-/// Run full trait validation: trait defs + ground-truth + does-nothing checks.
+/// Run full trait validation: trait defs + hostile/benign fixtures + does-nothing checks.
 ///
-/// All sample analyses (system utilities and the does-nothing corpus) run in a
+/// All sample analyses (fixture files and the does-nothing corpus) run in a
 /// single rayon parallel pool; judgement happens serially afterwards by
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
@@ -59,6 +69,8 @@ pub fn run() -> Result<()> {
     std::env::set_var("CLEAVE_SKIP_CACHE", "1");
     let options = cleave::AnalysisOptions {
         disable_yara: true,
+        disable_radare2: true,
+        disable_upx: true,
         ..Default::default()
     };
 
@@ -81,7 +93,7 @@ pub fn run() -> Result<()> {
         })
         .collect();
 
-    let (gt_stats, dn_stats) = evaluate(results)?;
+    let stats = evaluate(results)?;
 
     let traits_ver = cleave::traits_repo::version()
         .map(|v| format!(" (traits: {v})"))
@@ -90,46 +102,105 @@ pub fn run() -> Result<()> {
         .map(|p| format!(" traits_dir={}", p.display()))
         .unwrap_or_default();
     eprintln!(
-        "✅ validate{traits_ver}{traits_dir}: traits + ground-truth ({}/{}) + does-nothing ({}/{})",
-        gt_stats.0, gt_stats.1, dn_stats.0, dn_stats.1
+        "✅ validate{traits_ver}{traits_dir}: traits + hostile ({}/{}) + benign ({}/{}) + does-nothing ({}/{})",
+        stats.hostile_passed,
+        stats.hostile_total,
+        stats.benign_passed,
+        stats.benign_total,
+        stats.does_nothing_passed,
+        stats.does_nothing_total
     );
     Ok(())
 }
 
-/// Build the full target list: ground-truth binaries + walked does-nothing corpus.
+/// Build the full target list: hostile/benign fixtures + walked does-nothing corpus.
 fn collect_targets() -> Result<Vec<Target>> {
     let mut targets = Vec::new();
 
-    // Ground-truth binaries: expected score ranges reflect each tool's capability surface.
-    // /bin/ls — xattr/stat/symlink/group-lookup/ACL.
-    // /bin/cp — chmod/chown/fts/mknod/xattr/ACL.
-    // /bin/sh — fork/setsid/exec/signal/pty.
-    // /usr/bin/curl — HTTP/SOCKS/OAuth/TLS/crypto.
-    for (path, min, max) in [
-        // Bumped +1 after B4: cleave's macho_extractors now populates
-        // `macho.uuid`, which lets the existing
-        // metadata/build/reproducible::macho-uuid trait fire as a new
-        // baseline finding (previously unmatched because no UUID was
-        // being extracted).
-        ("/bin/ls", 1, 10),
-        ("/bin/cp", 1, 11),
-        ("/bin/sh", 1, 9),
-        ("/usr/bin/curl", 5, 13),
-    ] {
-        let p = PathBuf::from(path);
-        if p.exists() {
-            targets.push(Target::GroundTruth { path: p, min, max });
-        }
-    }
+    let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
 
-    if let Ok(traits_dir) = cleave::traits_repo::try_resolve() {
-        let dn_dir = traits_dir.join("testdata").join("does-nothing");
-        if dn_dir.is_dir() {
-            walk_does_nothing(&dn_dir, &mut targets)?;
-        }
+    collect_hostile_fixtures(&traits_dir.join("testdata").join("hostile"), &mut targets)?;
+    collect_benign_fixtures(&traits_dir.join("testdata").join("benign"), &mut targets)?;
+
+    let dn_dir = traits_dir.join("testdata").join("does-nothing");
+    if dn_dir.is_dir() {
+        walk_does_nothing(&dn_dir, &mut targets)?;
     }
 
     Ok(targets)
+}
+
+/// Every direct file in `testdata/hostile/` must have a hardcoded threshold.
+fn collect_hostile_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
+    const MIN_HOSTILE_FINDINGS: usize = 1;
+    const MIN_SUSPICIOUS_FINDINGS: usize = 2;
+
+    for (name, min_score) in HOSTILE_MIN_SCORES {
+        out.push(Target::Hostile {
+            path: dir.join(name),
+            min_score: *min_score,
+            min_hostile: MIN_HOSTILE_FINDINGS,
+            min_suspicious: MIN_SUSPICIOUS_FINDINGS,
+        });
+    }
+    validate_fixture_table(
+        dir,
+        HOSTILE_MIN_SCORES.iter().map(|(name, _)| *name),
+        "hostile",
+    )
+}
+
+/// Every direct file in `testdata/benign/` must have a hardcoded cap.
+fn collect_benign_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
+    for (name, cap) in BENIGN_SCORE_CAPS {
+        out.push(Target::Benign {
+            path: dir.join(name),
+            cap: *cap,
+        });
+    }
+    validate_fixture_table(
+        dir,
+        BENIGN_SCORE_CAPS.iter().map(|(name, _)| *name),
+        "benign",
+    )
+}
+
+fn validate_fixture_table<'a>(
+    dir: &Path,
+    configured: impl Iterator<Item = &'a str>,
+    label: &str,
+) -> Result<()> {
+    if !dir.is_dir() {
+        anyhow::bail!("missing {label} fixture directory: {}", dir.display());
+    }
+
+    let configured: HashSet<&str> = configured.collect();
+    let mut seen = HashSet::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_file() {
+            continue;
+        }
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !configured.contains(name.as_ref()) {
+            anyhow::bail!(
+                "missing validation threshold for {label} fixture: {}",
+                entry.path().display()
+            );
+        }
+        seen.insert(name.into_owned());
+    }
+
+    for name in configured {
+        if !seen.contains(name) {
+            anyhow::bail!(
+                "configured {label} fixture is missing: {}",
+                dir.join(name).display()
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Walk the does-nothing directory, collecting every analyzable file.
@@ -152,13 +223,25 @@ fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
 }
 
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
-fn evaluate(
-    results: Vec<(Target, Result<AnalysisReport>)>,
-) -> Result<((usize, usize), (usize, usize))> {
-    let mut gt_passed = 0;
-    let mut gt_total = 0;
-    let mut dn_passed = 0;
-    let mut dn_total = 0;
+struct ValidationStats {
+    hostile_passed: usize,
+    hostile_total: usize,
+    benign_passed: usize,
+    benign_total: usize,
+    does_nothing_passed: usize,
+    does_nothing_total: usize,
+}
+
+/// Walk the collected analysis results, emitting failures inline and tallying totals.
+fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<ValidationStats> {
+    let mut stats = ValidationStats {
+        hostile_passed: 0,
+        hostile_total: 0,
+        benign_passed: 0,
+        benign_total: 0,
+        does_nothing_passed: 0,
+        does_nothing_total: 0,
+    };
     let mut failed = 0usize;
 
     for (target, result) in results {
@@ -168,8 +251,9 @@ fn evaluate(
                 eprintln!("❌ {}: analysis failed: {e:#}", target.path().display());
                 failed += 1;
                 match target {
-                    Target::GroundTruth { .. } => gt_total += 1,
-                    Target::DoesNothing { .. } => dn_total += 1,
+                    Target::Hostile { .. } => stats.hostile_total += 1,
+                    Target::Benign { .. } => stats.benign_total += 1,
+                    Target::DoesNothing { .. } => stats.does_nothing_total += 1,
                 }
                 continue;
             }
@@ -177,24 +261,37 @@ fn evaluate(
         report.finalize();
 
         match target {
-            Target::GroundTruth { path, min, max } => {
-                gt_total += 1;
-                if judge_ground_truth(&path, min, max, &report) {
-                    gt_passed += 1;
+            Target::Hostile {
+                path,
+                min_score,
+                min_hostile,
+                min_suspicious,
+            } => {
+                stats.hostile_total += 1;
+                if judge_hostile(&path, min_score, min_hostile, min_suspicious, &report) {
+                    stats.hostile_passed += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+            Target::Benign { path, cap } => {
+                stats.benign_total += 1;
+                if judge_benign(&path, cap, &report) {
+                    stats.benign_passed += 1;
                 } else {
                     failed += 1;
                 }
             }
             Target::DoesNothing { dir, .. } => {
                 for file in &report.files {
-                    dn_total += 1;
+                    stats.does_nothing_total += 1;
                     let cap = does_nothing_cap(&file.path, &dir);
                     if file.score > cap {
                         eprintln!("❌ {}: score {} > cap {cap}", file.path, file.score);
                         print_contributing_findings(file, "     ");
                         failed += 1;
                     } else {
-                        dn_passed += 1;
+                        stats.does_nothing_passed += 1;
                     }
                 }
             }
@@ -204,41 +301,134 @@ fn evaluate(
     if failed > 0 {
         anyhow::bail!("{failed} validation check(s) failed");
     }
-    Ok(((gt_passed, gt_total), (dn_passed, dn_total)))
+    Ok(stats)
 }
 
-/// Judge a ground-truth binary. Returns `true` if it passes.
-fn judge_ground_truth(path: &Path, min: u32, max: u32, report: &AnalysisReport) -> bool {
+/// Judge a known-hostile fixture root file. Returns `true` if it passes.
+fn judge_hostile(
+    path: &Path,
+    min_score: u32,
+    min_hostile: usize,
+    min_suspicious: usize,
+    report: &AnalysisReport,
+) -> bool {
     let Some(file) = report.files.first() else {
-        return true;
+        eprintln!("❌ {}: analysis produced no files", path.display());
+        return false;
     };
-    let score = file.score;
     let display = path.display();
+    let hostile = count_findings(file, Criticality::Hostile);
+    let suspicious = count_findings(file, Criticality::Suspicious);
 
-    // Flag objectives/* or well-known/* traits firing on a benign platform utility.
-    let misplaced: Vec<_> = file
-        .findings
-        .iter()
-        .filter(|f| f.id.starts_with("objectives/") || f.id.starts_with("well-known/"))
-        .collect();
-
-    let out_of_range = score < min || score > max;
-    if !out_of_range && misplaced.is_empty() {
+    let score_too_low = file.score < min_score;
+    let hostile_too_low = hostile < min_hostile;
+    let suspicious_too_low = suspicious < min_suspicious;
+    if !score_too_low && !hostile_too_low && !suspicious_too_low {
         return true;
     }
 
-    if out_of_range {
-        eprintln!("❌ {display}: score {score} not in [{min},{max}]");
-        print_contributing_findings(file, "     ");
+    if score_too_low {
+        eprintln!("❌ {display}: score {} < minimum {min_score}", file.score);
     }
-    for f in &misplaced {
-        eprintln!(
-            "❌ {display}: intent trait on benign binary: {} ({:?})",
-            f.id, f.crit
-        );
+    if hostile_too_low {
+        eprintln!("❌ {display}: hostile findings {hostile} < minimum {min_hostile}");
     }
+    if suspicious_too_low {
+        eprintln!("❌ {display}: suspicious findings {suspicious} < minimum {min_suspicious}");
+    }
+    print_contributing_findings(file, "     ");
     false
 }
+
+/// Judge a known-benign fixture root file. Returns `true` if it passes.
+fn judge_benign(path: &Path, cap: u32, report: &AnalysisReport) -> bool {
+    let Some(file) = report.files.first() else {
+        eprintln!("❌ {}: analysis produced no files", path.display());
+        return false;
+    };
+    let misleading = misleading_benign_findings(report);
+    if file.score <= cap
+        && file.score < Criticality::Suspicious.score_weight()
+        && misleading.is_empty()
+    {
+        return true;
+    }
+
+    if file.score > cap {
+        eprintln!("❌ {}: score {} > cap {cap}", path.display(), file.score);
+    }
+    if file.score >= Criticality::Suspicious.score_weight() {
+        eprintln!(
+            "❌ {}: score {} >= one suspicious trait ({})",
+            path.display(),
+            file.score,
+            Criticality::Suspicious.score_weight()
+        );
+    }
+    for (file_path, finding) in misleading {
+        eprintln!(
+            "❌ {file_path}: intent/campaign trait on benign fixture: {} ({:?})",
+            finding.id, finding.crit
+        );
+    }
+    print_contributing_findings(file, "     ");
+    false
+}
+
+fn count_findings(file: &FileAnalysis, crit: Criticality) -> usize {
+    file.findings.iter().filter(|f| f.crit == crit).count()
+}
+
+fn misleading_benign_findings(
+    report: &AnalysisReport,
+) -> Vec<(&str, &cleave::types::traits_findings::Finding)> {
+    report
+        .files
+        .iter()
+        .flat_map(|file| {
+            file.findings
+                .iter()
+                .filter(|finding| {
+                    finding.id.starts_with("objectives/") || finding.id.starts_with("well-known/")
+                })
+                .map(move |finding| (file.path.as_str(), finding))
+        })
+        .collect()
+}
+
+/// Per-file minimum score for direct files in `testdata/hostile/`.
+///
+/// Finding-count floors are applied uniformly in [`collect_hostile_fixtures`]:
+/// each hostile fixture must produce at least one Hostile and two Suspicious
+/// findings. Scores are the current observed root-file score floors for these
+/// stable fixtures, hardcoded so drift is intentional and reviewable.
+const HOSTILE_MIN_SCORES: &[(&str, u32)] = &[
+    ("LInux_Perl_ClickFix.pl.xz", 122),
+    ("Spisok_na_Zakupivlyu_INIT.xlsx.lnk.xz", 156),
+    ("donutloader.bat.xz", 336),
+    ("dropper.sh.xz", 39),
+    ("index.applescript.xz", 554),
+    ("memdump.py.xz", 73),
+    ("pondrat.xz", 106),
+    ("rand-user-agent.js.xz", 150),
+    ("reverse-shell.cpp.xz", 121),
+    ("shady.php.xz", 1),
+    ("terminal.go.xz", 230),
+];
+
+/// Per-file score caps for direct files in `testdata/benign/`.
+///
+/// Each cap is roughly current observed score + 10%, but never reaches the
+/// score of one full-confidence Suspicious finding (40).
+const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
+    ("IddController.c.xz", 3),
+    ("find_git_conflicts.sh.xz", 3),
+    ("liblzma.so.5.4.5.xz", 5),
+    ("ls.macOS.xz", 9),
+    ("rand-user-agent.js.xz", 39),
+    ("run.bat.xz", 19),
+    ("test_cli.py.xz", 3),
+];
 
 /// Default per-file score cap for `testdata/does-nothing/` samples.
 const DOES_NOTHING_DEFAULT_CAP: u32 = 1;

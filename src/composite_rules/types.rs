@@ -245,6 +245,8 @@ pub(crate) enum FileType {
     Data,
     /// npm package.json manifest
     PackageJson,
+    /// npm package-lock.json lockfile
+    PackageLockJson,
     /// Chrome extension manifest.json
     ChromeManifest,
     /// VS Code extension manifest (extension.vsixmanifest)
@@ -392,6 +394,7 @@ impl FileType {
             || matches!(
                 self,
                 FileType::PackageJson
+                    | FileType::PackageLockJson
                     | FileType::ChromeManifest
                     | FileType::VsixManifest
                     | FileType::CargoToml
@@ -479,6 +482,7 @@ impl FileType {
             FileType::Data,
             // Manifest/config formats
             FileType::PackageJson,
+            FileType::PackageLockJson,
             FileType::ChromeManifest,
             FileType::VsixManifest,
             FileType::CargoToml,
@@ -563,6 +567,7 @@ impl FileType {
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,
+            "package-lock.json" | "packagelockjson" => FileType::PackageLockJson,
             "chrome-manifest" | "chromemanifest" => FileType::ChromeManifest,
             "vsixmanifest" | "vsix-manifest" | "extension.vsixmanifest" => FileType::VsixManifest,
             "cargo-toml" | "cargotoml" | "cargo.toml" => FileType::CargoToml,
@@ -722,6 +727,12 @@ mod tests {
     fn test_all_concrete_variants_includes_package_json() {
         let variants = FileType::all_concrete_variants();
         assert!(variants.contains(&FileType::PackageJson));
+    }
+
+    #[test]
+    fn test_all_concrete_variants_includes_package_lock_json() {
+        let variants = FileType::all_concrete_variants();
+        assert!(variants.contains(&FileType::PackageLockJson));
     }
 
     #[test]

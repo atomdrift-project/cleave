@@ -128,6 +128,9 @@ fn detect_from_filename(path: &Path) -> Option<FileType> {
     if name.eq_ignore_ascii_case("package.json") {
         return Some(FileType::PackageJson);
     }
+    if name.eq_ignore_ascii_case("package-lock.json") {
+        return Some(FileType::PackageLockJson);
+    }
     if name.eq_ignore_ascii_case("composer.json") {
         return Some(FileType::ComposerJson);
     }
@@ -289,6 +292,14 @@ mod tests {
         assert_eq!(
             detect_from_path(Path::new("/foo/bar/package.json")),
             Some(FileType::PackageJson)
+        );
+    }
+
+    #[test]
+    fn package_lock_json() {
+        assert_eq!(
+            detect_from_path(Path::new("/foo/bar/package-lock.json")),
+            Some(FileType::PackageLockJson)
         );
     }
 

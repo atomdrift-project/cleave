@@ -264,6 +264,7 @@ pub fn analyzer_for_file_type(
 
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
+        | FileType::PackageLockJson
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
@@ -378,6 +379,7 @@ pub(crate) fn analyzer_for_file_type_arc(
 
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
+        | FileType::PackageLockJson
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
@@ -552,6 +554,7 @@ impl FileTypeExt for FileType {
             FileType::TarZst => "tar.zst".to_string(),
             FileType::SevenZ => "7z".to_string(),
             FileType::PythonBytecode => "python-bytecode".to_string(),
+            FileType::PackageLockJson => "package-lock.json".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }
     }
@@ -590,6 +593,7 @@ impl FileTypeExt for FileType {
             FileType::Elixir => vec!["ex", "exs"],
             FileType::C => vec!["c", "h", "hh"],
             FileType::PackageJson => vec!["json", "package.json", "npm"],
+            FileType::PackageLockJson => vec!["json", "package-lock.json", "npm"],
             FileType::PkgInfo => vec!["pkg-info", "metadata", "dist-info"],
             FileType::VsixManifest => vec!["xml", "vsix", "vscode"],
             FileType::ChromeManifest => vec!["json", "manifest.json", "chrome", "extension"],

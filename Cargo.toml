@@ -296,3 +296,7 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
+
+# TEMP: local stng for testing the x86 save-sequence filter (revert after stng publish)
+[patch."https://codeberg.org/atomdrift/stng.git"]
+stng = { path = "/Users/t/dev/atomdrift/stng" }

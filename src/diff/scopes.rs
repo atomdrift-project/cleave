@@ -107,7 +107,7 @@ pub(super) fn diff_metrics(
     // diff-time synthesis.
     let old_flat = flatten_metrics(old.metrics.as_ref());
     let new_flat = flatten_metrics(new.metrics.as_ref());
-    diff_flat_paths(
+    let mut diff = diff_flat_paths(
         &old_flat,
         &new_flat,
         |path, value| MetricChange {
@@ -115,7 +115,51 @@ pub(super) fn diff_metrics(
             value: value.clone(),
         },
         limit,
-    )
+    );
+
+    // Drop numeric deltas under 9% — matches the section-pane noise
+    // floor. A 27% binary-size growth manifests as proportional moves
+    // in 30+ derivative metrics (func_count, dynsym_count,
+    // import_count, code_size, …); only the top-level deltas and the
+    // anomalies (densities that move *opposite* to file size) carry
+    // real signal. Bool flips and string changes are kept verbatim.
+    let mut dropped = 0.0_f32;
+    diff.changed.retain(|c| {
+        if is_trivial_metric_change(&c.old.value, &c.new.value) {
+            dropped += value_change_weight(&c.old.value, &c.new.value);
+            false
+        } else {
+            true
+        }
+    });
+    if dropped > 0.0 {
+        diff.change_weight = (diff.change_weight - dropped).max(0.0);
+        diff.recompute_roc();
+    }
+    diff
+}
+
+/// `true` if both sides are numeric and the change is noise: relative
+/// change below the 9% floor (same threshold as the section pane), or
+/// both sides round identically to 2dp (catches sub-1e-2 ratios like
+/// `0.00004 → 0.00003` that change measurably but render as the same
+/// "0.00 → 0.00" digits).
+fn is_trivial_metric_change(old: &Value, new: &Value) -> bool {
+    let (Value::Number(an), Value::Number(bn)) = (old, new) else {
+        return false;
+    };
+    let (Some(a), Some(b)) = (an.as_f64(), bn.as_f64()) else {
+        return false;
+    };
+    if !a.is_finite() || !b.is_finite() {
+        return false;
+    }
+    let denom = a.abs().max(b.abs());
+    if denom == 0.0 {
+        return true;
+    }
+    let rel = (a - b).abs() / denom;
+    rel < 0.09 || format!("{a:.2}") == format!("{b:.2}")
 }
 
 fn flatten_metrics(m: Option<&crate::types::scores::Metrics>) -> Vec<(String, Value)> {
@@ -155,6 +199,12 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
             }
         }
         Value::Array(arr) if !arr.is_empty() => {
+            // Rank-keyed arrays (`binary.top_*`) carry their signal in
+            // the head; ranks beyond the cap are tail noise that
+            // bloats kv diffs without adding diff value.
+            let cap = rank_keyed_cap(prefix).unwrap_or(arr.len());
+            let arr = &arr[..arr.len().min(cap)];
+
             if arr.iter().all(is_leaf) {
                 for v in arr {
                     let key = leaf_key(v).unwrap_or_default();
@@ -164,6 +214,9 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
                 // Array of objects with a stable identity field (e.g.
                 // `lib`, `name`, `path`). Index by the identity value so
                 // reordering doesn't fabricate diffs at every shifted slot.
+                // Skip the identity field as a leaf inside the object —
+                // its value would tautologically equal the bracket key
+                // (`[name=foo].name = "foo"`).
                 for v in arr {
                     let id = v
                         .as_object()
@@ -171,7 +224,7 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
                         .and_then(leaf_key)
                         .unwrap_or_default();
                     let key = format!("{prefix}[{id_field}={id}]");
-                    walk(v, &key, out);
+                    walk_skipping(v, &key, id_field, out);
                 }
             } else {
                 for (i, v) in arr.iter().enumerate() {
@@ -184,6 +237,37 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
         _ if prefix.is_empty() => {}
         _ => out.push((prefix.to_string(), value.clone())),
     }
+}
+
+/// Like [`walk`] but skips one named field in the immediate object —
+/// used by the identity-keyed array branch to drop the tautological
+/// `[name=foo].name = "foo"` leaf (the value is just the bracket key
+/// echoed back).  For non-object values, falls through to `walk`.
+fn walk_skipping(value: &Value, prefix: &str, skip: &str, out: &mut Vec<(String, Value)>) {
+    if let Value::Object(map) = value {
+        for (k, v) in map {
+            if k == skip {
+                continue;
+            }
+            let next = format!("{prefix}.{k}");
+            walk(v, &next, out);
+        }
+    } else {
+        walk(value, prefix, out);
+    }
+}
+
+/// Cap on rank-keyed array entries surfaced into kv-flat paths.  The
+/// `binary.top_*` arrays are sorted lists where the head carries the
+/// signal (top-N most complex / largest / hottest) — entries past the
+/// head are tail noise that bloats kv diffs without adding value.
+/// Returns `None` for arrays not in this category, leaving them
+/// uncapped.
+fn rank_keyed_cap(prefix: &str) -> Option<usize> {
+    if prefix.starts_with("binary.top_") {
+        return Some(3);
+    }
+    None
 }
 
 /// `Some(stable string form)` for JSON leaves; `None` for objects /
@@ -244,12 +328,29 @@ fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
 /// the `diff` module so unit construction can pre-flatten once per side.
 /// Mirrors the encoding accepted by `type: kv` rules and `cleave kv`,
 /// with smart array handling that doesn't fabricate diffs on reorder.
+///
+/// `source.imports[]` and `source.exports[]` are dropped — they're
+/// kv-tree projections of `report.imports` / `report.exports`
+/// (load-bearing for trait authoring via `type: kv`) but the diff
+/// already shows the same data through the dedicated `symbols` scope.
+/// Keeping them in the kv flatten would double-list every changed
+/// import. The kv tree on each report is unmodified — traits keep
+/// working.
 pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
-    flatten_dotted(value)
+    let mut flat = flatten_dotted(value);
+    flat.retain(|(path, _)| !is_redundant_kv_path(path));
+    flat
+}
+
+/// `true` for kv paths whose content is fully shown by another diff
+/// scope. Currently `source.imports[]` and `source.exports[]` (the
+/// `symbols` scope is the canonical view).
+fn is_redundant_kv_path(path: &str) -> bool {
+    path.starts_with("source.imports[") || path.starts_with("source.exports[")
 }
 
 pub(super) fn diff_kv(old: &DiffUnit, new: &DiffUnit, limit: usize) -> ScopeDiff<KvChange> {
-    diff_flat_paths(
+    let mut diff = diff_flat_paths(
         &old.kv_flat,
         &new.kv_flat,
         |path, value| KvChange {
@@ -262,7 +363,40 @@ pub(super) fn diff_kv(old: &DiffUnit, new: &DiffUnit, limit: usize) -> ScopeDiff
             value: value.clone(),
         },
         limit,
-    )
+    );
+
+    // `.addr` leaf paths whose values are hex addresses change on
+    // every build (function / init-array / fini-array slots get
+    // relocated by the linker); the *moved* signal is captured by
+    // sibling fields like `.size`, `.cc`, `.bbs` — the address itself
+    // carries no diff value.  Drop those `~` entries.
+    let mut dropped = 0.0_f32;
+    diff.changed.retain(|c| {
+        if is_trivial_address_change(&c.new.path, &c.old.value, &c.new.value) {
+            dropped += value_change_weight(&c.old.value, &c.new.value);
+            false
+        } else {
+            true
+        }
+    });
+    if dropped > 0.0 {
+        diff.change_weight = (diff.change_weight - dropped).max(0.0);
+        diff.recompute_roc();
+    }
+    diff
+}
+
+/// `true` for `~` changes where the path ends in `.addr` and both
+/// sides are hex-encoded addresses.  Distinct hex value content (build
+/// IDs, hashes) lives at non-`.addr` paths so it isn't caught here.
+fn is_trivial_address_change(path: &str, old: &Value, new: &Value) -> bool {
+    if !path.ends_with(".addr") {
+        return false;
+    }
+    let (Value::String(a), Value::String(b)) = (old, new) else {
+        return false;
+    };
+    a.starts_with("0x") && b.starts_with("0x")
 }
 
 /// Shared engine for path-keyed diffs (metrics, KV). Per-change weight is

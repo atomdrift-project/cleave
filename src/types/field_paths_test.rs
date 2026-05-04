@@ -23,7 +23,7 @@ mod tests {
         assert!(fields.contains(&"behavioral_import_ratio"));
         assert!(fields.contains(&"nonstandard_section_name_count"));
         assert!(fields.contains(&"import_count"));
-        assert!(fields.contains(&"function_count"));
+        assert!(fields.contains(&"func_count"));
 
         // Should have extracted many fields (BinaryMetrics has 50+ fields)
         assert!(

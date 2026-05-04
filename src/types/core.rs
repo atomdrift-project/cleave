@@ -494,10 +494,7 @@ impl AnalysisReport {
             self.files.insert(0, root_file);
         }
 
-        // Remove structural symbol findings — they restate imports and no consumer reads them
         for file in &mut self.files {
-            file.findings
-                .retain(|f| !f.id.starts_with("metadata/internal/symbols::"));
             file.strip_source_fields();
             Self::refresh_formula(file);
             file.compute_summary();

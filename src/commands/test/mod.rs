@@ -166,6 +166,18 @@ pub(crate) fn prepare_test_analysis(
         report.strings = string_extractor.extract_smart(&full_data, None);
     }
 
+    // Attach the binary kv tree so kv-sourced traits (`type: kv,
+    // path: …`) evaluate the same way as the production analyze
+    // pipeline. Without this, kv conditions silently fail and rules
+    // like `metadata/binary/linking::ifunc` show NOT MATCHED in
+    // test-rules even when they fire in `cleave analyze`.
+    // Mirrors the order in `lib.rs::analyze_file_with_resources`:
+    // `attach_to_report` first (synthesises the base kv tree from
+    // metrics), then `augment_report` layers on raw extractors
+    // (ELF .comment, DWARF, ifunc_symbols, init_array entries, …).
+    crate::analyzers::binary_kv::attach_to_report(&mut report);
+    crate::analyzers::binary_extractors::augment_report(&mut report, &full_data);
+
     Ok(PreparedTestAnalysis {
         file_type,
         full_data,

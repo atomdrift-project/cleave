@@ -553,10 +553,6 @@ fn tiny_findings(file: &FileAnalysis) -> Vec<TinyFinding> {
 }
 
 fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
-    if finding.id.starts_with("metadata/internal/symbols::") {
-        return false;
-    }
-
     if finding.crit != Criticality::Component {
         return true;
     }
@@ -919,7 +915,10 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
         // description column. One overly long description would otherwise push
         // evidence off the screen, leaving every row with just a stray `…`.
         // Layout overhead: bullet(3) + space(1) + trait + 2 spaces + 2 spaces = 8 + trait_width
-        const MIN_EVIDENCE_WIDTH: usize = 12;
+        // 24 cols accommodates two short kv-array members like
+        // `[lzma_crc32, lzma_crc64]` — descriptions truncate hard
+        // first since they're often paraphrasable from the trait id.
+        const MIN_EVIDENCE_WIDTH: usize = 24;
         let overhead = 8 + trait_width;
         let max_desc_width = term_width.saturating_sub(overhead + MIN_EVIDENCE_WIDTH);
         let desc_width = natural_desc_width.min(max_desc_width);

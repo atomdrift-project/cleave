@@ -13,6 +13,345 @@ use crate::types::Import;
 use std::collections::BTreeMap;
 
 // ---------------------------------------------------------------------------
+// PE TLS callbacks — Windows analog of ELF init_array
+// ---------------------------------------------------------------------------
+
+/// One TLS callback entry. TLS callbacks run before the binary's
+/// `main()` and provide an attacker a hook into load-time execution
+/// under a benign-looking PE. Modern compilers rarely emit callbacks
+/// for ordinary applications; their *appearance* between releases of
+/// an otherwise-stable binary is a tampering tell.
+#[derive(Debug, Clone)]
+pub(crate) struct TlsCallback {
+    /// Virtual address of the callback function (as it appears in
+    /// `dumpbin /TLS` / IDA — image-base-relative VA).
+    pub addr: u64,
+}
+
+/// Parse the TLS Directory (data directory entry 9) and walk the
+/// callback array. Returns `None` for non-PE input, missing TLS
+/// directory, or empty callback list.
+#[must_use]
+pub(crate) fn extract_tls_callbacks(data: &[u8]) -> Option<Vec<TlsCallback>> {
+    let pe = PeHeaders::parse(data)?;
+    let tls_rva = pe.data_directory(9)?.0 as usize;
+    if tls_rva == 0 {
+        return None;
+    }
+    let tls_off = pe.rva_to_offset(tls_rva)?;
+    // TLS Directory layout:
+    //   PE32:  4*u32 (StartVA EndVA IndexVA CallbacksVA), 2*u32 trailers
+    //   PE32+: 4*u64                                   , 2*u32 trailers
+    let ptr_size = if pe.is_64 { 8 } else { 4 };
+    let callbacks_va_off = tls_off.checked_add(ptr_size * 3)?;
+    if callbacks_va_off + ptr_size > data.len() {
+        return None;
+    }
+    let callbacks_va = if pe.is_64 {
+        u64::from_le_bytes(
+            data[callbacks_va_off..callbacks_va_off + 8]
+                .try_into()
+                .ok()?,
+        )
+    } else {
+        u32::from_le_bytes(
+            data[callbacks_va_off..callbacks_va_off + 4]
+                .try_into()
+                .ok()?,
+        ) as u64
+    };
+    if callbacks_va == 0 {
+        return None;
+    }
+    // CallbacksVA is image-base-relative. Subtract ImageBase to get RVA.
+    let callbacks_rva = callbacks_va.checked_sub(pe.image_base)? as usize;
+    let mut walk = pe.rva_to_offset(callbacks_rva)?;
+    let mut out = Vec::new();
+    for _ in 0..256 {
+        if walk + ptr_size > data.len() {
+            break;
+        }
+        let entry = if pe.is_64 {
+            u64::from_le_bytes(data[walk..walk + 8].try_into().ok()?)
+        } else {
+            u32::from_le_bytes(data[walk..walk + 4].try_into().ok()?) as u64
+        };
+        if entry == 0 {
+            break;
+        }
+        out.push(TlsCallback { addr: entry });
+        walk += ptr_size;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Minimal PE header view used by TLS-callback / image-base / RVA
+/// translation lookups. `pe_extractors` is byte-pattern-based by
+/// design; this parser keeps that property.
+pub(crate) struct PeHeaders<'a> {
+    data: &'a [u8],
+    pub is_64: bool,
+    pub image_base: u64,
+    data_dirs_off: usize,
+    data_dirs_count: usize,
+    sections_off: usize,
+    sections_count: usize,
+    section_entry_size: usize,
+}
+
+impl<'a> PeHeaders<'a> {
+    pub(crate) fn parse(data: &'a [u8]) -> Option<Self> {
+        if data.len() < 0x40 || &data[..2] != b"MZ" {
+            return None;
+        }
+        let e_lfanew = u32::from_le_bytes(data[0x3c..0x40].try_into().ok()?) as usize;
+        if e_lfanew + 24 > data.len() || &data[e_lfanew..e_lfanew + 4] != b"PE\0\0" {
+            return None;
+        }
+        let coff_off = e_lfanew + 4;
+        let num_sections =
+            u16::from_le_bytes(data[coff_off + 2..coff_off + 4].try_into().ok()?) as usize;
+        let opt_size =
+            u16::from_le_bytes(data[coff_off + 16..coff_off + 18].try_into().ok()?) as usize;
+        let opt_off = coff_off + 20;
+        if opt_off + 2 > data.len() {
+            return None;
+        }
+        let magic = u16::from_le_bytes(data[opt_off..opt_off + 2].try_into().ok()?);
+        let (is_64, image_base, data_dirs_off, num_dirs_off) = match magic {
+            0x10b => {
+                if opt_off + 96 > data.len() {
+                    return None;
+                }
+                let ib =
+                    u32::from_le_bytes(data[opt_off + 28..opt_off + 32].try_into().ok()?) as u64;
+                (false, ib, opt_off + 96, opt_off + 92)
+            }
+            0x20b => {
+                if opt_off + 112 > data.len() {
+                    return None;
+                }
+                let ib = u64::from_le_bytes(data[opt_off + 24..opt_off + 32].try_into().ok()?);
+                (true, ib, opt_off + 112, opt_off + 108)
+            }
+            _ => return None,
+        };
+        let data_dirs_count =
+            u32::from_le_bytes(data[num_dirs_off..num_dirs_off + 4].try_into().ok()?) as usize;
+        let sections_off = opt_off + opt_size;
+        Some(Self {
+            data,
+            is_64,
+            image_base,
+            data_dirs_off,
+            data_dirs_count,
+            sections_off,
+            sections_count: num_sections,
+            section_entry_size: 40,
+        })
+    }
+
+    /// Return `(rva, size)` for data directory `idx`.
+    pub(crate) fn data_directory(&self, idx: usize) -> Option<(u32, u32)> {
+        if idx >= self.data_dirs_count {
+            return None;
+        }
+        let off = self.data_dirs_off + idx * 8;
+        if off + 8 > self.data.len() {
+            return None;
+        }
+        let rva = u32::from_le_bytes(self.data[off..off + 4].try_into().ok()?);
+        let size = u32::from_le_bytes(self.data[off + 4..off + 8].try_into().ok()?);
+        Some((rva, size))
+    }
+
+    /// Translate a virtual RVA to a file offset by walking the section
+    /// table. Returns `None` if no section covers the RVA.
+    pub(crate) fn rva_to_offset(&self, rva: usize) -> Option<usize> {
+        for i in 0..self.sections_count {
+            let off = self.sections_off + i * self.section_entry_size;
+            if off + 40 > self.data.len() {
+                return None;
+            }
+            let vsize = u32::from_le_bytes(self.data[off + 8..off + 12].try_into().ok()?) as usize;
+            let vaddr = u32::from_le_bytes(self.data[off + 12..off + 16].try_into().ok()?) as usize;
+            let rsize = u32::from_le_bytes(self.data[off + 16..off + 20].try_into().ok()?) as usize;
+            let rdata = u32::from_le_bytes(self.data[off + 20..off + 24].try_into().ok()?) as usize;
+            let coverage = vsize.max(rsize);
+            if rva >= vaddr && rva < vaddr + coverage {
+                return Some(rdata + (rva - vaddr));
+            }
+        }
+        None
+    }
+
+    /// Walk all sections returning `(name, virtual_size, raw_size)` for
+    /// each. Used by callers needing per-section size analysis.
+    pub(crate) fn sections(&self) -> Vec<(String, u32, u32)> {
+        let mut out = Vec::with_capacity(self.sections_count);
+        for i in 0..self.sections_count {
+            let off = self.sections_off + i * self.section_entry_size;
+            if off + 40 > self.data.len() {
+                break;
+            }
+            let name_bytes = &self.data[off..off + 8];
+            let nul = name_bytes.iter().position(|&b| b == 0).unwrap_or(8);
+            let name = String::from_utf8_lossy(&name_bytes[..nul]).into_owned();
+            let Ok(vs) = self.data[off + 8..off + 12].try_into() else {
+                continue;
+            };
+            let Ok(rs) = self.data[off + 16..off + 20].try_into() else {
+                continue;
+            };
+            let vsize = u32::from_le_bytes(vs);
+            let rsize = u32::from_le_bytes(rs);
+            out.push((name, vsize, rsize));
+        }
+        out
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PE per-section virtual_size vs raw_size — packing / inflation signal
+// ---------------------------------------------------------------------------
+
+/// Sections whose `virtual_size` substantially exceeds their on-disk
+/// `raw_size`. Returns the section name + ratio for any section with
+/// `vsize > rsize * 4` and `rsize > 0` (excluding BSS-style sections
+/// where rsize is legitimately zero). Large inflation indicates a
+/// runtime-decompressed payload — the classic packer fingerprint.
+#[must_use]
+pub(crate) fn extract_inflated_sections(data: &[u8]) -> Option<Vec<(String, f64)>> {
+    let pe = PeHeaders::parse(data)?;
+    let mut out = Vec::new();
+    for (name, vsize, rsize) in pe.sections() {
+        if rsize == 0 || vsize <= rsize.saturating_mul(4) {
+            continue;
+        }
+        let ratio = (vsize as f64) / (rsize as f64);
+        out.push((name, ratio));
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PE Resource Directory TimeDateStamp
+// ---------------------------------------------------------------------------
+
+/// Timestamp embedded in the top-level IMAGE_RESOURCE_DIRECTORY,
+/// independent of the PE COFF header's TimeDateStamp. Set by the
+/// resource compiler at link time; often left untouched across
+/// rebuilds, so a *change* between releases of an otherwise-stable
+/// binary is a tampering tell. Returns 0 / None when unset or the
+/// resource directory is absent.
+#[must_use]
+pub(crate) fn extract_resource_timestamp(data: &[u8]) -> Option<u32> {
+    let pe = PeHeaders::parse(data)?;
+    let rsrc_rva = pe.data_directory(2)?.0 as usize;
+    if rsrc_rva == 0 {
+        return None;
+    }
+    let off = pe.rva_to_offset(rsrc_rva)?;
+    if off + 8 > data.len() {
+        return None;
+    }
+    let ts = u32::from_le_bytes(data[off + 4..off + 8].try_into().ok()?);
+    if ts == 0 {
+        None
+    } else {
+        Some(ts)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PE Debug Directory entries
+// ---------------------------------------------------------------------------
+
+/// One IMAGE_DEBUG_DIRECTORY entry. Each carries its own timestamp
+/// distinct from the PE COFF TimeDateStamp; PDB info is the most
+/// common type but CodeView (1), POGO (13), MPX, REPRO etc. each
+/// surface separately. Drift signals build-pipeline change.
+#[derive(Debug, Clone)]
+pub(crate) struct DebugDirEntry {
+    pub timestamp: u32,
+    pub type_id: u32,
+    pub size: u32,
+    /// Canonical short name for `type_id`, e.g. "codeview", "pogo",
+    /// "vc_feature", "ex_dllchars", "repro". `None` for unrecognized
+    /// types (the caller still surfaces `type_id` for new variants).
+    pub type_name: Option<&'static str>,
+}
+
+/// Parse all IMAGE_DEBUG_DIRECTORY entries (DataDirectory[6]). Each
+/// entry is 28 bytes. Returns `None` for non-PE input or an empty
+/// directory.
+#[must_use]
+pub(crate) fn extract_debug_directory(data: &[u8]) -> Option<Vec<DebugDirEntry>> {
+    let pe = PeHeaders::parse(data)?;
+    let (rva, size) = pe.data_directory(6)?;
+    if rva == 0 || size < 28 {
+        return None;
+    }
+    let off = pe.rva_to_offset(rva as usize)?;
+    let n = (size as usize) / 28;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n.min(64) {
+        let entry_off = off + i * 28;
+        if entry_off + 28 > data.len() {
+            break;
+        }
+        let timestamp = u32::from_le_bytes(data[entry_off + 4..entry_off + 8].try_into().ok()?);
+        let type_id = u32::from_le_bytes(data[entry_off + 12..entry_off + 16].try_into().ok()?);
+        let size = u32::from_le_bytes(data[entry_off + 16..entry_off + 20].try_into().ok()?);
+        out.push(DebugDirEntry {
+            timestamp,
+            type_id,
+            size,
+            type_name: debug_type_name(type_id),
+        });
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// IMAGE_DEBUG_TYPE_* canonical short names. Returns `None` for
+/// unrecognized types so callers can fall back to `type_id`.
+fn debug_type_name(id: u32) -> Option<&'static str> {
+    Some(match id {
+        1 => "coff",
+        2 => "codeview",
+        3 => "fpo",
+        4 => "misc",
+        5 => "exception",
+        6 => "fixup",
+        7 => "omap_to_src",
+        8 => "omap_from_src",
+        9 => "borland",
+        10 => "reserved10",
+        11 => "clsid",
+        12 => "vc_feature",
+        13 => "pogo",
+        14 => "iltcg",
+        15 => "mpx",
+        16 => "repro",
+        17 => "ex_dllcharacteristics",
+        20 => "perfmap",
+        _ => return None,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Rich header
 // ---------------------------------------------------------------------------
 

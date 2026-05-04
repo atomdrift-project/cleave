@@ -40,8 +40,8 @@ pub fn format_terminal(report: &AnalysisReport) -> String {
     };
     let mut out = String::new();
     header::write(&mut out, diff);
-    ledger::write(&mut out, diff);
     panes::write(&mut out, diff);
+    ledger::write_jitter(&mut out, diff);
     out
 }
 
@@ -51,16 +51,6 @@ pub fn format_terminal(report: &AnalysisReport) -> String {
 
 /// Fixed terminal width target for hairline rules.
 pub(super) const WIDTH: usize = 80;
-
-/// Per-scope ledger column width. Indexed by scope; iteration goes
-/// through [`Scope::ALL`].
-pub(super) const fn scope_col_width(scope: Scope) -> usize {
-    match scope {
-        Scope::Traits | Scope::Metrics => 12,
-        Scope::Strings | Scope::Sections => 11,
-        Scope::Kv | Scope::Symbols => 9,
-    }
-}
 
 /// Color a ROC percentage by intensity. Returns the printable form
 /// (with ANSI escapes) so callers can drop it straight into a writeln.
@@ -90,25 +80,6 @@ pub(super) fn count_badges(view: ScopeView<'_>) -> Vec<String> {
         parts.push(format!("~{}", view.changed_len).bright_yellow().to_string());
     }
     parts
-}
-
-/// Number of visible characters in a string ignoring ANSI escape
-/// sequences. Used for column-padding arithmetic over colored cells.
-pub(super) fn visible_chars(s: &str) -> usize {
-    let mut n = 0;
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            for c2 in chars.by_ref() {
-                if c2 == 'm' {
-                    break;
-                }
-            }
-        } else {
-            n += 1;
-        }
-    }
-    n
 }
 
 /// True for criticalities that aren't baseline / component / filtered.

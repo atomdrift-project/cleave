@@ -798,6 +798,45 @@ fn strip_whitespace(s: &str) -> String {
     s.chars().filter(|c| !c.is_whitespace()).collect()
 }
 
+/// Cheap O(1) gatekeeper for huge strings: decode the first ~256
+/// base64 characters and check for ELF / PE / archive magic. Lets
+/// `detect_base64_binary` proceed on multi-MB strings *only* when
+/// they look like packed binaries — avoiding a full 8MB+ decode on
+/// every JSON fixture or source-code blob that happens to be base64-
+/// shaped.
+///
+/// Two paths mirroring `detect_base64_binary`: pre-decoded bytes (via
+/// `encoding_chain`) get magic-checked directly; raw text gets a
+/// trial decode of just the head.
+fn head_decodes_to_known_magic(string_info: &StringInfo) -> bool {
+    if string_info
+        .encoding_chain
+        .iter()
+        .any(|e| e == "base64" || e == "base64-obf")
+    {
+        return magic_type(string_info.value.as_bytes()).is_some();
+    }
+    if !looks_like_base64(&string_info.value) {
+        return false;
+    }
+    // 256 base64 chars decode to 192 bytes — plenty for any magic check.
+    let head_chars: String = string_info
+        .value
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take(256)
+        .collect();
+    // Must be a multiple of 4 for standard base64; truncate.
+    let trimmed = &head_chars[..head_chars.len() - (head_chars.len() % 4)];
+    base64::Engine::decode(&base64::engine::general_purpose::STANDARD, trimmed)
+        .or_else(|_| {
+            base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, trimmed)
+        })
+        .ok()
+        .and_then(|bytes| magic_type(&bytes))
+        .is_some()
+}
+
 /// Detect archive/binary type from raw magic bytes.
 fn magic_type(data: &[u8]) -> Option<&'static str> {
     crate::analyzers::overlay::detect_archive_from_bytes(data).or_else(|| {
@@ -1126,10 +1165,18 @@ pub(crate) fn process_all_strings_with_host(
             break;
         }
 
-        // Skip strings that are too large for code detection (likely obfuscated/packed data)
-        // Real code fragments shouldn't be > 1MB
+        // Strings over 1 MB are a performance trap for the heavyweight
+        // detectors (full base64 decode + magic walk + recursive
+        // analysis). But they're *also* the exact shape a packed
+        // dropper takes — Kong-ingress-controller 2024 carried an
+        // 11 MB base64-encoded ELF in a single string. Skip
+        // unconditionally only when a cheap head-magic check on the
+        // string's first ~256 base64 chars rules out a packed binary;
+        // otherwise let the full pipeline run.
         const MAX_STRING_SIZE_FOR_DETECTION: usize = 1024 * 1024; // 1MB
-        if string_info.value.len() > MAX_STRING_SIZE_FOR_DETECTION {
+        if string_info.value.len() > MAX_STRING_SIZE_FOR_DETECTION
+            && !head_decodes_to_known_magic(string_info)
+        {
             continue;
         }
 

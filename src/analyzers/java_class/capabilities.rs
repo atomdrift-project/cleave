@@ -93,13 +93,7 @@ impl super::JavaClassAnalyzer {
                             id: cap_id.to_string(),
                             desc: description.to_string(),
                             conf: 0.9,
-                            crit: if cap_id.contains("unsafe") {
-                                Criticality::Notable
-                            } else if *cap_id == "net/jndi" || *cap_id == "net/rmi" {
-                                Criticality::Suspicious
-                            } else {
-                                Criticality::Notable
-                            },
+                            crit: Criticality::Notable,
                             mbc: None,
                             attack: None,
                             evidence: vec![Evidence {
@@ -149,7 +143,7 @@ impl super::JavaClassAnalyzer {
                     "net/transfer",
                     "File transfer operation",
                     &method.name,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
             if method_lower.contains("inject") || method_lower.contains("hook") {
@@ -158,7 +152,7 @@ impl super::JavaClassAnalyzer {
                     "execution/inject",
                     "Code injection method",
                     &method.name,
-                    Criticality::Hostile,
+                    Criticality::Suspicious,
                 );
             }
             if method_lower.contains("keylog") || method_lower.contains("capture") {
@@ -167,7 +161,7 @@ impl super::JavaClassAnalyzer {
                     "credential/keylogger",
                     "Potential keylogging",
                     &method.name,
-                    Criticality::Hostile,
+                    Criticality::Suspicious,
                 );
             }
         }
@@ -214,7 +208,7 @@ impl super::JavaClassAnalyzer {
                     "credential/password",
                     "Credential stealing indicator",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Suspicious,
                 );
             } else if s_lower.contains("steal") && s_lower.contains("pass")
                 || s_lower.contains("dump") && s_lower.contains("pass")
@@ -226,7 +220,7 @@ impl super::JavaClassAnalyzer {
                     "credential/password",
                     "Credential stealing indicator",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             } else if Self::contains_word(&s_lower, "password")
                 || s_lower.contains("-pass")
@@ -298,7 +292,7 @@ impl super::JavaClassAnalyzer {
                     "impact/control",
                     "System control capability",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
 
@@ -313,7 +307,7 @@ impl super::JavaClassAnalyzer {
                     "privilege-escalation/indicator",
                     "Privilege escalation indicator",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
 
@@ -358,27 +352,27 @@ impl super::JavaClassAnalyzer {
                     "impact/remote-access",
                     "Remote access trojan indicator",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
 
             // File operations. Skip strings that look like Java class refs / type
             // descriptors (e.g. "org/apache/tomcat/util/http/fileupload/...") — these
-            // are framework package paths, not exfiltration intent. Use "exfilt" rather
-            // than "exfil" so benign substrings like "ClassPathIndexFile" do not match.
+            // are framework package paths, not exfiltration intent.
             let looks_like_class_path = s.contains('/') || s.starts_with('L') && s.ends_with(';');
             if !looks_like_class_path
                 && (s_lower.contains("file-manager")
                     || s_lower.contains("browse-file")
                     || s_lower.contains("upload")
-                    || s_lower.contains("exfilt"))
+                    || s_lower.contains("exfiltrate")
+                    || Self::contains_word(&s_lower, "exfil"))
             {
                 self.add_capability(
                     report,
                     "exfiltration/data",
                     "Data exfiltration capability",
                     s,
-                    Criticality::Suspicious,
+                    Criticality::Notable,
                 );
             }
 
@@ -392,7 +386,7 @@ impl super::JavaClassAnalyzer {
                     "exfiltration/screenshot",
                     "Screenshot capability",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Notable,
                 );
             }
 
@@ -407,7 +401,7 @@ impl super::JavaClassAnalyzer {
                     "exfiltration/av-capture",
                     "Audio/video capture capability",
                     s,
-                    Criticality::Hostile,
+                    Criticality::Notable,
                 );
             }
         }

@@ -33,10 +33,10 @@ use crate::capabilities::validation::{
     find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_raw_should_use_text,
     find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_redundant_unix_platforms, find_short_pattern_warnings, find_should_use_defaults,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates,
-    find_structural_regex_duplicates, find_too_short_patterns,
+    find_redundant_unix_platforms, find_self_referencing_traits, find_short_pattern_warnings,
+    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -1530,6 +1530,48 @@ impl super::CapabilityMapper {
                     invalid_ids.len()
                 ));
             }
+
+            // Self-referencing traits — `if: type: trait, id: <self>`
+            // never fires because the runtime resolves the reference
+            // by checking the findings table, but the trait itself
+            // hasn't been added yet. Silent failure → every composite
+            // depending on it is silently dead.
+            tracing::trace!("Step 7b/15: Checking for self-referencing traits");
+            let self_refs = find_self_referencing_traits(&trait_definitions);
+            if !self_refs.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} traits self-reference (will never fire)",
+                    self_refs.len()
+                );
+                eprintln!(
+                    "   `if: type: trait, id: <self>` queries the findings table for the\n   \
+                     trait being evaluated, which hasn't been added yet — the lookup is\n   \
+                     always false. Composites that depend on this trait silently fail.\n"
+                );
+                for trait_def in &self_refs {
+                    let source_file = rule_source_files
+                        .get(&trait_def.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source_file, &trait_def.id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Trait '{}' references itself",
+                            source_file, line, trait_def.id
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Trait '{}' references itself",
+                            source_file, trait_def.id
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} self-referencing traits (will never fire)",
+                    self_refs.len()
+                ));
+            }
         } // End of enable_full_validation block for steps 3-7
 
         tracing::trace!("Step 8/15: Validating trait references in composite rules");
@@ -1544,7 +1586,6 @@ impl super::CapabilityMapper {
                     if ref_id.starts_with("metadata/import/")
                         || ref_id.starts_with("metadata/dylib/")
                         || ref_id.starts_with("metadata/signed/")
-                        || ref_id.starts_with("metadata/internal/")
                     {
                         continue;
                     }
@@ -1638,9 +1679,13 @@ impl super::CapabilityMapper {
 
         // Steps 11-15: Additional validation checks (skip when validation disabled)
         if enable_full_validation {
-            // Validate that composite rules don't reference metadata/internal/ paths
-            // Internal paths are for ML usage only and must not be used in composite rules
-            tracing::trace!("Step 11/15: Checking for internal path references");
+            // Validate that composite rules don't reference the
+            // retired `metadata/internal/symbols::*` namespace. The
+            // auto-emit was removed because it dominated diff/output
+            // noise for binaries with many imports; YAML rules that
+            // need to gate on a specific symbol/function call should
+            // use inline `type: symbol, exact: <name>` conditions.
+            tracing::trace!("Step 11/15: Checking for retired internal/symbols references");
             let mut internal_refs = Vec::new();
             for rule in &composite_rules {
                 let trait_refs = collect_trait_refs_from_rule(rule);
@@ -1657,27 +1702,27 @@ impl super::CapabilityMapper {
 
             if !internal_refs.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} composite rules reference internal paths",
+                    "\n❌ ERROR: {} composite rules reference the retired metadata/internal/ namespace",
                     internal_refs.len()
                 );
-                eprintln!("   Internal paths (metadata/internal/) are for ML usage only and cannot be used in composite rules:\n");
+                eprintln!("   The metadata/internal/symbols::* auto-emit was removed; replace each reference with an inline `type: symbol, exact: <name>` condition.\n");
                 for (rule_id, ref_id, source_file) in &internal_refs {
                     let line_hint = find_line_number(source_file, ref_id);
                     if let Some(line) = line_hint {
                         eprintln!(
-                            "   {}:{}: Rule '{}' references internal path: '{}'",
+                            "   {}:{}: Rule '{}' references retired path: '{}'",
                             source_file, line, rule_id, ref_id
                         );
                     } else {
                         eprintln!(
-                            "   {}: Rule '{}' references internal path: '{}'",
+                            "   {}: Rule '{}' references retired path: '{}'",
                             source_file, rule_id, ref_id
                         );
                     }
                 }
-                eprintln!("\n   Use metadata/import/ or metadata/dylib/ for import-based detection instead.");
+                eprintln!();
                 warnings.push(format!(
-                    "{} composite rules reference internal paths (metadata/internal/)",
+                    "{} composite rules reference retired metadata/internal/ paths",
                     internal_refs.len()
                 ));
             }
@@ -3149,11 +3194,9 @@ impl super::CapabilityMapper {
                     // Skip validation for dynamically generated metadata/* references
                     // - metadata/import/ and metadata/dylib/ are generated from binary imports
                     // - metadata/signed/ is generated from code signature parsing
-                    // - metadata/internal/ is validated separately (forbidden in composite rules)
                     let is_dynamic_or_internal = ref_id.starts_with("metadata/import/")
                         || ref_id.starts_with("metadata/dylib/")
-                        || ref_id.starts_with("metadata/signed/")
-                        || ref_id.starts_with("metadata/internal/");
+                        || ref_id.starts_with("metadata/signed/");
 
                     // Check if the exact trait ID exists (unless it's an intentional directory ref)
                     // Note: We require exact matches. References like "micro-behaviors/foo/bar/filename" where

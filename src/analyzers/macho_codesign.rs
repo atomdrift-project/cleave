@@ -83,6 +83,11 @@ pub(crate) struct CodeSignature {
     /// Indexed slots: host=1, guest=2, designated=3, library=4,
     /// plugin=5. Most binaries carry only the designated requirement.
     pub requirements_slot_count: u32,
+    /// Unix timestamp (seconds) recovered from the CMS signing-time
+    /// authenticated attribute (PKCS#9 OID 1.2.840.113549.1.9.5).
+    /// `None` for ad-hoc / platform binaries with no CMS, or when
+    /// the timestamp is absent / unparseable.
+    pub signing_time: Option<u64>,
 }
 
 // Magic numbers for Mach-O code signature blobs
@@ -125,13 +130,14 @@ pub(crate) fn parse_code_signature(
     // CodeDirectory but no CMS (no certificate chain) is adhoc-signed — this
     // is the default for Go's linker on macOS since Go 1.20 and for any
     // developer-local build before `codesign -s ...`.
-    let (team_id, signature_type, authorities) =
+    let (team_id, signature_type, authorities, signing_time) =
         if let Some(cms_data) = blobs.get(&CMS_SIGNATURE_MAGIC) {
-            extract_certificate_info(cms_data)
+            let (tid, st, auths) = extract_certificate_info(cms_data);
+            (tid, st, auths, extract_cms_signing_time(cms_data))
         } else if blobs.contains_key(&CODE_DIRECTORY_MAGIC) {
-            (None, SignatureType::Adhoc, vec![])
+            (None, SignatureType::Adhoc, vec![], None)
         } else {
-            (None, SignatureType::Unknown, vec![])
+            (None, SignatureType::Unknown, vec![], None)
         };
 
     let signer = authorities.first().cloned();
@@ -176,7 +182,113 @@ pub(crate) fn parse_code_signature(
         cdhash_sha256,
         requirements_sha256,
         requirements_slot_count,
+        signing_time,
     })
+}
+
+/// Scan a CMS blob for the PKCS#9 signing-time authenticated
+/// attribute and decode the timestamp to Unix seconds.
+///
+/// Strategy: locate the OID 1.2.840.113549.1.9.5 in DER (`06 09 2A
+/// 86 48 86 F7 0D 01 09 05`), then look ahead for a SET (`0x31`)
+/// containing either UTCTime (`0x17`) or GeneralizedTime (`0x18`).
+/// Lenient — bails on malformed input rather than propagating errors.
+fn extract_cms_signing_time(cms_data: &[u8]) -> Option<u64> {
+    const SIGNING_TIME_OID: [u8; 11] = [
+        0x06, 0x09, 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05,
+    ];
+    let pos = cms_data
+        .windows(SIGNING_TIME_OID.len())
+        .position(|w| w == SIGNING_TIME_OID)?;
+    // Search up to 32 bytes past the OID for the time tag.
+    let scan_end = (pos + SIGNING_TIME_OID.len() + 32).min(cms_data.len());
+    let region = &cms_data[pos + SIGNING_TIME_OID.len()..scan_end];
+    for (i, &byte) in region.iter().enumerate() {
+        match byte {
+            0x17 if i + 14 < region.len() => {
+                let len = region[i + 1] as usize;
+                if len < 11 || i + 2 + len > region.len() {
+                    continue;
+                }
+                let s = std::str::from_utf8(&region[i + 2..i + 2 + len]).ok()?;
+                return parse_utctime(s);
+            }
+            0x18 if i + 16 < region.len() => {
+                let len = region[i + 1] as usize;
+                if len < 14 || i + 2 + len > region.len() {
+                    continue;
+                }
+                let s = std::str::from_utf8(&region[i + 2..i + 2 + len]).ok()?;
+                return parse_generalizedtime(s);
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse ASN.1 UTCTime (`YYMMDDHHMMSSZ` or `YYMMDDHHMMZ`) to Unix
+/// seconds. Y2K convention: 2-digit years 00-49 = 2000-2049; 50-99
+/// = 1950-1999.
+fn parse_utctime(s: &str) -> Option<u64> {
+    let s = s.trim_end_matches('Z');
+    if s.len() != 12 && s.len() != 10 {
+        return None;
+    }
+    let yy: u32 = s[0..2].parse().ok()?;
+    let year = if yy < 50 { 2000 + yy } else { 1900 + yy };
+    let mo: u32 = s[2..4].parse().ok()?;
+    let dy: u32 = s[4..6].parse().ok()?;
+    let hr: u32 = s[6..8].parse().ok()?;
+    let mn: u32 = s[8..10].parse().ok()?;
+    let sc: u32 = if s.len() == 12 {
+        s[10..12].parse().ok()?
+    } else {
+        0
+    };
+    civil_to_unix(year, mo, dy, hr, mn, sc)
+}
+
+/// Parse ASN.1 GeneralizedTime (`YYYYMMDDHHMMSSZ`) to Unix seconds.
+fn parse_generalizedtime(s: &str) -> Option<u64> {
+    let s = s.trim_end_matches('Z');
+    if s.len() < 14 {
+        return None;
+    }
+    let year: u32 = s[0..4].parse().ok()?;
+    let mo: u32 = s[4..6].parse().ok()?;
+    let dy: u32 = s[6..8].parse().ok()?;
+    let hr: u32 = s[8..10].parse().ok()?;
+    let mn: u32 = s[10..12].parse().ok()?;
+    let sc: u32 = s[12..14].parse().ok()?;
+    civil_to_unix(year, mo, dy, hr, mn, sc)
+}
+
+/// Convert a civil UTC date/time to Unix seconds. Uses Hinnant's
+/// algorithm (no chrono dependency required, no leap-second support
+/// — sufficient for build-attribution comparison).
+fn civil_to_unix(year: u32, month: u32, day: u32, hour: u32, min: u32, sec: u32) -> Option<u64> {
+    if !(1970..=2200).contains(&year)
+        || !(1..=12).contains(&month)
+        || !(1..=31).contains(&day)
+        || hour >= 24
+        || min >= 60
+        || sec >= 62
+    {
+        return None;
+    }
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y / 400;
+    let yoe = y - era * 400;
+    let doy = (153 * if month > 2 { month - 3 } else { month + 9 } + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = (era as i64) * 146097 + (doe as i64) - 719468;
+    let seconds = days * 86400 + i64::from(hour) * 3600 + i64::from(min) * 60 + i64::from(sec);
+    if seconds < 0 {
+        None
+    } else {
+        Some(seconds as u64)
+    }
 }
 
 /// Parse superblob structure and extract individual blobs

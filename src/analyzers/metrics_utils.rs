@@ -437,11 +437,11 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
     if !report.functions.is_empty() {
         let total_size: u64 = report.functions.iter().map(|f| f.size.unwrap_or(0)).sum();
         if total_size > 0 {
-            binary.avg_function_size = total_size as f32 / report.functions.len() as f32;
+            binary.avg_func_size = total_size as f32 / report.functions.len() as f32;
         }
 
         // Count high complexity functions (threshold: 50+ matches BinaryMetrics definition)
-        binary.high_complexity_functions = report
+        binary.high_complexity_funcs = report
             .functions
             .iter()
             .filter(|f| {
@@ -458,7 +458,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
     if code_kb > 0.0 {
         binary.import_density = binary.import_count as f32 / code_kb;
         binary.string_density = binary.string_count as f32 / code_kb;
-        binary.function_density = binary.function_count as f32 / code_kb;
+        binary.func_density = binary.func_count as f32 / code_kb;
     }
 
     if binary.string_count > 0 {

@@ -365,8 +365,22 @@ impl<'a> RuleDebugger<'a> {
             };
         }
 
-        // For matched/unmatched, still use debug_condition for detailed condition info
-        let cond_result = self.debug_condition(condition);
+        // For matched/unmatched, still use debug_condition for detailed condition info.
+        // Short-circuit self-referencing traits — `if: type: trait, id: <self>`
+        // would otherwise loop through `debug_trait_reference` →
+        // `debug_trait_via_evaluation` → here forever and overflow the stack.
+        let cond_result = if let Condition::Trait { id } = condition {
+            if id == &trait_def.id {
+                ConditionDebugResult::new(
+                    format!("trait: {id} (self-reference — never fires)"),
+                    false,
+                )
+            } else {
+                self.debug_condition(condition)
+            }
+        } else {
+            self.debug_condition(condition)
+        };
 
         RuleDebugResult {
             rule_id: trait_def.id.to_string(),
@@ -617,8 +631,20 @@ impl<'a> RuleDebugger<'a> {
                 substr,
                 regex,
                 case_insensitive,
+                exists,
+                size_min,
+                size_max,
                 ..
-            } => self.debug_kv_condition(path, exact, substr, regex, *case_insensitive),
+            } => self.debug_kv_condition(
+                path,
+                exact,
+                substr,
+                regex,
+                *case_insensitive,
+                *exists,
+                *size_min,
+                *size_max,
+            ),
             Condition::Hex {
                 pattern,
                 offset,
@@ -669,20 +695,27 @@ impl<'a> RuleDebugger<'a> {
         // Step 2: Check prefix/suffix matching (like eval_trait slow path)
         let slash_count = id.matches('/').count();
 
+        // Mirror eval_trait()'s slow path: both `::` (current trait id
+        // separator) and `/` (legacy form) must be checked. Earlier
+        // this only checked `/`, so directory-prefix references like
+        // `micro-behaviors/dylib/library/libc` reported "not found"
+        // even when `…/libc::libc-version-string` was firing — yielding
+        // MATCHED-header / 0-of-N-body divergence.
         if slash_count == 0 {
-            // Short name: suffix match (e.g., "terminate" matches "execution/process/terminate")
-            let suffix = format!("/{}", id);
+            // Short name: suffix match for same-directory relative reference.
+            let suffix_new = format!("::{}", id);
+            let suffix_legacy = format!("/{}", id);
             let matching_findings: Vec<_> = self
                 .report
                 .findings
                 .iter()
-                .filter(|f| f.id.ends_with(&suffix))
+                .filter(|f| f.id.ends_with(&suffix_new) || f.id.ends_with(&suffix_legacy))
                 .collect();
 
             if !matching_findings.is_empty() {
                 let mut result = ConditionDebugResult::new(desc, true);
                 result.details.push(format!(
-                    "✓ {} finding(s) matched suffix '/{}' in findings:",
+                    "✓ {} finding(s) matched suffix '{}' in findings:",
                     matching_findings.len(),
                     id
                 ));
@@ -701,19 +734,20 @@ impl<'a> RuleDebugger<'a> {
                 return result;
             }
         } else {
-            // Directory path: prefix match (any trait within that directory)
-            let prefix = format!("{}/", id);
+            // Directory path: prefix match (any trait within that directory).
+            let prefix_new = format!("{}::", id);
+            let prefix_legacy = format!("{}/", id);
             let matching_findings: Vec<_> = self
                 .report
                 .findings
                 .iter()
-                .filter(|f| f.id.starts_with(&prefix))
+                .filter(|f| f.id.starts_with(&prefix_new) || f.id.starts_with(&prefix_legacy))
                 .collect();
 
             if !matching_findings.is_empty() {
                 let mut result = ConditionDebugResult::new(desc.clone(), true);
                 result.details.push(format!(
-                    "✓ {} finding(s) matched prefix '{}/' in findings:",
+                    "✓ {} finding(s) matched prefix '{}' in findings:",
                     matching_findings.len(),
                     id
                 ));
@@ -933,10 +967,9 @@ impl<'a> RuleDebugger<'a> {
                     result
                         .details
                         .push(format!("  binary.string_count: {}", binary.string_count));
-                    result.details.push(format!(
-                        "  binary.function_count: {}",
-                        binary.function_count
-                    ));
+                    result
+                        .details
+                        .push(format!("  binary.func_count: {}", binary.func_count));
                     result.details.push(format!(
                         "  binary.avg_complexity: {:.2}",
                         binary.avg_complexity
@@ -1216,6 +1249,10 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
+    // Mirrors the full set of kv-condition operators a trait can
+    // declare; bundling into a struct here would just push the
+    // boilerplate one layer over.
+    #[allow(clippy::too_many_arguments)]
     fn debug_kv_condition(
         &self,
         path: &str,
@@ -1223,6 +1260,9 @@ impl<'a> RuleDebugger<'a> {
         substr: &Option<String>,
         regex: &Option<String>,
         case_insensitive: bool,
+        exists: Option<bool>,
+        size_min: Option<usize>,
+        size_max: Option<usize>,
     ) -> ConditionDebugResult {
         let pattern_desc = if let Some(e) = exact {
             format!("exact: \"{}\"", truncate_string(e, 40))
@@ -1230,22 +1270,34 @@ impl<'a> RuleDebugger<'a> {
             format!("substr: \"{}\"", truncate_string(c, 40))
         } else if let Some(r) = regex {
             format!("regex: /{}/", truncate_string(r, 40))
-        } else {
+        } else if exists == Some(true) {
             "exists".to_string()
+        } else if let (Some(min), Some(max)) = (size_min, size_max) {
+            format!("size {}..{}", min, max)
+        } else if let Some(min) = size_min {
+            format!("size_min {}", min)
+        } else if let Some(max) = size_max {
+            format!("size_max {}", max)
+        } else {
+            "(no constraint)".to_string()
         };
 
         let desc = format!("kv: path=\"{}\" {}", path, pattern_desc);
 
-        // Use the actual kv evaluator
+        // Use the actual kv evaluator. Earlier this discarded `exists`,
+        // `size_min`, and `size_max` from the parent condition, so a
+        // YAML trait like `type: kv, path: …, exists: true, size_min: 1`
+        // was rebuilt as a no-op match — every kv-only trait reported
+        // NOT MATCHED in test-rules even when it fired in production.
         let condition = Condition::Kv {
             path: path.to_string(),
             exact: exact.clone(),
             substr: substr.clone(),
             regex: regex.clone(),
             case_insensitive,
-            exists: None,
-            size_min: None,
-            size_max: None,
+            exists,
+            size_min,
+            size_max,
             compiled_regex: regex.as_ref().and_then(|r| regex::Regex::new(r).ok()),
         };
 

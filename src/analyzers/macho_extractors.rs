@@ -49,6 +49,10 @@ const LC_BUILD_VERSION: u32 = 0x32;
 const LC_CODE_SIGNATURE: u32 = 0x1D;
 const LC_SEGMENT: u32 = 0x01;
 const LC_SEGMENT_64: u32 = 0x19;
+const LC_FUNCTION_STARTS: u32 = 0x26;
+/// Mach VM protection bits — same on all platforms.
+const VM_PROT_WRITE: u32 = 0x02;
+const VM_PROT_EXECUTE: u32 = 0x04;
 
 const LC_REQ_DYLD: u32 = 0x8000_0000;
 
@@ -85,7 +89,7 @@ pub(crate) fn extract_all_slices(data: &[u8]) -> Vec<SliceSummary> {
         let mut uuid = None;
         let mut has_cs = false;
         if let Some(after) = parse_header(data, offset, is_64) {
-            if let Some(lc) = parse_load_commands(data, after.cmds_offset, after.ncmds) {
+            if let Some(lc) = parse_load_commands(data, after.cmds_offset, after.ncmds, offset) {
                 uuid = lc.uuid;
                 has_cs = lc.code_signature.is_some();
             }
@@ -222,6 +226,12 @@ pub(crate) struct MachoLoadCommands {
     pub build_version: Option<MachoBuildVersion>,
     pub source_version: Option<String>,
     pub id_dylib: Option<String>,
+    /// Path-token classification of `id_dylib` (the dylib's own
+    /// install_name): `"absolute"`, `"rpath"`, `"loader_path"`, or
+    /// `"executable_path"`. The 3CX backdoor flipped its libffmpeg
+    /// from `@rpath` to `@loader_path` to make injection from
+    /// arbitrary directories work.
+    pub install_name_kind: Option<String>,
     pub load_dylibs: Vec<MachoDylib>,
     pub rpath: Vec<String>,
     pub linker_options: Vec<String>,
@@ -229,6 +239,16 @@ pub(crate) struct MachoLoadCommands {
     /// Callers feed this to `macho_codesign::parse_code_signature` to
     /// recover team_id / entitlements / authorities.
     pub code_signature: Option<(u32, u32)>,
+    /// Decoded count of LC_FUNCTION_STARTS entries (function entry
+    /// points known to dyld). Distinct from radare2's `func_count`
+    /// which comes from disassembly.
+    pub function_starts_count: u32,
+    /// Names of segments whose initial protection (`init_prot`)
+    /// permits both write and execute — i.e. mapped RWX from load.
+    /// Anomalous: ordinary binaries map __TEXT as r-x and __DATA as
+    /// rw-. RWX init_prot indicates self-modifying code or runtime
+    /// patching infrastructure (JIT engines, packers).
+    pub wx_init_prot_segments: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +275,13 @@ pub(crate) struct MachoDylib {
     pub path: String,
     /// One of `"load"`, `"weak"`, `"lazy"`, `"reexport"`, `"upward"`.
     pub kind: String,
+    /// Path-token classification: `"absolute"`, `"rpath"`,
+    /// `"loader_path"`, or `"executable_path"`.
+    pub path_kind: String,
+    /// LC_LOAD_DYLIB `timestamp` field (u32, seconds since epoch).
+    /// Often zero in modern dyld-3 builds; non-zero values predate ~2018
+    /// and carry a weak who/when signal.
+    pub timestamp: u32,
     /// Compatibility version (encoded X.Y.Z).
     pub compatibility_version: String,
     /// Current version (encoded X.Y.Z).
@@ -268,7 +295,12 @@ pub(crate) struct MachoDylib {
 pub(crate) fn extract(data: &[u8]) -> Option<MachoLoadCommands> {
     let (header_off, is_64) = locate_first_macho_slice(data)?;
     let after_header = parse_header(data, header_off, is_64)?;
-    let mut out = parse_load_commands(data, after_header.cmds_offset, after_header.ncmds)?;
+    let mut out = parse_load_commands(
+        data,
+        after_header.cmds_offset,
+        after_header.ncmds,
+        header_off,
+    )?;
     // LC_CODE_SIGNATURE.dataoff is slice-relative.  Promote to a
     // file-absolute offset so callers (binary_extractors) can pass
     // the raw file bytes without having to track which slice we
@@ -354,7 +386,12 @@ fn parse_header(data: &[u8], off: usize, is_64: bool) -> Option<HeaderInfo> {
     })
 }
 
-fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoLoadCommands> {
+fn parse_load_commands(
+    data: &[u8],
+    start: usize,
+    ncmds: usize,
+    slice_off: usize,
+) -> Option<MachoLoadCommands> {
     let mut out = MachoLoadCommands::default();
     let mut cursor = start;
     for _ in 0..ncmds {
@@ -393,10 +430,42 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
             | LC_REEXPORT_DYLIB | LC_LOAD_UPWARD_DYLIB => {
                 if let Some(d) = parse_dylib(body, cmd) {
                     if cmd == LC_ID_DYLIB {
+                        out.install_name_kind = Some(d.path_kind.clone());
                         out.id_dylib = Some(d.path);
                     } else {
                         out.load_dylibs.push(d);
                     }
+                }
+            }
+            LC_SEGMENT_64 if body.len() >= 72 => {
+                let segname = parse_fixed_name(&body[8..24]);
+                // segment_command_64: char segname[16], u64 vmaddr,
+                // u64 vmsize, u64 fileoff, u64 filesize,
+                // u32 maxprot @56, u32 initprot @60.
+                // We check initprot — it's what actually gets mapped.
+                // maxprot is almost always 0x07 (rwx) on Apple's
+                // linker; the signal lives in initprot.
+                let initprot = u32::from_le_bytes(body[60..64].try_into().ok()?);
+                if initprot & VM_PROT_WRITE != 0 && initprot & VM_PROT_EXECUTE != 0 {
+                    out.wx_init_prot_segments.push(segname);
+                }
+            }
+            LC_SEGMENT if body.len() >= 56 => {
+                let segname = parse_fixed_name(&body[8..24]);
+                // segment_command (32-bit): char segname[16], u32 vmaddr,
+                // u32 vmsize, u32 fileoff, u32 filesize,
+                // u32 maxprot @40, u32 initprot @44.
+                let initprot = u32::from_le_bytes(body[44..48].try_into().ok()?);
+                if initprot & VM_PROT_WRITE != 0 && initprot & VM_PROT_EXECUTE != 0 {
+                    out.wx_init_prot_segments.push(segname);
+                }
+            }
+            LC_FUNCTION_STARTS if body.len() >= 16 => {
+                let dataoff = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
+                let datasize = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
+                let abs = slice_off.saturating_add(dataoff);
+                if let Some(slice) = data.get(abs..abs.saturating_add(datasize)) {
+                    out.function_starts_count = count_function_starts(slice);
                 }
             }
             LC_CODE_SIGNATURE if body.len() >= 16 => {
@@ -440,10 +509,44 @@ fn parse_load_commands(data: &[u8], start: usize, ncmds: usize) -> Option<MachoL
         && out.rpath.is_empty()
         && out.linker_options.is_empty()
         && out.code_signature.is_none()
+        && out.function_starts_count == 0
+        && out.wx_init_prot_segments.is_empty()
     {
         return None;
     }
     Some(out)
+}
+
+/// Count entries in an LC_FUNCTION_STARTS payload. The blob is a
+/// sequence of ULEB128-encoded address deltas terminated by a zero
+/// delta. Each non-terminating delta corresponds to one function
+/// known to dyld.
+fn count_function_starts(data: &[u8]) -> u32 {
+    let mut count: u32 = 0;
+    let mut i = 0usize;
+    while i < data.len() {
+        let mut value: u64 = 0;
+        let mut shift = 0u32;
+        let mut consumed = 0usize;
+        loop {
+            if i + consumed >= data.len() || shift >= 63 {
+                return count;
+            }
+            let byte = data[i + consumed];
+            value |= ((byte & 0x7f) as u64) << shift;
+            consumed += 1;
+            if byte & 0x80 == 0 {
+                break;
+            }
+            shift += 7;
+        }
+        i += consumed;
+        if value == 0 {
+            break;
+        }
+        count = count.saturating_add(1);
+    }
+    count
 }
 
 /// Format the LC_UUID 16-byte field as a canonical hyphenated UUID.
@@ -495,16 +598,43 @@ fn parse_dylib(body: &[u8], cmd: u32) -> Option<MachoDylib> {
         return None;
     }
     let name_offset = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-    let _timestamp = u32::from_le_bytes(body[12..16].try_into().ok()?);
+    let timestamp = u32::from_le_bytes(body[12..16].try_into().ok()?);
     let current = u32::from_le_bytes(body[16..20].try_into().ok()?);
     let compat = u32::from_le_bytes(body[20..24].try_into().ok()?);
     let path = read_lc_string(body, name_offset)?;
+    let path_kind = classify_install_name_path(&path).to_string();
     Some(MachoDylib {
         path,
         kind: dylib_kind(cmd).to_string(),
+        path_kind,
+        timestamp,
         compatibility_version: decode_xyz_version(compat),
         current_version: decode_xyz_version(current),
     })
+}
+
+/// Classify an install_name / dylib path by its leading dyld token.
+/// Distinguishes the three flexible runtime-resolution forms from
+/// the absolute path. The 3CX backdoor toggled libffmpeg's
+/// install_name from `@rpath` to `@loader_path`; surfacing the
+/// kind lets traits compare the categorical value rather than
+/// regex-matching the raw string.
+fn classify_install_name_path(path: &str) -> &'static str {
+    if let Some(rest) = path.strip_prefix('@') {
+        if rest.starts_with("rpath/") || rest == "rpath" {
+            "rpath"
+        } else if rest.starts_with("loader_path/") || rest == "loader_path" {
+            "loader_path"
+        } else if rest.starts_with("executable_path/") || rest == "executable_path" {
+            "executable_path"
+        } else {
+            "other_token"
+        }
+    } else if path.starts_with('/') {
+        "absolute"
+    } else {
+        "relative"
+    }
 }
 
 fn dylib_kind(cmd: u32) -> &'static str {
@@ -590,6 +720,70 @@ pub(crate) fn find_section<'a>(data: &'a [u8], segname: &str, sectname: &str) ->
     let (header_off, is_64) = locate_first_macho_slice(data)?;
     let after_header = parse_header(data, header_off, is_64)?;
     walk_segments_for_section(data, header_off, after_header, is_64, segname, sectname)
+}
+
+/// Decoded `__DATA,__objc_imageinfo` (or `__OBJC,__image_info` for
+/// pre-2018 binaries). Reveals Swift toolchain version even when no
+/// Swift symbols are exposed; `is_simulated` distinguishes simulator-
+/// targeted slices.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ObjcImageInfo {
+    /// Canonical Swift version derived from bits 8..16 of `flags`.
+    /// Returns `None` for pure ObjC binaries (Swift bits = 0).
+    pub swift_version: Option<&'static str>,
+    /// Bit 5 — `OBJC_IMAGE_IS_SIMULATED`.
+    pub is_simulated: bool,
+    /// Bit 3 — `OBJC_IMAGE_OPTIMIZED_BY_DYLD`.
+    pub optimized_by_dyld: bool,
+    /// Bit 6 — `OBJC_IMAGE_HAS_CATEGORY_CLASS_PROPERTIES`.
+    pub has_category_class_properties: bool,
+}
+
+impl ObjcImageInfo {
+    pub(crate) fn is_empty(&self) -> bool {
+        self.swift_version.is_none()
+            && !self.is_simulated
+            && !self.optimized_by_dyld
+            && !self.has_category_class_properties
+    }
+}
+
+/// Parse `__DATA,__objc_imageinfo` (8 bytes: u32 version, u32 flags).
+/// Falls back to `__OBJC,__image_info` for pre-2018 binaries. Returns
+/// `None` if neither section is present.
+#[must_use]
+pub(crate) fn extract_objc_imageinfo(data: &[u8]) -> Option<ObjcImageInfo> {
+    let bytes = find_section(data, "__DATA", "__objc_imageinfo")
+        .or_else(|| find_section(data, "__DATA_CONST", "__objc_imageinfo"))
+        .or_else(|| find_section(data, "__OBJC", "__image_info"))?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let flags = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
+    let swift_byte = ((flags >> 8) & 0xff) as u8;
+    Some(ObjcImageInfo {
+        swift_version: swift_version_name(swift_byte),
+        is_simulated: flags & (1 << 5) != 0,
+        optimized_by_dyld: flags & (1 << 3) != 0,
+        has_category_class_properties: flags & (1 << 6) != 0,
+    })
+}
+
+/// Map the high-byte Swift version field to a canonical name. Apple's
+/// runtime defines a fixed table; values past 7 are Swift 5.x where
+/// the exact version is encoded by additional metadata in the binary.
+fn swift_version_name(byte: u8) -> Option<&'static str> {
+    Some(match byte {
+        0 => return None,
+        1 => "1.0",
+        2 => "1.1",
+        3 => "2.0",
+        4 => "3.0",
+        5 => "4.0",
+        6 => "4.1",
+        7 => "4.2",
+        _ => "5.0+",
+    })
 }
 
 fn walk_segments_for_section<'a>(

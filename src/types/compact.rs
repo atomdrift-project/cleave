@@ -230,10 +230,6 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
     let mut trait_order: Vec<&str> = Vec::new();
 
     for finding in &file.findings {
-        if finding.id.starts_with("metadata/internal/symbols::") {
-            continue;
-        }
-
         let evidence_values: Vec<String> = finding
             .evidence
             .iter()

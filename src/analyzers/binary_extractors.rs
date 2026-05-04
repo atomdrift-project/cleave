@@ -35,6 +35,18 @@ use std::collections::BTreeSet;
 ///   match individual entries.
 #[must_use]
 pub(crate) fn extract_elf_comment(data: &[u8]) -> Option<String> {
+    let entries = extract_elf_comment_entries(data)?;
+    Some(entries.join("; "))
+}
+
+/// Read `.comment` as the original NUL-separated list of entries.
+/// Each entry corresponds to a banner contributed by one input
+/// object file at link time. Distinct entries from different
+/// toolchain families in a single binary signal that one or more
+/// `.o` files were built outside the main toolchain — the canonical
+/// xz-class supply-chain tampering tell.
+#[must_use]
+pub(crate) fn extract_elf_comment_entries(data: &[u8]) -> Option<Vec<String>> {
     let bytes = read_section(data, b".comment")?;
     let tokens: Vec<String> = bytes
         .split(|&b| b == 0)
@@ -45,7 +57,7 @@ pub(crate) fn extract_elf_comment(data: &[u8]) -> Option<String> {
     if tokens.is_empty() {
         None
     } else {
-        Some(tokens.join("; "))
+        Some(tokens)
     }
 }
 
@@ -189,6 +201,7 @@ fn scan_section_fallback<'a>(_data: &'a [u8], _name: &[u8]) -> Option<&'a [u8]> 
 #[derive(Debug, Clone, Copy)]
 struct Shdr {
     sh_name: u32,
+    sh_addr: u64,
     sh_offset: u64,
     sh_size: u64,
 }
@@ -198,22 +211,93 @@ fn read_shdr(data: &[u8], shoff: usize, entsize: usize, idx: usize, is_64: bool)
     let entry = data.get(off..off + entsize)?;
     let sh_name = u32::from_le_bytes(entry.get(..4)?.try_into().ok()?);
     if is_64 {
+        let sh_addr = u64::from_le_bytes(entry.get(0x10..0x18)?.try_into().ok()?);
         let sh_offset = u64::from_le_bytes(entry.get(0x18..0x20)?.try_into().ok()?);
         let sh_size = u64::from_le_bytes(entry.get(0x20..0x28)?.try_into().ok()?);
         Some(Shdr {
             sh_name,
+            sh_addr,
             sh_offset,
             sh_size,
         })
     } else {
+        let sh_addr = u32::from_le_bytes(entry.get(0x0c..0x10)?.try_into().ok()?) as u64;
         let sh_offset = u32::from_le_bytes(entry.get(0x10..0x14)?.try_into().ok()?) as u64;
         let sh_size = u32::from_le_bytes(entry.get(0x14..0x18)?.try_into().ok()?) as u64;
         Some(Shdr {
             sh_name,
+            sh_addr,
             sh_offset,
             sh_size,
         })
     }
+}
+
+/// Locate a named section and return its header alongside the file
+/// bytes covering it. The header carries `sh_addr` (virtual address)
+/// in addition to file offset/size — needed for relocation lookup
+/// where r_offset is a virtual address.
+fn find_section<'a>(data: &'a [u8], name: &[u8]) -> Option<(Shdr, &'a [u8])> {
+    if data.len() < 0x40 || &data[..4] != b"\x7fELF" {
+        return None;
+    }
+    let is_64 = data[4] == 2;
+    let is_le = data[5] == 1;
+    if !is_le {
+        return None;
+    }
+    let (e_shoff, e_shentsize, e_shnum, e_shstrndx) = if is_64 {
+        let shoff = u64::from_le_bytes(data[0x28..0x30].try_into().ok()?);
+        let shentsize = u16::from_le_bytes(data[0x3a..0x3c].try_into().ok()?);
+        let shnum = u16::from_le_bytes(data[0x3c..0x3e].try_into().ok()?);
+        let shstrndx = u16::from_le_bytes(data[0x3e..0x40].try_into().ok()?);
+        (
+            shoff as usize,
+            shentsize as usize,
+            shnum as usize,
+            shstrndx as usize,
+        )
+    } else {
+        if data.len() < 0x34 {
+            return None;
+        }
+        let shoff = u32::from_le_bytes(data[0x20..0x24].try_into().ok()?);
+        let shentsize = u16::from_le_bytes(data[0x2e..0x30].try_into().ok()?);
+        let shnum = u16::from_le_bytes(data[0x30..0x32].try_into().ok()?);
+        let shstrndx = u16::from_le_bytes(data[0x32..0x34].try_into().ok()?);
+        (
+            shoff as usize,
+            shentsize as usize,
+            shnum as usize,
+            shstrndx as usize,
+        )
+    };
+    if e_shentsize == 0 || e_shnum == 0 || e_shstrndx >= e_shnum {
+        return None;
+    }
+    let shstrtab = read_shdr(data, e_shoff, e_shentsize, e_shstrndx, is_64)?;
+    let (shstr_off, shstr_size) = (shstrtab.sh_offset as usize, shstrtab.sh_size as usize);
+    if shstr_off.checked_add(shstr_size)? > data.len() {
+        return None;
+    }
+    let shstrings = &data[shstr_off..shstr_off + shstr_size];
+    for i in 0..e_shnum {
+        let shdr = read_shdr(data, e_shoff, e_shentsize, i, is_64)?;
+        let name_off = shdr.sh_name as usize;
+        if name_off >= shstrings.len() {
+            continue;
+        }
+        let nul = shstrings[name_off..].iter().position(|&b| b == 0)?;
+        if &shstrings[name_off..name_off + nul] == name {
+            let off = shdr.sh_offset as usize;
+            let size = shdr.sh_size as usize;
+            if off.checked_add(size)? > data.len() {
+                return None;
+            }
+            return Some((shdr, &data[off..off + size]));
+        }
+    }
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +405,454 @@ pub(crate) fn extract_dynamic_flags(data: &[u8]) -> Option<DynamicFlags> {
 }
 
 // ---------------------------------------------------------------------------
+// ELF stripped-metadata-sections inventory
+// ---------------------------------------------------------------------------
+
+/// Canonical metadata sections, paired with the predicate that
+/// decides whether the section's *absence* is unusual for THIS
+/// binary. Returning `false` from the predicate suppresses the
+/// section so we don't false-positive non-GNU toolchains (FreeBSD's
+/// clang/LLD doesn't emit `.note.GNU-stack` etc., so missing them is
+/// normal there).
+///
+/// `.comment` is unconditional — every mainstream toolchain leaves
+/// a banner; missing it requires `strip --strip-all` and is the
+/// xz-class "attribution evasion" signal.
+fn canonical_metadata_section_predicates() -> &'static [(&'static [u8], fn(&[u8]) -> bool)] {
+    &[
+        (b".comment", |_data| true),
+        (b".note.GNU-stack", looks_like_gnu_toolchain),
+        (b".note.gnu.property", looks_like_gnu_toolchain),
+        (b".note.ABI-tag", looks_like_gnu_toolchain_executable),
+        (b".symtab", |_data| true),
+        (b".strtab", |_data| true),
+    ]
+}
+
+/// Heuristic: this ELF was produced by a GNU-style toolchain
+/// (gcc/binutils). Used to suppress "missing .note.GNU-*" reports
+/// for clang/LLD/MSVC-LIB binaries that never emit those notes.
+fn looks_like_gnu_toolchain(data: &[u8]) -> bool {
+    // GNU build-id note is the most reliable cross-cutting signal —
+    // present on Debian/Ubuntu/Fedora/RHEL/Arch builds, absent on
+    // most BSD clang/LLD outputs.
+    read_section(data, b".note.gnu.build-id").is_some()
+}
+
+/// Heuristic: GNU-toolchain executable (not a shared library).
+/// `.note.ABI-tag` is conventionally only emitted into executables.
+fn looks_like_gnu_toolchain_executable(data: &[u8]) -> bool {
+    if !looks_like_gnu_toolchain(data) {
+        return false;
+    }
+    // ELF e_type at offset 16: 2 = ET_EXEC, 3 = ET_DYN. We can't
+    // distinguish a position-independent executable from a shared
+    // library on e_type alone (both are ET_DYN), so we accept both
+    // and rely on `.note.ABI-tag` being a soft signal.
+    if data.len() < 18 {
+        return false;
+    }
+    let e_type = u16::from_le_bytes([data[16], data[17]]);
+    matches!(e_type, 2 | 3)
+}
+
+/// List canonical toolchain metadata sections that are *missing* from
+/// the input ELF, suppressing entries that wouldn't normally exist
+/// for the binary's toolchain class. Aggressive stripping is itself
+/// a tampering / attribution-evasion signal — distros normally ship
+/// binaries with at least `.comment` intact.
+///
+/// Returns `None` for non-ELF input or when no relevant section is
+/// missing. Returned list is in detection order.
+#[must_use]
+pub(crate) fn extract_stripped_metadata_sections(data: &[u8]) -> Option<Vec<String>> {
+    if data.len() < 5 || &data[..4] != b"\x7fELF" {
+        return None;
+    }
+    let mut missing = Vec::new();
+    for (name, predicate) in canonical_metadata_section_predicates() {
+        if !predicate(data) {
+            continue;
+        }
+        if read_section(data, name).is_none() {
+            if let Ok(s) = std::str::from_utf8(name) {
+                missing.push(s.to_string());
+            }
+        }
+    }
+    if missing.is_empty() {
+        None
+    } else {
+        Some(missing)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ELF IFUNC resolvers — `.dynsym` entries with `STT_GNU_IFUNC` (st_type=10)
+// ---------------------------------------------------------------------------
+
+/// One `.dynsym` entry of FUNC or IFUNC type. `kind` is the
+/// canonical short name surfaced to traits (`"func"`, `"ifunc"`),
+/// `binding` is `"global"` / `"weak"` / `"local"`, `visibility` is
+/// `"default"` / `"hidden"` / `"protected"` / `"internal"`.
+#[derive(Debug, Clone)]
+pub(crate) struct DynsymFunc {
+    pub name: String,
+    pub kind: &'static str,
+    pub binding: &'static str,
+    pub visibility: &'static str,
+    pub size: u64,
+    pub defined: bool,
+}
+
+/// Result of one full `.dynsym` walk over FUNC + IFUNC entries.
+/// Carries the full count + the focused list of entries that are
+/// "interesting" (IFUNC, weak, hidden/protected, or undefined).
+/// Ordinary global default FUNC entries are counted but not listed —
+/// they're already reflected in the import/export panes.
+pub(crate) struct DynsymFuncSummary {
+    /// Total count of FUNC + IFUNC dynsym entries (defined OR
+    /// imported). Lifted to a metric so trait authors can compare
+    /// against `binary.func_count` to detect hidden-code growth.
+    pub total: u32,
+    /// Count of IFUNC-type entries.
+    pub ifunc_count: u32,
+    /// Focused entries — see `DynsymFuncSummary` doc.
+    pub focused: Vec<DynsymFunc>,
+}
+
+/// Walk `.dynsym` once and return both the total FUNC+IFUNC count
+/// and the focused list of "non-ordinary" entries (IFUNC, weak,
+/// hidden/protected, undefined). Replaces the older
+/// `extract_ifunc_symbols` callers.
+#[must_use]
+pub(crate) fn extract_dynsym_func_summary(data: &[u8]) -> Option<DynsymFuncSummary> {
+    if data.len() < 5 || &data[..4] != b"\x7fELF" {
+        return None;
+    }
+    let is_64 = data[4] == 2;
+    let dynsym = read_section(data, b".dynsym")?;
+    let dynstr = read_section(data, b".dynstr")?;
+    let entry_size = if is_64 { 24 } else { 16 };
+    if entry_size == 0 || dynsym.len() < entry_size {
+        return None;
+    }
+
+    let mut summary = DynsymFuncSummary {
+        total: 0,
+        ifunc_count: 0,
+        focused: Vec::new(),
+    };
+    let entries = dynsym.len() / entry_size;
+    for i in 1..entries.min(1 << 20) {
+        let off = i * entry_size;
+        let st_name = u32::from_le_bytes(dynsym[off..off + 4].try_into().ok()?) as usize;
+        let st_info_off = if is_64 { off + 4 } else { off + 12 };
+        let st_info = dynsym[st_info_off];
+        let st_other = dynsym[st_info_off + 1];
+        let st_shndx_off = if is_64 { off + 6 } else { off + 14 };
+        let st_shndx = u16::from_le_bytes(dynsym[st_shndx_off..st_shndx_off + 2].try_into().ok()?);
+        let (st_size, defined) = if is_64 {
+            let size = u64::from_le_bytes(dynsym[off + 16..off + 24].try_into().ok()?);
+            (size, st_shndx != 0)
+        } else {
+            let size = u32::from_le_bytes(dynsym[off + 8..off + 12].try_into().ok()?) as u64;
+            (size, st_shndx != 0)
+        };
+        let st_type = st_info & 0x0f;
+        let st_bind = st_info >> 4;
+        let st_vis = st_other & 0x03;
+        // STT_FUNC = 2, STT_GNU_IFUNC = 10
+        if !matches!(st_type, 2 | 10) {
+            continue;
+        }
+        summary.total += 1;
+        if st_type == 10 {
+            summary.ifunc_count += 1;
+        }
+        // Focused: IFUNC, weak, hidden/protected, or undefined. Skip
+        // ordinary global-default-defined FUNC entries to keep the
+        // kv list small — those are already captured in import/export.
+        let interesting = st_type == 10 || st_bind == 2 || matches!(st_vis, 2 | 3) || !defined;
+        if !interesting {
+            continue;
+        }
+        let Some(name) = read_strtab_string(dynstr, st_name) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        summary.focused.push(DynsymFunc {
+            name,
+            kind: if st_type == 10 { "ifunc" } else { "func" },
+            binding: match st_bind {
+                0 => "local",
+                1 => "global",
+                2 => "weak",
+                _ => "other",
+            },
+            visibility: match st_vis {
+                0 => "default",
+                1 => "internal",
+                2 => "hidden",
+                3 => "protected",
+                _ => "other",
+            },
+            size: st_size,
+            defined,
+        });
+    }
+    summary.focused.sort_by(|a, b| a.name.cmp(&b.name));
+    if summary.total == 0 {
+        return None;
+    }
+    Some(summary)
+}
+
+// ---------------------------------------------------------------------------
+// ELF init/fini constructor arrays — resolved to symbol names
+// ---------------------------------------------------------------------------
+
+/// One slot in `.init_array` / `.fini_array`. `addr` is the virtual
+/// address of the constructor / destructor function; `symbol` is the
+/// dynsym name when the address matches an exported function;
+/// `reloc` is the relocation type that supplied the address ("relative",
+/// "irelative", "abs64", "glob_dat") for slots that were 0 at link
+/// time. Slots with a direct (non-PIC) function pointer have `reloc`
+/// unset.
+#[derive(Debug, Clone)]
+pub(crate) struct InitFunctionEntry {
+    pub addr: u64,
+    pub symbol: Option<String>,
+    pub reloc: Option<&'static str>,
+}
+
+/// Resolve all entries in the named init-array-style section
+/// (`.init_array` or `.fini_array`) to function addresses and, when
+/// possible, symbol names. The xz 5.6.0 backdoor *replaced* one of
+/// liblzma's two original constructors; surfacing the constructor
+/// name (or its lack of one) makes the swap visible in diff output.
+#[must_use]
+pub(crate) fn extract_init_function_array(
+    data: &[u8],
+    section: &[u8],
+) -> Option<Vec<InitFunctionEntry>> {
+    let (shdr, slot_bytes) = find_section(data, section)?;
+    if !is_le_64(data) {
+        // Init-array slot resolution is implemented for x86-64 / aarch64
+        // (LE 64-bit) only — the xz target. Trait authors get the slot
+        // count via `elf.init_array_count` regardless.
+        return None;
+    }
+    if shdr.sh_size < 8 {
+        return None;
+    }
+    let dynsym_index = build_dynsym_address_index(data);
+    let relocs = collect_relocations(data, b".rela.dyn")
+        .or_else(|| collect_relocations(data, b".rela.plt"))
+        .unwrap_or_default();
+
+    let slots = (shdr.sh_size as usize) / 8;
+    let mut out = Vec::with_capacity(slots);
+    for i in 0..slots {
+        let off = i * 8;
+        if off + 8 > slot_bytes.len() {
+            break;
+        }
+        let direct = u64::from_le_bytes(slot_bytes[off..off + 8].try_into().ok()?);
+        let slot_va = shdr.sh_addr.wrapping_add(off as u64);
+        let (addr, reloc) = resolve_init_slot(direct, slot_va, &relocs, &dynsym_index);
+        if addr == 0 {
+            // Empty slot (rare — usually the array is fully populated);
+            // record with no symbol so the diff still notices a change.
+            out.push(InitFunctionEntry {
+                addr: 0,
+                symbol: None,
+                reloc,
+            });
+            continue;
+        }
+        let symbol = dynsym_index.lookup(addr);
+        out.push(InitFunctionEntry {
+            addr,
+            symbol,
+            reloc,
+        });
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+fn is_le_64(data: &[u8]) -> bool {
+    data.len() >= 6 && &data[..4] == b"\x7fELF" && data[4] == 2 && data[5] == 1
+}
+
+/// Decide what address a constructor slot resolves to. Returns
+/// `(address, reloc_kind)`. A non-zero `direct` slot value is a
+/// link-time-resolved pointer (non-PIC); otherwise we look up a
+/// matching relocation entry by its `r_offset`.
+fn resolve_init_slot(
+    direct: u64,
+    slot_va: u64,
+    relocs: &[RelocationEntry],
+    dynsym: &DynsymAddressIndex,
+) -> (u64, Option<&'static str>) {
+    if direct != 0 {
+        return (direct, None);
+    }
+    for r in relocs {
+        if r.offset != slot_va {
+            continue;
+        }
+        return match r.kind {
+            RelocKind::Relative => (r.addend, Some("relative")),
+            RelocKind::Irelative => (r.addend, Some("irelative")),
+            RelocKind::Abs64 | RelocKind::GlobDat => {
+                let addr = dynsym.address_of_index(r.sym_idx).unwrap_or(0);
+                (
+                    addr,
+                    Some(if matches!(r.kind, RelocKind::Abs64) {
+                        "abs64"
+                    } else {
+                        "glob_dat"
+                    }),
+                )
+            }
+        };
+    }
+    (0, None)
+}
+
+#[derive(Debug, Clone, Copy)]
+enum RelocKind {
+    Relative,
+    Irelative,
+    Abs64,
+    GlobDat,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RelocationEntry {
+    offset: u64,
+    addend: u64,
+    sym_idx: u32,
+    kind: RelocKind,
+}
+
+/// Parse a `.rela.*` section as 24-byte ELF64 RELA entries:
+/// `r_offset:u64, r_info:u64, r_addend:i64`. We only retain entries
+/// of relocation kinds relevant to constructor-array resolution.
+fn collect_relocations(data: &[u8], section: &[u8]) -> Option<Vec<RelocationEntry>> {
+    let (_, bytes) = find_section(data, section)?;
+    if bytes.len() < 24 {
+        return None;
+    }
+    let mut out = Vec::new();
+    for chunk in bytes.chunks_exact(24) {
+        let r_offset = u64::from_le_bytes(chunk[..8].try_into().ok()?);
+        let r_info = u64::from_le_bytes(chunk[8..16].try_into().ok()?);
+        let r_addend = u64::from_le_bytes(chunk[16..24].try_into().ok()?);
+        let r_type = (r_info & 0xffff_ffff) as u32;
+        let sym_idx = (r_info >> 32) as u32;
+        // Relocation type IDs are arch-specific; the `_RELATIVE` and
+        // `_IRELATIVE` semantics are stable so we collapse x86-64 +
+        // aarch64 into the same arms.
+        let kind = match r_type {
+            8 | 1027 => RelocKind::Relative, // R_X86_64_RELATIVE / R_AARCH64_RELATIVE
+            37 | 1032 => RelocKind::Irelative, // R_X86_64_IRELATIVE / R_AARCH64_IRELATIVE
+            1 | 257 => RelocKind::Abs64,     // R_X86_64_64 / R_AARCH64_ABS64
+            6 | 1025 => RelocKind::GlobDat,  // R_X86_64_GLOB_DAT / R_AARCH64_GLOB_DAT
+            _ => continue,
+        };
+        out.push(RelocationEntry {
+            offset: r_offset,
+            addend: r_addend,
+            sym_idx,
+            kind,
+        });
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Address-keyed view over `.dynsym` for resolving function pointers
+/// to symbol names. Holds two parallel vectors so we can answer both
+/// `address → name` (for direct/relative slots) and `index → address`
+/// (for abs64/glob_dat slots referencing a symbol by index).
+struct DynsymAddressIndex {
+    by_addr: Vec<(u64, String)>,
+    by_index: Vec<(u32, u64)>,
+}
+
+impl DynsymAddressIndex {
+    fn lookup(&self, addr: u64) -> Option<String> {
+        if addr == 0 {
+            return None;
+        }
+        self.by_addr
+            .iter()
+            .find(|(a, _)| *a == addr)
+            .map(|(_, name)| name.clone())
+    }
+
+    fn address_of_index(&self, idx: u32) -> Option<u64> {
+        if idx == 0 {
+            return None;
+        }
+        self.by_index
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, a)| *a)
+    }
+}
+
+fn build_dynsym_address_index(data: &[u8]) -> DynsymAddressIndex {
+    let mut by_addr = Vec::new();
+    let mut by_index = Vec::new();
+    let Some(dynsym) = read_section(data, b".dynsym") else {
+        return DynsymAddressIndex { by_addr, by_index };
+    };
+    let Some(dynstr) = read_section(data, b".dynstr") else {
+        return DynsymAddressIndex { by_addr, by_index };
+    };
+    if !is_le_64(data) {
+        return DynsymAddressIndex { by_addr, by_index };
+    }
+    let entry_size = 24usize;
+    let entries = dynsym.len() / entry_size;
+    for i in 1..entries.min(1 << 20) {
+        let off = i * entry_size;
+        let Some(chunk) = dynsym.get(off..off + entry_size) else {
+            break;
+        };
+        let st_name = u32::from_le_bytes(chunk[..4].try_into().unwrap_or([0; 4])) as usize;
+        let st_info = chunk[4];
+        let st_value = u64::from_le_bytes(chunk[8..16].try_into().unwrap_or([0; 8]));
+        let st_type = st_info & 0x0f;
+        // STT_FUNC=2, STT_GNU_IFUNC=10. Skip non-functions and
+        // undefined entries (st_value=0 is undef-or-relocatable; we
+        // handle those via relocations).
+        if !matches!(st_type, 2 | 10) || st_value == 0 {
+            continue;
+        }
+        if let Some(name) = read_strtab_string(dynstr, st_name) {
+            if !name.is_empty() {
+                by_addr.push((st_value, name.clone()));
+                by_index.push((i as u32, st_value));
+            }
+        }
+    }
+    DynsymAddressIndex { by_addr, by_index }
+}
+
+// ---------------------------------------------------------------------------
 // ELF symbol versioning — `.gnu.version_r` (verneed) + `.gnu.version_d` (verdef)
 // ---------------------------------------------------------------------------
 
@@ -396,6 +928,96 @@ pub(crate) fn extract_needed_versions(data: &[u8]) -> Option<Vec<SymbolVersionRe
             break;
         }
         entry_off += vn_next;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// One symbol-version definition (`.gnu.version_d` entry). `parent`
+/// is the predecessor version this one extends — `Some("XZ_5.4")` for
+/// `XZ_5.6.0` in liblzma. `None` for root definitions and the SONAME
+/// base entry. List position preserves the link-time definition
+/// order; an out-of-position insert across a release boundary is
+/// itself a tampering signal.
+#[derive(Debug, Clone)]
+pub(crate) struct VersionDefinition {
+    pub name: String,
+    pub parent: Option<String>,
+    pub flags: u16,
+}
+
+impl VersionDefinition {
+    /// VER_FLG_BASE — this entry is the section's "base" pseudo-
+    /// version (typically the SONAME, e.g. `liblzma.so.5`).
+    pub(crate) fn is_base(&self) -> bool {
+        self.flags & 0x1 != 0
+    }
+}
+
+/// Parse `.gnu.version_d` and return one entry per version definition
+/// preserving file order (so trait authors can detect out-of-order
+/// inserts). Each entry carries its predecessor chain — the parent
+/// version a release builds on, e.g. `XZ_5.6.0 → XZ_5.4`.
+#[must_use]
+pub(crate) fn extract_version_definitions(data: &[u8]) -> Option<Vec<VersionDefinition>> {
+    let verdef = read_section(data, b".gnu.version_d")?;
+    let dynstr = read_section(data, b".dynstr")?;
+
+    let mut out = Vec::new();
+    let mut entry_off = 0usize;
+    for _ in 0..256 {
+        if entry_off + 20 > verdef.len() {
+            break;
+        }
+        let vd_flags = u16::from_le_bytes(verdef[entry_off + 2..entry_off + 4].try_into().ok()?);
+        let vd_cnt = u16::from_le_bytes(verdef[entry_off + 6..entry_off + 8].try_into().ok()?);
+        let vd_aux =
+            u32::from_le_bytes(verdef[entry_off + 12..entry_off + 16].try_into().ok()?) as usize;
+        let vd_next =
+            u32::from_le_bytes(verdef[entry_off + 16..entry_off + 20].try_into().ok()?) as usize;
+
+        let mut name: Option<String> = None;
+        let mut parent: Option<String> = None;
+        let mut aux_off = entry_off + vd_aux;
+        for i in 0..vd_cnt.min(8) {
+            if aux_off + 8 > verdef.len() {
+                break;
+            }
+            let vda_name =
+                u32::from_le_bytes(verdef[aux_off..aux_off + 4].try_into().ok()?) as usize;
+            let vda_next =
+                u32::from_le_bytes(verdef[aux_off + 4..aux_off + 8].try_into().ok()?) as usize;
+            if let Some(s) = read_strtab_string(dynstr, vda_name) {
+                if i == 0 {
+                    name = Some(s);
+                } else if parent.is_none() && !s.is_empty() {
+                    // Spec allows multiple aux entries past index 0 but
+                    // mainstream toolchains only ever emit one (the
+                    // immediate predecessor). Keep the first.
+                    parent = Some(s);
+                }
+            }
+            if vda_next == 0 {
+                break;
+            }
+            aux_off += vda_next;
+        }
+        if let Some(name) = name {
+            if !name.is_empty() {
+                out.push(VersionDefinition {
+                    name,
+                    parent,
+                    flags: vd_flags,
+                });
+            }
+        }
+        if vd_next == 0 {
+            break;
+        }
+        entry_off += vd_next;
     }
     if out.is_empty() {
         None
@@ -562,6 +1184,67 @@ pub(crate) fn extract_note_package(data: &[u8]) -> Option<serde_json::Value> {
         None
     } else {
         Some(val)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// .note.ABI-tag — minimum runtime kernel/ABI requirement
+// ---------------------------------------------------------------------------
+
+/// Minimum-ABI requirement recovered from `.note.ABI-tag`.
+/// `os` is the OS marker (0=Linux, 1=Hurd, 2=Solaris, 3=FreeBSD,
+/// 4=NetBSD, 5=Syllable, 6=NaCl). `kernel` is the canonical
+/// "major.minor.patch" string (e.g. "3.2.0").
+#[derive(Debug, Clone)]
+pub(crate) struct AbiTag {
+    pub os: u32,
+    pub kernel: String,
+}
+
+const NT_GNU_ABI_TAG: u32 = 1;
+
+/// Parse `.note.ABI-tag` and return the OS marker + minimum kernel
+/// version. Drift in min-kernel between point releases of the same
+/// library/binary is a build-environment-change signal.
+#[must_use]
+pub(crate) fn extract_abi_tag(data: &[u8]) -> Option<AbiTag> {
+    let bytes = read_section(data, b".note.ABI-tag")?;
+    if bytes.len() < 32 {
+        return None;
+    }
+    // Note header: u32 namesz | u32 descsz | u32 type | name[…]
+    let namesz = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    let descsz = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let ntype = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+    if ntype != NT_GNU_ABI_TAG || descsz < 16 {
+        return None;
+    }
+    let name_start = 12usize;
+    let desc_start = name_start.checked_add(align_up(namesz, 4))?;
+    if desc_start + 16 > bytes.len() {
+        return None;
+    }
+    let os = u32::from_le_bytes(bytes[desc_start..desc_start + 4].try_into().ok()?);
+    let major = u32::from_le_bytes(bytes[desc_start + 4..desc_start + 8].try_into().ok()?);
+    let minor = u32::from_le_bytes(bytes[desc_start + 8..desc_start + 12].try_into().ok()?);
+    let patch = u32::from_le_bytes(bytes[desc_start + 12..desc_start + 16].try_into().ok()?);
+    Some(AbiTag {
+        os,
+        kernel: format!("{}.{}.{}", major, minor, patch),
+    })
+}
+
+/// Map the OS marker from `.note.ABI-tag` to a canonical short name.
+fn abi_tag_os_name(os: u32) -> Option<&'static str> {
+    match os {
+        0 => Some("linux"),
+        1 => Some("hurd"),
+        2 => Some("solaris"),
+        3 => Some("freebsd"),
+        4 => Some("netbsd"),
+        5 => Some("syllable"),
+        6 => Some("nacl"),
+        _ => None,
     }
 }
 
@@ -874,6 +1557,105 @@ pub(crate) fn detect_fortify_functions(imports: &[Import]) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
+// `.gnu_debuglink` follow — locate the companion `.debug` file
+// ---------------------------------------------------------------------------
+
+/// Read the filename embedded in `.gnu_debuglink`. The section
+/// layout is `NUL-terminated filename | 0..3 padding bytes (4-byte
+/// align) | u32 CRC32`. The CRC is intentionally ignored — many
+/// debug packages publish slightly-mismatching CRCs after rebuilds,
+/// so trusting the filename alone matches GDB's lenient behavior.
+#[must_use]
+fn extract_debuglink_filename(data: &[u8]) -> Option<String> {
+    let bytes = read_section(data, b".gnu_debuglink")?;
+    let nul = bytes.iter().position(|&b| b == 0)?;
+    if nul == 0 {
+        return None;
+    }
+    std::str::from_utf8(&bytes[..nul]).ok().map(str::to_string)
+}
+
+/// Locate a companion `.debug` file referenced by `.gnu_debuglink`
+/// and return `(file_bytes, resolved_path)`. Walks the four
+/// canonical lookup locations in order:
+///
+///   1. `<bin_dir>/<debuglink>`
+///   2. `<bin_dir>/.debug/<debuglink>`
+///   3. `/usr/lib/debug/<bin_dir>/<debuglink>`
+///   4. `/usr/lib/debug/.build-id/<xx>/<rest>.debug`
+///
+/// The first existing file wins. We don't validate the CRC32 — see
+/// `extract_debuglink_filename` for rationale.
+fn follow_debuglink(data: &[u8], binary_path: &str) -> Option<(Vec<u8>, std::path::PathBuf)> {
+    let debuglink = extract_debuglink_filename(data)?;
+    let bin_path = std::path::Path::new(binary_path);
+    let bin_dir = bin_path.parent()?;
+
+    let mut candidates: Vec<std::path::PathBuf> = Vec::with_capacity(4);
+    candidates.push(bin_dir.join(&debuglink));
+    candidates.push(bin_dir.join(".debug").join(&debuglink));
+
+    if let Ok(absolute) = bin_path.canonicalize() {
+        if let Some(absolute_dir) = absolute.parent() {
+            // /usr/lib/debug/<bin's full dir>/<debuglink>
+            let mut sys = std::path::PathBuf::from("/usr/lib/debug");
+            // join() with an absolute path replaces; strip the leading
+            // slash so we get nesting instead.
+            for component in absolute_dir.components().skip(1) {
+                sys.push(component);
+            }
+            sys.push(&debuglink);
+            candidates.push(sys);
+        }
+    }
+
+    if let Some(build_id) = build_id_hex(data) {
+        if build_id.len() >= 4 {
+            let (head, tail) = build_id.split_at(2);
+            candidates.push(
+                std::path::PathBuf::from("/usr/lib/debug/.build-id")
+                    .join(head)
+                    .join(format!("{}.debug", tail)),
+            );
+        }
+    }
+
+    for candidate in candidates {
+        if let Ok(bytes) = std::fs::read(&candidate) {
+            if bytes.len() >= 4 && &bytes[..4] == b"\x7fELF" {
+                return Some((bytes, candidate));
+            }
+        }
+    }
+    None
+}
+
+/// Extract the GNU build-id from `.note.gnu.build-id` as a lowercase
+/// hex string. Used by `follow_debuglink` to construct the
+/// build-id-keyed lookup path. Independent of the higher-level
+/// metric so we don't depend on whether metrics ran first.
+fn build_id_hex(data: &[u8]) -> Option<String> {
+    let bytes = read_section(data, b".note.gnu.build-id")?;
+    if bytes.len() < 16 {
+        return None;
+    }
+    let namesz = u32::from_le_bytes(bytes[..4].try_into().ok()?) as usize;
+    let descsz = u32::from_le_bytes(bytes[4..8].try_into().ok()?) as usize;
+    let name_start = 12usize;
+    let desc_start = name_start.checked_add(align_up(namesz, 4))?;
+    let desc_end = desc_start.checked_add(descsz)?;
+    if desc_end > bytes.len() {
+        return None;
+    }
+    Some(
+        bytes[desc_start..desc_end]
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect(),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Distro / CI environment fingerprinting from `.comment`
 // ---------------------------------------------------------------------------
 
@@ -1046,6 +1828,85 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             pe_extra.insert("manifest".into(), manifest);
         }
 
+        // PE Debug Directory entries — each carries its own
+        // TimeDateStamp distinct from the COFF header. Drift signals
+        // a build-pipeline change (e.g. a different CodeView signer or
+        // POGO instrumentation toggled).
+        if let Some(entries) = super::pe_extractors::extract_debug_directory(raw_data) {
+            let arr: Vec<Value> = entries
+                .iter()
+                .map(|e| {
+                    let mut node = serde_json::Map::new();
+                    if let Some(name) = e.type_name {
+                        node.insert("type".into(), json!(name));
+                    } else {
+                        node.insert("type_id".into(), json!(e.type_id));
+                    }
+                    node.insert("timestamp".into(), json!(e.timestamp));
+                    if e.size > 0 {
+                        node.insert("size".into(), json!(e.size));
+                    }
+                    Value::Object(node)
+                })
+                .collect();
+            pe_extra.insert("debug_entries".into(), Value::Array(arr));
+        }
+
+        // Resource Directory TimeDateStamp — independent of the COFF
+        // header; usually static across rebuilds, so a change is signal.
+        if let Some(ts) = super::pe_extractors::extract_resource_timestamp(raw_data) {
+            let resources = pe_extra
+                .entry("resources".to_string())
+                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+            if let Some(obj) = resources.as_object_mut() {
+                obj.insert("timestamp".into(), json!(ts));
+            }
+        }
+
+        // Sections with virtual_size >> raw_size — runtime-decompressed
+        // payload region. Classic packer fingerprint.
+        if let Some(inflated) = super::pe_extractors::extract_inflated_sections(raw_data) {
+            let max_ratio = inflated.iter().map(|(_, r)| *r).fold(0.0_f64, f64::max);
+            let names: Vec<Value> = inflated.iter().map(|(n, _)| json!(n)).collect();
+            pe_extra.insert("inflated_sections".into(), Value::Array(names));
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let pe_metrics = metrics
+                .pe
+                .get_or_insert_with(crate::types::binary_metrics::PeMetrics::default);
+            pe_metrics.max_section_inflation_ratio = max_ratio;
+        }
+
+        // TLS callbacks — Windows analog of ELF init_array. Currently
+        // only the count metric existed; surface the addresses as
+        // structured kv so trait authors can match on individual
+        // entries (and a diff highlights additions vs removals).
+        if let Some(callbacks) = super::pe_extractors::extract_tls_callbacks(raw_data) {
+            // Build address → export-name map for symbol resolution.
+            let export_addr: std::collections::HashMap<u64, &str> = report
+                .exports
+                .iter()
+                .filter_map(|e| {
+                    let raw = e.offset.as_deref()?.trim_start_matches("0x");
+                    let addr = u64::from_str_radix(raw, 16).ok()?;
+                    Some((addr, e.symbol.as_str()))
+                })
+                .collect();
+            let arr: Vec<Value> = callbacks
+                .iter()
+                .map(|cb| {
+                    let mut node = serde_json::Map::new();
+                    node.insert("addr".into(), json!(format!("0x{:x}", cb.addr)));
+                    if let Some(name) = export_addr.get(&cb.addr) {
+                        node.insert("symbol".into(), json!(*name));
+                    }
+                    Value::Object(node)
+                })
+                .collect();
+            pe_extra.insert("tls_callbacks".into(), Value::Array(arr));
+        }
+
         if !pe_extra.is_empty() {
             augment.insert("pe".into(), Value::Object(pe_extra));
         }
@@ -1059,7 +1920,26 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         let mut elf_extra = serde_json::Map::new();
         let mut build_extra = serde_json::Map::new();
 
-        if let Some(comment) = extract_elf_comment(raw_data) {
+        if let Some(entries) = extract_elf_comment_entries(raw_data) {
+            // Raw per-object banners — one entry per input `.o`. Trait
+            // authors gate on `length > 1` of the deduplicated set to
+            // detect mixed-toolchain builds (the count itself lives on
+            // `elf.comment_distinct_count` metric).
+            let mut distinct: Vec<String> = entries.clone();
+            distinct.sort();
+            distinct.dedup();
+            let entry_count = entries.len() as u32;
+            let distinct_count = distinct.len() as u32;
+            elf_extra.insert("comment_entries".into(), json!(entries.clone()));
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let elf_metrics = metrics
+                .elf
+                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
+            elf_metrics.comment_entry_count = entry_count;
+            elf_metrics.comment_distinct_count = distinct_count;
+            let comment = entries.join("; ");
             elf_extra.insert("comment".into(), json!(comment.clone()));
             let fp = parse_comment_fingerprint(&comment);
             if let Some(d) = fp.distro {
@@ -1082,14 +1962,21 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         // DWARF DW_AT_producer / DW_AT_comp_dir / DW_AT_name —
         // unstripped ELF binaries leak the FULL compile command line
         // and build directory per CU. Strongest attribution surface
-        // any binary format offers.
-        if let Some(dw) = super::dwarf_extractors::extract(raw_data) {
+        // any binary format offers. Stripped distro releases keep
+        // their DWARF in a companion `<name>.debug` file referenced
+        // by `.gnu_debuglink`; we try the in-binary path first then
+        // fall back to the companion when present.
+        let (dwarf_metadata, companion_path) = super::dwarf_extractors::extract(raw_data)
+            .map(|dw| (Some(dw), None))
+            .unwrap_or_else(|| {
+                follow_debuglink(raw_data, &report.target.path)
+                    .map(|(data, path)| (super::dwarf_extractors::extract(&data), Some(path)))
+                    .unwrap_or((None, None))
+            });
+        if let Some(dw) = dwarf_metadata {
             let mut dwarf_extra = serde_json::Map::new();
             if !dw.producers.is_empty() {
                 dwarf_extra.insert("producers".into(), json!(dw.producers.clone()));
-                // Also surface the first producer string as the
-                // canonical cross-format `build.toolchain` when the
-                // metrics path didn't already populate it.
                 if let Some(first) = dw.producers.first() {
                     build_extra
                         .entry("toolchain_full".to_string())
@@ -1098,9 +1985,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
             if !dw.comp_dirs.is_empty() {
                 dwarf_extra.insert("comp_dirs".into(), json!(dw.comp_dirs.clone()));
-                // Single canonical build root → cross-format
-                // `build.build_root`. Multiple comp_dirs = different
-                // CUs from different repos; we don't pick one.
                 if dw.comp_dirs.len() == 1 {
                     build_extra
                         .entry("build_root".to_string())
@@ -1115,7 +1999,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
             if dw.cu_count > 0 {
                 dwarf_extra.insert("cu_count".into(), json!(dw.cu_count));
-                // Also expose as a metric for trait min/max queries.
                 let metrics = report
                     .metrics
                     .get_or_insert_with(crate::types::scores::Metrics::default);
@@ -1123,6 +2006,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                     .elf
                     .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
                 elf_metrics.dwarf_cu_count = dw.cu_count;
+            }
+            if let Some(ref path) = companion_path {
+                dwarf_extra.insert("companion_path".into(), json!(path.display().to_string()));
             }
             if !dwarf_extra.is_empty() {
                 augment.insert("dwarf".into(), Value::Object(dwarf_extra));
@@ -1183,6 +2069,27 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         if let Some(provides) = extract_provided_versions(raw_data) {
             elf_extra.insert("provided_versions".into(), json!(provides));
         }
+        if let Some(defs) = extract_version_definitions(raw_data) {
+            // Preserves file order. Trait authors compare positions
+            // across releases to spot post-hoc inserts (e.g. a new
+            // version slipped between two existing ones rather than
+            // appended).
+            let arr: Vec<Value> = defs
+                .iter()
+                .map(|d| {
+                    let mut node = serde_json::Map::new();
+                    node.insert("name".into(), json!(d.name));
+                    if let Some(parent) = d.parent.as_deref() {
+                        node.insert("parent".into(), json!(parent));
+                    }
+                    if d.is_base() {
+                        node.insert("base".into(), json!(true));
+                    }
+                    Value::Object(node)
+                })
+                .collect();
+            elf_extra.insert("version_definitions".into(), Value::Array(arr));
+        }
 
         // Linker identification. Cross-format `build.linker` for
         // ergonomic trait writing alongside `build.toolchain_family`.
@@ -1190,6 +2097,94 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             build_extra
                 .entry("linker".to_string())
                 .or_insert_with(|| json!(linker));
+        }
+
+        if let Some(abi) = extract_abi_tag(raw_data) {
+            let mut node = serde_json::Map::new();
+            if let Some(os_name) = abi_tag_os_name(abi.os) {
+                node.insert("os".into(), json!(os_name));
+            }
+            node.insert("min_kernel".into(), json!(abi.kernel));
+            elf_extra.insert("abi".into(), Value::Object(node));
+        }
+
+        for (section, key) in [
+            (b".init_array".as_ref(), "init_array"),
+            (b".fini_array".as_ref(), "fini_array"),
+        ] {
+            if let Some(entries) = extract_init_function_array(raw_data, section) {
+                let arr: Vec<Value> = entries
+                    .iter()
+                    .map(|e| {
+                        let mut node = serde_json::Map::new();
+                        node.insert("addr".into(), json!(format!("0x{:x}", e.addr)));
+                        if let Some(s) = e.symbol.as_deref() {
+                            node.insert("symbol".into(), json!(s));
+                        }
+                        if let Some(r) = e.reloc {
+                            node.insert("reloc".into(), json!(r));
+                        }
+                        Value::Object(node)
+                    })
+                    .collect();
+                elf_extra.insert(key.into(), Value::Array(arr));
+            }
+        }
+
+        if let Some(missing) = extract_stripped_metadata_sections(raw_data) {
+            let count = missing.len() as u32;
+            elf_extra.insert("stripped_metadata_sections".into(), json!(missing));
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let elf_metrics = metrics
+                .elf
+                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
+            elf_metrics.stripped_metadata_section_count = count;
+        }
+
+        if let Some(summary) = extract_dynsym_func_summary(raw_data) {
+            if !summary.focused.is_empty() {
+                let arr: Vec<Value> = summary
+                    .focused
+                    .iter()
+                    .map(|d| {
+                        let mut node = serde_json::Map::new();
+                        node.insert("name".into(), json!(d.name));
+                        node.insert("kind".into(), json!(d.kind));
+                        if d.binding != "global" {
+                            node.insert("binding".into(), json!(d.binding));
+                        }
+                        if d.visibility != "default" {
+                            node.insert("visibility".into(), json!(d.visibility));
+                        }
+                        if d.size > 0 {
+                            node.insert("size".into(), json!(d.size));
+                        }
+                        if !d.defined {
+                            node.insert("defined".into(), json!(false));
+                        }
+                        Value::Object(node)
+                    })
+                    .collect();
+                elf_extra.insert("dynsym_funcs".into(), Value::Array(arr));
+            }
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let elf_metrics = metrics
+                .elf
+                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
+            elf_metrics.ifunc_count = summary.ifunc_count;
+            // D2: surface exposed-API count + derived hidden-code
+            // count on `binary.*` so the diff naturally shows
+            // disproportionate growth (e.g. xz 5.6.0 added 109
+            // functions but only 1 dynsym entry).
+            let binary = metrics
+                .binary
+                .get_or_insert_with(crate::types::binary_metrics::BinaryMetrics::default);
+            binary.dynsym_func_count = summary.total;
+            binary.internal_func_count = binary.func_count.saturating_sub(summary.total);
         }
 
         if let Some(prop) = extract_gnu_property(raw_data) {
@@ -1327,17 +2322,27 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             if let Some(id) = lc.id_dylib.as_deref() {
                 macho_extra.insert("id_dylib".into(), json!(id));
             }
+            if let Some(kind) = lc.install_name_kind.as_deref() {
+                macho_extra.insert("install_name_kind".into(), json!(kind));
+            }
             if !lc.load_dylibs.is_empty() {
                 let arr: Vec<Value> = lc
                     .load_dylibs
                     .iter()
                     .map(|d| {
-                        json!({
-                            "path": d.path,
-                            "kind": d.kind,
-                            "current_version": d.current_version,
-                            "compatibility_version": d.compatibility_version,
-                        })
+                        let mut node = serde_json::Map::new();
+                        node.insert("path".into(), json!(d.path));
+                        node.insert("kind".into(), json!(d.kind));
+                        node.insert("path_kind".into(), json!(d.path_kind));
+                        node.insert("current_version".into(), json!(d.current_version));
+                        node.insert(
+                            "compatibility_version".into(),
+                            json!(d.compatibility_version),
+                        );
+                        if d.timestamp != 0 {
+                            node.insert("timestamp".into(), json!(d.timestamp));
+                        }
+                        Value::Object(node)
                     })
                     .collect();
                 macho_extra.insert("load_dylibs".into(), Value::Array(arr));
@@ -1347,6 +2352,39 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
             if !lc.linker_options.is_empty() {
                 macho_extra.insert("linker_options".into(), json!(lc.linker_options.clone()));
+            }
+            if !lc.wx_init_prot_segments.is_empty() {
+                macho_extra.insert(
+                    "wx_init_prot_segments".into(),
+                    json!(lc.wx_init_prot_segments.clone()),
+                );
+            }
+            if let Some(objc) = super::macho_extractors::extract_objc_imageinfo(raw_data) {
+                if !objc.is_empty() {
+                    let mut node = serde_json::Map::new();
+                    if let Some(sv) = objc.swift_version {
+                        node.insert("swift_version".into(), json!(sv));
+                    }
+                    if objc.is_simulated {
+                        node.insert("is_simulated".into(), json!(true));
+                    }
+                    if objc.optimized_by_dyld {
+                        node.insert("optimized_by_dyld".into(), json!(true));
+                    }
+                    if objc.has_category_class_properties {
+                        node.insert("has_category_class_properties".into(), json!(true));
+                    }
+                    macho_extra.insert("objc".into(), Value::Object(node));
+                }
+            }
+            if lc.function_starts_count > 0 {
+                let metrics = report
+                    .metrics
+                    .get_or_insert_with(crate::types::scores::Metrics::default);
+                let macho_metrics = metrics
+                    .macho
+                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
+                macho_metrics.function_starts_count = lc.function_starts_count;
             }
 
             // Mach-O code signature → signing.* (team_id, identifier,
@@ -1383,6 +2421,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                         }
                         if cs.is_notarized {
                             obj.insert("notarized".into(), json!(true));
+                        }
+                        if let Some(ts) = cs.signing_time {
+                            obj.insert("signing_time".into(), json!(ts));
                         }
                         if cs.has_hardened_runtime {
                             obj.entry("hardened_runtime".to_string())
@@ -1501,6 +2542,73 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 "sanitizers".into(),
                 Value::Array(sanitizers.into_iter().map(Value::String).collect()),
             );
+        }
+    }
+
+    // Top unnamed functions by cyclomatic complexity. rizin labels
+    // discovered-but-unnamed functions as `fcn.<addr>`; named ones
+    // are `sym.X`, `entry0`, `main`, etc. A high-complexity unnamed
+    // function in a stripped library is interesting in its own right
+    // — it carries the bulk of internal logic without any ABI tie.
+    // The xz 5.6.0 backdoor lives in two anonymous functions
+    // (cc=165, cc=147); surfacing them by name lets a diff highlight
+    // their *appearance* between releases as a first-class signal.
+    let mut unnamed: Vec<&crate::types::binary::Function> = report
+        .functions
+        .iter()
+        .filter(|f| f.name.starts_with("fcn."))
+        .filter(|f| f.complexity.unwrap_or(0) > 1)
+        .collect();
+    unnamed.sort_by(|a, b| {
+        b.complexity
+            .unwrap_or(0)
+            .cmp(&a.complexity.unwrap_or(0))
+            .then_with(|| b.size.unwrap_or(0).cmp(&a.size.unwrap_or(0)))
+    });
+    if !unnamed.is_empty() {
+        // Single-number trait targets: count of unnamed funcs whose
+        // cyclomatic complexity clears the "interesting" bar (>50,
+        // matching `binary.high_complexity_funcs`). Drift in
+        // this number between releases is the cleanest one-shot
+        // signal that hidden complexity grew (xz 5.4.5: 6, xz 5.6.0: 13).
+        let complex_unnamed = unnamed
+            .iter()
+            .filter(|f| f.complexity.unwrap_or(0) > 50)
+            .count() as u32;
+        let metrics = report
+            .metrics
+            .get_or_insert_with(crate::types::scores::Metrics::default);
+        let binary = metrics
+            .binary
+            .get_or_insert_with(crate::types::binary_metrics::BinaryMetrics::default);
+        binary.unnamed_complex_func_count = complex_unnamed;
+
+        const MAX_UNNAMED: usize = 8;
+        let arr: Vec<Value> = unnamed
+            .iter()
+            .take(MAX_UNNAMED)
+            .map(|f| {
+                let mut node = serde_json::Map::new();
+                if let Some(off) = f.offset.as_deref() {
+                    node.insert("addr".into(), json!(off));
+                }
+                if let Some(sz) = f.size {
+                    node.insert("size".into(), json!(sz));
+                }
+                if let Some(cc) = f.complexity {
+                    node.insert("cc".into(), json!(cc));
+                }
+                if let Some(cf) = f.control_flow.as_ref() {
+                    node.insert("bbs".into(), json!(cf.basic_blocks));
+                }
+                Value::Object(node)
+            })
+            .collect();
+        let binary_extra = augment
+            .entry(String::from("binary"))
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(obj) = binary_extra.as_object_mut() {
+            obj.insert("top_complex_unnamed".into(), Value::Array(arr));
         }
     }
 
@@ -2340,6 +3448,72 @@ mod tests {
     #[test]
     fn extract_elf_comment_returns_none_for_non_elf() {
         assert!(extract_elf_comment(b"not an elf").is_none());
+    }
+
+    /// Build a minimal ELF carrying a single arbitrary section under
+    /// the given name. Used by the .gnu_debuglink test below.
+    fn build_minimal_elf_with_section(section_name: &[u8], content: &[u8]) -> Vec<u8> {
+        const EHDR_SIZE: usize = 0x40;
+        const SHENT_SIZE: usize = 0x40;
+        let mut shstrtab = Vec::from(b"\0.shstrtab\0".as_ref());
+        let section_name_off = shstrtab.len();
+        shstrtab.extend_from_slice(section_name);
+        shstrtab.push(0);
+        let shstr_off = EHDR_SIZE;
+        let content_off = shstr_off + shstrtab.len();
+        let sht_off = content_off + content.len();
+        let shnum = 3;
+        let mut buf = vec![0u8; sht_off + SHENT_SIZE * shnum];
+        buf[0..4].copy_from_slice(b"\x7fELF");
+        buf[4] = 2;
+        buf[5] = 1;
+        buf[6] = 1;
+        buf[0x28..0x30].copy_from_slice(&(sht_off as u64).to_le_bytes());
+        buf[0x3a..0x3c].copy_from_slice(&(SHENT_SIZE as u16).to_le_bytes());
+        buf[0x3c..0x3e].copy_from_slice(&(shnum as u16).to_le_bytes());
+        buf[0x3e..0x40].copy_from_slice(&1u16.to_le_bytes());
+        buf[shstr_off..shstr_off + shstrtab.len()].copy_from_slice(&shstrtab);
+        buf[content_off..content_off + content.len()].copy_from_slice(content);
+        let s1 = sht_off + SHENT_SIZE;
+        buf[s1..s1 + 4].copy_from_slice(&1u32.to_le_bytes());
+        buf[s1 + 0x18..s1 + 0x20].copy_from_slice(&(shstr_off as u64).to_le_bytes());
+        buf[s1 + 0x20..s1 + 0x28].copy_from_slice(&(shstrtab.len() as u64).to_le_bytes());
+        let s2 = sht_off + SHENT_SIZE * 2;
+        buf[s2..s2 + 4].copy_from_slice(&(section_name_off as u32).to_le_bytes());
+        buf[s2 + 0x18..s2 + 0x20].copy_from_slice(&(content_off as u64).to_le_bytes());
+        buf[s2 + 0x20..s2 + 0x28].copy_from_slice(&(content.len() as u64).to_le_bytes());
+        buf
+    }
+
+    #[test]
+    fn extract_debuglink_filename_reads_basename() {
+        // .gnu_debuglink layout: NUL-terminated filename, padding to
+        // 4-byte alignment, then u32 CRC32. Padding bytes are zero.
+        let mut content = b"liblzma.so.5.6.0.debug\0\0".to_vec();
+        content.extend_from_slice(&0xdeadbeefu32.to_le_bytes());
+        let elf = build_minimal_elf_with_section(b".gnu_debuglink", &content);
+        let name = extract_debuglink_filename(&elf).expect("debuglink name");
+        assert_eq!(name, "liblzma.so.5.6.0.debug");
+    }
+
+    #[test]
+    fn follow_debuglink_finds_sibling() {
+        let dir =
+            std::env::temp_dir().join(format!("cleave_debuglink_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bin_path = dir.join("libtest.so.1");
+        let companion_path = dir.join("libtest.so.1.debug");
+        let mut content = b"libtest.so.1.debug\0\0".to_vec();
+        content.extend_from_slice(&0u32.to_le_bytes());
+        let bin_bytes = build_minimal_elf_with_section(b".gnu_debuglink", &content);
+        let companion_bytes = build_minimal_elf_with_section(b".debug_info", &[0u8; 16]);
+        std::fs::write(&bin_path, &bin_bytes).unwrap();
+        std::fs::write(&companion_path, &companion_bytes).unwrap();
+        let resolved = follow_debuglink(&bin_bytes, bin_path.to_str().unwrap());
+        let _ = std::fs::remove_dir_all(&dir);
+        let (data, path) = resolved.expect("companion located");
+        assert_eq!(path, companion_path);
+        assert_eq!(&data[..4], b"\x7fELF");
     }
 
     #[test]

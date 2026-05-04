@@ -221,7 +221,7 @@ fn should_skip_unknown_xor_payload_for_binary(
             }) && m
                 .binary
                 .as_ref()
-                .is_some_and(|binary| binary.export_count >= 50 && binary.function_count >= 200)
+                .is_some_and(|binary| binary.export_count >= 50 && binary.func_count >= 200)
         });
 
         return in_readonly_data
@@ -1674,7 +1674,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 m.pe.as_ref().is_some_and(|pe| pe.has_signature)
                     && m.binary.as_ref().is_some_and(|binary| {
                         binary.export_count <= 2
-                            && binary.function_count >= 100
+                            && binary.func_count >= 100
                             && binary.string_count >= 2000
                     })
                     && m.pe
@@ -1736,7 +1736,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 .metrics
                 .as_ref()
                 .and_then(|m| m.binary.as_ref())
-                .is_some_and(|m| m.function_count >= 200 && m.string_count >= 800)
+                .is_some_and(|m| m.func_count >= 200 && m.string_count >= 800)
         {
             tracing::debug!(
                 "Skipping unknown xor fragment in versioned .NET resource library: {}",

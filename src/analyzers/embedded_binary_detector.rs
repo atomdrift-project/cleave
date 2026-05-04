@@ -47,19 +47,44 @@ impl EmbeddedKind {
 /// A validated embedded binary found within a larger file.
 #[derive(Debug)]
 pub(crate) struct EmbeddedBinary {
-    /// Byte offset within the host file.
+    /// Byte offset within the host file. For base64-encoded payloads
+    /// this is the start of the *encoded* run — the dropper's
+    /// physical location in the parent.
     pub offset: usize,
     /// Detected binary kind.
     pub kind: EmbeddedKind,
-    /// Estimated size in bytes (from SizeOfImage or remainder of file).
+    /// Estimated size in bytes. For raw embeds this is the binary
+    /// size; for base64 it's the decoded payload size.
     pub estimated_size: usize,
+    /// Encoding wrapper between the host bytes and the payload —
+    /// `None` for raw/plain, `Some("base64")` for base64-encoded.
+    /// Recursive analyzers must decode before treating
+    /// `host_data[offset..]` as the payload.
+    pub encoding: Option<&'static str>,
+    /// Optional container/packer format inferred from bytes surrounding
+    /// the embedded program, used for child names and overlay-aware carving.
+    pub format_hint: Option<&'static str>,
+}
+
+impl EmbeddedBinary {
+    /// Name fragment used when reporting/analyzing this embedded child.
+    #[must_use]
+    pub(crate) fn display_kind(&self) -> String {
+        match self.format_hint {
+            Some(hint) => format!("{}.{}", self.kind.as_str(), hint),
+            None => self.kind.as_str().to_string(),
+        }
+    }
 }
 
 /// Scan binary data for embedded PE and ELF files.
 ///
 /// Uses strict header validation to minimize false positives. Skips the first
 /// few bytes (the host binary's own header). Returns at most [`MAX_EMBEDDED`]
-/// results sorted by offset.
+/// results sorted by offset. Includes both raw-magic finds and
+/// base64-encoded payloads — droppers that hide a stage-2 binary
+/// inside `.rodata` (Kong-ingress-controller 2024) appear as a
+/// single `EmbeddedBinary` entry per detection.
 #[must_use]
 pub(crate) fn scan_for_embedded_binaries(
     data: &[u8],
@@ -68,9 +93,115 @@ pub(crate) fn scan_for_embedded_binaries(
     let mut results = Vec::new();
     scan_pe(data, &mut results, cancelled);
     scan_elf(data, &mut results, cancelled);
+    scan_base64_packed(data, &mut results, cancelled);
     results.sort_by_key(|e| e.offset);
     results.truncate(MAX_EMBEDDED);
     results
+}
+
+// ── Base64-encoded payload scanning ──────────────────────────────────────────
+
+/// Minimum base64-run length to consider a packed-binary candidate.
+/// Smaller blobs (<4 KB decoded → ~5.5 KB encoded) hit
+/// `MIN_EMBEDDED_ELF_SIZE` after decoding and get filtered there;
+/// this gate just avoids decoding every small base64 string in a
+/// binary's data section.
+const MIN_BASE64_RUN: usize = 8 * 1024;
+
+/// Distinct base64 marker for an aligned `\x7fELF` prefix:
+/// `\x7fEL` (3 bytes) → `f0VM`. Adding the next byte (`F` = 0x46)
+/// pulls in two more chars, but the first 4 are the unambiguous
+/// alignment-0 marker. We use 6 chars so the search rejects more
+/// than 99% of false matches before we ever decode.
+const ELF_BASE64_PREFIX: &[u8] = b"f0VMRg";
+
+/// PE DOS header `MZ\x90\x00` (universal) → base64 `TVqQAA`.
+const PE_BASE64_PREFIX: &[u8] = b"TVqQAA";
+
+fn scan_base64_packed(
+    data: &[u8],
+    results: &mut Vec<EmbeddedBinary>,
+    cancelled: Option<&AtomicBool>,
+) {
+    for (prefix, expected_kind) in [(ELF_BASE64_PREFIX, "elf"), (PE_BASE64_PREFIX, "pe")] {
+        for marker_off in memmem::find_iter(data, prefix) {
+            if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
+                return;
+            }
+            // Walk forward from the marker while we stay inside the
+            // base64 alphabet. This bounds the run cheaply.
+            let run_end = marker_off
+                + data[marker_off..]
+                    .iter()
+                    .take_while(|&&b| is_base64_byte(b))
+                    .count();
+            let run_len = run_end - marker_off;
+            if run_len < MIN_BASE64_RUN {
+                continue;
+            }
+            let trimmed = &data[marker_off..run_end - run_len % 4];
+            // Decode just enough to confirm magic — 256 chars → 192
+            // bytes, plenty for header validation.
+            let head_chars = trimmed.len().min(256);
+            let head = match base64::Engine::decode(
+                &base64::engine::general_purpose::STANDARD,
+                &trimmed[..head_chars - head_chars % 4],
+            ) {
+                Ok(b) => b,
+                Err(_) => continue,
+            };
+            let kind = match classify_decoded_head(&head) {
+                Some(k) => k,
+                None => continue,
+            };
+            // Sanity: the kind we discovered must match what the
+            // marker prefix claimed. Otherwise we caught a coincidence.
+            if kind.as_str() != expected_kind {
+                continue;
+            }
+            // Estimated decoded size = 3/4 of the run length.
+            let estimated_size = (run_len / 4) * 3;
+            if estimated_size < MIN_EMBEDDED_ELF_SIZE {
+                continue;
+            }
+            results.push(EmbeddedBinary {
+                offset: marker_off,
+                kind,
+                estimated_size,
+                encoding: Some("base64"),
+                format_hint: None,
+            });
+        }
+    }
+}
+
+fn is_base64_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+}
+
+fn classify_decoded_head(data: &[u8]) -> Option<EmbeddedKind> {
+    if data.len() < 8 {
+        return None;
+    }
+    if &data[..4] == b"\x7fELF" {
+        let class = data[4];
+        let endian = data[5];
+        return Some(match (class, endian) {
+            (1, 1) => EmbeddedKind::Elf32Le,
+            (1, 2) => EmbeddedKind::Elf32Be,
+            (2, 1) => EmbeddedKind::Elf64Le,
+            (2, 2) => EmbeddedKind::Elf64Be,
+            _ => return None,
+        });
+    }
+    if &data[..2] == b"MZ" {
+        // Probe for the PE signature offset stamped at 0x3c. The
+        // base64 head doesn't get us all the way to the PE header
+        // (~256 bytes vs ~0x80 minimum), so we accept on DOS magic
+        // alone and let downstream consumers re-validate if needed.
+        return Some(EmbeddedKind::Pe64);
+    }
+    None
 }
 
 /// Build a finding for a detected embedded binary.
@@ -117,17 +248,24 @@ fn scan_pe(data: &[u8], results: &mut Vec<EmbeddedBinary>, cancelled: Option<&At
     // Start past byte 0 so we skip the host PE's own MZ header.
     let search_start = 2.min(data.len());
     let finder = memmem::Finder::new(b"MZ");
+    let mut pe_results = Vec::new();
     for pos in finder.find_iter(&data[search_start..]) {
-        if results.len() >= MAX_EMBEDDED {
+        if pe_results.len() >= MAX_EMBEDDED {
             break;
         }
         if cancelled.is_some_and(|f| f.load(Ordering::Acquire)) {
             break;
         }
         if let Some(emb) = validate_pe(data, pos + search_start) {
-            results.push(emb);
+            pe_results.push(emb);
         }
     }
+    for binary in &mut pe_results {
+        if binary.format_hint.is_some() {
+            binary.estimated_size = data.len().saturating_sub(binary.offset);
+        }
+    }
+    results.extend(pe_results);
 }
 
 /// Validate a potential PE header at `offset` within `data`.
@@ -188,21 +326,10 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         _ => return None, // Neither PE32 nor PE32+ — reject
     };
 
-    // SizeOfImage is at optional header offset 56 for both PE32 and PE32+
-    let size_of_image_offset = pe_base + 24 + 56; // optional header base + 56
-    let estimated_size = read_u32_le(data, size_of_image_offset)
-        .map(|soi| soi as usize)
-        .filter(|&soi| (MIN_BINARY_SIZE..=MAX_PE_IMAGE_SIZE).contains(&soi))
-        .unwrap_or_else(|| data.len().saturating_sub(offset));
-
-    if estimated_size < MIN_BINARY_SIZE {
-        return None;
-    }
-
     let available_size = data.len().saturating_sub(offset);
-    let bounded_size = estimated_size.min(available_size);
+    let mut physical_size = section_table_offset.checked_add(n_sections as usize * 40)?;
+    physical_size = physical_size.checked_sub(offset)?;
     if section_table_offset < offset
-        || section_table_offset.saturating_sub(offset) >= bounded_size
         || section_table_offset
             .checked_add(n_sections as usize * 40)
             .is_none_or(|end| end > data.len())
@@ -221,16 +348,92 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         }
 
         let section_end = pointer_to_raw_data.checked_add(size_of_raw_data)?;
-        if pointer_to_raw_data == 0 || section_end > bounded_size {
+        if pointer_to_raw_data == 0 || section_end > available_size {
             return None;
         }
+        physical_size = physical_size.max(section_end);
+    }
+
+    // Authenticode's security directory stores a file offset, not an RVA.
+    // Include it in the physical child span so signed embedded PEs are not
+    // carved into malformed unsigned fragments.
+    let data_directory_base = match kind {
+        EmbeddedKind::Pe32 => pe_base + 24 + 96,
+        EmbeddedKind::Pe64 => pe_base + 24 + 112,
+        _ => pe_base + 24 + 96,
+    };
+    if let (Some(cert_offset), Some(cert_size)) = (
+        read_u32_le(data, data_directory_base + 4 * 8).map(|v| v as usize),
+        read_u32_le(data, data_directory_base + 4 * 8 + 4).map(|v| v as usize),
+    ) {
+        if cert_offset > 0 && cert_size > 0 {
+            let cert_end = cert_offset.checked_add(cert_size)?;
+            if cert_end <= available_size {
+                physical_size = physical_size.max(cert_end);
+            }
+        }
+    }
+
+    let size_of_image = read_u32_le(data, pe_base + 24 + 56)
+        .map(|soi| soi as usize)
+        .filter(|&soi| (MIN_BINARY_SIZE..=MAX_PE_IMAGE_SIZE).contains(&soi));
+
+    let embedded_data = &data[offset..];
+    let format_hint = detect_embedded_pe_format(embedded_data);
+    let sfx_size = match format_hint {
+        Some("nsis") => nsis_physical_size(embedded_data),
+        Some("inno") => Some(available_size),
+        _ => None,
+    };
+    let estimated_size = size_of_image
+        .unwrap_or(physical_size)
+        .max(physical_size)
+        .max(sfx_size.unwrap_or(0))
+        .min(available_size);
+
+    if estimated_size < MIN_BINARY_SIZE {
+        return None;
     }
 
     Some(EmbeddedBinary {
         offset,
         kind,
         estimated_size,
+        encoding: None,
+        format_hint,
     })
+}
+
+fn detect_embedded_pe_format(data: &[u8]) -> Option<&'static str> {
+    if memmem::find(data, b"Inno Setup Setup Data").is_some() {
+        return Some("inno");
+    }
+    if memmem::find(data, &[0xEF, 0xBE, 0xAD, 0xDE]).is_some()
+        && [
+            b"Nullsoft Install System".as_slice(),
+            b"NSIS Error".as_slice(),
+            b"nsis.sf.net/NSIS_Error".as_slice(),
+            b"/NCRC".as_slice(),
+        ]
+        .iter()
+        .any(|marker| memmem::find(data, marker).is_some())
+    {
+        return Some("nsis");
+    }
+    None
+}
+
+fn nsis_physical_size(data: &[u8]) -> Option<usize> {
+    let header = memmem::find(data, &[0xEF, 0xBE, 0xAD, 0xDE])?;
+    if data.get(header + 4..header + 16)? != b"NullsoftInst" {
+        return None;
+    }
+
+    let archive_size = read_u32_le(data, header + 20)? as usize;
+    // NSIS stores a three-byte tail after the archive body; 7-Zip reports
+    // this separately as "Tail Size = 3".
+    let end = header.checked_add(archive_size)?.checked_add(3)?;
+    (end <= data.len()).then_some(end)
 }
 
 // ── ELF scanning ─────────────────────────────────────────────────────────────
@@ -426,6 +629,8 @@ fn validate_elf(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
         offset,
         kind,
         estimated_size,
+        encoding: None,
+        format_hint: None,
     })
 }
 
@@ -479,6 +684,7 @@ fn read_u64_class(data: &[u8], offset: usize, class: u8, le: bool) -> Option<u64
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -602,12 +808,65 @@ mod tests {
     }
 
     #[test]
+    fn test_scan_finds_base64_encoded_embedded_elf() {
+        // Build a real synthetic ELF, base64-encode it, splice into a
+        // host buffer's data region — exact shape of the Kong-ingress-
+        // controller 2024 dropper.
+        let mut payload = Vec::new();
+        make_synthetic_elf(&mut payload, 0);
+        let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &payload);
+        let mut host = vec![0u8; 4096];
+        host[0] = 0x7F;
+        host[1] = 0x45;
+        host[2] = 0x4C;
+        host[3] = 0x46;
+        let splice_off = 1024;
+        host.extend_from_slice(&[0u8; 1024]);
+        let needed = splice_off + encoded.len() + 256;
+        host.resize(needed, 0);
+        host[splice_off..splice_off + encoded.len()].copy_from_slice(encoded.as_bytes());
+
+        let found = scan_for_embedded_binaries(&host, None);
+        let base64_hit = found.iter().find(|f| f.offset == splice_off);
+        assert!(
+            base64_hit.is_some(),
+            "should detect base64-encoded ELF at offset {splice_off}; found {:?}",
+            found.iter().map(|f| (f.offset, f.kind)).collect::<Vec<_>>()
+        );
+        assert!(matches!(
+            base64_hit.expect("base64 hit present").kind,
+            EmbeddedKind::Elf64Le
+        ));
+    }
+
+    #[test]
+    fn test_scan_rejects_random_base64_run() {
+        // 16 KB of base64-shaped bytes that don't decode to ELF/PE.
+        let mut host = vec![0u8; 4096];
+        host[0] = 0x7F;
+        host[1] = 0x45;
+        host[2] = 0x4C;
+        host[3] = 0x46;
+        // Junk encoded — not a real binary.
+        let junk = "A".repeat(20_000);
+        host.extend_from_slice(junk.as_bytes());
+
+        let found = scan_for_embedded_binaries(&host, None);
+        assert!(
+            !found.iter().any(|f| f.offset >= 4096),
+            "must not flag random base64 runs as embedded payloads"
+        );
+    }
+
+    #[test]
     fn test_embedded_elf_in_kernel_module_is_notable() {
         let finding = finding_for(
             &EmbeddedBinary {
                 offset: 512,
                 kind: EmbeddedKind::Elf32Le,
                 estimated_size: 4096,
+                encoding: None,
+                format_hint: None,
             },
             "/boot/kernel/pmspcv.ko",
         );
@@ -623,6 +882,8 @@ mod tests {
                 offset: 512,
                 kind: EmbeddedKind::Elf32Le,
                 estimated_size: 4096,
+                encoding: None,
+                format_hint: None,
             },
             "/tmp/dropper.bin",
         );
@@ -788,6 +1049,8 @@ mod tests {
             offset: 0x400,
             kind: EmbeddedKind::Pe32,
             estimated_size: 8192,
+            encoding: None,
+            format_hint: None,
         };
         let finding = finding_for(&binary, "/tmp/test.exe");
         assert_eq!(finding.id, "binary/embedded/pe");

@@ -381,9 +381,9 @@ impl MachOAnalyzer {
                 if let Some(ref mut metrics) = report.metrics {
                     if let Some(ref mut binary_metrics) = metrics.binary {
                         // Merge radare2 metrics into existing basic metrics (only if non-zero)
-                        if r2_binary_metrics.function_count > 0 {
-                            binary_metrics.function_count = r2_binary_metrics.function_count;
-                            binary_metrics.avg_function_size = r2_binary_metrics.avg_function_size;
+                        if r2_binary_metrics.func_count > 0 {
+                            binary_metrics.func_count = r2_binary_metrics.func_count;
+                            binary_metrics.avg_func_size = r2_binary_metrics.avg_func_size;
                             binary_metrics.avg_complexity = r2_binary_metrics.avg_complexity;
                         }
                         // Don't use radare2's code_to_data_ratio - it has a bug where __const sections

@@ -81,6 +81,12 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     let data = std::fs::read(path)?;
     let mut full_report = report.clone();
     crate::analyzers::metrics_utils::populate_binary_metrics(&mut full_report, &data);
+    // Layer binary_extractors metric writes (e.g. .comment counts,
+    // stripped-section inventory) so the metrics command sees the
+    // same fields as a full `cleave analyze` run.
+    if matches!(file_type, FileType::Elf | FileType::Pe | FileType::MachO) {
+        crate::analyzers::binary_extractors::augment_report(&mut full_report, &data);
+    }
 
     // Update our metrics object with the refined one
     if let Some(refined_metrics) = full_report.metrics {

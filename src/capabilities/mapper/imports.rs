@@ -6,10 +6,6 @@
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashSet;
 
-/// Maximum number of metadata/internal/symbols:: findings to generate.
-/// These are only used for ML, so we limit to avoid output explosion on large binaries.
-const MAX_IMPORT_FINDINGS: usize = 1024;
-
 impl super::CapabilityMapper {
     /// Generate capability findings from import data in analysis reports.
     ///
@@ -30,15 +26,17 @@ impl super::CapabilityMapper {
         let mut new_findings: Vec<Finding> = Vec::new();
 
         if is_binary {
-            // For binaries: generate library-level and symbol-level findings
-            // Library: metadata/dylib/{library} - linked libraries (for composite trait matching)
-            // Symbol: metadata/internal/symbols/{symbol} - called/referenced symbols (for ML only, not composite traits)
+            // For binaries: emit library-level findings only.  Symbol-
+            // level findings used to be auto-emitted under
+            // `metadata/internal/symbols::<name>` for trait composition,
+            // but the feature was rarely used (a handful of unless:
+            // clauses) and dominated diff/output noise for any binary
+            // with many imports.  YAML traits now use inline
+            // `type: symbol, exact: <name>` conditions instead.
 
-            // Group symbols by library for dylib findings
+            // Group symbols by library for dylib findings.
             let mut libs_with_symbols: std::collections::HashMap<String, Vec<String>> =
                 std::collections::HashMap::new();
-
-            let mut import_finding_count = 0;
 
             for import in &report.imports {
                 if let Some(lib) = &import.library {
@@ -47,34 +45,6 @@ impl super::CapabilityMapper {
                             .entry(lib.clone())
                             .or_default()
                             .push(import.symbol.clone());
-                    }
-                }
-
-                // Generate symbol-level finding for ML (not for composite trait matching)
-                // Limited to MAX_IMPORT_FINDINGS to avoid output explosion
-                if import_finding_count >= MAX_IMPORT_FINDINGS {
-                    continue;
-                }
-
-                let normalized_symbol = Self::normalize_import_name(&import.symbol);
-                if !normalized_symbol.is_empty() {
-                    let symbol_id = format!("metadata/internal/symbols::{}", normalized_symbol);
-                    if !seen_ids.contains(&symbol_id) {
-                        seen_ids.insert(symbol_id.clone());
-                        import_finding_count += 1;
-                        new_findings.push(Finding {
-                            id: symbol_id,
-                            kind: FindingKind::Structural,
-                            desc: String::new(), // Compact: desc is redundant (derivable from id)
-                            conf: 0.95,
-                            crit: Criticality::Baseline,
-                            mbc: None,
-                            attack: None,
-                            trait_refs: Vec::new(),
-                            evidence: Vec::new(), // Compact: evidence is redundant
-                            match_count: 0,
-                            source_file: None,
-                        });
                     }
                 }
             }
@@ -129,82 +99,58 @@ impl super::CapabilityMapper {
                 });
             }
         } else {
-            // For scripts: generate two types of findings:
-            // 1. metadata/import/{lang}/{module} for actual imports (usable in composite traits)
-            // 2. metadata/internal/symbols/{symbol} for function calls (ML only, not for composites)
-            let mut import_finding_count = 0;
-
+            // For scripts: emit `metadata/import/{lang}/{module}`
+            // findings for actual imports.  AST-extracted function
+            // calls (`import.source == "ast"`) used to be auto-emitted
+            // under `metadata/internal/symbols::<name>` but the
+            // feature added more diff/output noise than it was worth
+            // — YAML rules use inline `type: symbol, exact: <name>`
+            // conditions when they need to gate on a function call.
             for import in &report.imports {
                 let normalized = Self::normalize_import_name(&import.symbol);
                 if normalized.is_empty() {
                     continue;
                 }
-
+                // Function-call sites stay out of the findings list.
                 if import.source == "ast" {
-                    // Function calls go to metadata/internal/symbols/ for ML usage only
-                    // Limited to MAX_IMPORT_FINDINGS
-                    if import_finding_count >= MAX_IMPORT_FINDINGS {
-                        continue;
-                    }
-
-                    let symbol_id = format!("metadata/internal/symbols::{}", normalized);
-                    if !seen_ids.contains(&symbol_id) {
-                        seen_ids.insert(symbol_id.clone());
-                        import_finding_count += 1;
-                        new_findings.push(Finding {
-                            id: symbol_id,
-                            kind: FindingKind::Structural,
-                            desc: String::new(), // Compact: derivable from id
-                            conf: 0.95,
-                            crit: Criticality::Baseline,
-                            mbc: None,
-                            attack: None,
-                            trait_refs: Vec::new(),
-                            evidence: Vec::new(), // Compact: redundant
-                            match_count: 0,
-                            source_file: None,
-                        });
-                    }
-                } else {
-                    // Actual imports go to metadata/import/{lang}/{module} for composite traits
-                    let source_ecosystem =
-                        Self::detect_import_ecosystem(&file_type, &import.source);
-
-                    let id = format!("metadata/import/{}::{}", source_ecosystem, normalized);
-
-                    if seen_ids.contains(&id) {
-                        continue;
-                    }
-                    seen_ids.insert(id.clone());
-
-                    let desc = match &import.library {
-                        Some(lib) if !lib.is_empty() => {
-                            format!("imports {} from {}", import.symbol, lib)
-                        }
-                        _ => format!("imports {}", import.symbol),
-                    };
-
-                    new_findings.push(Finding {
-                        id,
-                        kind: FindingKind::Structural,
-                        desc,
-                        conf: 0.95,
-                        crit: Criticality::Baseline,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: Vec::new(),
-                        evidence: vec![Evidence {
-                            method: "import".to_string(),
-                            source: import.source.clone(),
-                            value: import.symbol.clone(),
-                            location: import.library.clone(),
-                            ..Default::default()
-                        }],
-
-                        match_count: 0,
-                        source_file: None,
-                    });
+                    continue;
                 }
+
+                let source_ecosystem = Self::detect_import_ecosystem(&file_type, &import.source);
+                let id = format!("metadata/import/{}::{}", source_ecosystem, normalized);
+
+                if seen_ids.contains(&id) {
+                    continue;
+                }
+                seen_ids.insert(id.clone());
+
+                let desc = match &import.library {
+                    Some(lib) if !lib.is_empty() => {
+                        format!("imports {} from {}", import.symbol, lib)
+                    }
+                    _ => format!("imports {}", import.symbol),
+                };
+
+                new_findings.push(Finding {
+                    id,
+                    kind: FindingKind::Structural,
+                    desc,
+                    conf: 0.95,
+                    crit: Criticality::Baseline,
+                    mbc: None,
+                    attack: None,
+                    trait_refs: Vec::new(),
+                    evidence: vec![Evidence {
+                        method: "import".to_string(),
+                        source: import.source.clone(),
+                        value: import.symbol.clone(),
+                        location: import.library.clone(),
+                        ..Default::default()
+                    }],
+
+                    match_count: 0,
+                    source_file: None,
+                });
             }
         }
 

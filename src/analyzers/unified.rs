@@ -1847,14 +1847,12 @@ func main() {
 }
 "#;
         let report = analyze_go_code(code);
-        // The ListenAndServe call should be detected either as a dedicated trait
-        // or as an internal symbol marker
+        // The ListenAndServe call should be detected as a dedicated trait
         assert!(
             report.findings.iter().any(|c| c.id
                 == "micro-behaviors/communications/http/server::go-http-server"
-                || c.id == "micro-behaviors/communications/http/server::listenandserve-call"
-                || c.id == "metadata/internal/symbols::http/listenandserve"),
-            "Expected go-http-server, listenandserve-call, or http/listenandserve symbol, found: {:?}",
+                || c.id == "micro-behaviors/communications/http/server::listenandserve-call"),
+            "Expected go-http-server or listenandserve-call, found: {:?}",
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }

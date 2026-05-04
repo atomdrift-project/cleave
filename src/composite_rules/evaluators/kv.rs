@@ -1502,17 +1502,6 @@ fn format_evidence_value_with_size(
     size_min: Option<usize>,
     size_max: Option<usize>,
 ) -> String {
-    // If size constraints were used, include size info in the output
-    let size_info = if size_min.is_some() || size_max.is_some() {
-        match value {
-            Value::Array(arr) => Some(format!("size: {} (array)", arr.len())),
-            Value::Object(obj) => Some(format!("size: {} (object)", obj.len())),
-            _ => None,
-        }
-    } else {
-        None
-    };
-
     let s = match value {
         Value::String(s) => s.clone(),
         Value::Array(arr) => {
@@ -1530,7 +1519,21 @@ fn format_evidence_value_with_size(
         s
     };
 
-    // Append size info if present
+    // Only annotate size when the rendered form hides the count: a
+    // truncated string, or an object (rendered without bracket-count
+    // cues). Arrays render as `[a, b, c]` — the reader counts items.
+    let size_info = if size_min.is_some() || size_max.is_some() {
+        match value {
+            Value::Array(arr) if truncated.ends_with("...") => {
+                Some(format!("size: {} (array)", arr.len()))
+            }
+            Value::Object(obj) => Some(format!("size: {} (object)", obj.len())),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     match size_info {
         Some(info) => format!("{} ({})", truncated, info),
         None => truncated,

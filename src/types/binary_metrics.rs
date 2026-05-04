@@ -26,7 +26,7 @@
 //! - **Density metrics** (per KB of code):
 //!   - `import_density = import_count / (code_size / 1024)`
 //!   - `string_density = string_count / (code_size / 1024)`
-//!   - `function_density = function_count / (code_size / 1024)`
+//!   - `func_density = func_count / (code_size / 1024)`
 //!   - High density may indicate unpacked/decompressed code or shellcode
 //!
 //! - **Normalized metrics** (size-independent):
@@ -42,7 +42,7 @@
 use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
-use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
+use super::{is_false, is_zero_f32, is_zero_f64, is_zero_u32, is_zero_u64};
 
 // =============================================================================
 // BINARY-SPECIFIC METRICS
@@ -227,24 +227,44 @@ pub struct BinaryMetrics {
     // === Functions ===
     /// Depth of function analysis rizin performed, so rules can discriminate
     /// metrics-driven detections based on the analysis budget:
-    /// - `0` = skipped (`function_count` etc. are 0; function-count
+    /// - `0` = skipped (`func_count` etc. are 0; function-count
     ///   thresholds should be ignored)
     /// - `1` = light (`aa` only; entry-point analysis, no prologue scan)
     /// - `2` = full (`aa;aap`; entry-point + prologue scan, richest metrics)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub function_analysis_depth: u32,
+    pub func_analysis_depth: u32,
     /// Function count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub function_count: u32,
+    pub func_count: u32,
+    /// Count of FUNC + IFUNC entries in `.dynsym` — the binary's
+    /// public ABI surface. Compare with `func_count` to detect
+    /// hidden-code growth between releases.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub dynsym_func_count: u32,
+    /// `func_count - dynsym_func_count` — functions with no
+    /// dynsym entry (internal helpers). Disproportionate growth in
+    /// this number with little change to `dynsym_func_count` between
+    /// releases is the xz-class supply-chain signal: 99% of the new
+    /// code is hidden from the public ABI.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub internal_func_count: u32,
+    /// Count of unnamed (no dynsym entry) functions with cyclomatic
+    /// complexity > 50 (matches `high_complexity_funcs` threshold).
+    /// The full ranked list lives at `binary.top_complex_unnamed[]`
+    /// kv; this metric is the single-number trait target — drift
+    /// between releases reveals hidden complex code added without
+    /// ABI tie.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub unnamed_complex_func_count: u32,
     /// Average function size
     #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub avg_function_size: f32,
+    pub avg_func_size: f32,
     /// Tiny functions (<16 bytes)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub tiny_functions: u32,
+    pub tiny_funcs: u32,
     /// Huge functions (>64KB)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub huge_functions: u32,
+    pub huge_funcs: u32,
     /// Indirect call instructions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub indirect_calls: u32,
@@ -261,16 +281,16 @@ pub struct BinaryMetrics {
     pub max_complexity: u32,
     /// Functions with high complexity (>50)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub high_complexity_functions: u32,
+    pub high_complexity_funcs: u32,
     /// Names of high complexity functions
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub high_complexity_function_names: Vec<String>,
+    pub high_complexity_func_names: Vec<String>,
     /// Functions with very high complexity (>100)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub very_high_complexity_functions: u32,
+    pub very_high_complexity_funcs: u32,
     /// Names of very high complexity functions
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub very_high_complexity_function_names: Vec<String>,
+    pub very_high_complexity_func_names: Vec<String>,
 
     // === Control Flow ===
     /// Total basic blocks across all functions
@@ -281,16 +301,16 @@ pub struct BinaryMetrics {
     pub avg_basic_blocks: f32,
     /// Linear functions (no branches)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub linear_functions: u32,
+    pub linear_funcs: u32,
     /// Recursive functions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub recursive_functions: u32,
+    pub recursive_funcs: u32,
     /// Non-returning functions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub noreturn_functions: u32,
+    pub noreturn_funcs: u32,
     /// Leaf functions (make no calls)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub leaf_functions: u32,
+    pub leaf_funcs: u32,
 
     // === Stack ===
     /// Average stack frame size
@@ -301,10 +321,10 @@ pub struct BinaryMetrics {
     pub max_stack_frame: u32,
     /// Functions with large stack (>4KB)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub large_stack_functions: u32,
+    pub large_stack_funcs: u32,
     /// Names of large stack functions
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub large_stack_function_names: Vec<String>,
+    pub large_stack_func_names: Vec<String>,
 
     // === Overlay ===
     /// Has overlay data
@@ -346,7 +366,7 @@ pub struct BinaryMetrics {
     pub string_density: f32,
     /// Function density: functions per KB of code
     #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub function_density: f32,
+    pub func_density: f32,
     /// Export to import ratio (DLLs=high, EXEs=low)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub export_to_import_ratio: f32,
@@ -483,11 +503,11 @@ impl BinaryMetrics {
                 "string_density is negative"
             );
         }
-        if self.function_density < 0.0 {
+        if self.func_density < 0.0 {
             tracing::warn!(
                 path,
-                function_density = self.function_density,
-                "function_density is negative"
+                func_density = self.func_density,
+                "func_density is negative"
             );
         }
 
@@ -663,8 +683,11 @@ pub struct ElfMetrics {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub build_id_length: u32,
     /// GNU build-id hex string (lowercase, no separators).
-    /// Surfaced under the cross-format `debug.build_id` kv path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// In-memory carrier only — surfaced to consumers via the
+    /// cross-format `debug.build_id` kv path. Skipped from JSON so
+    /// it doesn't show up twice (once as `elf.build_id` metric and
+    /// once as `debug.build_id` kv) in analysis and diff output.
+    #[serde(default, skip_serializing)]
     pub build_id: Option<String>,
     /// DWARF compilation-unit count (`.debug_info`). Derived count →
     /// lives on metrics; trait authors target `elf.dwarf_cu_count`.
@@ -676,6 +699,29 @@ pub struct ElfMetrics {
     /// Number of debug-related sections
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_section_count: u32,
+
+    /// Total NUL-separated entries in `.comment`. One per input
+    /// object file. Distinct entries with different toolchain
+    /// banners signal a mixed-toolchain build (xz-class tampering).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub comment_entry_count: u32,
+    /// Distinct (deduplicated) entries in `.comment`. > 1 means at
+    /// least one input object was built with a different banner than
+    /// the rest of the binary.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub comment_distinct_count: u32,
+    /// Count of canonical metadata sections that are absent from a
+    /// normally-toolchain-output ELF (.comment, .note.GNU-stack,
+    /// .note.gnu.property, .note.ABI-tag, .symtab, .strtab).
+    /// Aggressive stripping is itself a signal — distro releases
+    /// usually keep `.comment`, only `strip --strip-all` removes it.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub stripped_metadata_section_count: u32,
+    /// Count of `STT_GNU_IFUNC` entries in `.dynsym`. Trait authors
+    /// match individual names via `elf.ifunc_symbols[]` kv; this
+    /// metric supports min/max queries.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub ifunc_count: u32,
 }
 
 /// PE-specific metrics
@@ -967,6 +1013,11 @@ pub struct PeMetrics {
     /// TLS callback count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub tls_callbacks: u32,
+    /// Maximum `virtual_size / raw_size` ratio across sections
+    /// (excluding rsize=0 / BSS-style). >4 indicates a runtime-
+    /// decompressed payload — classic packer fingerprint.
+    #[serde(default, skip_serializing_if = "is_zero_f64")]
+    pub max_section_inflation_ratio: f64,
 
     // === Authenticode ===
     /// Has digital signature
@@ -1031,7 +1082,7 @@ pub struct PeMetrics {
     pub se_handler_count: u32,
     /// CFG (Control Flow Guard) target-function table count.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub cfg_function_count: u32,
+    pub cfg_func_count: u32,
     /// CFG GuardFlags raw bitfield. Common bits:
     /// 0x100 = INSTRUMENTED, 0x200 = WRITE_INSTRUMENTED,
     /// 0x400 = FUNCTION_TABLE_PRESENT, 0x800 = EXPORT_SUPPRESSION_INFO,
@@ -1040,7 +1091,7 @@ pub struct PeMetrics {
     pub cfg_guard_flags: u32,
     /// CFG check-function pointer (the `__guard_check_icall_fptr`).
     #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub cfg_check_function: u64,
+    pub cfg_check_func: u64,
 
     // === Resource Directory tree ===
     /// Sorted, deduplicated list of canonical RT_* resource type
@@ -1308,6 +1359,12 @@ pub struct MachoMetrics {
     /// Swift code; the specific subset present narrows Swift version.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub swift_section_count: u32,
+    /// Count of LC_FUNCTION_STARTS entries — function entry points
+    /// known to dyld. Independent of disassembled `func_count`;
+    /// drift across releases of an otherwise-stable binary is a
+    /// linker/build-pipeline change signal.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub function_starts_count: u32,
 }
 
 /// Java class file metrics
@@ -1400,7 +1457,7 @@ mod tests {
         assert_eq!(metrics.overall_entropy, 0.0);
         assert_eq!(metrics.section_count, 0);
         assert_eq!(metrics.import_count, 0);
-        assert_eq!(metrics.function_count, 0);
+        assert_eq!(metrics.func_count, 0);
         assert!(!metrics.has_overlay);
     }
 
@@ -1412,7 +1469,7 @@ mod tests {
             section_count: 5,
             executable_sections: 2,
             import_count: 150,
-            function_count: 50,
+            func_count: 50,
             ..Default::default()
         };
         assert!((metrics.overall_entropy - 7.5).abs() < f32::EPSILON);
@@ -1446,12 +1503,12 @@ mod tests {
         let metrics = BinaryMetrics {
             avg_complexity: 15.5,
             max_complexity: 100,
-            high_complexity_functions: 5,
-            high_complexity_function_names: vec!["process_data".to_string()],
+            high_complexity_funcs: 5,
+            high_complexity_func_names: vec!["process_data".to_string()],
             ..Default::default()
         };
         assert_eq!(metrics.max_complexity, 100);
-        assert_eq!(metrics.high_complexity_function_names.len(), 1);
+        assert_eq!(metrics.high_complexity_func_names.len(), 1);
     }
 
     #[test]

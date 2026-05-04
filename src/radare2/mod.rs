@@ -47,9 +47,9 @@ use tracing::{debug, trace, warn};
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 
-/// Default timeout for rizin subprocess execution (1200 seconds / 20 minutes).
+/// Default timeout for rizin subprocess execution (240 seconds / 4 minutes).
 /// This prevents hung processes from accumulating during archive analysis.
-const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 1200;
+const RIZIN_DEFAULT_TIMEOUT_SECS: u64 = 240;
 
 /// Soft memory cap for a single rizin subprocess (4 GiB).
 ///
@@ -576,10 +576,10 @@ pub(crate) struct BatchedAnalysis {
     #[serde(default)]
     pub memory_exceeded: bool,
     /// Depth of function analysis rizin actually performed. Mirrors the
-    /// `binary.function_analysis_depth` metric: 0 = skipped, 1 = light (`aa`
+    /// `binary.func_analysis_depth` metric: 0 = skipped, 1 = light (`aa`
     /// only), 2 = full (`aa;aap`).
     #[serde(default)]
-    pub function_analysis_depth: u32,
+    pub func_analysis_depth: u32,
 }
 
 const fn default_true() -> bool {
@@ -770,7 +770,7 @@ impl Radare2Analyzer {
         //   must run first for any function metrics to appear.
         //
         // Policy: always emit function metrics; empty metrics are unacceptable.
-        // The analysis tier is recorded in `function_analysis_depth` so rules
+        // The analysis tier is recorded in `func_analysis_depth` so rules
         // can discriminate.
         //
         //   unstripped, ≤15MB  → `aa;aap;aflj` (depth=2, rich: entry-point + prologue)
@@ -1112,7 +1112,7 @@ impl Radare2Analyzer {
             "radare2 batched analysis completed"
         );
 
-        let function_analysis_depth = if use_prologue_only || use_light_analysis {
+        let func_analysis_depth = if use_prologue_only || use_light_analysis {
             1 // `aap` alone or `aa` alone
         } else {
             2 // `aa;aap`
@@ -1128,7 +1128,7 @@ impl Radare2Analyzer {
             imports,
             timed_out: false,
             memory_exceeded: false,
-            function_analysis_depth,
+            func_analysis_depth,
         };
 
         // Save to cache (unless CLEAVE_SKIP_CACHE is set)
@@ -1153,7 +1153,7 @@ impl Radare2Analyzer {
 
         let mut metrics = BinaryMetrics {
             section_count: batched.sections.len() as u32,
-            function_analysis_depth: batched.function_analysis_depth,
+            func_analysis_depth: batched.func_analysis_depth,
             ..Default::default()
         };
         let mut entropies: Vec<f32> = Vec::new();
@@ -1326,7 +1326,7 @@ impl Radare2Analyzer {
         }
 
         // Function metrics
-        metrics.function_count = batched.functions.len() as u32;
+        metrics.func_count = batched.functions.len() as u32;
 
         let mut complexities: Vec<u32> = Vec::new();
         let mut bb_counts: Vec<u32> = Vec::new();
@@ -1376,7 +1376,7 @@ impl Radare2Analyzer {
         if code_kb > 0.0 {
             metrics.import_density = metrics.import_count as f32 / code_kb;
             metrics.string_density = metrics.string_count as f32 / code_kb;
-            metrics.function_density = metrics.function_count as f32 / code_kb;
+            metrics.func_density = metrics.func_count as f32 / code_kb;
             metrics.relocation_density = metrics.relocation_count as f32 / code_kb;
             metrics.complexity_per_kb = metrics.avg_complexity * 1024.0 / metrics.code_size as f32;
         }

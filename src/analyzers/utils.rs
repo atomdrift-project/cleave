@@ -23,16 +23,17 @@ pub(crate) fn analyze_embedded_as_child(
     bytes: &[u8],
     host_name: &str,
     kind_str: &str,
+    display_kind: &str,
     offset: usize,
     capability_mapper: Arc<CapabilityMapper>,
     yara_engine: Option<Arc<YaraEngine>>,
     _parent_strings: &[stng::ExtractedString],
-) -> Option<crate::types::FileAnalysis> {
+) -> Option<Vec<crate::types::FileAnalysis>> {
     let suffix = if kind_str == "pe" { ".exe" } else { "" };
     let temp = tempfile::Builder::new().suffix(suffix).tempfile().ok()?;
     std::fs::write(temp.path(), bytes).ok()?;
 
-    let child_name = format!("embedded:{}@{:#x}", kind_str, offset);
+    let child_name = format!("embedded:{}@{:#x}", display_kind, offset);
     let child_path = crate::types::file_analysis::encode_archive_path(host_name, &child_name);
     let child_path_buf = PathBuf::from(&child_path);
 
@@ -67,10 +68,81 @@ pub(crate) fn analyze_embedded_as_child(
         analyzer.analyze_input(&input).ok()?
     };
 
-    let (mut fa, _nested, _) = report.into_file_analysis(0);
+    let temp_path = temp.path().display().to_string();
+    let (mut fa, nested, _) = report.into_file_analysis(0);
+    let metadata_name = if kind_str == "pe" {
+        embedded_pe_metadata_name(&fa)
+    } else {
+        None
+    };
+    let child_path = metadata_name
+        .as_deref()
+        .map(|name| {
+            crate::types::file_analysis::encode_archive_path(
+                host_name,
+                &format!("embedded:{}:{}@{:#x}", display_kind, name, offset),
+            )
+        })
+        .unwrap_or(child_path);
     fa.path = child_path;
     fa.depth = 1;
-    Some(fa)
+    let child_prefix = fa.path.clone();
+
+    let mut files = Vec::with_capacity(nested.len().saturating_add(1));
+    files.push(fa);
+    for mut nested_file in nested {
+        nested_file.path =
+            normalize_embedded_nested_path(&nested_file.path, &temp_path, &child_prefix);
+        nested_file.depth = nested_file.depth.saturating_add(1);
+        files.push(nested_file);
+    }
+    Some(files)
+}
+
+fn normalize_embedded_nested_path(path: &str, temp_path: &str, child_prefix: &str) -> String {
+    if path.starts_with(child_prefix) {
+        return path.to_string();
+    }
+    if let Some(rest) = path.strip_prefix(temp_path) {
+        return format!("{child_prefix}{rest}");
+    }
+    if let Some((_, member)) = path.split_once(crate::types::file_analysis::ARCHIVE_DELIMITER) {
+        return crate::types::file_analysis::encode_archive_path(child_prefix, member);
+    }
+    crate::types::file_analysis::encode_archive_path(child_prefix, path)
+}
+
+fn embedded_pe_metadata_name(file: &crate::types::FileAnalysis) -> Option<String> {
+    [
+        "pe.version_info.original_filename",
+        "pe.version_info.product_name",
+        "pe.version_info.file_description",
+    ]
+    .iter()
+    .filter_map(|key| file.kv.get(*key).and_then(serde_json::Value::as_str))
+    .find_map(sanitize_child_name)
+}
+
+fn sanitize_child_name(value: &str) -> Option<String> {
+    let mut out = String::with_capacity(value.len().min(64));
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else if matches!(ch, '.' | '_' | '-') {
+            out.push(ch);
+        } else if ch.is_whitespace() && !out.ends_with('_') {
+            out.push('_');
+        }
+        if out.len() >= 64 {
+            break;
+        }
+    }
+    let trimmed = out.trim_matches('_').to_string();
+    if trimmed.len() >= 3 {
+        Some(trimmed)
+    } else {
+        None
+    }
 }
 
 /// Calculate SHA256 hash of data.

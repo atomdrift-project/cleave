@@ -173,10 +173,10 @@ pub struct SourceCodeMetrics {
     // Function metrics
     /// Total number of functions/methods defined
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub function_count: u32,
+    pub func_count: u32,
     /// Average function size in lines
     #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub avg_function_size: f32,
+    pub avg_func_size: f32,
     /// Maximum function size
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_function_size: u32,
@@ -582,12 +582,12 @@ mod tests {
             code_lines: 400,
             comment_lines: 50,
             blank_lines: 50,
-            function_count: 20,
+            func_count: 20,
             import_count: 15,
             ..Default::default()
         };
         assert_eq!(metrics.total_lines, 500);
-        assert_eq!(metrics.function_count, 20);
+        assert_eq!(metrics.func_count, 20);
     }
 
     // ==================== CodeStructureMetrics Tests ====================

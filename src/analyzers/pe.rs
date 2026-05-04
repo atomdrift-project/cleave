@@ -1243,10 +1243,10 @@ impl PEAnalyzer {
                 }) {
                     let pdata_functions = pdata.virtual_size / 12;
                     if pdata_functions > 0
-                        && (binary_metrics.function_count <= 1
-                            || pdata_functions > binary_metrics.function_count * 10)
+                        && (binary_metrics.func_count <= 1
+                            || pdata_functions > binary_metrics.func_count * 10)
                     {
-                        binary_metrics.function_count = pdata_functions;
+                        binary_metrics.func_count = pdata_functions;
                     }
                 }
 
@@ -1267,8 +1267,7 @@ impl PEAnalyzer {
                 if code_kb > 0.0 {
                     binary_metrics.import_density = binary_metrics.import_count as f32 / code_kb;
                     binary_metrics.string_density = binary_metrics.string_count as f32 / code_kb;
-                    binary_metrics.function_density =
-                        binary_metrics.function_count as f32 / code_kb;
+                    binary_metrics.func_density = binary_metrics.func_count as f32 / code_kb;
                     binary_metrics.relocation_density =
                         binary_metrics.relocation_count as f32 / code_kb;
                     binary_metrics.complexity_per_kb =
@@ -1800,27 +1799,60 @@ impl PEAnalyzer {
                     report.findings.push(finding);
                     continue;
                 }
-                let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
-                let embedded_bytes = &pe_data[binary.offset..slice_end];
+                // Decode base64-encoded payloads before recursing —
+                // otherwise the child analyzer reads encoded text
+                // and reports the dropper as a malformed binary.
+                let decoded_storage: Vec<u8>;
+                let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
+                    let run_end = binary.offset
+                        + pe_data[binary.offset..]
+                            .iter()
+                            .take_while(|&&b| {
+                                b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+                            })
+                            .count();
+                    let trimmed_end = run_end - (run_end - binary.offset) % 4;
+                    match base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &pe_data[binary.offset..trimmed_end],
+                    ) {
+                        Ok(b) => {
+                            decoded_storage = b;
+                            &decoded_storage[..]
+                        }
+                        Err(_) => {
+                            report.findings.push(finding);
+                            continue;
+                        }
+                    }
+                } else {
+                    let slice_end = (binary.offset + binary.estimated_size).min(pe_data.len());
+                    &pe_data[binary.offset..slice_end]
+                };
                 let kind_str = binary.kind.as_str();
-                if let Some(fa) = crate::analyzers::utils::analyze_embedded_as_child(
+                let display_kind = binary.display_kind();
+                if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
                     embedded_bytes,
                     &host_name,
                     kind_str,
+                    &display_kind,
                     binary.offset,
                     self.capability_mapper.clone(),
                     self.yara_engine.clone(),
                     raw_stng_strings.as_deref().unwrap_or(&[]),
                 ) {
                     if finding.crit == Criticality::Suspicious
-                        && fa.findings.iter().any(|child_finding| {
-                            child_finding.crit <= Criticality::Notable
-                                && child_finding.id.starts_with("metadata/signed/")
-                        })
+                        && files
+                            .iter()
+                            .flat_map(|file| &file.findings)
+                            .any(|child_finding| {
+                                child_finding.crit <= Criticality::Notable
+                                    && child_finding.id.starts_with("metadata/signed/")
+                            })
                     {
                         finding.crit = Criticality::Notable;
                     }
-                    report.files.push(fa);
+                    report.files.extend(files);
                 }
                 report.findings.push(finding);
             }
@@ -2844,10 +2876,10 @@ fn parse_load_config(
             metrics.se_handler_count = read_u64(body, 0x68).unwrap_or(0) as u32;
         }
         if body.len() >= 0x78 {
-            metrics.cfg_check_function = read_u64(body, 0x70).unwrap_or(0);
+            metrics.cfg_check_func = read_u64(body, 0x70).unwrap_or(0);
         }
         if body.len() >= 0x90 {
-            metrics.cfg_function_count = read_u64(body, 0x88).unwrap_or(0) as u32;
+            metrics.cfg_func_count = read_u64(body, 0x88).unwrap_or(0) as u32;
         }
         if body.len() >= 0x94 {
             metrics.cfg_guard_flags = read_u32(body, 0x90).unwrap_or(0);
@@ -2860,10 +2892,10 @@ fn parse_load_config(
             metrics.se_handler_count = read_u32(body, 0x48).unwrap_or(0);
         }
         if body.len() >= 0x50 {
-            metrics.cfg_check_function = read_u32(body, 0x4C).unwrap_or(0) as u64;
+            metrics.cfg_check_func = read_u32(body, 0x4C).unwrap_or(0) as u64;
         }
         if body.len() >= 0x5C {
-            metrics.cfg_function_count = read_u32(body, 0x58).unwrap_or(0);
+            metrics.cfg_func_count = read_u32(body, 0x58).unwrap_or(0);
         }
         if body.len() >= 0x60 {
             metrics.cfg_guard_flags = read_u32(body, 0x5C).unwrap_or(0);

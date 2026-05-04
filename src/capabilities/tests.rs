@@ -2792,24 +2792,11 @@ fn test_generate_import_findings_with_library() {
 
     CapabilityMapper::generate_import_findings(&mut report);
 
-    // For binaries we generate:
-    // - metadata/internal/symbols/{symbol} for symbols (ML only, not for composite traits)
-    // - metadata/dylib/{library} for linked libraries (for composite trait matching)
-    assert_eq!(report.findings.len(), 2);
+    // For binaries we now only emit `metadata/dylib/{library}` for the
+    // linked library — symbol-level auto-emit (`metadata/internal/symbols::*`)
+    // was removed; YAML rules use inline `type: symbol, exact: <name>`.
+    assert_eq!(report.findings.len(), 1);
 
-    // Check symbol-level finding (in metadata/internal/symbols/)
-    // Note: desc is empty for compactness (derivable from id)
-    let symbol_finding = report
-        .findings
-        .iter()
-        .find(|f| f.id == "metadata/internal/symbols::printf")
-        .expect("should have symbol-level finding in metadata/internal/symbols/");
-    assert!(
-        symbol_finding.desc.is_empty(),
-        "symbol desc should be empty for compactness"
-    );
-
-    // Check library-level finding (in metadata/dylib/)
     let dylib_finding = report
         .findings
         .iter()
@@ -2851,9 +2838,11 @@ fn test_generate_import_findings_dedup() {
 }
 
 #[test]
-fn test_generate_import_findings_script_function_calls() {
-    // Test that function calls in scripts go to metadata/internal/symbols/
-    // while actual imports go to metadata/import/{lang}::{module}
+fn test_generate_import_findings_script_function_calls_dropped() {
+    // Function calls (`source: "ast"`) used to be auto-emitted under
+    // `metadata/internal/symbols::*` for trait composition; that
+    // namespace was retired because it dominated diff/output noise.
+    // Only actual imports (`source: "import"`) generate findings now.
     use crate::types::Import;
 
     let mut report = AnalysisReport::new(TargetInfo {
@@ -2872,15 +2861,13 @@ fn test_generate_import_findings_script_function_calls() {
         offset: None,
     });
 
-    // Function call (method invocation)
+    // Function calls — should NOT produce findings.
     report.imports.push(Import {
         symbol: "system".to_string(),
         library: None,
         source: "ast".to_string(),
         offset: None,
     });
-
-    // Another function call
     report.imports.push(Import {
         symbol: "open".to_string(),
         library: None,
@@ -2890,26 +2877,9 @@ fn test_generate_import_findings_script_function_calls() {
 
     CapabilityMapper::generate_import_findings(&mut report);
 
-    // Should have 3 findings: 1 import + 2 function calls
-    assert_eq!(report.findings.len(), 3);
-
-    let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
-
-    // Actual import goes to metadata/import/
-    assert!(
-        ids.contains(&"metadata/import/ruby::net/http"),
-        "Should have metadata/import/ for actual imports"
-    );
-
-    // Function calls go to metadata/internal/symbols/
-    assert!(
-        ids.contains(&"metadata/internal/symbols::system"),
-        "Should have metadata/internal/symbols/ for function calls"
-    );
-    assert!(
-        ids.contains(&"metadata/internal/symbols::open"),
-        "Should have metadata/internal/symbols/ for function calls"
-    );
+    // Only the real import.
+    assert_eq!(report.findings.len(), 1);
+    assert_eq!(report.findings[0].id, "metadata/import/ruby::net/http");
 }
 
 #[test]
@@ -3078,25 +3048,12 @@ fn test_generate_import_findings_evidence_structure() {
 
     CapabilityMapper::generate_import_findings(&mut report);
 
-    // For binaries we generate:
-    // - metadata/internal/symbols/{symbol} for symbols (ML only)
-    // - metadata/dylib/{library} for linked libraries
-    assert_eq!(report.findings.len(), 2);
+    // For binaries we now emit only the library-level
+    // `metadata/dylib/<library>` finding — symbol-level auto-emit was
+    // removed (YAML traits use inline `type: symbol, exact: <name>`).
+    assert_eq!(report.findings.len(), 1);
 
-    // Check symbol-level finding (in metadata/internal/symbols/)
-    // Note: evidence is empty for compactness (info is derivable from id)
-    let symbol_finding = report
-        .findings
-        .iter()
-        .find(|f| f.id == "metadata/internal/symbols::nslog")
-        .expect("should have symbol-level finding in metadata/internal/symbols/");
-    assert!(
-        symbol_finding.evidence.is_empty(),
-        "symbol evidence should be empty for compactness"
-    );
-
-    // Check library-level finding evidence (in metadata/dylib/)
-    // Dylib findings DO have evidence (method="library")
+    // Library-level finding carries `method="library"` evidence.
     let dylib_finding = report
         .findings
         .iter()

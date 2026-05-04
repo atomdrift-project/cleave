@@ -74,7 +74,8 @@ fn renders_ledger_row_for_added_file() {
     assert!(out.contains("b"));
     assert!(out.contains("ROC"));
     assert!(out.contains("lib/foo.so"));
-    assert!(out.contains("TRAITS"));
+    // Per-scope ROC rides on the scope heading now (no ledger column header).
+    assert!(out.contains("traits"));
     assert!(out.contains("family::evil"));
 }
 
@@ -117,7 +118,8 @@ fn renders_changed_file_in_ledger_no_zero_filler() {
     let out = format_terminal(&r);
     assert!(out.contains("1 file changed"));
     assert!(out.contains("x.py"));
-    assert!(out.contains("STRINGS"));
+    // Per-scope ROC rides on the scope heading now (no ledger column header).
+    assert!(out.contains("strings"));
     assert!(!out.contains("+0"));
     assert!(!out.contains("~0"));
     assert!(!out.contains("-0"));

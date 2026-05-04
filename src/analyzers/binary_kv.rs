@@ -113,7 +113,7 @@
 //!   bound_imports[]                      [{ name, time_date_stamp, forwarder_ref_count }]
 //!                                        — build-host WinSxS state fingerprint
 //!   load_config.security_cookie          "0x140295040" — /GS cookie address
-//!   load_config.cfg_check_function       "0x140287418" — CFG check fn pointer
+//!   load_config.cfg_check_func       "0x140287418" — CFG check fn pointer
 //!   load_config.cfg_guard_flags          "0x10500" — raw CFG guard-flags bitfield
 //!   load_config.cfg_flags.{...}          decoded named CFG flags
 //!
@@ -321,6 +321,15 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
     if let Some(pe) = metrics.pe.as_ref() {
         if pe.signing_time != 0 {
             out.insert("signing_time".into(), json!(pe.signing_time));
+        }
+        // Identify the timestamping authority CN from the chain.
+        // Heuristic: chain CN containing a time-stamping marker.
+        // Trojanized installers sometimes use a *different* TSA than the
+        // legitimate vendor's normal pipeline.
+        if let Some(signer_chain) = pe.signer.as_deref() {
+            if let Some(ts) = identify_timestamping_authority(signer_chain) {
+                out.insert("countersigner".into(), json!(ts));
+            }
         }
         // `signed_before_built` is a derived comparison (signing_time
         // < timestamp), not a raw structural read — lives on the
@@ -538,10 +547,10 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             "security_cookie".into(),
             json!(format!("0x{:x}", pe.security_cookie)),
         );
-        if pe.cfg_check_function != 0 {
+        if pe.cfg_check_func != 0 {
             lc.insert(
-                "cfg_check_function".into(),
-                json!(format!("0x{:x}", pe.cfg_check_function)),
+                "cfg_check_func".into(),
+                json!(format!("0x{:x}", pe.cfg_check_func)),
             );
         }
         if pe.cfg_guard_flags != 0 {
@@ -623,6 +632,18 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     }
     if !elf.needed.is_empty() {
         out.insert("needed".into(), json!(elf.needed.clone()));
+        // Library declaring a direct dependency on the dynamic linker
+        // (`ld-linux-*`, `ld-musl-*`) is a topology anomaly. Loader
+        // libs are normally pulled in transitively by libc; an
+        // explicit DT_NEEDED is rare outside of statically-linked
+        // glibc internals and the xz 5.6.0 backdoor.
+        if elf
+            .needed
+            .iter()
+            .any(|n| is_dynamic_loader_soname(n.as_str()))
+        {
+            out.insert("has_direct_interp_dep".into(), json!(true));
+        }
     }
     if !elf.rpaths.is_empty() {
         out.insert("rpath".into(), json!(elf.rpaths.clone()));
@@ -662,6 +683,45 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
         return None;
     }
     Some(out)
+}
+
+/// True when an `elf.needed` SONAME names the dynamic loader directly
+/// (`ld-linux-*`, `ld-musl-*`). A *library* with this dependency
+/// declared explicitly is anomalous — the loader is normally pulled
+/// in transitively via libc.
+/// Pick the timestamping-authority CN from an Authenticode chain.
+/// Returns the leaf-most TSA entry (the actual Time Stamping Signer)
+/// rather than the TSA's CA. Returns `None` for an unsigned binary or
+/// a chain with no detectable TSA — many code-signed PEs are signed
+/// without a timestamp.
+fn identify_timestamping_authority(chain: &str) -> Option<String> {
+    let lower_markers = [
+        "time stamping signer",
+        "timestamp signer",
+        "time-stamp signer",
+        "time stamping",
+        "timestamp",
+        "time-stamp",
+        "tsa",
+    ];
+    chain
+        .split(", ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .find(|s| {
+            let lower = s.to_lowercase();
+            lower_markers.iter().any(|m| lower.contains(m))
+        })
+        .map(str::to_string)
+}
+
+fn is_dynamic_loader_soname(name: &str) -> bool {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    base.starts_with("ld-linux")
+        || base.starts_with("ld-musl")
+        || base.starts_with("ld.so")
+        || base.starts_with("ld64.so")
+        || base == "ld.so"
 }
 
 /// Stash the synthesized binary kv tree on `report.kv_tree`.  Drops

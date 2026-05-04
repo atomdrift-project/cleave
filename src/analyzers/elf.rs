@@ -515,8 +515,8 @@ impl ElfAnalyzer {
                                 binary_metrics.import_count as f32 / code_kb;
                             binary_metrics.string_density =
                                 binary_metrics.string_count as f32 / code_kb;
-                            binary_metrics.function_density =
-                                binary_metrics.function_count as f32 / code_kb;
+                            binary_metrics.func_density =
+                                binary_metrics.func_count as f32 / code_kb;
                             binary_metrics.relocation_density =
                                 binary_metrics.relocation_count as f32 / code_kb;
                             binary_metrics.complexity_per_kb =
@@ -810,19 +810,47 @@ impl ElfAnalyzer {
                 if binary.offset >= data.len() {
                     continue;
                 }
-                let slice_end = (binary.offset + binary.estimated_size).min(data.len());
-                let embedded_bytes = &data[binary.offset..slice_end];
+                // For base64-encoded payloads we must decode before
+                // recursing — otherwise the child analyzer reads
+                // base64 text and reports the embedded binary as
+                // malformed (Kong-ingress-controller 2024).
+                let decoded_storage: Vec<u8>;
+                let embedded_bytes: &[u8] = if binary.encoding == Some("base64") {
+                    let run_end = binary.offset
+                        + data[binary.offset..]
+                            .iter()
+                            .take_while(|&&b| {
+                                b.is_ascii_alphanumeric() || b == b'+' || b == b'/' || b == b'='
+                            })
+                            .count();
+                    let trimmed_end = run_end - (run_end - binary.offset) % 4;
+                    match base64::Engine::decode(
+                        &base64::engine::general_purpose::STANDARD,
+                        &data[binary.offset..trimmed_end],
+                    ) {
+                        Ok(b) => {
+                            decoded_storage = b;
+                            &decoded_storage[..]
+                        }
+                        Err(_) => continue,
+                    }
+                } else {
+                    let slice_end = (binary.offset + binary.estimated_size).min(data.len());
+                    &data[binary.offset..slice_end]
+                };
                 let kind_str = binary.kind.as_str();
-                if let Some(fa) = crate::analyzers::utils::analyze_embedded_as_child(
+                let display_kind = binary.display_kind();
+                if let Some(files) = crate::analyzers::utils::analyze_embedded_as_child(
                     embedded_bytes,
                     &host_name,
                     kind_str,
+                    &display_kind,
                     binary.offset,
                     self.capability_mapper.clone(),
                     None, // YARA handled by child
                     raw_stng_strings.as_deref().unwrap_or(&[]),
                 ) {
-                    report.files.push(fa);
+                    report.files.extend(files);
                 }
             }
         }
@@ -1051,31 +1079,10 @@ impl ElfAnalyzer {
                     "goblin",
                 ));
             }
-            // IFUNC resolvers (STT_GNU_IFUNC) are notable regardless of import/export direction
-            if dynsym.st_type() == 10 {
-                let clean_name = crate::types::binary::normalize_symbol(name);
-                if !report.findings.iter().any(|f| f.desc.contains(&clean_name)) {
-                    report.findings.push(Finding {
-                        kind: FindingKind::Capability,
-                        id: "feat/binary/elf/ifunc".to_string(),
-                        desc: format!("ELF IFUNC resolver: {}", clean_name),
-                        crit: Criticality::Notable,
-                        conf: 1.0,
-                        mbc: None,
-                        attack: None,
-                        trait_refs: vec![],
-                        evidence: vec![Evidence {
-                            method: "symbol_type".to_string(),
-                            source: "goblin".to_string(),
-                            value: "STT_GNU_IFUNC (LOOS)".to_string(),
-                            location: Some(format!("{:#x}", dynsym.st_value)),
-                            ..Default::default()
-                        }],
-                        match_count: 0,
-                        source_file: None,
-                    });
-                }
-            }
+            // STT_GNU_IFUNC names are surfaced via the kv path
+            // `elf.ifunc_symbols[]` (populated by binary_extractors)
+            // and matched by the YAML trait
+            // `metadata/binary/linking::ifunc`.
         }
 
         // Analyze static symbol table (.symtab) for any additional exports not in .dynsym
@@ -1089,35 +1096,15 @@ impl ElfAnalyzer {
                     if report.exports.iter().any(|e| e.symbol == name) {
                         continue;
                     }
-                    let clean_name = crate::types::binary::normalize_symbol(name);
                     report.exports.push(Export::new(
                         name,
                         Some(format!("{:#x}", sym.st_value)),
                         "goblin",
                     ));
-                    if st_type == 10
-                        && !report.findings.iter().any(|f| f.desc.contains(&clean_name))
-                    {
-                        report.findings.push(Finding {
-                            kind: FindingKind::Capability,
-                            id: "feat/binary/elf/ifunc".to_string(),
-                            desc: format!("ELF IFUNC resolver: {}", clean_name),
-                            crit: Criticality::Notable,
-                            conf: 1.0,
-                            mbc: None,
-                            attack: None,
-                            trait_refs: vec![],
-                            evidence: vec![Evidence {
-                                method: "symbol_type".to_string(),
-                                source: "goblin".to_string(),
-                                value: "STT_GNU_IFUNC (LOOS)".to_string(),
-                                location: Some(format!("{:#x}", sym.st_value)),
-                                ..Default::default()
-                            }],
-                            match_count: 0,
-                            source_file: None,
-                        });
-                    }
+                    // STT_GNU_IFUNC names from .symtab flow into the
+                    // `elf.ifunc_symbols[]` kv path via the
+                    // binary_extractors scan. The YAML trait
+                    // `metadata/binary/linking::ifunc` reads from kv.
                 }
             }
         }

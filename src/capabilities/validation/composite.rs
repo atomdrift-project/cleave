@@ -4,8 +4,26 @@
 //! that composite rules only contain trait references (not inline primitives),
 //! auto-prefixing trait references, and detecting redundant patterns.
 
-use crate::composite_rules::{CompositeTrait, Condition};
+use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
 use std::collections::HashMap;
+
+/// Find atomic traits whose `if:` clause references themselves
+/// (`type: trait, id: <self>`). Such traits never fire — the runtime
+/// resolves the trait reference by querying the findings table, but
+/// the trait being evaluated hasn't been added yet, so the lookup
+/// always returns false. Earlier, this also caused the test-rules
+/// debugger to recurse forever and overflow the stack.
+///
+/// Returns `(trait_id, source_file_hint)` for each violation. Caller
+/// can join with the loader's `rule_source_files` map to print a
+/// useful line-number diagnostic.
+#[must_use]
+pub(crate) fn find_self_referencing_traits(traits: &[TraitDefinition]) -> Vec<&TraitDefinition> {
+    traits
+        .iter()
+        .filter(|t| matches!(&t.r#if, Condition::Trait { id } if id == &t.id))
+        .collect()
+}
 
 /// Validate that a composite rule only contains trait references, not inline conditions.
 ///

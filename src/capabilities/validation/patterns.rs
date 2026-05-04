@@ -17,6 +17,41 @@ use crate::composite_rules::{Condition, FileType, TraitDefinition};
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+/// Extract `(substr, regex, type_label)` from any condition that has them.
+///
+/// Returns `None` for conditions that do not carry both fields (e.g. `Hex`,
+/// `Yara`, `Metrics`, `Trait`, `Syscall`). Use this helper instead of matching
+/// individual variants so checks apply uniformly across the regex-bearing
+/// condition types.
+fn substr_regex_fields(
+    condition: &Condition,
+) -> Option<(Option<&str>, Option<&str>, &'static str)> {
+    match condition {
+        Condition::Symbol { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "symbol"))
+        }
+        Condition::Text { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "text"))
+        }
+        Condition::StringLiteral { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "string_literal"))
+        }
+        Condition::Raw { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "raw")),
+        Condition::Ast { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "ast")),
+        Condition::Section { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "section"))
+        }
+        Condition::Encoded { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "encoded"))
+        }
+        Condition::Basename { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "basename"))
+        }
+        Condition::Kv { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "kv")),
+        _ => None,
+    }
+}
+
 /// Count the minimum number of literal characters that MUST match in a regex pattern.
 ///
 /// This counts characters that are not optional or quantified, helping identify
@@ -175,6 +210,30 @@ pub(crate) fn find_short_pattern_warnings(
                     section_offset_range,
                     ..
                 }
+                | Condition::Text {
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                    ..
+                }
+                | Condition::StringLiteral {
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                    ..
+                }
+                | Condition::Encoded {
+                    section,
+                    offset,
+                    offset_range,
+                    section_offset,
+                    section_offset_range,
+                    ..
+                }
                 | Condition::Hex {
                     section,
                     offset,
@@ -202,41 +261,41 @@ pub(crate) fn find_short_pattern_warnings(
         }
 
         // Check the condition
-        match &trait_def.r#if {
-            Condition::Raw { substr, regex, .. } => {
-                // Check substr length
-                if let Some(pattern) = substr {
-                    if pattern.len() <= 3 {
-                        let source = rule_source_files
-                            .get(&trait_def.id)
-                            .cloned()
-                            .unwrap_or_else(|| "unknown".to_string());
-                        warnings.push((
-                            trait_def.id.clone(),
-                            pattern.clone(),
-                            "raw substr".to_string(),
-                            source,
-                        ));
-                    }
-                }
-                // Check regex minimum literal content
-                // Count characters that MUST appear (not quantified or optional)
-                if let Some(pattern) = regex {
-                    let literal_count = count_regex_min_literals(pattern);
-                    if literal_count <= 3 && literal_count > 0 {
-                        let source = rule_source_files
-                            .get(&trait_def.id)
-                            .cloned()
-                            .unwrap_or_else(|| "unknown".to_string());
-                        warnings.push((
-                            trait_def.id.clone(),
-                            pattern.clone(),
-                            "raw regex".to_string(),
-                            source,
-                        ));
-                    }
+        if let Some((substr, regex, type_label)) = substr_regex_fields(&trait_def.r#if) {
+            // Check substr length
+            if let Some(pattern) = substr {
+                if pattern.len() <= 3 {
+                    let source = rule_source_files
+                        .get(&trait_def.id)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    warnings.push((
+                        trait_def.id.clone(),
+                        pattern.to_string(),
+                        format!("{} substr", type_label),
+                        source,
+                    ));
                 }
             }
+            // Check regex minimum literal content
+            // Count characters that MUST appear (not quantified or optional)
+            if let Some(pattern) = regex {
+                let literal_count = count_regex_min_literals(pattern);
+                if literal_count <= 3 && literal_count > 0 {
+                    let source = rule_source_files
+                        .get(&trait_def.id)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    warnings.push((
+                        trait_def.id.clone(),
+                        pattern.to_string(),
+                        format!("{} regex", type_label),
+                        source,
+                    ));
+                }
+            }
+        }
+        match &trait_def.r#if {
             Condition::Hex { pattern, .. } => {
                 // Count effective hex bytes (excluding ?? wildcards and [N] gaps,
                 // but counting nibble wildcards like 4? or ?F)
@@ -277,13 +336,7 @@ pub(crate) fn find_short_pattern_warnings(
 /// weren't adapted for this codebase.
 pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
-        let pattern_opt = match &trait_def.r#if {
-            Condition::Raw {
-                regex: Some(ref regex_str),
-                ..
-            } => Some(regex_str.as_str()),
-            _ => None,
-        };
+        let pattern_opt = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r);
 
         if let Some(pattern) = pattern_opt {
             if pattern.contains("(?:") {
@@ -317,22 +370,9 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
 /// for common backtracking pitfalls.
 pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
-        // Extract regex pattern from any condition type that has one
-        let pattern_opt = match &trait_def.r#if {
-            Condition::Raw {
-                regex: Some(ref regex_str),
-                ..
-            }
-            | Condition::Ast {
-                regex: Some(ref regex_str),
-                ..
-            }
-            | Condition::Symbol {
-                regex: Some(ref regex_str),
-                ..
-            } => Some(regex_str.clone()),
-            _ => None,
-        };
+        // Extract regex pattern from any regex-bearing condition variant
+        let pattern_opt =
+            substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r.map(str::to_owned));
 
         if let Some(pattern) = pattern_opt {
             let mut issues = Vec::new();

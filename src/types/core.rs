@@ -439,6 +439,63 @@ impl AnalysisReport {
         merged_file_indices
     }
 
+    /// Add child-file findings to their containing wrapper while preserving the
+    /// child entries. This keeps archive members, embedded binaries, and UPX
+    /// layers attributable as separate files, but ensures filtering and root
+    /// summaries still reflect behavior hidden behind the wrapper.
+    pub fn inherit_child_findings_into_wrappers(&mut self) -> Vec<usize> {
+        use rustc_hash::{FxHashMap, FxHashSet};
+
+        if self.files.len() <= 1 {
+            return Vec::new();
+        }
+
+        let path_to_index: FxHashMap<String, usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .map(|(idx, file)| (file.path.clone(), idx))
+            .collect();
+
+        let mut child_indices: Vec<usize> = self
+            .files
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, file)| immediate_wrapper_path(&file.path).map(|_| idx))
+            .collect();
+        child_indices.sort_by_key(|&idx| {
+            std::cmp::Reverse((
+                self.files[idx].depth,
+                wrapper_delimiter_count(&self.files[idx].path),
+            ))
+        });
+
+        let mut changed = FxHashSet::default();
+        for child_idx in child_indices {
+            let Some(parent_path) = immediate_wrapper_path(&self.files[child_idx].path) else {
+                continue;
+            };
+            let Some(&parent_idx) = path_to_index.get(parent_path) else {
+                continue;
+            };
+            if parent_idx == child_idx || self.files[child_idx].findings.is_empty() {
+                continue;
+            }
+
+            let child_findings = self.files[child_idx].findings.clone();
+            let parent = &mut self.files[parent_idx];
+            parent.findings.extend(child_findings);
+            dedupe_finding_list(&mut parent.findings);
+            Self::refresh_formula(parent);
+            parent.compute_summary();
+            changed.insert(parent_idx);
+        }
+
+        let mut changed: Vec<usize> = changed.into_iter().collect();
+        changed.sort_unstable();
+        changed
+    }
+
     /// Shrink all Vec fields to fit their contents, freeing excess capacity.
     /// Call this after analysis is complete to reduce memory footprint.
     pub fn shrink_to_fit(&mut self) {
@@ -493,6 +550,8 @@ impl AnalysisReport {
             }
             self.files.insert(0, root_file);
         }
+
+        self.inherit_child_findings_into_wrappers();
 
         for file in &mut self.files {
             file.strip_source_fields();
@@ -727,6 +786,25 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     if existing.desc.is_empty() && !new.desc.is_empty() {
         existing.desc = new.desc;
     }
+}
+
+fn immediate_wrapper_path(path: &str) -> Option<&str> {
+    use super::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+
+    let archive_pos = path.rfind(ARCHIVE_DELIMITER);
+    let encoding_pos = path.rfind(ENCODING_DELIMITER);
+    match (archive_pos, encoding_pos) {
+        (Some(a), Some(e)) => Some(&path[..a.max(e)]),
+        (Some(a), None) => Some(&path[..a]),
+        (None, Some(e)) => Some(&path[..e]),
+        (None, None) => None,
+    }
+}
+
+fn wrapper_delimiter_count(path: &str) -> usize {
+    use super::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
+
+    path.matches(ARCHIVE_DELIMITER).count() + path.matches(ENCODING_DELIMITER).count()
 }
 
 /// Information about the file being analyzed
@@ -1139,5 +1217,103 @@ mod tests {
         let counts = report.files[0].counts.as_ref().unwrap();
         assert_eq!(counts.hostile, 1);
         assert_eq!(counts.notable, 1);
+    }
+
+    #[test]
+    fn test_inherit_archive_child_findings_preserves_child() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/archive.zip",
+                vec![test_finding("cap/archive", Criticality::Notable)],
+            ),
+            test_file(
+                "/archive.zip!!member.py",
+                vec![test_finding("cap/member", Criticality::Suspicious)],
+            ),
+        ];
+
+        let changed = report.inherit_child_findings_into_wrappers();
+
+        assert_eq!(changed, vec![0]);
+        assert_eq!(report.files.len(), 2);
+        assert!(report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/archive"));
+        assert!(report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/member"));
+        assert_eq!(report.files[1].findings.len(), 1);
+        assert_eq!(report.files[1].findings[0].id, "cap/member");
+    }
+
+    #[test]
+    fn test_inherit_nested_child_findings_to_each_wrapper() {
+        let mut report = AnalysisReport::new(test_target());
+        report.files = vec![
+            test_file(
+                "/outer.zip",
+                vec![test_finding("cap/outer", Criticality::Notable)],
+            ),
+            test_file(
+                "/outer.zip!!inner.tar",
+                vec![test_finding("cap/inner", Criticality::Notable)],
+            ),
+            test_file(
+                "/outer.zip!!inner.tar!!payload",
+                vec![test_finding("cap/payload", Criticality::Hostile)],
+            ),
+        ];
+        report.files[1].depth = 1;
+        report.files[2].depth = 2;
+
+        let changed = report.inherit_child_findings_into_wrappers();
+
+        assert_eq!(changed, vec![0, 1]);
+        assert!(report.files[1]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/payload"));
+        assert!(report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/payload"));
+    }
+
+    #[test]
+    fn test_finalize_inherits_upx_child_findings_into_root() {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/bin/sample".to_string(),
+            file_type: "elf".to_string(),
+            size_bytes: 10,
+            sha256: "rootsha".to_string(),
+            architectures: None,
+        });
+        report.findings = vec![test_finding("anti-static/packer/upx", Criticality::Notable)];
+        let mut child = test_file(
+            "/bin/sample!!upx@0",
+            vec![test_finding("cap/unpacked", Criticality::Suspicious)],
+        );
+        child.depth = 1;
+        report.files.push(child);
+
+        report.finalize();
+
+        assert_eq!(report.files.len(), 2);
+        assert_eq!(report.files[0].path, "/bin/sample");
+        assert!(report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "anti-static/packer/upx"));
+        assert!(report.files[0]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/unpacked"));
+        assert!(report.files[1]
+            .findings
+            .iter()
+            .any(|f| f.id == "cap/unpacked"));
     }
 }

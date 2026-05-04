@@ -863,14 +863,36 @@ impl PEAnalyzer {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if fs::write(temp_file.path(), &unpacked_data).is_ok() {
+                        let opts = crate::analyzers::stng_analysis_opts(4);
+                        let unpacked_strings =
+                            stng::extract_strings_with_options(&unpacked_data, &opts);
                         let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
                             temp_file.path(),
                             &unpacked_data,
-                            None,
+                            Some(&unpacked_strings),
                             true,
                             None, // Hash will change after decompression
                         );
+                        crate::analyzers::binary_kv::attach_to_report(&mut unpacked_report);
+                        crate::analyzers::binary_extractors::augment_report(
+                            &mut unpacked_report,
+                            &unpacked_data,
+                        );
+                        if let Some(yara) = &self.yara_engine {
+                            match yara.scan_bytes_to_findings(&unpacked_data, Some(&["pe"])) {
+                                Ok((matches, findings)) => {
+                                    unpacked_report.yara_matches = matches;
+                                    for finding in findings {
+                                        unpacked_report.push_finding_capped(finding);
+                                    }
+                                }
+                                Err(e) => unpacked_report
+                                    .metadata
+                                    .errors
+                                    .push(format!("yara(upx): {e:#}")),
+                            }
+                        }
                         // Evaluate composites against the unpacked layer so that
                         // objective-level findings (infostealers, etc.) appear in the child.
                         self.capability_mapper.evaluate_and_merge_findings(
@@ -893,6 +915,13 @@ impl PEAnalyzer {
                         unpacked_file.parent_id = Some(0);
                         unpacked_file.encoding = Some(vec!["upx".to_string()]);
                         unpacked_file.compute_summary();
+
+                        // The packed wrapper represents the executable users see, so
+                        // its findings include the behavior exposed by the UPX layer
+                        // while the child retains layer-specific attribution.
+                        for finding in &unpacked_file.findings {
+                            report.push_finding_capped(finding.clone());
+                        }
 
                         // Add nested files from unpacked analysis (e.g., embedded code)
                         report.files.extend(unpacked_report.files);

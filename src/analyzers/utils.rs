@@ -7,7 +7,7 @@
 use crate::analyzers::elf::ElfAnalyzer;
 use crate::analyzers::input::AnalysisInput;
 use crate::analyzers::pe::PEAnalyzer;
-use crate::analyzers::Analyzer;
+use crate::analyzers::{Analyzer, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{Evidence, StructuralFeature};
 use crate::yara_engine::YaraEngine;
@@ -58,11 +58,11 @@ pub(crate) fn analyze_embedded_as_child(
         .with_backing_path(temp.path())
         .at_depth(1);
 
-    let report = if file_type == crate::analyzers::FileType::Pe {
+    let mut report = if file_type == crate::analyzers::FileType::Pe {
         let mut analyzer = PEAnalyzer::new()
             .with_capability_mapper_arc(capability_mapper)
             .without_embedded_scan();
-        if let Some(yara) = yara_engine {
+        if let Some(yara) = yara_engine.clone() {
             analyzer = analyzer.with_yara_arc(yara);
         }
         analyzer.analyze_input(&input).ok()?
@@ -75,6 +75,21 @@ pub(crate) fn analyze_embedded_as_child(
         }
         analyzer.analyze_input(&input).ok()?
     };
+
+    if let Some(yara) = yara_engine.as_ref() {
+        match yara.scan_bytes_to_findings(bytes, Some(&file_type.yara_filetypes())) {
+            Ok((matches, findings)) => {
+                report.yara_matches = matches;
+                for finding in findings {
+                    report.push_finding_capped(finding);
+                }
+            }
+            Err(e) => report
+                .metadata
+                .errors
+                .push(format!("yara(embedded): {e:#}")),
+        }
+    }
 
     let temp_path = temp.path().display().to_string();
     let (mut fa, nested, _) = report.into_file_analysis(0);

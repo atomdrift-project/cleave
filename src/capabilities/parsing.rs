@@ -1053,6 +1053,8 @@ fn check_regex_length(
 
     let regex = match condition {
         Condition::Symbol { regex, .. }
+        | Condition::Text { regex, .. }
+        | Condition::StringLiteral { regex, .. }
         | Condition::Raw { regex, .. }
         | Condition::Ast { regex, .. }
         | Condition::Section { regex, .. }
@@ -1063,9 +1065,9 @@ fn check_regex_length(
     };
 
     if let Some(pattern) = regex {
-        if pattern.len() > 80 {
+        if pattern.len() > 75 {
             warnings.push(format!(
-                "Trait '{}': regex pattern exceeds 80 bytes ({} bytes): {:?}",
+                "Trait '{}': regex pattern exceeds 75 bytes ({} bytes): {:?}. Consider decomposing into a composite of multiple atomic conditions (kv, symbol, ast, text) joined with near_lines/near_bytes for proximity matching.",
                 trait_id,
                 pattern.len(),
                 pattern
@@ -1989,7 +1991,7 @@ mod tests {
 
     #[test]
     fn test_regex_length_ok() {
-        let pattern = "a".repeat(80);
+        let pattern = "a".repeat(75);
         let condition = crate::composite_rules::Condition::Basename {
             exact: None,
             substr: None,
@@ -2005,7 +2007,7 @@ mod tests {
 
     #[test]
     fn test_regex_length_over_limit_warns() {
-        let pattern = "a".repeat(81);
+        let pattern = "a".repeat(76);
         let condition = crate::composite_rules::Condition::Basename {
             exact: None,
             substr: None,
@@ -2017,8 +2019,8 @@ mod tests {
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, &mut warnings);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("regex pattern exceeds 80 bytes"));
-        assert!(warnings[0].contains("81 bytes"));
+        assert!(warnings[0].contains("regex pattern exceeds 75 bytes"));
+        assert!(warnings[0].contains("76 bytes"));
     }
 
     #[test]

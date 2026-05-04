@@ -13,6 +13,7 @@ use crate::types::{
     AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Function, Import, Metrics,
     Section, StringInfo, StructuralFeature, TargetInfo,
 };
+use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
 use goblin::elf::note::NT_GNU_BUILD_ID;
 use goblin::elf::Elf;
@@ -39,6 +40,7 @@ pub(crate) struct ElfAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     radare2: Radare2Analyzer,
     string_extractor: StringExtractor,
+    yara_engine: Option<Arc<YaraEngine>>,
     /// Pre-extracted strings from stng (avoids redundant extraction)
     preextracted_strings: Option<Vec<StringInfo>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
@@ -254,6 +256,7 @@ impl ElfAnalyzer {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             radare2: Radare2Analyzer::new(),
             string_extractor: StringExtractor::new(),
+            yara_engine: None,
             preextracted_strings: None,
             skip_embedded_scan: false,
             cancellation: None,
@@ -285,9 +288,11 @@ impl ElfAnalyzer {
 
     /// Create analyzer with shared YARA engine
     #[must_use]
-    pub(crate) fn with_yara_arc(self, _yara_engine: &Arc<crate::yara_engine::YaraEngine>) -> Self {
-        // ELF analyzer currently doesn't use YARA engine directly for structural analysis,
-        // but we accept it for consistency with other analyzers and future use.
+    pub(crate) fn with_yara_arc(
+        mut self,
+        yara_engine: &Arc<crate::yara_engine::YaraEngine>,
+    ) -> Self {
+        self.yara_engine = Some(yara_engine.clone());
         self
     }
 
@@ -1442,14 +1447,47 @@ impl ElfAnalyzer {
             Ok(unpacked_data) => {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new() {
                     if std::fs::write(temp_file.path(), &unpacked_data).is_ok() {
+                        let opts = crate::analyzers::stng_analysis_opts(4);
+                        let unpacked_strings =
+                            stng::extract_strings_with_options(&unpacked_data, &opts);
                         let unpacked_report = self.analyze_elf_core(
                             temp_file.path(),
                             temp_file.path(),
                             &unpacked_data,
-                            None,
+                            Some(&unpacked_strings),
                             true,
                             None,
                         );
+                        let mut unpacked_report = unpacked_report;
+                        crate::analyzers::binary_kv::attach_to_report(&mut unpacked_report);
+                        crate::analyzers::binary_extractors::augment_report(
+                            &mut unpacked_report,
+                            &unpacked_data,
+                        );
+                        if let Some(yara) = &self.yara_engine {
+                            match yara
+                                .scan_bytes_to_findings(&unpacked_data, Some(&["elf", "so", "ko"]))
+                            {
+                                Ok((matches, findings)) => {
+                                    unpacked_report.yara_matches = matches;
+                                    for finding in findings {
+                                        unpacked_report.push_finding_capped(finding);
+                                    }
+                                }
+                                Err(e) => unpacked_report
+                                    .metadata
+                                    .errors
+                                    .push(format!("yara(upx): {e:#}")),
+                            }
+                        }
+                        self.capability_mapper.evaluate_and_merge_findings(
+                            &mut unpacked_report,
+                            &unpacked_data,
+                            None,
+                            None,
+                        );
+                        crate::path_mapper::analyze_and_link_paths(&mut unpacked_report);
+                        crate::env_mapper::analyze_and_link_env_vars(&mut unpacked_report);
 
                         // Create separate FileAnalysis for unpacked layer
                         let unpacked_sha256 =
@@ -1464,6 +1502,13 @@ impl ElfAnalyzer {
                         unpacked_file.parent_id = Some(0);
                         unpacked_file.encoding = Some(vec!["upx".to_string()]);
                         unpacked_file.compute_summary();
+
+                        // The packed wrapper represents the executable users see, so
+                        // its findings include the behavior exposed by the UPX layer
+                        // while the child retains layer-specific attribution.
+                        for finding in &unpacked_file.findings {
+                            report.push_finding_capped(finding.clone());
+                        }
 
                         // Add nested files from unpacked analysis (e.g., embedded code)
                         report.files.extend(unpacked_report.files);

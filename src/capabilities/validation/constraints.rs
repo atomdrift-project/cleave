@@ -365,6 +365,20 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 word,
                 ..
             }
+            | Condition::Text {
+                exact,
+                substr,
+                regex,
+                word,
+                ..
+            }
+            | Condition::StringLiteral {
+                exact,
+                substr,
+                regex,
+                word,
+                ..
+            }
             | Condition::Encoded {
                 exact,
                 substr,
@@ -378,8 +392,45 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 substr,
                 regex,
                 ..
+            }
+            | Condition::Basename {
+                exact,
+                substr,
+                regex,
+                ..
             } => exact.is_some() || substr.is_some() || regex.is_some(),
-            // Other condition types have required fields
+            Condition::Section {
+                exact,
+                substr,
+                regex,
+                word,
+                length_min,
+                length_max,
+                entropy_min,
+                entropy_max,
+                readable,
+                writable,
+                executable,
+                ratio_min,
+                ratio_max,
+                ..
+            } => {
+                exact.is_some()
+                    || substr.is_some()
+                    || regex.is_some()
+                    || word.is_some()
+                    || length_min.is_some()
+                    || length_max.is_some()
+                    || entropy_min.is_some()
+                    || entropy_max.is_some()
+                    || readable.is_some()
+                    || writable.is_some()
+                    || executable.is_some()
+                    || ratio_min.is_some()
+                    || ratio_max.is_some()
+            }
+            // Other condition types (Trait, Yara, Syscall, Metrics, Kv, Ast)
+            // have required fields enforced by the type system or deserializer.
             _ => true,
         };
 
@@ -563,6 +614,30 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
         section_offset_range,
         ..
     }
+    | Condition::Text {
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        ..
+    }
+    | Condition::StringLiteral {
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        ..
+    }
+    | Condition::Encoded {
+        section,
+        offset,
+        offset_range,
+        section_offset,
+        section_offset_range,
+        ..
+    }
     | Condition::Hex {
         section,
         offset,
@@ -601,8 +676,10 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
 /// For hex patterns, `??` full wildcards and `[N]` gaps don't count toward length,
 /// but nibble wildcards like `4?` or `?F` do (they still constrain one nibble).
 ///
-/// `type: text` patterns are excluded — string extraction already provides
-/// boundary context that reduces noise.
+/// Applies uniformly to all string-pattern condition types (text, raw,
+/// string_literal, encoded). Binary string extraction has a low minimum
+/// (typically 4 bytes) — a 1–2 char text substr still matches anywhere inside
+/// every extracted string, so the same noise floor applies.
 ///
 /// Returns: `Vec<(trait_id, pattern_value, pattern_type)>`
 #[must_use]
@@ -616,26 +693,30 @@ pub(crate) fn find_too_short_patterns(
             continue;
         }
 
-        match &t.r#if {
-            Condition::Raw { exact, substr, .. } => {
-                if let Some(s) = exact {
-                    if s.len() < MIN_PATTERN_LENGTH {
-                        violations.push((t.id.clone(), s.clone(), "exact"));
-                    }
-                }
-                if let Some(s) = substr {
-                    if s.len() < MIN_PATTERN_LENGTH {
-                        violations.push((t.id.clone(), s.clone(), "substr"));
-                    }
-                }
-            }
+        let (exact, substr) = match &t.r#if {
+            Condition::Raw { exact, substr, .. }
+            | Condition::Text { exact, substr, .. }
+            | Condition::StringLiteral { exact, substr, .. }
+            | Condition::Encoded { exact, substr, .. } => (exact.as_deref(), substr.as_deref()),
             Condition::Hex { pattern, .. } => {
                 let concrete_bytes = count_concrete_hex_bytes(pattern);
                 if concrete_bytes < MIN_PATTERN_LENGTH {
                     violations.push((t.id.clone(), pattern.clone(), "hex"));
                 }
+                continue;
             }
-            _ => {}
+            _ => continue,
+        };
+
+        if let Some(s) = exact {
+            if s.len() < MIN_PATTERN_LENGTH {
+                violations.push((t.id.clone(), s.to_string(), "exact"));
+            }
+        }
+        if let Some(s) = substr {
+            if s.len() < MIN_PATTERN_LENGTH {
+                violations.push((t.id.clone(), s.to_string(), "substr"));
+            }
         }
     }
 
@@ -856,12 +937,16 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
 
     for t in trait_definitions {
         let invalid = match &t.r#if {
-            // String/Raw/Encoded: not requires regex
-            Condition::Raw { regex, not, .. } | Condition::Encoded { regex, not, .. } => {
-                not.is_some() && regex.is_none()
-            }
+            // Variants that carry both `regex` and `not`: `not` only makes sense
+            // alongside an ambiguous matcher (regex). With exact/substr/word the
+            // match is already precise — change the pattern instead.
+            Condition::Raw { regex, not, .. }
+            | Condition::Encoded { regex, not, .. }
+            | Condition::Symbol { regex, not, .. }
+            | Condition::Text { regex, not, .. }
+            | Condition::StringLiteral { regex, not, .. } => not.is_some() && regex.is_none(),
             // Hex: not is always valid (patterns are inherently ambiguous).
-            // All other condition types: not is not supported.
+            // Other condition types do not have a `not:` field.
             _ => false,
         };
 

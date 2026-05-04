@@ -1429,10 +1429,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 data_bytes = file_data.len(),
                 "ELF: entering structural analysis (YARA already prefetched)"
             );
-            let analyzer = analyzers::elf::ElfAnalyzer::new()
+            let mut analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
                 .with_capability_mapper_arc(mapper_arc.clone())
                 .with_preextracted_strings(preextracted_strings.clone());
+            if let Some(engine) = yara_engine {
+                analyzer = analyzer.with_yara_arc(engine);
+            }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(

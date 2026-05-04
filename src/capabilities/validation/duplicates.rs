@@ -421,9 +421,9 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ));
         };
 
-    // Extract patterns from Symbol and Raw conditions. Text is intentionally
-    // excluded — cross-file text-pattern overlap is expected (e.g. different
-    // rules keying off the same family string on different tiers).
+    // Extract patterns from all string-pattern condition variants. Callers
+    // can filter on `condition_type` after extraction if they need to scope
+    // their check to a subset of types.
     match &trait_def.r#if {
         Condition::Symbol {
             exact,
@@ -463,7 +463,89 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("raw", "regex", v.clone(), sec.clone());
             }
         }
-        _ => {} // Skip Encoded, Yara, etc.
+        Condition::Text {
+            exact,
+            substr,
+            word,
+            regex,
+            section,
+            ..
+        } => {
+            let sec = section.clone();
+            if let Some(v) = exact {
+                add_pattern("text", "exact", v.clone(), sec.clone());
+            }
+            if let Some(v) = substr {
+                add_pattern("text", "substr", v.clone(), sec.clone());
+            }
+            if let Some(v) = word {
+                add_pattern("text", "word", v.clone(), sec.clone());
+            }
+            if let Some(v) = regex {
+                add_pattern("text", "regex", v.clone(), sec.clone());
+            }
+        }
+        Condition::StringLiteral {
+            exact,
+            substr,
+            word,
+            regex,
+            section,
+            ..
+        } => {
+            let sec = section.clone();
+            if let Some(v) = exact {
+                add_pattern("string_literal", "exact", v.clone(), sec.clone());
+            }
+            if let Some(v) = substr {
+                add_pattern("string_literal", "substr", v.clone(), sec.clone());
+            }
+            if let Some(v) = word {
+                add_pattern("string_literal", "word", v.clone(), sec.clone());
+            }
+            if let Some(v) = regex {
+                add_pattern("string_literal", "regex", v.clone(), sec.clone());
+            }
+        }
+        Condition::Basename {
+            exact,
+            substr,
+            regex,
+            ..
+        } => {
+            if let Some(v) = exact {
+                add_pattern("basename", "exact", v.clone(), None);
+            }
+            if let Some(v) = substr {
+                add_pattern("basename", "substr", v.clone(), None);
+            }
+            if let Some(v) = regex {
+                add_pattern("basename", "regex", v.clone(), None);
+            }
+        }
+        Condition::Encoded {
+            exact,
+            substr,
+            word,
+            regex,
+            section,
+            ..
+        } => {
+            let sec = section.clone();
+            if let Some(v) = exact {
+                add_pattern("encoded", "exact", v.clone(), sec.clone());
+            }
+            if let Some(v) = substr {
+                add_pattern("encoded", "substr", v.clone(), sec.clone());
+            }
+            if let Some(v) = word {
+                add_pattern("encoded", "word", v.clone(), sec.clone());
+            }
+            if let Some(v) = regex {
+                add_pattern("encoded", "regex", v.clone(), sec.clone());
+            }
+        }
+        _ => {} // Skip Yara, Hex, Trait, Syscall, Metrics, Section, Kv, Ast.
     }
 
     patterns
@@ -1069,9 +1151,13 @@ pub(crate) fn check_same_string_different_types(
         let patterns = extract_patterns(trait_def);
 
         for (normalized, location) in patterns {
-            // Only check text, symbol, and raw types (extract_patterns produces
-            // those condition_type labels today; string_value is long gone).
-            if !matches!(location.condition_type.as_str(), "text" | "symbol" | "raw") {
+            // Check all string-pattern types — the entire point of this validator
+            // is to catch the same literal expressed under different condition
+            // types in overlapping file-type scopes.
+            if !matches!(
+                location.condition_type.as_str(),
+                "text" | "symbol" | "raw" | "string_literal" | "basename" | "encoded"
+            ) {
                 continue;
             }
 
@@ -1306,30 +1392,167 @@ pub(crate) fn check_case_insensitive_overlaps(
                 });
             };
 
-        // Extract patterns from conditions that support case_insensitive.
-        // Text is intentionally excluded — same rationale as extract_patterns.
-        if let Condition::Raw {
-            exact,
-            substr,
-            word,
-            regex,
-            case_insensitive,
-            ..
-        } = &trait_def.r#if
-        {
-            if let Some(v) = exact {
-                add_case_pattern("raw", "exact", v.clone(), *case_insensitive);
+        // Extract patterns from every condition variant that carries a
+        // `case_insensitive` flag. Symbol is excluded (no such flag — symbol
+        // matching is always case-sensitive).
+        match &trait_def.r#if {
+            Condition::Raw {
+                exact,
+                substr,
+                word,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("raw", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("raw", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = word {
+                    add_case_pattern("raw", "word", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("raw", "regex", v.clone(), *case_insensitive);
+                }
             }
-            if let Some(v) = substr {
-                add_case_pattern("raw", "substr", v.clone(), *case_insensitive);
+            Condition::Text {
+                exact,
+                substr,
+                word,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("text", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("text", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = word {
+                    add_case_pattern("text", "word", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("text", "regex", v.clone(), *case_insensitive);
+                }
             }
-            if let Some(v) = word {
-                add_case_pattern("raw", "word", v.clone(), *case_insensitive);
+            Condition::StringLiteral {
+                exact,
+                substr,
+                word,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("string_literal", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("string_literal", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = word {
+                    add_case_pattern("string_literal", "word", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("string_literal", "regex", v.clone(), *case_insensitive);
+                }
             }
-            if let Some(v) = regex {
-                add_case_pattern("raw", "regex", v.clone(), *case_insensitive);
+            Condition::Encoded {
+                exact,
+                substr,
+                word,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("encoded", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("encoded", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = word {
+                    add_case_pattern("encoded", "word", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("encoded", "regex", v.clone(), *case_insensitive);
+                }
             }
-            // Symbol doesn't have case_insensitive; others aren't relevant.
+            Condition::Basename {
+                exact,
+                substr,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("basename", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("basename", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("basename", "regex", v.clone(), *case_insensitive);
+                }
+            }
+            Condition::Section {
+                exact,
+                substr,
+                word,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("section", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("section", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = word {
+                    add_case_pattern("section", "word", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("section", "regex", v.clone(), *case_insensitive);
+                }
+            }
+            Condition::Kv {
+                exact,
+                substr,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("kv", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("kv", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("kv", "regex", v.clone(), *case_insensitive);
+                }
+            }
+            Condition::Ast {
+                exact,
+                substr,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                if let Some(v) = exact {
+                    add_case_pattern("ast", "exact", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = substr {
+                    add_case_pattern("ast", "substr", v.clone(), *case_insensitive);
+                }
+                if let Some(v) = regex {
+                    add_case_pattern("ast", "regex", v.clone(), *case_insensitive);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1546,6 +1769,12 @@ pub(crate) fn check_regex_contains_literal(
         match &trait_def.r#if {
             Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
+            Condition::Text { regex: Some(r), .. } => add_regex("text", r.clone()),
+            Condition::StringLiteral { regex: Some(r), .. } => {
+                add_regex("string_literal", r.clone())
+            }
+            Condition::Basename { regex: Some(r), .. } => add_regex("basename", r.clone()),
+            Condition::Encoded { regex: Some(r), .. } => add_regex("encoded", r.clone()),
             _ => {}
         }
     }
@@ -1598,6 +1827,62 @@ pub(crate) fn check_regex_contains_literal(
                 }
                 if let Some(w) = word {
                     add_literal("raw", "word", w.clone());
+                }
+            }
+            Condition::Text {
+                exact,
+                substr,
+                word,
+                ..
+            } => {
+                if let Some(e) = exact {
+                    add_literal("text", "exact", e.clone());
+                }
+                if let Some(s) = substr {
+                    add_literal("text", "substr", s.clone());
+                }
+                if let Some(w) = word {
+                    add_literal("text", "word", w.clone());
+                }
+            }
+            Condition::StringLiteral {
+                exact,
+                substr,
+                word,
+                ..
+            } => {
+                if let Some(e) = exact {
+                    add_literal("string_literal", "exact", e.clone());
+                }
+                if let Some(s) = substr {
+                    add_literal("string_literal", "substr", s.clone());
+                }
+                if let Some(w) = word {
+                    add_literal("string_literal", "word", w.clone());
+                }
+            }
+            Condition::Basename { exact, substr, .. } => {
+                if let Some(e) = exact {
+                    add_literal("basename", "exact", e.clone());
+                }
+                if let Some(s) = substr {
+                    add_literal("basename", "substr", s.clone());
+                }
+            }
+            Condition::Encoded {
+                exact,
+                substr,
+                word,
+                ..
+            } => {
+                if let Some(e) = exact {
+                    add_literal("encoded", "exact", e.clone());
+                }
+                if let Some(s) = substr {
+                    add_literal("encoded", "substr", s.clone());
+                }
+                if let Some(w) = word {
+                    add_literal("encoded", "word", w.clone());
                 }
             }
             _ => {}
@@ -1837,6 +2122,26 @@ pub(crate) fn check_regex_alternative_subsets(
                 case_insensitive,
                 ..
             } => add_regex("raw", r.clone(), *case_insensitive),
+            Condition::Text {
+                regex: Some(r),
+                case_insensitive,
+                ..
+            } => add_regex("text", r.clone(), *case_insensitive),
+            Condition::StringLiteral {
+                regex: Some(r),
+                case_insensitive,
+                ..
+            } => add_regex("string_literal", r.clone(), *case_insensitive),
+            Condition::Basename {
+                regex: Some(r),
+                case_insensitive,
+                ..
+            } => add_regex("basename", r.clone(), *case_insensitive),
+            Condition::Encoded {
+                regex: Some(r),
+                case_insensitive,
+                ..
+            } => add_regex("encoded", r.clone(), *case_insensitive),
             _ => {}
         }
     }
@@ -2018,7 +2323,12 @@ pub(crate) fn validate_regex_overlap_with_literal(
 
     for t in trait_definitions {
         match &t.r#if {
-            Condition::Symbol { exact: Some(s), .. } | Condition::Raw { exact: Some(s), .. } => {
+            Condition::Symbol { exact: Some(s), .. }
+            | Condition::Raw { exact: Some(s), .. }
+            | Condition::Text { exact: Some(s), .. }
+            | Condition::StringLiteral { exact: Some(s), .. }
+            | Condition::Basename { exact: Some(s), .. }
+            | Condition::Encoded { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
                     "exact".to_string(),
@@ -2031,6 +2341,18 @@ pub(crate) fn validate_regex_overlap_with_literal(
                 substr: Some(s), ..
             }
             | Condition::Raw {
+                substr: Some(s), ..
+            }
+            | Condition::Text {
+                substr: Some(s), ..
+            }
+            | Condition::StringLiteral {
+                substr: Some(s), ..
+            }
+            | Condition::Basename {
+                substr: Some(s), ..
+            }
+            | Condition::Encoded {
                 substr: Some(s), ..
             } => {
                 literal_patterns.push((
@@ -2048,9 +2370,12 @@ pub(crate) fn validate_regex_overlap_with_literal(
     // Check regex patterns against literal patterns
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::Symbol { regex: Some(r), .. } | Condition::Raw { regex: Some(r), .. } => {
-                Some(r)
-            }
+            Condition::Symbol { regex: Some(r), .. }
+            | Condition::Raw { regex: Some(r), .. }
+            | Condition::Text { regex: Some(r), .. }
+            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Basename { regex: Some(r), .. }
+            | Condition::Encoded { regex: Some(r), .. } => Some(r),
             _ => None,
         };
 
@@ -2363,7 +2688,12 @@ pub(crate) fn find_alternation_merge_candidates(
 
     for t in trait_definitions {
         let regex_pattern = match &t.r#if {
-            Condition::Raw { regex: Some(r), .. } => Some(r.clone()),
+            Condition::Raw { regex: Some(r), .. }
+            | Condition::Symbol { regex: Some(r), .. }
+            | Condition::Text { regex: Some(r), .. }
+            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Basename { regex: Some(r), .. }
+            | Condition::Encoded { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
         };
 

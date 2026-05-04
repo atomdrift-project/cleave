@@ -88,6 +88,24 @@ impl UPXDecompressor {
             .is_ok_and(|output| output.status.success())
     }
 
+    fn copy_to_writable_temp(file_path: &Path) -> Result<NamedTempFile, UPXError> {
+        let temp_file = NamedTempFile::new()?;
+        let temp_path = temp_file.path();
+
+        // UPX decompresses in place. `fs::copy` preserves read-only mode from
+        // source samples on Unix, so force the private temp copy writable.
+        std::fs::copy(file_path, temp_path)?;
+
+        let metadata = std::fs::metadata(temp_path)?;
+        let mut permissions = metadata.permissions();
+        if permissions.readonly() {
+            permissions.set_readonly(false);
+            std::fs::set_permissions(temp_path, permissions)?;
+        }
+
+        Ok(temp_file)
+    }
+
     /// Decompress a UPX-packed file and return the decompressed data.
     /// The input file_path points to the original packed file.
     pub(crate) fn decompress(file_path: &Path) -> Result<Vec<u8>, UPXError> {
@@ -97,11 +115,8 @@ impl UPXDecompressor {
 
         // Create a temporary file to hold a copy for decompression
         // (upx -d modifies the file in place, so we work on a copy)
-        let temp_file = NamedTempFile::new()?;
+        let temp_file = Self::copy_to_writable_temp(file_path)?;
         let temp_path = temp_file.path();
-
-        // Use fs::copy instead of read + write to avoid buffering original in memory
-        std::fs::copy(file_path, temp_path)?;
 
         // Run upx -d on the temporary copy with a timeout.
         // stdout → null: -q mode produces nothing useful; null avoids a drain thread.
@@ -372,6 +387,28 @@ mod tests {
             }
             _ => panic!("Expected NotInstalled or DecompressionFailed error"),
         }
+    }
+
+    #[test]
+    fn test_copy_to_writable_temp_from_readonly_source() {
+        let mut source = NamedTempFile::new().unwrap();
+        source.write_all(b"UPX! readonly sample").unwrap();
+        source.flush().unwrap();
+
+        let mut permissions = std::fs::metadata(source.path()).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(source.path(), permissions).unwrap();
+
+        let copied = UPXDecompressor::copy_to_writable_temp(source.path()).unwrap();
+        assert!(!std::fs::metadata(copied.path())
+            .unwrap()
+            .permissions()
+            .readonly());
+
+        // Restore permissions so the temporary source can be cleaned up on all platforms.
+        let mut permissions = std::fs::metadata(source.path()).unwrap().permissions();
+        permissions.set_readonly(false);
+        std::fs::set_permissions(source.path(), permissions).unwrap();
     }
 
     // =========================================================================

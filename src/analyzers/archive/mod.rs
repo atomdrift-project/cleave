@@ -701,6 +701,16 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
+        // RPM packages embed strong build attribution in their header
+        // (BUILDHOST, PACKAGER, VENDOR, BUILDTIME). Surface as
+        // `rpm.*` kv before payload extraction — cheap header walk,
+        // no decompression needed.
+        if matches!(file_type, FileType::Rpm) {
+            if let Some(rpm_value) = crate::analyzers::rpm_kv::extract(data) {
+                report.merge_kv_subtree("rpm", rpm_value);
+            }
+        }
+
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
             if let Ok((mut seeded_entries, archive_metrics)) =
                 zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))

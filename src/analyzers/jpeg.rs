@@ -106,7 +106,7 @@ impl JpegAnalyzer {
             });
         }
         if let Some((kv_value, _)) = structural {
-            attach_jpeg_kv(&mut report, kv_value);
+            report.merge_kv_subtree("jpeg", kv_value);
         }
 
         if let Some(strings) = stng_strings {
@@ -231,23 +231,6 @@ fn scan_jpeg_markers(data: &[u8]) -> (u64, u64, u64) {
 }
 
 /// Analyze JPEG data and extract steganography-relevant metrics
-/// Stash the synthesized `jpeg.*` kv subtree on `report.kv_tree`,
-/// preserving any pre-existing tree.
-fn attach_jpeg_kv(report: &mut AnalysisReport, jpeg_value: serde_json::Value) {
-    use serde_json::{Map, Value};
-    let mut root = match report.kv_tree.take().map(|b| *b) {
-        Some(Value::Object(m)) => m,
-        Some(other) => {
-            let mut m = Map::new();
-            m.insert("_legacy".into(), other);
-            m
-        }
-        None => Map::new(),
-    };
-    root.insert("jpeg".into(), jpeg_value);
-    report.kv_tree = Some(Box::new(Value::Object(root)));
-}
-
 fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
     use jpeg_decoder::Decoder;
     use std::io::Cursor;

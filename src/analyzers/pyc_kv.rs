@@ -1,37 +1,15 @@
-//! Python bytecode (`.pyc`) structural extraction — surfaces the
-//! header (magic + flags + timestamp/hash) and any embedded `.py`
-//! source filenames as a `pyc.*` kv subtree.
+//! `pyc.*` kv subtree — `.pyc` header (magic + flags +
+//! timestamp/hash) and any `.py` source filenames recovered from
+//! the marshalled code object's `co_filename`. Source-path leaks
+//! catch trojanized rebuilds where the path differs from the
+//! maintainer's expected build tree.
 //!
-//! # Why these fields
-//!
-//! Python supply-chain attacks frequently ship rebuilt `.pyc` files
-//! that *appear* to match the legitimate `.py` (because Python prefers
-//! cached bytecode when timestamps line up) but actually carry
-//! attacker-controlled instructions. The marshalled code object
-//! embeds `co_filename` — the path to the source file as seen from
-//! the build host. A trojanized rebuild leaks a different filename
-//! (e.g. `/Users/attacker/work/...` instead of the maintainer's
-//! `/build/myproject/src/...`).
-//!
-//! We don't decode the full marshal stream (it's deeply
-//! version-dependent); instead we walk forward looking for ASCII
-//! strings ending in `.py` — that's where `co_filename` lands in
-//! every Python version since 3.0.
-//!
-//! # Schema
-//!
-//! ```text
-//! pyc:
-//!   magic              hex string of the 4 magic bytes
-//!   python_version     mapped from magic, e.g. "3.11"
-//!   is_hash_based      bool — PEP 552 hash-based pyc
-//!   timestamp          u32 — source mtime (only when not hash-based)
-//!   source_size        u32 — source size (only when not hash-based)
-//!   source_files[]     ASCII strings ending in `.py` discovered in
-//!                      the marshalled body (`co_filename` lives here)
-//! ```
+//! Marshal-format-agnostic: scans for ASCII `.py` strings rather
+//! than decoding the version-specific marshal stream. Schema is the
+//! [`PycKv`] struct.
 
-use serde_json::{json, Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 
 /// Maximum bytes of the `.pyc` body to scan for source-filename
 /// strings. Real `co_filename` paths sit very early in the marshal
@@ -41,6 +19,26 @@ const MAX_BODY_SCAN: usize = 256 * 1024;
 
 /// Maximum number of distinct source filenames to surface.
 const MAX_SOURCE_FILES: usize = 32;
+
+#[derive(Default, Serialize)]
+struct PycKv {
+    magic: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    python_version: Option<&'static str>,
+    #[serde(skip_serializing_if = "is_false")]
+    is_hash_based: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    timestamp: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_size: Option<u32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_files: Vec<String>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 /// Extract `pyc.*` kv tree from Python bytecode. Returns `None` for
 /// inputs that don't look like a `.pyc` (header too short / unknown
@@ -61,42 +59,28 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
     let is_hash_based = (flags & 1) != 0;
     let body_offset = 16; // header is fixed at 16 bytes since 3.7
 
-    let mut out = Map::new();
-    out.insert(
-        "magic".into(),
-        json!(format!(
+    // Marshal's TYPE_ASCII / TYPE_SHORT_ASCII formats prefix strings
+    // with a length byte (or 4-byte LE int), so the actual filename
+    // bytes appear contiguously in the body — substring search picks
+    // them up without needing a marshal decoder.
+    let body = &data[body_offset..body_offset + (data.len() - body_offset).min(MAX_BODY_SCAN)];
+
+    let kv = PycKv {
+        magic: format!(
             "{:08x}",
             u32::from_le_bytes([data[0], data[1], data[2], data[3]])
-        )),
-    );
-    if let Some(version) = python_version_for_magic(magic_word) {
-        out.insert("python_version".into(), json!(version));
-    }
-    if is_hash_based {
-        out.insert("is_hash_based".into(), json!(true));
-    } else {
-        let ts = u32::from_le_bytes([data[8], data[9], data[10], data[11]]);
-        let sz = u32::from_le_bytes([data[12], data[13], data[14], data[15]]);
-        if ts != 0 {
-            out.insert("timestamp".into(), json!(ts));
-        }
-        if sz != 0 {
-            out.insert("source_size".into(), json!(sz));
-        }
-    }
-
-    // Scan body for ASCII strings ending in `.py`. Marshal's TYPE_ASCII
-    // / TYPE_SHORT_ASCII formats prefix strings with a length byte (or
-    // 4-byte LE int), so the actual filename bytes appear contiguously
-    // in the stream — substring search picks them up reliably without
-    // needing a marshal decoder.
-    let body = &data[body_offset..body_offset + (data.len() - body_offset).min(MAX_BODY_SCAN)];
-    let files = scan_source_files(body);
-    if !files.is_empty() {
-        out.insert("source_files".into(), json!(files));
-    }
-
-    Some(Value::Object(out))
+        ),
+        python_version: python_version_for_magic(magic_word),
+        is_hash_based,
+        timestamp: (!is_hash_based)
+            .then(|| u32::from_le_bytes([data[8], data[9], data[10], data[11]]))
+            .filter(|&v| v != 0),
+        source_size: (!is_hash_based)
+            .then(|| u32::from_le_bytes([data[12], data[13], data[14], data[15]]))
+            .filter(|&v| v != 0),
+        source_files: scan_source_files(body),
+    };
+    serde_json::to_value(kv).ok()
 }
 
 /// Map a Python bytecode magic number to a human-readable Python
@@ -151,33 +135,19 @@ fn scan_source_files(body: &[u8]) -> Vec<String> {
         };
         let after = i + suffix_len;
         // Walk backwards from the dot to the start of the path run.
+        // Require at least one path byte before the dot — a bare
+        // ".py" with no name is marshal noise. The `MAX_SOURCE_FILES`
+        // cap upstream bounds false positives; trying to filter
+        // longer-extension cases like `.python3` by looking at the
+        // byte after `.py` proved unreliable (marshal opcode bytes
+        // can be ASCII letters too).
         let mut start = i;
-        while start > 0 {
-            let b = body[start - 1];
-            if !is_path_byte(b) {
-                break;
-            }
+        while start > 0 && is_path_byte(body[start - 1]) {
             start -= 1;
         }
-        // Require at least one byte before the dot — a bare ".py"
-        // alone is marshal noise. Anything longer is a real filename
-        // (the byte AFTER the suffix is unreliable: marshal opcodes
-        // can be ASCII letters that look like extension chars).
         if start == i {
             i += 1;
             continue;
-        }
-        // Reject extension-extension cases (`.pythonpath`, `.python3`)
-        // by checking the byte right after the suffix is a path-ish
-        // continuation. Marshal opcode bytes that follow a real
-        // filename are typically *length prefixes* or *type tags* —
-        // both are non-alpha — so this only filters true extensions.
-        if after < body.len() {
-            let term = body[after];
-            if term == b'_' || term == b'.' || (term.is_ascii_alphabetic() && (i - start) < 3) {
-                i += 1;
-                continue;
-            }
         }
         if let Ok(s) = std::str::from_utf8(&body[start..after]) {
             if !s.is_empty() && !found.iter().any(|x| x == s) {

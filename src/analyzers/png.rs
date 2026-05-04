@@ -116,7 +116,7 @@ impl PngAnalyzer {
         // Attach the kv subtree last so it survives whichever metric
         // path above ran (or didn't).  Namespaced under `png.*`.
         if let Some((kv_value, _)) = structural {
-            attach_png_kv(&mut report, kv_value);
+            report.merge_kv_subtree("png", kv_value);
         }
 
         if let Some(strings) = stng_strings {
@@ -154,25 +154,6 @@ impl Analyzer for PngAnalyzer {
             false
         }
     }
-}
-
-/// Stash the synthesized `png.*` kv subtree on `report.kv_tree`,
-/// preserving any pre-existing tree (defensive — currently the PNG
-/// analyzer is the first kv writer for this format, but later passes
-/// like `binary_extractors::augment_report` may also contribute).
-fn attach_png_kv(report: &mut AnalysisReport, png_value: serde_json::Value) {
-    use serde_json::{Map, Value};
-    let mut root = match report.kv_tree.take().map(|b| *b) {
-        Some(Value::Object(m)) => m,
-        Some(other) => {
-            let mut m = Map::new();
-            m.insert("_legacy".into(), other);
-            m
-        }
-        None => Map::new(),
-    };
-    root.insert("png".into(), png_value);
-    report.kv_tree = Some(Box::new(Value::Object(root)));
 }
 
 /// Analyze PNG data and extract steganography-relevant metrics

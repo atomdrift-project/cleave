@@ -14,23 +14,6 @@ use std::path::Path;
 use std::sync::Arc;
 use tree_sitter::Language;
 
-/// Attach a `pyc.*` kv subtree to `report.kv_tree`, preserving any
-/// pre-existing tree.
-fn attach_pyc_kv(report: &mut AnalysisReport, pyc_value: serde_json::Value) {
-    use serde_json::{Map, Value};
-    let mut root = match report.kv_tree.take().map(|b| *b) {
-        Some(Value::Object(m)) => m,
-        Some(other) => {
-            let mut m = Map::new();
-            m.insert("_legacy".into(), other);
-            m
-        }
-        None => Map::new(),
-    };
-    root.insert("pyc".into(), pyc_value);
-    report.kv_tree = Some(Box::new(Value::Object(root)));
-}
-
 /// Generic analyzer that works with any text file.
 ///
 /// For languages with tree-sitter support, extracts symbols via AST.
@@ -169,7 +152,7 @@ impl GenericAnalyzer {
         if matches!(self.file_type, FileType::PythonBytecode) {
             if let Some(bytes) = original_bytes {
                 if let Some(kv) = super::pyc_kv::extract(bytes) {
-                    attach_pyc_kv(&mut report, kv);
+                    report.merge_kv_subtree("pyc", kv);
                 }
             }
         }

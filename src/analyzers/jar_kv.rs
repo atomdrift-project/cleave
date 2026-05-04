@@ -1,58 +1,67 @@
-//! JAR (and WAR / EAR / Spring Boot fat-jar) kv-tree synthesis.
+//! `jar.*` kv subtree — JAR / WAR / EAR / Spring Boot fat-jar
+//! manifest attribution (Built-By, Created-By, Build-Jdk, …) plus
+//! structural signals (signed, multi-release, native libs, embedded
+//! jars, pom coordinates).
 //!
-//! Surfaces structural and attribution metadata from an extracted JAR
-//! as a `jar.*` kv subtree so YAML traits can target it precisely.
-//!
-//! # Why these fields
-//!
-//! Java `META-INF/MANIFEST.MF` files routinely embed strong build-host
-//! attribution leaks that are invaluable for supply-chain swap
-//! detection:
-//!
-//! ```text
-//! Manifest-Version: 1.0
-//! Created-By: Apache Maven 3.9.4         <- build tool fingerprint
-//! Built-By: EC2AMAZ-GED9SG5$              <- builder hostname/user
-//! Build-Jdk: 17.0.8                       <- compiler version
-//! Build-Time: 2024-11-25T08:28:28+0000    <- exact build timestamp
-//! Implementation-Build: d03cce270…        <- often a git commit SHA
-//! ```
-//!
-//! When a JAR is recompiled by an attacker, these fields routinely
-//! flip in ways that simple `Implementation-Version` checks miss
-//! (e.g. `Built-By: jenkins-prod` → `Built-By: rogue-laptop`).
-//!
-//! Also captures structural signals (signed?, multi-release layout,
-//! bundled native libraries, embedded JARs) that point at non-obvious
-//! capability surface.
-//!
-//! # Schema
-//!
-//! ```text
-//! jar:
-//!   manifest:
-//!     <key>: <value>           verbatim header → snake_case key
-//!   signed             bool    META-INF/*.SF present
-//!   sig_count          int     number of signers (.SF files)
-//!   multi_release      bool    META-INF/versions/<n>/ present
-//!   has_native_libs    bool    .so / .dll / .dylib bundled
-//!   has_embedded_jars  bool    nested .jar / .war / .ear
-//!   embedded_jar_count int
-//!   entry_count        int     total file entries
-//!   class_count        int     .class file count
-//!   pom:
-//!     group_id         str     META-INF/maven/<g>/<a>/pom.properties
-//!     artifact_id      str
-//!     version          str
-//! ```
+//! Schema is the [`JarKv`] struct. Both temp-dir and in-memory
+//! analysis paths funnel through the same [`Aggregator`].
 
-use serde_json::{json, Map, Value};
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::types::AnalysisReport;
+
+/// `jar.*` kv tree.
+#[derive(Default, Serialize)]
+struct JarKv {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    manifest: BTreeMap<String, String>,
+    entry_count: u32,
+    class_count: u32,
+    signed: bool,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    sig_count: u32,
+    #[serde(skip_serializing_if = "is_false")]
+    multi_release: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_native_libs: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_embedded_jars: bool,
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    embedded_jar_count: u32,
+    #[serde(skip_serializing_if = "PomKv::is_empty")]
+    pom: PomKv,
+}
+
+#[derive(Default, Serialize)]
+struct PomKv {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    group_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artifact_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+}
+
+impl PomKv {
+    fn is_empty(&self) -> bool {
+        self.group_id.is_none() && self.artifact_id.is_none() && self.version.is_none()
+    }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
 
 /// MANIFEST.MF headers worth surfacing as `jar.manifest.<snake_key>`.
 /// Limiting to a known set keeps trait authors targeting stable names
@@ -102,54 +111,51 @@ const TRACKED_MANIFEST_HEADERS: &[(&str, &str)] = &[
     ("Spring-Boot-Lib", "spring_boot_lib"),
 ];
 
-/// Aggregator threaded through both the on-disk and in-memory paths.
-/// Each visit feeds it one entry; `finish` produces the final kv map.
+/// Threaded through both the on-disk and in-memory paths. Each
+/// `visit` feeds it one entry; `finish` produces the final kv tree.
 #[derive(Default)]
 struct Aggregator {
-    entry_count: u32,
-    class_count: u32,
-    sig_count: u32,
-    native_libs: bool,
-    multi_release: bool,
-    embedded_jar_count: u32,
-    pom_group: Option<String>,
-    pom_artifact: Option<String>,
-    pom_version: Option<String>,
-    manifest: Option<Map<String, Value>>,
+    kv: JarKv,
 }
 
 impl Aggregator {
     fn visit(&mut self, rel: &str, read_text: impl FnOnce() -> Option<String>) {
-        self.entry_count = self.entry_count.saturating_add(1);
-        let lower_ext = rel.rsplit('.').next().map(str::to_ascii_lowercase);
-        match lower_ext.as_deref() {
-            Some("class") => self.class_count = self.class_count.saturating_add(1),
-            Some("so" | "dll" | "dylib" | "jnilib") => self.native_libs = true,
+        self.kv.entry_count = self.kv.entry_count.saturating_add(1);
+        match rel
+            .rsplit('.')
+            .next()
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("class") => self.kv.class_count = self.kv.class_count.saturating_add(1),
+            Some("so" | "dll" | "dylib" | "jnilib") => self.kv.has_native_libs = true,
             Some("jar" | "war" | "ear") => {
-                self.embedded_jar_count = self.embedded_jar_count.saturating_add(1);
+                self.kv.embedded_jar_count = self.kv.embedded_jar_count.saturating_add(1);
+                self.kv.has_embedded_jars = true;
             }
             _ => {}
         }
         if rel.starts_with("META-INF/") && rel.ends_with(".SF") {
-            self.sig_count = self.sig_count.saturating_add(1);
+            self.kv.sig_count = self.kv.sig_count.saturating_add(1);
+            self.kv.signed = true;
         }
         if rel.starts_with("META-INF/versions/") {
-            self.multi_release = true;
+            self.kv.multi_release = true;
         }
         if rel == "META-INF/MANIFEST.MF" {
             if let Some(text) = read_text() {
-                self.manifest = Some(parse_manifest(&text));
+                self.kv.manifest = parse_manifest(&text);
             }
-        } else if self.pom_group.is_none() && rel.ends_with("/pom.properties") {
+        } else if self.kv.pom.group_id.is_none() && rel.ends_with("/pom.properties") {
             if let Some(text) = read_text() {
                 for line in text.lines() {
                     let line = line.trim();
                     if let Some(v) = line.strip_prefix("groupId=") {
-                        self.pom_group = Some(v.trim().to_string());
+                        self.kv.pom.group_id = Some(v.trim().to_string());
                     } else if let Some(v) = line.strip_prefix("artifactId=") {
-                        self.pom_artifact = Some(v.trim().to_string());
+                        self.kv.pom.artifact_id = Some(v.trim().to_string());
                     } else if let Some(v) = line.strip_prefix("version=") {
-                        self.pom_version = Some(v.trim().to_string());
+                        self.kv.pom.version = Some(v.trim().to_string());
                     }
                 }
             }
@@ -157,46 +163,10 @@ impl Aggregator {
     }
 
     fn finish(self) -> Option<Value> {
-        let manifest_present = self.manifest.as_ref().is_some_and(|m| !m.is_empty());
-        if self.entry_count == 0 && !manifest_present {
+        if self.kv.entry_count == 0 && self.kv.manifest.is_empty() {
             return None;
         }
-        let mut out = Map::new();
-        if let Some(m) = self.manifest {
-            if !m.is_empty() {
-                out.insert("manifest".into(), Value::Object(m));
-            }
-        }
-        out.insert("entry_count".into(), json!(self.entry_count));
-        out.insert("class_count".into(), json!(self.class_count));
-        out.insert("signed".into(), json!(self.sig_count > 0));
-        if self.sig_count > 0 {
-            out.insert("sig_count".into(), json!(self.sig_count));
-        }
-        if self.multi_release {
-            out.insert("multi_release".into(), json!(true));
-        }
-        if self.native_libs {
-            out.insert("has_native_libs".into(), json!(true));
-        }
-        if self.embedded_jar_count > 0 {
-            out.insert("has_embedded_jars".into(), json!(true));
-            out.insert("embedded_jar_count".into(), json!(self.embedded_jar_count));
-        }
-        if self.pom_group.is_some() || self.pom_artifact.is_some() || self.pom_version.is_some() {
-            let mut pom = Map::new();
-            if let Some(v) = self.pom_group {
-                pom.insert("group_id".into(), json!(v));
-            }
-            if let Some(v) = self.pom_artifact {
-                pom.insert("artifact_id".into(), json!(v));
-            }
-            if let Some(v) = self.pom_version {
-                pom.insert("version".into(), json!(v));
-            }
-            out.insert("pom".into(), Value::Object(pom));
-        }
-        Some(Value::Object(out))
+        serde_json::to_value(self.kv).ok()
     }
 }
 
@@ -263,7 +233,7 @@ pub(crate) fn extract_jar_kv(content: &[u8]) -> Option<Value> {
 /// The JAR manifest format wraps long values onto continuation lines
 /// that start with a single space — handled here so values like
 /// `Plugin-Description: Code Analyzer for C#` survive intact.
-fn parse_manifest(text: &str) -> Map<String, Value> {
+fn parse_manifest(text: &str) -> BTreeMap<String, String> {
     let mut joined: Vec<String> = Vec::new();
     for line in text.lines() {
         if let Some(stripped) = line.strip_prefix(' ') {
@@ -274,7 +244,7 @@ fn parse_manifest(text: &str) -> Map<String, Value> {
         }
         joined.push(line.to_string());
     }
-    let mut out = Map::new();
+    let mut out = BTreeMap::new();
     for line in joined {
         let line = line.trim_end();
         if line.is_empty() {
@@ -291,7 +261,7 @@ fn parse_manifest(text: &str) -> Map<String, Value> {
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(key))
         {
-            out.insert((*snake).into(), json!(value));
+            out.insert((*snake).to_string(), value.to_string());
         }
     }
     out
@@ -301,20 +271,9 @@ fn parse_manifest(text: &str) -> Map<String, Value> {
 /// Idempotent and namespaced — calling for a non-JAR temp directory
 /// (no MANIFEST, no entries) leaves `report.kv_tree` untouched.
 pub(crate) fn attach_to_report(report: &mut AnalysisReport, temp_dir: &Path) {
-    let Some(jar_value) = build_jar_kv(temp_dir) else {
-        return;
-    };
-    let mut root = match report.kv_tree.take().map(|b| *b) {
-        Some(Value::Object(m)) => m,
-        Some(v) => {
-            let mut m = Map::new();
-            m.insert("_legacy".into(), v);
-            m
-        }
-        None => Map::new(),
-    };
-    root.insert("jar".into(), jar_value);
-    report.kv_tree = Some(Box::new(Value::Object(root)));
+    if let Some(jar_value) = build_jar_kv(temp_dir) {
+        report.merge_kv_subtree("jar", jar_value);
+    }
 }
 
 #[cfg(test)]

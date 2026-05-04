@@ -1,53 +1,73 @@
-//! JPEG structural extraction — marker-segment walk for kv synthesis
-//! and steganography-relevant counts.
+//! `jpeg.*` kv subtree — JPEG marker walk surfacing EXIF
+//! attribution (Make / Model / Software / DateTime), ICC / IPTC /
+//! XMP presence, and stego-relevant counts (concatenated SOIs,
+//! comment density, MakerNote bytes).
 //!
-//! Distinct from `analyzers::jpeg`'s pixel-statistic pass: this
-//! module only walks marker segments (no pixel decode), so it stays
-//! cheap on huge JPEGs and complements the entropy/edge-density
-//! analysis with structural attribution + stego signals.
-//!
-//! # Why these fields
-//!
-//! Two threads matter for supply-chain detection:
-//!
-//!   * **Attribution** — EXIF Make / Model / Software / DateTime /
-//!     Artist / Copyright are baked into legitimate camera and editor
-//!     output; an attacker recompositing a "logo.jpg" almost never
-//!     matches the original's EXIF chain. Diff'ing these fields
-//!     across versions exposes swapped artwork.
-//!
-//!   * **Steganography** — appended bytes after EOI, multiple SOI
-//!     markers (concatenated JPEGs), oversized COM/APP segments,
-//!     unusual MakerNote sizes. The pixel-pass entropy metrics catch
-//!     LSB stego; the structural walk catches the simpler
-//!     append/comment-padding tricks.
-//!
-//! # Schema
-//!
-//! kv (raw extracted values):
-//! ```text
-//! jpeg:
-//!   exif.make            EXIF tag 0x010F
-//!   exif.model           EXIF tag 0x0110
-//!   exif.software        EXIF tag 0x0131  (editor / camera firmware)
-//!   exif.datetime        EXIF tag 0x0132  (file modification)
-//!   exif.datetime_original EXIF tag 0x9003 (capture time)
-//!   exif.artist          EXIF tag 0x013B
-//!   exif.copyright       EXIF tag 0x8298
-//!   exif.has_gps         bool — GPS IFD present
-//!   icc_profile_name     APP2 "ICC_PROFILE\0" → profile name
-//!   comment              COM (FFFE) text
-//!   adobe_color_transform APP14 transform byte (0/1/2)
-//!   has_iptc             bool — APP13 with "Photoshop 3.0"
-//!   has_photoshop_irb    bool
-//!   has_xmp              bool — APP1 with adobe XMP namespace
-//!   has_jfif_thumbnail   bool — JFIF APP0 thumbnail dims nonzero
-//! ```
-//!
-//! metrics (interpretations) ride on `JpegStructuralCounts` for the
-//! caller to fold into `JpegMetrics`.
+//! No pixel decode; complements the entropy pass in
+//! `analyzers::jpeg`. Schema is the [`JpegKv`] struct; structural
+//! counts ride on [`JpegStructuralCounts`] for the caller to fold
+//! into `JpegMetrics`.
 
-use serde_json::{json, Map, Value};
+use serde::Serialize;
+use serde_json::Value;
+
+#[derive(Default, Serialize)]
+struct JpegKv {
+    #[serde(skip_serializing_if = "ExifKv::is_empty")]
+    exif: ExifKv,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    adobe_color_transform: Option<u8>,
+    #[serde(skip_serializing_if = "is_false")]
+    has_icc_profile: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_iptc: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_photoshop_irb: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_xmp: bool,
+    #[serde(skip_serializing_if = "is_false")]
+    has_jfif_thumbnail: bool,
+}
+
+#[derive(Default, Serialize)]
+struct ExifKv {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    make: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    software: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    datetime: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    datetime_original: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    artist: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    copyright: Option<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    has_gps: bool,
+}
+
+impl ExifKv {
+    fn is_empty(&self) -> bool {
+        self.make.is_none()
+            && self.model.is_none()
+            && self.software.is_none()
+            && self.datetime.is_none()
+            && self.datetime_original.is_none()
+            && self.artist.is_none()
+            && self.copyright.is_none()
+            && !self.has_gps
+    }
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
 
 /// Counts the caller folds into `JpegMetrics`. Kept separate from the
 /// kv tree so the kv/metrics split stays clean.
@@ -73,8 +93,7 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, JpegStructuralCounts)> {
         ..Default::default()
     };
 
-    let mut out = Map::new();
-    let mut exif: Map<String, Value> = Map::new();
+    let mut kv = JpegKv::default();
     let mut pos = 2usize;
 
     loop {
@@ -141,77 +160,62 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, JpegStructuralCounts)> {
                     counts.app_segment_count = counts.app_segment_count.saturating_add(1);
                 }
 
-                handle_segment(marker, body, &mut out, &mut exif, &mut counts);
+                handle_segment(marker, body, &mut kv, &mut counts);
 
                 pos = body_end;
             }
         }
     }
 
-    if !exif.is_empty() {
-        out.insert("exif".into(), Value::Object(exif));
-    }
-    Some((Value::Object(out), counts))
+    Some((serde_json::to_value(kv).ok()?, counts))
 }
 
-fn handle_segment(
-    marker: u8,
-    body: &[u8],
-    out: &mut Map<String, Value>,
-    exif: &mut Map<String, Value>,
-    counts: &mut JpegStructuralCounts,
-) {
+fn handle_segment(marker: u8, body: &[u8], kv: &mut JpegKv, counts: &mut JpegStructuralCounts) {
     match marker {
         // COM — surface the comment text.
         0xFE => {
             if let Ok(s) = std::str::from_utf8(body) {
                 let trimmed = s.trim_end_matches(|c: char| c == '\0' || c.is_whitespace());
                 if !trimmed.is_empty() {
-                    out.insert("comment".into(), json!(trimmed));
+                    kv.comment = Some(trimmed.to_string());
                 }
             }
         }
-        // APP0 — JFIF (thumbnail dims) or JFXX.
-        0xE0 if body.starts_with(b"JFIF\0") && body.len() >= 14 => {
-            let tw = body[12];
-            let th = body[13];
-            if tw != 0 && th != 0 {
-                out.insert("has_jfif_thumbnail".into(), json!(true));
-            }
+        // APP0 — JFIF thumbnail (when both dims nonzero).
+        0xE0 if body.starts_with(b"JFIF\0")
+            && body.len() >= 14
+            && body[12] != 0
+            && body[13] != 0 =>
+        {
+            kv.has_jfif_thumbnail = true;
         }
         // APP1 — EXIF (Exif\0\0) or XMP.
         0xE1 => {
             if body.starts_with(b"Exif\0\0") {
-                parse_exif_app1(&body[6..], exif, counts);
+                parse_exif_app1(&body[6..], &mut kv.exif, counts);
             } else if body
                 .windows(b"http://ns.adobe.com/xap/1.0/".len())
                 .any(|w| w == b"http://ns.adobe.com/xap/1.0/")
             {
-                out.insert("has_xmp".into(), json!(true));
+                kv.has_xmp = true;
             }
         }
-        // APP2 — ICC profile when prefix matches.
+        // APP2 — ICC profile when prefix matches. Skip detailed
+        // parsing; supply-chain swap detection just wants the bool.
         0xE2 if body.starts_with(b"ICC_PROFILE\0") && body.len() >= 14 + 84 => {
-            // ICC profile descriptor at offset 14+84 holds the
-            // profile-name (after fields). Simplest reliable
-            // signal: the profile description tag string. Skip
-            // detailed ICC parsing — surface the canonical "is
-            // present" boolean, which is what supply-chain swap
-            // detection actually wants.
-            out.insert("has_icc_profile".into(), json!(true));
+            kv.has_icc_profile = true;
         }
-        // APP13 — Adobe Photoshop IRB (often carrying IPTC).
+        // APP13 — Adobe Photoshop IRB; first 8BIM resource block
+        // sits at the fixed offset right after the IRB header.
         0xED if body.starts_with(b"Photoshop 3.0\0") => {
-            out.insert("has_photoshop_irb".into(), json!(true));
-            // 8BIM blocks for IPTC live inside; surface as a
-            // bool rather than parsing the full IRB chain.
-            if body.windows(4).any(|w| w == b"8BIM") {
-                out.insert("has_iptc".into(), json!(true));
+            kv.has_photoshop_irb = true;
+            if body.get(14..18) == Some(b"8BIM") {
+                kv.has_iptc = true;
             }
         }
         // APP14 — Adobe color transform (1 byte at offset 11).
         0xEE if body.starts_with(b"Adobe\0") && body.len() >= 12 => {
-            out.insert("adobe_color_transform".into(), json!(body[11]));
+            kv.adobe_color_transform = Some(body[11]);
         }
         _ => {}
     }
@@ -223,7 +227,7 @@ fn handle_segment(
 /// we can pick up DateTimeOriginal. GPS-IFD presence is recorded as a
 /// boolean (the GPS tags themselves carry coordinates we don't
 /// need).
-fn parse_exif_app1(tiff: &[u8], exif: &mut Map<String, Value>, counts: &mut JpegStructuralCounts) {
+fn parse_exif_app1(tiff: &[u8], exif: &mut ExifKv, counts: &mut JpegStructuralCounts) {
     if tiff.len() < 8 {
         return;
     }
@@ -264,7 +268,7 @@ fn walk_ifd(
     tiff: &[u8],
     off: usize,
     little: bool,
-    exif: &mut Map<String, Value>,
+    exif: &mut ExifKv,
     counts: &mut JpegStructuralCounts,
     is_root: bool,
 ) {
@@ -320,13 +324,13 @@ fn walk_ifd(
         };
 
         match tag {
-            0x010F => insert_ascii(exif, "make", data_slice),
-            0x0110 => insert_ascii(exif, "model", data_slice),
-            0x0131 => insert_ascii(exif, "software", data_slice),
-            0x0132 => insert_ascii(exif, "datetime", data_slice),
-            0x013B => insert_ascii(exif, "artist", data_slice),
-            0x8298 => insert_ascii(exif, "copyright", data_slice),
-            0x9003 if !is_root => insert_ascii(exif, "datetime_original", data_slice),
+            0x010F => exif.make = ascii_value(data_slice),
+            0x0110 => exif.model = ascii_value(data_slice),
+            0x0131 => exif.software = ascii_value(data_slice),
+            0x0132 => exif.datetime = ascii_value(data_slice),
+            0x013B => exif.artist = ascii_value(data_slice),
+            0x8298 => exif.copyright = ascii_value(data_slice),
+            0x9003 if !is_root => exif.datetime_original = ascii_value(data_slice),
             0x927C if !is_root => {
                 // MakerNote — opaque vendor blob; size only.
                 counts.maker_note_bytes = counts
@@ -348,20 +352,17 @@ fn walk_ifd(
             walk_ifd(tiff, off, little, exif, counts, false);
         }
         if gps_ifd_off.is_some() {
-            exif.insert("has_gps".into(), json!(true));
+            exif.has_gps = true;
         }
     }
 }
 
-fn insert_ascii(out: &mut Map<String, Value>, key: &str, bytes: Option<&[u8]>) {
-    let Some(b) = bytes else { return };
-    let Ok(s) = std::str::from_utf8(b) else {
-        return;
-    };
+/// Decode an EXIF ASCII tag value, trimming the spec-mandated NUL
+/// terminator and any trailing whitespace.
+fn ascii_value(bytes: Option<&[u8]>) -> Option<String> {
+    let s = std::str::from_utf8(bytes?).ok()?;
     let trimmed = s.trim_end_matches(|c: char| c == '\0' || c.is_whitespace());
-    if !trimmed.is_empty() {
-        out.insert(key.into(), json!(trimmed));
-    }
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
 #[cfg(test)]

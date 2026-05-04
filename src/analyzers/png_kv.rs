@@ -1,45 +1,32 @@
-//! PNG structural extraction — chunk-table walk for kv synthesis and
-//! steganography-relevant metrics.
+//! `png.*` kv subtree — PNG chunk-table walk for structural
+//! attribution (Software, Author, ICC profile, tIME) plus
+//! steganography signals (trailing bytes, post-IEND chunks,
+//! unknown chunk types).
 //!
-//! Distinct from `analyzers::png`'s pixel-statistic pass: this module
-//! only decodes the chunk header table (no zlib decompression of IDAT
-//! or text), so it stays cheap on huge PNGs and complements the
-//! pixel-entropy/edge-density analysis with structural signals.
-//!
-//! # Why these fields
-//!
-//! Image-as-payload supply-chain attacks (npm/PyPI packages that pull
-//! a "logo" PNG and extract a hidden payload) almost always leave one
-//! of two structural fingerprints:
-//!
-//!   * Trailing bytes after the IEND chunk — the loader appends raw
-//!     bytes the PNG decoder ignores; trivial for an attacker, very
-//!     visible to a chunk walker.
-//!   * Oversized or unusual `tEXt`/`zTXt`/`iTXt` chunks holding
-//!     base64-encoded payloads.
-//!
-//! Plus the standard attribution fields (Software, Author, Creation
-//! Time, ICC profile name) that supply-chain swap detection diffs
-//! across versions.
-//!
-//! # Schema
-//!
-//! kv (raw extracted values):
-//! ```text
-//! png:
-//!   text.<key>           tEXt/iTXt/zTXt key → value
-//!   time                 tIME chunk as `YYYY-MM-DDTHH:MM:SSZ`
-//!   icc_profile_name     iCCP profile name (string before NUL)
-//!   color_type           raw IHDR byte (0/2/3/4/6)
-//!   interlace_method     raw IHDR byte (0/1)
-//!   unknown_chunks       list of 4-letter chunk codes not in the
-//!                        standard set
-//! ```
-//!
-//! metrics (counts / interpretations) land on `PngMetrics` via the
-//! returned `StructuralCounts` — see `png.rs`.
+//! No zlib pass; complements the pixel-statistic analysis in
+//! `analyzers::png`. Schema is the [`PngKv`] struct; counts ride
+//! on [`StructuralCounts`].
 
-use serde_json::{json, Map, Value};
+use serde::Serialize;
+use serde_json::Value;
+use std::collections::BTreeMap;
+
+/// Strongly-typed `png.*` kv tree.
+#[derive(Default, Serialize)]
+struct PngKv {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    text: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    time: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icc_profile_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    color_type: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    interlace_method: Option<u8>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    unknown_chunks: Vec<String>,
+}
 
 /// Counts and interpretations the caller folds into `PngMetrics`.
 /// Kept separate from the kv tree so the kv/metrics split stays
@@ -66,12 +53,7 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, StructuralCounts)> {
     }
 
     let mut counts = StructuralCounts::default();
-    let mut text: Map<String, Value> = Map::new();
-    let mut time: Option<String> = None;
-    let mut icc_profile_name: Option<String> = None;
-    let mut color_type: Option<u8> = None;
-    let mut interlace_method: Option<u8> = None;
-    let mut unknown: Vec<String> = Vec::new();
+    let mut kv = PngKv::default();
     let mut iend_seen = false;
     let mut last_chunk_end: usize = 8;
 
@@ -96,35 +78,21 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, StructuralCounts)> {
         let body = &data[chunk_data_start..chunk_data_start + length];
         match ctype {
             "IHDR" if body.len() >= 13 => {
-                color_type = Some(body[9]);
-                interlace_method = Some(body[12]);
+                kv.color_type = Some(body[9]);
+                kv.interlace_method = Some(body[12]);
             }
             "IDAT" => counts.chunks_idat = counts.chunks_idat.saturating_add(1),
             "IEND" => iend_seen = true,
-            "tEXt" => {
+            "tEXt" | "zTXt" | "iTXt" => {
                 counts.text_chunks_total_bytes =
                     counts.text_chunks_total_bytes.saturating_add(length as u32);
-                if let Some((key, value)) = parse_text_chunk(body) {
-                    text.insert(snake_case(&key), json!(value));
-                }
-            }
-            "zTXt" => {
-                counts.text_chunks_total_bytes =
-                    counts.text_chunks_total_bytes.saturating_add(length as u32);
-                if let Some((key, value)) = parse_ztxt_chunk(body) {
-                    text.insert(snake_case(&key), json!(value));
-                }
-            }
-            "iTXt" => {
-                counts.text_chunks_total_bytes =
-                    counts.text_chunks_total_bytes.saturating_add(length as u32);
-                if let Some((key, value)) = parse_itxt_chunk(body) {
-                    text.insert(snake_case(&key), json!(value));
+                if let Some((key, value)) = parse_text_chunk_variant(ctype, body) {
+                    kv.text.insert(snake_case(&key), value);
                 }
             }
             "tIME" if body.len() >= 7 => {
                 let year = u16::from_be_bytes([body[0], body[1]]);
-                time = Some(format!(
+                kv.time = Some(format!(
                     "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
                     year, body[2], body[3], body[4], body[5], body[6]
                 ));
@@ -133,14 +101,14 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, StructuralCounts)> {
                 if let Some(end) = body.iter().position(|&b| b == 0) {
                     if let Ok(s) = std::str::from_utf8(&body[..end]) {
                         if !s.is_empty() {
-                            icc_profile_name = Some(s.to_string());
+                            kv.icc_profile_name = Some(s.to_string());
                         }
                     }
                 }
             }
             _ if !is_standard_chunk(ctype) => {
-                if !ctype.is_empty() && unknown.iter().all(|u| u != ctype) {
-                    unknown.push(ctype.to_string());
+                if !ctype.is_empty() && kv.unknown_chunks.iter().all(|u| u != ctype) {
+                    kv.unknown_chunks.push(ctype.to_string());
                 }
                 counts.unknown_chunks_count = counts.unknown_chunks_count.saturating_add(1);
             }
@@ -152,27 +120,7 @@ pub(crate) fn extract(data: &[u8]) -> Option<(Value, StructuralCounts)> {
 
     counts.trailing_bytes = (data.len().saturating_sub(last_chunk_end)) as u32;
 
-    let mut out = Map::new();
-    if !text.is_empty() {
-        out.insert("text".into(), Value::Object(text));
-    }
-    if let Some(t) = time {
-        out.insert("time".into(), json!(t));
-    }
-    if let Some(name) = icc_profile_name {
-        out.insert("icc_profile_name".into(), json!(name));
-    }
-    if let Some(ct) = color_type {
-        out.insert("color_type".into(), json!(ct));
-    }
-    if let Some(im) = interlace_method {
-        out.insert("interlace_method".into(), json!(im));
-    }
-    if !unknown.is_empty() {
-        out.insert("unknown_chunks".into(), json!(unknown));
-    }
-
-    Some((Value::Object(out), counts))
+    Some((serde_json::to_value(kv).ok()?, counts))
 }
 
 /// Standard PNG chunk types (PNG 1.2 spec + APNG + the few that
@@ -206,44 +154,39 @@ fn is_standard_chunk(t: &str) -> bool {
     )
 }
 
-fn parse_text_chunk(body: &[u8]) -> Option<(String, String)> {
-    let nul = body.iter().position(|&b| b == 0)?;
-    let key = std::str::from_utf8(&body[..nul]).ok()?;
-    let val = std::str::from_utf8(body.get(nul + 1..)?).ok()?;
-    Some((key.to_string(), val.to_string()))
-}
-
-fn parse_ztxt_chunk(body: &[u8]) -> Option<(String, String)> {
-    let nul = body.iter().position(|&b| b == 0)?;
-    let key = std::str::from_utf8(&body[..nul]).ok()?;
-    // body[nul+1] is compression method; body[nul+2..] is zlib payload.
-    // We surface the keyword + a placeholder marker; decompression is
-    // intentionally skipped to keep the kv pass cheap. Trait authors
-    // who need decoded text can target the raw zTXt presence.
-    if body.get(nul + 1).copied() != Some(0) {
-        return Some((key.to_string(), String::new()));
-    }
-    Some((key.to_string(), String::new()))
-}
-
-fn parse_itxt_chunk(body: &[u8]) -> Option<(String, String)> {
-    // iTXt layout: keyword\0 cflag(1) cmethod(1) language\0 translated_kw\0 text
+/// Parse the keyword + value out of any PNG text chunk variant.
+/// All three (`tEXt`, `zTXt`, `iTXt`) start with a NUL-terminated
+/// keyword; what differs is what follows. We surface the keyword
+/// always, the text value only when it's plain (uncompressed) UTF-8,
+/// and an empty value otherwise — decoded text from compressed
+/// chunks would need a zlib pass that the kv layer intentionally
+/// skips.
+fn parse_text_chunk_variant(ctype: &str, body: &[u8]) -> Option<(String, String)> {
     let kw_end = body.iter().position(|&b| b == 0)?;
-    let key = std::str::from_utf8(&body[..kw_end]).ok()?;
-    let cflag = *body.get(kw_end + 1)?;
-    let cursor = kw_end + 3;
-    let lang_end = cursor + body[cursor..].iter().position(|&b| b == 0)?;
-    let trans_start = lang_end + 1;
-    let trans_end = trans_start + body[trans_start..].iter().position(|&b| b == 0)?;
-    let text_bytes = &body[trans_end + 1..];
-    if cflag == 0 {
-        let text = std::str::from_utf8(text_bytes).ok()?;
-        Some((key.to_string(), text.to_string()))
-    } else {
-        // Compressed iTXt — surface key only; decoded text would
-        // require zlib decompression which we skip on the kv path.
-        Some((key.to_string(), String::new()))
-    }
+    let key = std::str::from_utf8(&body[..kw_end]).ok()?.to_string();
+    let value = match ctype {
+        "tEXt" => std::str::from_utf8(body.get(kw_end + 1..)?)
+            .ok()?
+            .to_string(),
+        "zTXt" => String::new(), // compression method byte + zlib payload
+        "iTXt" => {
+            // iTXt: keyword\0 cflag(1) cmethod(1) language\0 translated_kw\0 text
+            let cflag = *body.get(kw_end + 1)?;
+            let after_meta = kw_end + 3;
+            let lang_end = after_meta + body.get(after_meta..)?.iter().position(|&b| b == 0)?;
+            let trans_start = lang_end + 1;
+            let trans_end = trans_start + body.get(trans_start..)?.iter().position(|&b| b == 0)?;
+            if cflag == 0 {
+                std::str::from_utf8(body.get(trans_end + 1..)?)
+                    .ok()?
+                    .to_string()
+            } else {
+                String::new()
+            }
+        }
+        _ => return None,
+    };
+    Some((key, value))
 }
 
 /// Convert a PNG text keyword (free-form, may contain spaces or

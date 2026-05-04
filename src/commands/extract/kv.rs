@@ -27,6 +27,7 @@ use crate::analyzers::pdf::pdf_kv;
 use crate::analyzers::pickle_kv;
 use crate::analyzers::png_kv;
 use crate::analyzers::pyc_kv;
+use crate::analyzers::rpm_kv;
 use crate::analyzers::FileType;
 use crate::cli;
 use crate::composite_rules::evaluators::kv::{
@@ -54,12 +55,11 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
 
     let content = fs::read(path)?;
 
-    // Documents that aren't natively manifest formats (office, RTF,
-    // and eventually PDF) get a synthetic kv tree built by their
-    // dedicated analyzer module. We try each in order before
-    // falling through to the generic structured-content parser. The
-    // returned trees use snake_case schemas — see
-    // `analyzers::office::office_kv` and `rtf::rtf_kv`.
+    // Try the dispatch table first — each probe checks magic /
+    // extension cheaply and parses on hit, wrapping the result in
+    // its top-level kv namespace (`png`, `jpeg`, `class`, …).
+    // Office / RTF / PDF return pre-namespaced trees so they're
+    // tried first as standalone parsers.
     let (detected, parsed) = if let Some(office_value) =
         office_kv::extract_office_kv(path, &content)
     {
@@ -68,18 +68,8 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
         (StructuredFormat::Json, rtf_value)
     } else if let Some(pdf_value) = pdf_kv::extract_pdf_kv(&content) {
         (StructuredFormat::Json, pdf_value)
-    } else if let Some(jar_value) = extract_jar_kv_if_jar(path, &content) {
-        (StructuredFormat::Json, jar_value)
-    } else if let Some(png_value) = extract_png_kv_if_png(&content) {
-        (StructuredFormat::Json, png_value)
-    } else if let Some(jpeg_value) = extract_jpeg_kv_if_jpeg(&content) {
-        (StructuredFormat::Json, jpeg_value)
-    } else if let Some(class_value) = extract_class_kv_if_class(&content) {
-        (StructuredFormat::Json, class_value)
-    } else if let Some(pyc_value) = extract_pyc_kv_if_pyc(&content) {
-        (StructuredFormat::Json, pyc_value)
-    } else if let Some(pickle_value) = extract_pickle_kv_if_pickle(path, &content) {
-        (StructuredFormat::Json, pickle_value)
+    } else if let Some(probe_value) = run_kv_probes(path, &content) {
+        (StructuredFormat::Json, probe_value)
     } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content) {
         (StructuredFormat::Json, binary_value)
     } else {
@@ -193,82 +183,123 @@ fn format_output(
 /// expose a metrics-only fast path.  Acceptable for `cleave kv`
 /// (interactive trait-authoring tool); real analysis flows
 /// already go through the same path and pay the cost once.
-/// Surface `png.*` from any file with a PNG magic header. Cheap path
-/// — no pixel decode, just the chunk-table walk that powers the
-/// analyzer's structural metrics.
-fn extract_png_kv_if_png(content: &[u8]) -> Option<Value> {
-    let (mut value, _counts) = png_kv::extract(content)?;
+/// One probe in the kv-format dispatch table. `matches` runs first
+/// (cheap magic / extension check); on hit, `parse` is invoked and
+/// the resulting tree is wrapped as `{ namespace: tree }` so kv-paths
+/// always read `<namespace>.<...>`.
+struct KvProbe {
+    namespace: &'static str,
+    matches: fn(&Path, &[u8]) -> bool,
+    parse: fn(&[u8]) -> Option<Value>,
+}
+
+/// Probes are tried in order; first match wins. Cheap magic checks
+/// come before parsers that need extension help (pickle), so the hot
+/// non-matching path stays a few byte comparisons.
+const KV_PROBES: &[KvProbe] = &[
+    KvProbe {
+        namespace: "png",
+        matches: starts_with_png,
+        parse: parse_png,
+    },
+    KvProbe {
+        namespace: "jpeg",
+        matches: starts_with_jpeg,
+        parse: parse_jpeg,
+    },
+    KvProbe {
+        namespace: "class",
+        matches: starts_with_class,
+        parse: class_kv::extract,
+    },
+    KvProbe {
+        namespace: "pyc",
+        matches: looks_like_pyc,
+        parse: pyc_kv::extract,
+    },
+    KvProbe {
+        namespace: "rpm",
+        matches: starts_with_rpm,
+        parse: rpm_kv::extract,
+    },
+    KvProbe {
+        namespace: "jar",
+        matches: looks_like_jar,
+        parse: jar_kv::extract_jar_kv,
+    },
+    KvProbe {
+        namespace: "pickle",
+        matches: looks_like_pickle,
+        parse: pickle_kv::extract,
+    },
+];
+
+fn run_kv_probes(path: &Path, content: &[u8]) -> Option<Value> {
+    let probe = KV_PROBES.iter().find(|p| (p.matches)(path, content))?;
+    let inner = (probe.parse)(content)?;
     let mut root = serde_json::Map::new();
-    root.insert("png".into(), value.take());
+    root.insert(probe.namespace.into(), inner);
     Some(Value::Object(root))
 }
 
-/// Surface `jpeg.*` from any file starting with the JPEG SOI marker
-/// (FF D8). Same cheap-path pattern as PNG: marker walk only, no
-/// pixel decode.
-fn extract_jpeg_kv_if_jpeg(content: &[u8]) -> Option<Value> {
-    let (mut value, _counts) = jpeg_kv::extract(content)?;
-    let mut root = serde_json::Map::new();
-    root.insert("jpeg".into(), value.take());
-    Some(Value::Object(root))
+fn starts_with_png(_: &Path, content: &[u8]) -> bool {
+    content.starts_with(b"\x89PNG\r\n\x1a\n")
 }
-
-/// Surface `class.*` from a Java `.class` file (`CAFEBABE` magic).
-fn extract_class_kv_if_class(content: &[u8]) -> Option<Value> {
-    let mut value = class_kv::extract(content)?;
-    let mut root = serde_json::Map::new();
-    root.insert("class".into(), value.take());
-    Some(Value::Object(root))
+fn starts_with_jpeg(_: &Path, content: &[u8]) -> bool {
+    content.starts_with(&[0xFF, 0xD8])
 }
-
-/// Surface `pyc.*` from a Python `.pyc` (4-byte magic ending in
-/// `\r\n`).
-fn extract_pyc_kv_if_pyc(content: &[u8]) -> Option<Value> {
-    let mut value = pyc_kv::extract(content)?;
-    let mut root = serde_json::Map::new();
-    root.insert("pyc".into(), value.take());
-    Some(Value::Object(root))
+fn starts_with_class(_: &Path, content: &[u8]) -> bool {
+    content.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE])
 }
-
-/// Surface `pickle.*` for `.pkl` / `.pickle` / `.joblib` / `.pt`
-/// extensions. We gate on extension because pickle has no robust
-/// magic — protocol 0 is plain ASCII text and would false-positive
-/// on countless other inputs.
-fn extract_pickle_kv_if_pickle(path: &Path, content: &[u8]) -> Option<Value> {
-    let ext = path.extension().and_then(|s| s.to_str())?;
-    if !matches!(
-        ext.to_ascii_lowercase().as_str(),
-        "pkl" | "pickle" | "joblib" | "pt"
-    ) {
-        return None;
+fn starts_with_rpm(_: &Path, content: &[u8]) -> bool {
+    content.starts_with(&[0xED, 0xAB, 0xEE, 0xDB])
+}
+/// `.pyc` files start with a 2-byte magic word followed by `\r\n`;
+/// the magic word varies per Python version (3-byte detection covers
+/// every release we map in `pyc_kv`).
+fn looks_like_pyc(path: &Path, content: &[u8]) -> bool {
+    let ext_match = path
+        .extension()
+        .and_then(|s| s.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pyc"));
+    let magic_match = content.len() >= 4 && content[2] == 0x0D && content[3] == 0x0A;
+    ext_match && magic_match
+}
+/// JAR / WAR / EAR are all ZIPs — accept either the magic + filename
+/// hint or the analyzer's positive type detection.
+fn looks_like_jar(path: &Path, content: &[u8]) -> bool {
+    if !content.starts_with(b"PK\x03\x04") {
+        return false;
     }
-    let mut value = pickle_kv::extract(content)?;
-    let mut root = serde_json::Map::new();
-    root.insert("pickle".into(), value.take());
-    Some(Value::Object(root))
-}
-
-/// Surface `jar.*` from any zip-shaped file Java tooling identifies
-/// as a JAR/WAR/EAR. Cheap path: we only check the magic + extension,
-/// then defer to the in-memory zip extractor in `jar_kv`.
-fn extract_jar_kv_if_jar(path: &Path, content: &[u8]) -> Option<Value> {
-    if content.len() < 4 || &content[..4] != b"PK\x03\x04" {
-        return None;
-    }
-    let ext_is_jarish = path
+    let ext_match = path
         .extension()
         .and_then(|s| s.to_str())
         .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "jar" | "war" | "ear"));
-    let detected = analyzers::detect_file_type_from_data(path, content);
-    let detected_is_jar = matches!(detected, FileType::Jar);
-    if !(ext_is_jarish || detected_is_jar) {
-        return None;
-    }
-    let mut value = jar_kv::extract_jar_kv(content)?;
-    // Wrap so kv-paths read as `jar.manifest.created_by` etc.
-    let mut root = serde_json::Map::new();
-    root.insert("jar".into(), value.take());
-    Some(Value::Object(root))
+    ext_match
+        || matches!(
+            analyzers::detect_file_type_from_data(path, content),
+            FileType::Jar
+        )
+}
+/// Pickle has no robust magic (protocol 0 is plain ASCII), so we gate
+/// on extension only. Misclassified inputs are still handled cleanly
+/// by `pickle_kv::extract` returning `None`.
+fn looks_like_pickle(path: &Path, _: &[u8]) -> bool {
+    path.extension().and_then(|s| s.to_str()).is_some_and(|e| {
+        matches!(
+            e.to_ascii_lowercase().as_str(),
+            "pkl" | "pickle" | "joblib" | "pt"
+        )
+    })
+}
+
+/// Adapter: png_kv returns `(Value, StructuralCounts)`; the kv
+/// command only wants the value.
+fn parse_png(content: &[u8]) -> Option<Value> {
+    png_kv::extract(content).map(|(v, _)| v)
+}
+fn parse_jpeg(content: &[u8]) -> Option<Value> {
+    jpeg_kv::extract(content).map(|(v, _)| v)
 }
 
 fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {

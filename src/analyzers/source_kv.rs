@@ -1,38 +1,14 @@
-//! Source-code kv-tree synthesis. Surfaces structured AST data
-//! (imports, exports, function names, decorators) as `source.*`
-//! kv paths so YAML traits can target them precisely.
+//! `source.*` kv subtree — pivots the unified analyzer's already-
+//! extracted imports / exports / functions / strings into a kv
+//! shape so trait authors can ask aggregate questions ("does this
+//! file import both X and Y?") without walking each `Import` /
+//! `Export` entry. Cheap: no new tree-sitter queries.
 //!
-//! Designed to be cheap: every value here is already extracted by
-//! the unified analyzer's tree-sitter walk; this module just
-//! pivots the existing `report.imports` / `report.exports` /
-//! `report.functions` vectors into a kv tree shape.
-//!
-//! No new tree-sitter queries are run.  If a value isn't already on
-//! the report, it doesn't appear here — keeping the per-file kv
-//! synthesis cost flat.
-//!
-//! ## Schema
-//!
-//! ```text
-//! source:
-//!   imports[]               sorted distinct import symbols
-//!   exports[]               sorted distinct exported names
-//!   functions[]             sorted distinct function names
-//!   import_libraries[]      sorted distinct library names
-//!                           (for languages where Import.library is
-//!                            populated, e.g. Python `from X import Y`)
-//!   has_imports             bool — at least one import present
-//!   has_exports             bool — at least one named export
-//! ```
-//!
-//! Trait authors can target precise call sites via the existing
-//! `type: import`/`type: symbol` matchers; `source.*` is for
-//! aggregate-shape questions ("does this binary import both X and
-//! Y", "are there any exports at all", etc.) where kv-tree
-//! traversal is cleaner than walking each Import/Export entry.
+//! Schema is the [`SourceKv`] struct.
 
 use crate::types::AnalysisReport;
-use serde_json::{json, Map, Value};
+use serde::Serialize;
+use serde_json::Value;
 use std::collections::BTreeSet;
 
 /// Maximum string-constant entries to surface. Caps the per-file kv
@@ -47,12 +23,38 @@ const MIN_STRING_LEN: usize = 6;
 /// Build a `source.*` subtree from the imports/exports/functions
 /// already populated on `report`, plus optional string-constant
 /// extraction from `report.strings` and shebang detection from the
-/// raw `content`. Returns `None` when no source data is present.
+#[derive(Default, Serialize)]
+struct SourceKv {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    imports: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    import_libraries: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    has_imports: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    exports: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    has_exports: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    functions: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    strings: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    shebang: Option<String>,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+/// Build the `source.*` subtree from `report.imports` / `exports` /
+/// `functions` / `strings` plus the leading shebang in `content`
+/// (when supplied). Returns `None` when no source data is present.
 #[must_use]
 pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -> Option<Value> {
-    let mut out = Map::new();
+    let mut kv = SourceKv::default();
 
-    // Imports — sorted distinct symbols.
     if !report.imports.is_empty() {
         let mut symbols: BTreeSet<&str> = BTreeSet::new();
         let mut libraries: BTreeSet<&str> = BTreeSet::new();
@@ -65,29 +67,20 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
             }
         }
         if !symbols.is_empty() {
-            let v: Vec<&&str> = symbols.iter().collect();
-            out.insert("imports".into(), json!(v));
-            out.insert("has_imports".into(), json!(true));
+            kv.imports = symbols.iter().map(|s| (*s).to_string()).collect();
+            kv.has_imports = true;
         }
-        if !libraries.is_empty() {
-            let v: Vec<&&str> = libraries.iter().collect();
-            out.insert("import_libraries".into(), json!(v));
-        }
+        kv.import_libraries = libraries.iter().map(|s| (*s).to_string()).collect();
     }
 
-    // Exports — sorted distinct names.
     if !report.exports.is_empty() {
         let symbols: BTreeSet<&str> = report.exports.iter().map(|e| e.symbol.as_str()).collect();
         if !symbols.is_empty() {
-            let v: Vec<&&str> = symbols.iter().collect();
-            out.insert("exports".into(), json!(v));
-            out.insert("has_exports".into(), json!(true));
+            kv.exports = symbols.iter().map(|s| (*s).to_string()).collect();
+            kv.has_exports = true;
         }
     }
 
-    // Function names — sorted distinct.  `report.functions` is the
-    // unified analyzer's per-file function list (tree-sitter
-    // function_definition nodes).
     if !report.functions.is_empty() {
         let names: BTreeSet<&str> = report
             .functions
@@ -95,16 +88,9 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
             .map(|f| f.name.as_str())
             .filter(|s| !s.is_empty())
             .collect();
-        if !names.is_empty() {
-            let v: Vec<&&str> = names.iter().collect();
-            out.insert("functions".into(), json!(v));
-        }
+        kv.functions = names.iter().map(|s| (*s).to_string()).collect();
     }
 
-    // String constants — distinct values from `report.strings`, capped
-    // and length-filtered. Trait authors target via regex.  Raw
-    // structural read; no AST-position filtering (which would require
-    // a per-node walk).
     if !report.strings.is_empty() {
         let mut strings: BTreeSet<&str> = BTreeSet::new();
         for s in &report.strings {
@@ -112,23 +98,18 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
                 strings.insert(s.value.as_str());
             }
         }
-        if !strings.is_empty() {
-            let v: Vec<&&str> = strings.iter().collect();
-            out.insert("strings".into(), json!(v));
-        }
+        kv.strings = strings.iter().map(|s| (*s).to_string()).collect();
     }
 
-    // Shebang — first-line interpreter directive, when present.
     if let Some(bytes) = content {
-        if let Some(shebang) = parse_shebang(bytes) {
-            out.insert("shebang".into(), json!(shebang));
-        }
+        kv.shebang = parse_shebang(bytes);
     }
 
-    if out.is_empty() {
+    let value = serde_json::to_value(kv).ok()?;
+    if value.as_object().is_some_and(serde_json::Map::is_empty) {
         None
     } else {
-        Some(Value::Object(out))
+        Some(value)
     }
 }
 
@@ -159,23 +140,9 @@ fn parse_shebang(content: &[u8]) -> Option<String> {
 /// Idempotent: when no source data is present (binary-only file),
 /// `report.kv_tree` is left untouched.
 pub(crate) fn attach_to_report(report: &mut AnalysisReport, content: Option<&[u8]>) {
-    let Some(source) = build_source_kv(report, content) else {
-        return;
-    };
-    let mut root = match report.kv_tree.take().map(|b| *b) {
-        Some(Value::Object(m)) => m,
-        Some(v) => {
-            // Existing kv tree was a non-object value (shouldn't
-            // happen, but defensive); stash it under `_legacy` so we
-            // don't lose data.
-            let mut m = Map::new();
-            m.insert("_legacy".into(), v);
-            m
-        }
-        None => Map::new(),
-    };
-    root.insert("source".into(), source);
-    report.kv_tree = Some(Box::new(Value::Object(root)));
+    if let Some(source) = build_source_kv(report, content) {
+        report.merge_kv_subtree("source", source);
+    }
 }
 
 #[cfg(test)]
@@ -183,6 +150,7 @@ pub(crate) fn attach_to_report(report: &mut AnalysisReport, content: Option<&[u8
 mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Function, Import, TargetInfo};
+    use serde_json::json;
 
     fn empty_report() -> AnalysisReport {
         AnalysisReport::new(TargetInfo {

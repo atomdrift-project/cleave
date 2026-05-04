@@ -58,6 +58,8 @@ pub(crate) mod class_kv;
 pub(crate) mod pyc_kv;
 // Python pickle kv-tree synthesis (protocol + modules + opcode set).
 pub(crate) mod pickle_kv;
+// RPM package header kv-tree synthesis (BUILDHOST + attribution).
+pub(crate) mod rpm_kv;
 // B0.5 quick-win extractors: ELF .comment, sanitizer detection, etc.
 pub(crate) mod binary_extractors;
 // B1: Go buildinfo extractor (cross-format PE/ELF/Mach-O/raw).

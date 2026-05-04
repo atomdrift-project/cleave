@@ -235,6 +235,25 @@ impl AnalysisReport {
         file.formula = (!formula.is_empty()).then_some(formula);
     }
 
+    /// Merge a per-format kv subtree into `kv_tree` under `namespace`.
+    /// Preserves existing namespaces; pre-existing non-object trees
+    /// are stashed under `_legacy` so we never lose data. Used by
+    /// every per-format kv attacher (`png`, `jpeg`, `class`, `pyc`,
+    /// `pickle`, `jar`, `rpm`, …).
+    pub(crate) fn merge_kv_subtree(&mut self, namespace: &str, value: serde_json::Value) {
+        let mut root = match self.kv_tree.take().map(|b| *b) {
+            Some(serde_json::Value::Object(m)) => m,
+            Some(other) => {
+                let mut m = serde_json::Map::new();
+                m.insert("_legacy".into(), other);
+                m
+            }
+            None => serde_json::Map::new(),
+        };
+        root.insert(namespace.into(), value);
+        self.kv_tree = Some(Box::new(serde_json::Value::Object(root)));
+    }
+
     /// Add a finding
     pub fn add_finding(&mut self, finding: Finding) {
         if !self.findings.iter().any(|f| f.id == finding.id) {
@@ -643,9 +662,10 @@ fn flatten_kv_for_output(
             }
             serde_json::Value::Null | serde_json::Value::Bool(false) => {}
             serde_json::Value::String(s) if s.is_empty() => {}
-            serde_json::Value::Number(n) if n.as_i64() == Some(0) => {}
-            serde_json::Value::Number(n) if n.as_f64().is_some_and(|f| f == 0.0) && !n.is_i64() => {
-            }
+            // Skip every numeric zero in one arm: `as_f64` returns
+            // `Some(0.0)` for both integer and float zeros, so this
+            // covers `0`, `0.0`, and `-0.0` without two guards.
+            serde_json::Value::Number(n) if n.as_f64() == Some(0.0) => {}
             _ => {
                 if !prefix.is_empty() {
                     out.insert(prefix.to_string(), value.clone());

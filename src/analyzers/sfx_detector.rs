@@ -23,6 +23,9 @@ const NSIS_DEADBEEF: &[u8] = &[0xEF, 0xBE, 0xAD, 0xDE];
 
 /// Inno Setup data header string.
 const INNO_MARKER: &[u8] = b"Inno Setup Setup Data";
+
+/// PyInstaller cookie magic.
+const PYINST_MAGIC: &[u8] = b"MEI\x0c\x0b\x0a\x0b\x0e";
 const NSIS_VERSION_BANNER: &[u8] = b"Nullsoft Install System";
 const NSIS_ERROR_TITLE: &[u8] = b"NSIS Error";
 const NSIS_ERROR_URL: &[u8] = b"nsis.sf.net/NSIS_Error";
@@ -33,6 +36,7 @@ const NSIS_NCRC_SWITCH: &[u8] = b"/NCRC";
 pub(crate) enum SfxKind {
     Nsis,
     InnoSetup,
+    PyInstaller,
 }
 
 impl SfxKind {
@@ -40,6 +44,7 @@ impl SfxKind {
         match self {
             SfxKind::Nsis => "file/sfx/nsis",
             SfxKind::InnoSetup => "file/sfx/inno-setup",
+            SfxKind::PyInstaller => "file/sfx/pyinstaller",
         }
     }
 
@@ -47,6 +52,7 @@ impl SfxKind {
         match self {
             SfxKind::Nsis => "NSIS self-extracting installer",
             SfxKind::InnoSetup => "Inno Setup self-extracting installer",
+            SfxKind::PyInstaller => "PyInstaller-bundled Python executable",
         }
     }
 
@@ -54,6 +60,7 @@ impl SfxKind {
         match self {
             SfxKind::Nsis => "NSIS",
             SfxKind::InnoSetup => "Inno Setup",
+            SfxKind::PyInstaller => "PyInstaller",
         }
     }
 }
@@ -76,6 +83,9 @@ pub(crate) fn detect_sfx(data: &[u8]) -> Option<SfxKind> {
     }
     if has_strong_nsis_markers(data) {
         return Some(SfxKind::Nsis);
+    }
+    if memmem::rfind(data, PYINST_MAGIC).is_some() {
+        return Some(SfxKind::PyInstaller);
     }
     None
 }
@@ -110,10 +120,11 @@ pub(crate) fn analyze_sfx(
     let marker = match kind {
         SfxKind::Nsis => NSIS_DEADBEEF,
         SfxKind::InnoSetup => INNO_MARKER,
+        SfxKind::PyInstaller => PYINST_MAGIC,
     };
     let marker_offset = memmem::find(data, marker);
 
-    let archive_report = try_extract(file_path, kind, capability_mapper, yara_engine);
+    let archive_report = try_extract(file_path, data, kind, capability_mapper, yara_engine);
     let extracted = archive_report.is_some();
 
     SfxResult {
@@ -151,6 +162,7 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
 /// Try to extract the SFX contents using system tools.
 fn try_extract(
     file_path: &Path,
+    data: &[u8],
     kind: SfxKind,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
@@ -165,6 +177,7 @@ fn try_extract(
                 false
             }
         }
+        SfxKind::PyInstaller => run_pyinstx(data, tmp.path()),
     };
 
     if !extracted {
@@ -218,6 +231,16 @@ fn run_7z(src: &Path, out: &Path) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+fn run_pyinstx(data: &[u8], out: &Path) -> bool {
+    match pyinstx::extract(data, out) {
+        Ok(stats) => stats.files_written > 0,
+        Err(e) => {
+            tracing::debug!("pyinstx extraction failed: {e}");
+            false
+        }
+    }
 }
 
 fn run_innoextract(src: &Path, out: &Path) -> bool {

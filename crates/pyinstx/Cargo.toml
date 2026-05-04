@@ -1,0 +1,19 @@
+[package]
+name = "pyinstx"
+version = "0.1.0"
+edition = "2021"
+authors = ["The Atomdrift Project"]
+description = "Pure-Rust extractor for PyInstaller-bundled executables"
+license = "Apache-2.0"
+
+[lints]
+workspace = true
+
+[dependencies]
+flate2 = "1.1"
+memchr = "2.8"
+thiserror = "2.0"
+tracing = "0.1"
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }

@@ -784,6 +784,7 @@ dependencies = [
  "png",
  "predicates",
  "proptest",
+ "pyinstx",
  "rand 0.9.4",
  "rayon",
  "regex",
@@ -3304,6 +3305,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "pyinstx"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "memchr",
+ "thiserror 2.0.18",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

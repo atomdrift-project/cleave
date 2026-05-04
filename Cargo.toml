@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "crates/pyinstx", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -100,6 +100,9 @@ malecule = { path = "crates/malecule" }
 
 # System memory queries
 sysmem = { path = "crates/sysmem" }
+
+# PyInstaller archive extraction
+pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }

@@ -577,6 +577,7 @@ impl AnalysisReport {
         if let Some(tree) = self.kv_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
+        file.kv_tree = self.kv_tree.clone();
         file
     }
 
@@ -623,6 +624,7 @@ impl AnalysisReport {
         if let Some(tree) = self.kv_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
+        file.kv_tree = self.kv_tree;
         (file, nested_files, archive_contents)
     }
 }

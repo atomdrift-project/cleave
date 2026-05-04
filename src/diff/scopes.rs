@@ -157,7 +157,8 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
         Value::Array(arr) if !arr.is_empty() => {
             if arr.iter().all(is_leaf) {
                 for v in arr {
-                    out.push((format!("{prefix}[]={}", leaf_key(v)), v.clone()));
+                    let key = leaf_key(v).unwrap_or_default();
+                    out.push((format!("{prefix}[]={key}"), v.clone()));
                 }
             } else if let Some(id_field) = identity_field_for(arr) {
                 // Array of objects with a stable identity field (e.g.
@@ -167,7 +168,7 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
                     let id = v
                         .as_object()
                         .and_then(|o| o.get(id_field))
-                        .map(leaf_key)
+                        .and_then(leaf_key)
                         .unwrap_or_default();
                     let key = format!("{prefix}[{id_field}={id}]");
                     walk(v, &key, out);
@@ -185,19 +186,22 @@ fn walk(value: &Value, prefix: &str, out: &mut Vec<(String, Value)>) {
     }
 }
 
-fn is_leaf(v: &Value) -> bool {
-    matches!(v, Value::String(_) | Value::Number(_) | Value::Bool(_))
+/// `Some(stable string form)` for JSON leaves; `None` for objects /
+/// arrays / null. The `Some(_)` branches define both "what's a leaf?"
+/// and the membership-encoding key in one place — earlier code split
+/// these into `is_leaf` plus `leaf_key`, which had to stay in sync by
+/// inspection.
+fn leaf_key(v: &Value) -> Option<String> {
+    match v {
+        Value::String(s) => Some(s.clone()),
+        Value::Number(n) => Some(n.to_string()),
+        Value::Bool(b) => Some(b.to_string()),
+        _ => None,
+    }
 }
 
-/// Render a JSON leaf as a stable, path-safe string for membership encoding.
-/// Strings keep their content; numbers and bools use their canonical form.
-fn leaf_key(v: &Value) -> String {
-    match v {
-        Value::String(s) => s.clone(),
-        Value::Number(n) => n.to_string(),
-        Value::Bool(b) => b.to_string(),
-        _ => String::new(),
-    }
+fn is_leaf(v: &Value) -> bool {
+    leaf_key(v).is_some()
 }
 
 /// If every element of `arr` is an object that carries the *same* well-known
@@ -205,36 +209,49 @@ fn leaf_key(v: &Value) -> String {
 /// flattener key array entries by member identity rather than by index, so
 /// reordering doesn't fabricate change entries at every shifted slot.
 ///
-/// We try a small ranked list of likely identity fields (`name`, `id`,
-/// `lib`, `path`, `key`, `symbol`). The first one carried by *every* element
-/// wins. Returns `None` when no field qualifies — caller falls back to
-/// indexed paths, preserving v1 behavior for arrays without obvious keys.
+/// The ranked candidate list covers what cleave's analyzers actually emit:
+///
+/// * `name` — ELF/Mach-O dynamic entries, PE imports, sections, JAR
+///   `inner_classes`, RPM file entries
+/// * `id` — generic structured-data; CRX/Apk identifiers
+/// * `lib` — older Go/PE import shape
+/// * `path` — Go `dependencies[]`, JAR pom modules, archive members
+/// * `key` — Office relationships, plist keyed lists
+/// * `symbol` — pickle / class-file symbol references
+///
+/// First field carried by *every* element wins. Returns `None` for arrays
+/// without an obvious key — the caller then falls back to indexed paths.
+/// New analyzer outputs that should benefit from identity-keyed diffs
+/// belong on this list.
 fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
     const CANDIDATES: &[&str] = &["name", "id", "lib", "path", "key", "symbol"];
-    CANDIDATES
-        .iter()
-        .find(|&cand| {
-            arr.iter().all(|v| {
-                v.as_object()
-                    .and_then(|o| o.get(*cand))
-                    .is_some_and(is_leaf)
-            })
+    CANDIDATES.iter().copied().find(|cand| {
+        arr.iter().all(|v| {
+            v.as_object()
+                .and_then(|o| o.get(*cand))
+                .is_some_and(is_leaf)
         })
-        .map(|v| v as _)
+    })
 }
 
 // =============================================================================
-// KV — flatten kv_tree to the same path syntax accepted by `type: kv` rules
-// and `cleave kv`, then diff by path. Identity is path; values may be of any
-// JSON type. Top-level path segment is captured as `namespace` for grouping.
+// KV — diffs a kv_tree pre-flattened by `flatten_kv_for_diff` into path /
+// value pairs. Identity is path; values may be of any JSON type. The top-
+// level path segment becomes `namespace` for downstream grouping.
 // =============================================================================
 
+/// Flatten a kv_tree into the diff-engine's path/value pairs. Public to
+/// the `diff` module so unit construction can pre-flatten once per side.
+/// Mirrors the encoding accepted by `type: kv` rules and `cleave kv`,
+/// with smart array handling that doesn't fabricate diffs on reorder.
+pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
+    flatten_dotted(value)
+}
+
 pub(super) fn diff_kv(old: &DiffUnit, new: &DiffUnit, limit: usize) -> ScopeDiff<KvChange> {
-    let old_flat = old.kv_tree.as_ref().map(flatten_dotted).unwrap_or_default();
-    let new_flat = new.kv_tree.as_ref().map(flatten_dotted).unwrap_or_default();
     diff_flat_paths(
-        &old_flat,
-        &new_flat,
+        &old.kv_flat,
+        &new.kv_flat,
         |path, value| KvChange {
             path: path.to_string(),
             namespace: path
@@ -282,7 +299,7 @@ where
                 change_weight += 1.0; // new path: full slot of change
                 diff.added.push(make(path, value));
             }
-            Some(prev) if json_neq(prev, value) => {
+            Some(prev) if !json_eq(prev, value) => {
                 change_weight += value_change_weight(prev, value);
                 diff.changed.push(Changed {
                     old: make(path, prev),
@@ -343,15 +360,15 @@ fn value_change_weight(old: &Value, new: &Value) -> f32 {
     }
 }
 
-/// JSON inequality with epsilon tolerance for floating-point numbers so
+/// JSON equality with epsilon tolerance for floating-point numbers so
 /// trivial rounding does not generate spurious change entries.
-fn json_neq(a: &Value, b: &Value) -> bool {
+fn json_eq(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Number(an), Value::Number(bn)) => match (an.as_f64(), bn.as_f64()) {
-            (Some(x), Some(y)) => (x - y).abs() > 1e-9,
-            _ => an != bn,
+            (Some(x), Some(y)) => (x - y).abs() <= 1e-9,
+            _ => an == bn,
         },
-        _ => a != b,
+        _ => a == b,
     }
 }
 
@@ -369,36 +386,43 @@ pub(super) fn diff_symbols(
     // Some upstream extractors emit the same symbol multiple times (e.g.
     // each call site of an import). Dedupe by `(kind, library, symbol)`
     // before diffing so the output doesn't repeat the same entry.
-    let key = |c: &SymbolChange| -> String {
-        format!(
-            "{:?}:{}:{}",
+    // Tuple-keyed dedup. Replaces an earlier `format!("{:?}:{}:{}",...)`
+    // hot path that allocated a `String` per symbol (~10K-50K
+    // allocations on shared-library imports on a typical binary).
+    fn key(c: &SymbolChange) -> (SymbolKind, String, String) {
+        (
             c.kind,
-            c.library.as_deref().unwrap_or(""),
-            c.symbol
+            c.library.clone().unwrap_or_default(),
+            c.symbol.clone(),
         )
-    };
+    }
     let to_changes = |imports: &[Import], exports: &[Export]| -> Vec<SymbolChange> {
-        let mut seen: FxHashSet<String> = FxHashSet::default();
-        let mut v: Vec<SymbolChange> = Vec::new();
-        for i in imports {
-            let c = SymbolChange {
-                symbol: i.symbol.clone(),
-                kind: SymbolKind::Import,
-                library: i.library.clone(),
-            };
+        let mut seen: FxHashSet<(SymbolKind, String, String)> = FxHashSet::default();
+        let mut v: Vec<SymbolChange> = Vec::with_capacity(imports.len() + exports.len());
+        let mut push = |v: &mut Vec<SymbolChange>, c: SymbolChange| {
             if seen.insert(key(&c)) {
                 v.push(c);
             }
+        };
+        for i in imports {
+            push(
+                &mut v,
+                SymbolChange {
+                    symbol: i.symbol.clone(),
+                    kind: SymbolKind::Import,
+                    library: i.library.clone(),
+                },
+            );
         }
         for e in exports {
-            let c = SymbolChange {
-                symbol: e.symbol.clone(),
-                kind: SymbolKind::Export,
-                library: None,
-            };
-            if seen.insert(key(&c)) {
-                v.push(c);
-            }
+            push(
+                &mut v,
+                SymbolChange {
+                    symbol: e.symbol.clone(),
+                    kind: SymbolKind::Export,
+                    library: None,
+                },
+            );
         }
         v
     };
@@ -642,8 +666,8 @@ mod tests {
     fn kv_added_namespace_extracted() {
         let mut old = unit();
         let mut new = unit();
-        old.kv_tree = Some(serde_json::json!({"metadata": {"sig": "old"}}));
-        new.kv_tree = Some(serde_json::json!({
+        old.kv_flat = flatten_kv_for_diff(&serde_json::json!({"metadata": {"sig": "old"}}));
+        new.kv_flat = flatten_kv_for_diff(&serde_json::json!({
             "metadata": {"sig": "new"},
             "signature": {"team_id": "ABC123"},
         }));

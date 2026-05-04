@@ -18,6 +18,75 @@ use serde_json::Value;
 
 use super::core::Criticality;
 
+/// One of the six diff scopes. Iterating [`Scope::ALL`] is the canonical
+/// way to fan out across all scopes — every "for each scope do X" site
+/// in the diff/format code is one of these iterations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Scope {
+    /// Per-finding (trait) diff.
+    Traits,
+    /// Flattened-metric-path diff.
+    Metrics,
+    /// Flattened kv-tree-path diff.
+    Kv,
+    /// Imported / exported symbol diff.
+    Symbols,
+    /// Extracted-string-literal diff.
+    Strings,
+    /// Binary-section diff (ELF / Mach-O / PE).
+    Sections,
+}
+
+impl Scope {
+    /// All six scopes in canonical (display) order.
+    pub const ALL: [Scope; 6] = [
+        Scope::Traits,
+        Scope::Metrics,
+        Scope::Kv,
+        Scope::Symbols,
+        Scope::Strings,
+        Scope::Sections,
+    ];
+
+    /// Lower-case scope name used in CLI flags (`--scope traits`),
+    /// section headings, and trait references.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Scope::Traits => "traits",
+            Scope::Metrics => "metrics",
+            Scope::Kv => "kv",
+            Scope::Symbols => "symbols",
+            Scope::Strings => "strings",
+            Scope::Sections => "sections",
+        }
+    }
+
+    /// All-caps label for the ledger column header.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Scope::Traits => "TRAITS",
+            Scope::Metrics => "METRICS",
+            Scope::Kv => "KV",
+            Scope::Symbols => "SYMBOLS",
+            Scope::Strings => "STRINGS",
+            Scope::Sections => "SECTIONS",
+        }
+    }
+}
+
+impl std::str::FromStr for Scope {
+    type Err = ();
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Scope::ALL
+            .iter()
+            .copied()
+            .find(|sc| sc.as_str() == s)
+            .ok_or(())
+    }
+}
+
 /// Top-level diff report (schema v1).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiffReportV1 {
@@ -82,6 +151,34 @@ pub struct ScopeRocs {
     pub sections: f32,
 }
 
+impl ScopeRocs {
+    /// Look up the ROC for one scope. Pairs with [`Scope::ALL`] for
+    /// "for each scope, do X" loops.
+    #[must_use]
+    pub fn get(&self, scope: Scope) -> f32 {
+        match scope {
+            Scope::Traits => self.traits,
+            Scope::Metrics => self.metrics,
+            Scope::Kv => self.kv,
+            Scope::Symbols => self.symbols,
+            Scope::Strings => self.strings,
+            Scope::Sections => self.sections,
+        }
+    }
+
+    /// Set the ROC for one scope.
+    pub fn set(&mut self, scope: Scope, value: f32) {
+        match scope {
+            Scope::Traits => self.traits = value,
+            Scope::Metrics => self.metrics = value,
+            Scope::Kv => self.kv = value,
+            Scope::Symbols => self.symbols = value,
+            Scope::Strings => self.strings = value,
+            Scope::Sections => self.sections = value,
+        }
+    }
+}
+
 /// Per-scope rollup. A scope is `None` when it was excluded from the run by
 /// `--scope` or when neither side had any data for it.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -104,6 +201,65 @@ pub struct ScopeDiffs {
     /// Diff over binary sections (ELF/Mach-O/PE).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub sections: Option<ScopeDiff<SectionChange>>,
+}
+
+impl ScopeDiffs {
+    /// Erased per-scope view: `Some` when this scope ran, regardless of
+    /// the underlying change type. Use for queries that don't care about
+    /// the change-row shape (e.g. "did anything change?").
+    #[must_use]
+    pub fn view(&self, scope: Scope) -> ScopeView<'_> {
+        match scope {
+            Scope::Traits => self.traits.as_ref().into(),
+            Scope::Metrics => self.metrics.as_ref().into(),
+            Scope::Kv => self.kv.as_ref().into(),
+            Scope::Symbols => self.symbols.as_ref().into(),
+            Scope::Strings => self.strings.as_ref().into(),
+            Scope::Sections => self.sections.as_ref().into(),
+        }
+    }
+}
+
+/// Type-erased peek at one scope's [`ScopeDiff`]. Carries just the
+/// shape questions callers need (`present`, `has_changes`, counts,
+/// `roc`) — typed iteration over `added`/`removed`/`changed` still
+/// goes through the concrete `ScopeDiffs` field.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScopeView<'a> {
+    /// `true` when the scope ran (`Some(_)`), regardless of whether it
+    /// found any items.
+    pub present: bool,
+    /// `true` when at least one item is in `added`/`removed`/`changed`.
+    pub has_changes: bool,
+    /// `true` when neither side had any data for this scope. Distinct
+    /// from `!has_changes`: a scope can be non-empty (counts on both
+    /// sides) yet have no diff.
+    pub is_empty: bool,
+    /// Number of items in `ScopeDiff::added`.
+    pub added_len: usize,
+    /// Number of items in `ScopeDiff::removed`.
+    pub removed_len: usize,
+    /// Number of items in `ScopeDiff::changed`.
+    pub changed_len: usize,
+    /// Pre-computed rate of change for this scope.
+    pub roc: f32,
+    _life: std::marker::PhantomData<&'a ()>,
+}
+
+impl<'a, T> From<Option<&'a ScopeDiff<T>>> for ScopeView<'a> {
+    fn from(opt: Option<&'a ScopeDiff<T>>) -> Self {
+        opt.map(|s| ScopeView {
+            present: true,
+            has_changes: s.has_changes(),
+            is_empty: s.is_empty(),
+            added_len: s.added.len(),
+            removed_len: s.removed.len(),
+            changed_len: s.changed.len(),
+            roc: s.roc,
+            _life: std::marker::PhantomData,
+        })
+        .unwrap_or_default()
+    }
 }
 
 /// A single file's contribution to the diff.
@@ -296,7 +452,7 @@ pub struct SymbolChange {
 }
 
 /// Symbol direction.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SymbolKind {
     /// Symbol imported from an external module.

@@ -33,8 +33,8 @@ use crate::types::file_analysis::FileAnalysis;
 use crate::types::scores::Metrics;
 use crate::types::traits_findings::Finding;
 use crate::types::{
-    AnalysisReport, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, ScopeDiff, ScopeDiffs,
-    ScopeRocs, TargetInfo,
+    AnalysisReport, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, Scope, ScopeDiff,
+    ScopeDiffs, ScopeRocs, TargetInfo,
 };
 use crate::AnalysisOptions;
 
@@ -73,6 +73,31 @@ impl ScopeMask {
         }
     }
 
+    /// True if the mask requests this scope. Pairs with [`Scope::ALL`]
+    /// for "for each scope in the mask, do X" loops.
+    #[must_use]
+    pub fn contains(self, scope: Scope) -> bool {
+        match scope {
+            Scope::Traits => self.traits,
+            Scope::Metrics => self.metrics,
+            Scope::Kv => self.kv,
+            Scope::Symbols => self.symbols,
+            Scope::Strings => self.strings,
+            Scope::Sections => self.sections,
+        }
+    }
+
+    fn set(&mut self, scope: Scope, on: bool) {
+        match scope {
+            Scope::Traits => self.traits = on,
+            Scope::Metrics => self.metrics = on,
+            Scope::Kv => self.kv = on,
+            Scope::Symbols => self.symbols = on,
+            Scope::Strings => self.strings = on,
+            Scope::Sections => self.sections = on,
+        }
+    }
+
     /// Parse a comma-separated scope list (`traits,kv` etc.). Accepts the
     /// alias `all` for [`Self::all`]. Empty string maps to `all`.
     pub fn parse(spec: &str) -> Result<Self> {
@@ -89,18 +114,19 @@ impl ScopeMask {
             sections: false,
         };
         for tok in spec.split(',') {
-            match tok.trim().to_ascii_lowercase().as_str() {
-                "traits" => mask.traits = true,
-                "metrics" => mask.metrics = true,
-                "kv" => mask.kv = true,
-                "symbols" => mask.symbols = true,
-                "strings" => mask.strings = true,
-                "sections" => mask.sections = true,
-                "all" => return Ok(Self::all()),
-                "" => continue,
-                other => {
+            let token = tok.trim();
+            if token.is_empty() {
+                continue;
+            }
+            if token.eq_ignore_ascii_case("all") {
+                return Ok(Self::all());
+            }
+            let lower = token.to_ascii_lowercase();
+            match lower.parse::<Scope>() {
+                Ok(scope) => mask.set(scope, true),
+                Err(()) => {
                     return Err(anyhow!(
-                        "unknown scope '{other}'; expected one of: traits, metrics, kv, symbols, strings, sections, all"
+                        "unknown scope '{token}'; expected one of: traits, metrics, kv, symbols, strings, sections, all"
                     ));
                 }
             }
@@ -125,7 +151,11 @@ pub(crate) struct DiffUnit {
     pub(crate) path: String,
     pub(crate) findings: Vec<Finding>,
     pub(crate) metrics: Option<Metrics>,
-    pub(crate) kv_tree: Option<Value>,
+    /// kv tree pre-flattened with diff-friendly path encoding
+    /// (membership / identity-keyed for arrays). Built once at unit
+    /// construction so `diff_kv` can hash directly without re-walking
+    /// the JSON. See [`scopes::flatten_kv_for_diff`].
+    pub(crate) kv_flat: Vec<(String, Value)>,
     pub(crate) imports: Vec<Import>,
     pub(crate) exports: Vec<Export>,
     pub(crate) strings: Vec<StringInfo>,
@@ -138,7 +168,7 @@ impl DiffUnit {
             path,
             findings: Vec::new(),
             metrics: None,
-            kv_tree: None,
+            kv_flat: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
             strings: Vec::new(),
@@ -207,14 +237,9 @@ pub fn diff_paths(
     }
 
     let scopes = aggregate_scopes(&file_diffs, scope_mask, limit_changes);
-    summary.scope_roc = ScopeRocs {
-        traits: scopes.traits.as_ref().map_or(0.0, |s| s.roc),
-        metrics: scopes.metrics.as_ref().map_or(0.0, |s| s.roc),
-        kv: scopes.kv.as_ref().map_or(0.0, |s| s.roc),
-        symbols: scopes.symbols.as_ref().map_or(0.0, |s| s.roc),
-        strings: scopes.strings.as_ref().map_or(0.0, |s| s.roc),
-        sections: scopes.sections.as_ref().map_or(0.0, |s| s.roc),
-    };
+    for scope in Scope::ALL {
+        summary.scope_roc.set(scope, scopes.view(scope).roc);
+    }
     summary.overall_roc = mean_nonempty_rocs(&summary.scope_roc, &scopes);
 
     let visible_files: Vec<FileDiffEntry> = file_diffs
@@ -311,7 +336,11 @@ fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
         path: root_rel.to_string(),
         findings: report.findings.clone(),
         metrics: report.metrics.clone(),
-        kv_tree: report.kv_tree.as_deref().cloned(),
+        kv_flat: report
+            .kv_tree
+            .as_deref()
+            .map(scopes::flatten_kv_for_diff)
+            .unwrap_or_default(),
         imports: report.imports.clone(),
         exports: report.exports.clone(),
         strings: report.strings.clone(),
@@ -337,7 +366,16 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
         path,
         findings: fa.findings.clone(),
         metrics: fa.metrics.clone(),
-        kv_tree: None,
+        // Archive members carry their own kv tree (preserved via
+        // `FileAnalysis.kv_tree`) so a `.class` inside a `.jar` still
+        // contributes its `class.*` paths to the diff. Earlier
+        // versions hard-coded `None` here, silently dropping nested
+        // kv data.
+        kv_flat: fa
+            .kv_tree
+            .as_deref()
+            .map(scopes::flatten_kv_for_diff)
+            .unwrap_or_default(),
         imports: fa.imports.clone(),
         exports: fa.exports.clone(),
         strings: fa.strings.clone(),
@@ -424,15 +462,7 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
 }
 
 fn any_scope_changed(s: &ScopeDiffs) -> bool {
-    fn changed<T>(d: &Option<ScopeDiff<T>>) -> bool {
-        d.as_ref().is_some_and(ScopeDiff::has_changes)
-    }
-    changed(&s.traits)
-        || changed(&s.metrics)
-        || changed(&s.kv)
-        || changed(&s.symbols)
-        || changed(&s.strings)
-        || changed(&s.sections)
+    Scope::ALL.iter().any(|scope| s.view(*scope).has_changes)
 }
 
 /// Pool per-file diffs into program-level `ScopeDiff`s. Counts and items are
@@ -505,36 +535,14 @@ fn aggregate_scopes(files: &[FileDiffEntry], mask: ScopeMask, limit: usize) -> S
 /// Empty-on-both scopes are excluded from the denominator so they do not
 /// drag the overall ROC toward zero.
 fn mean_nonempty_rocs(rocs: &ScopeRocs, scopes: &ScopeDiffs) -> f32 {
-    let mut sum = 0.0;
-    let mut n = 0u32;
-    for (roc, present) in [
-        (
-            rocs.traits,
-            scopes.traits.as_ref().is_some_and(|s| !s.is_empty()),
-        ),
-        (
-            rocs.metrics,
-            scopes.metrics.as_ref().is_some_and(|s| !s.is_empty()),
-        ),
-        (rocs.kv, scopes.kv.as_ref().is_some_and(|s| !s.is_empty())),
-        (
-            rocs.symbols,
-            scopes.symbols.as_ref().is_some_and(|s| !s.is_empty()),
-        ),
-        (
-            rocs.strings,
-            scopes.strings.as_ref().is_some_and(|s| !s.is_empty()),
-        ),
-        (
-            rocs.sections,
-            scopes.sections.as_ref().is_some_and(|s| !s.is_empty()),
-        ),
-    ] {
-        if present {
-            sum += roc;
-            n += 1;
-        }
-    }
+    let (sum, n) = Scope::ALL
+        .iter()
+        .filter(|&&scope| {
+            let view = scopes.view(scope);
+            view.present && !view.is_empty
+        })
+        .map(|&scope| rocs.get(scope))
+        .fold((0.0_f32, 0_u32), |(s, n), r| (s + r, n + 1));
     if n == 0 {
         0.0
     } else {

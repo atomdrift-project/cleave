@@ -663,6 +663,43 @@ impl ArchiveAnalyzer {
         Ok(report)
     }
 
+    /// Analyze a PyInstaller-bundled executable from in-memory bytes.
+    ///
+    /// Decodes every CArchive entry and PYZ content, then runs the same
+    /// per-member analysis pipeline used for ZIP archives — without
+    /// touching the disk.
+    pub(crate) fn analyze_pyinstaller_bytes(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+    ) -> Result<AnalysisReport> {
+        let start = std::time::Instant::now();
+        if self.is_cancelled() {
+            anyhow::bail!("Analysis cancelled before PyInstaller analysis");
+        }
+        let target = TargetInfo {
+            path: archive_path.display().to_string(),
+            file_type: "pe".to_string(),
+            size_bytes: data.len() as u64,
+            sha256: calculate_sha256(data),
+            architectures: None,
+        };
+        let mut report = AnalysisReport::new(target);
+        report.structure.push(StructuralFeature {
+            id: "archive/pyinstaller".to_string(),
+            desc: "PyInstaller-bundled Python executable".to_string(),
+            evidence: vec![Evidence {
+                method: "marker_detection".to_string(),
+                source: "pyinstx".to_string(),
+                value: "MEI cookie".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+        });
+        self.analyze_pyinstaller_archive_in_memory(data, archive_path, &mut report, start)?;
+        Ok(report)
+    }
+
     fn analyze_archive(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path)?;
         self.analyze_archive_with_data(&data, file_path)

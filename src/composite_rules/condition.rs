@@ -1971,12 +1971,8 @@ impl Condition {
     pub(crate) fn check_greedy_patterns(&self) -> Option<String> {
         let regex_to_check = match self {
             Condition::Text { regex: Some(r), .. }
-            | Condition::StringLiteral { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
-            | Condition::Symbol { regex: Some(r), .. }
-            | Condition::Ast { regex: Some(r), .. }
-            | Condition::Basename { regex: Some(r), .. }
-            | Condition::Kv { regex: Some(r), .. } => Some(r.as_str()),
+            | Condition::Ast { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
         };
 
@@ -3315,6 +3311,7 @@ mod location_constraint_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
+    use crate::composite_rules::Condition;
 
     // ── patterns that MUST be flagged ──────────────────────────────────────
 
@@ -3394,6 +3391,73 @@ mod backtrack_tests {
     fn real_world_eval_decrypt_pattern_caught() {
         let pat = r"(?i)(\$[a-zA-Z0-9_]+\s*=\s*[a-zA-Z0-9_]*Decrypt.*\(.+\);\s*eval\s*\(\s*\$[a-zA-Z0-9_]+\s*\)|eval\s*\(\s*[a-zA-Z0-9_]*Decrypt.*\(.+\)\s*\))";
         assert!(find_backtrack_issue(pat).is_some());
+    }
+
+    #[test]
+    fn greedy_pattern_lint_skips_kv_regex() {
+        let cond = Condition::Kv {
+            path: "debug.pdb_path".to_string(),
+            exact: None,
+            substr: None,
+            regex: Some(r"(?i)PQT_Downloader[\\/].*[\\/]PQT_Downloader\.pdb$".to_string()),
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        };
+        assert!(cond.check_greedy_patterns().is_none());
+    }
+
+    #[test]
+    fn greedy_pattern_lint_skips_string_literal_regex() {
+        let cond = Condition::StringLiteral {
+            exact: None,
+            substr: None,
+            regex: Some(r"^ssh(d|-.+)?$".to_string()),
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
+            compiled_regex: None,
+            compiled_finder: None,
+        };
+        assert!(cond.check_greedy_patterns().is_none());
+    }
+
+    #[test]
+    fn greedy_pattern_lint_skips_symbol_regex() {
+        let cond = Condition::Symbol {
+            exact: None,
+            substr: None,
+            regex: Some(r"^libc\.so(\.[0-9]+)*$".to_string()),
+            platforms: None,
+            is_check: None,
+            kind: None,
+            not: None,
+            compiled_regex: None,
+            compiled_finder: None,
+        };
+        assert!(cond.check_greedy_patterns().is_none());
+    }
+
+    #[test]
+    fn greedy_pattern_lint_skips_basename_regex() {
+        let cond = Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some(r"^ssh(d|-.+)?$".to_string()),
+            case_insensitive: false,
+            is_check: None,
+            compiled_regex: None,
+        };
+        assert!(cond.check_greedy_patterns().is_none());
     }
 
     #[test]

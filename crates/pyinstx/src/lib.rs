@@ -5,11 +5,14 @@
 //! contents (TOC); each TOC entry describes a packaged file (Python source,
 //! compiled module, native library, data resource, or a nested PYZ archive).
 //!
-//! This crate detects the cookie, walks the TOC, and streams every entry to
-//! disk. Compressed entries are decompressed through a zlib stream straight
-//! into the output file, so memory stays bounded regardless of entry size.
-//! Nested PYZ archives are walked in the same pass and their inner `.pyc`
-//! files are written alongside the rest.
+//! The crate exposes two public entry points:
+//!
+//! * [`extract_to_memory`] decodes every entry (CArchive top-level + nested
+//!   PYZ contents) into an in-memory [`Vec`] of [`MemoryEntry`]. This is the
+//!   primary path — used by callers (e.g. cleave) that want to feed each
+//!   entry directly into a downstream analyzer without touching the disk.
+//! * [`extract`] is a thin convenience wrapper that writes the same entries
+//!   to a destination directory.
 //!
 //! Reference: <https://github.com/extremecoders-re/pyinstxtractor>
 
@@ -36,7 +39,7 @@ const COOKIE_V21: usize = 24 + 64;
 /// PYZ archive magic.
 const PYZ_MAGIC: &[u8; 4] = b"PYZ\0";
 
-/// Errors returned by [`extract`].
+/// Errors returned by [`extract_to_memory`] and [`extract`].
 #[derive(Debug, Error)]
 pub enum Error {
     /// The byte slice does not contain a PyInstaller cookie.
@@ -50,10 +53,89 @@ pub enum Error {
     Io(#[from] io::Error),
 }
 
-/// Summary returned from a successful extraction.
+/// Coarse classification of a PyInstaller TOC entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntryKind {
+    /// Python source script entry-point (CArchive type `s`).
+    PySource,
+    /// Pre-compiled Python module or package (CArchive type `m`/`M`).
+    PyModule,
+    /// File extracted from a nested PYZ archive (always a `.pyc`).
+    PyzMember,
+    /// Splash screen resource (CArchive type `x`).
+    Splash,
+    /// Native shared library, data resource, or anything else.
+    Binary,
+}
+
+/// Build provenance recovered from the PyInstaller cookie + TOC.
+///
+/// Populated by [`extract_to_memory`] and exposed through
+/// [`MemoryStats::provenance`]. All fields are best-effort — fields default
+/// to empty when the source archive lacks them.
+#[derive(Debug, Default, Clone)]
+pub struct Provenance {
+    /// Embedded Python interpreter version, `(major, minor)`.
+    pub python_version: Option<(u8, u8)>,
+    /// Filename of the bundled Python shared library, e.g. `python311.dll`
+    /// or `libpython3.11.so.1.0`.
+    pub python_lib: Option<String>,
+    /// `"2.0"` (pre-2014 cookie) or `"2.1+"` (2014+).
+    pub cookie_version: &'static str,
+    /// Names of `s`-type Python entry-point scripts.
+    pub entry_points: Vec<String>,
+    /// `o`-type bootloader runtime options (e.g. `pyi-hide-console`,
+    /// `pyi-disable-windowed-traceback`, Python `-O`/`-v`/`-s` flags).
+    pub runtime_options: Vec<String>,
+    /// `d`-type dependency entries — names of sibling CArchives this bundle
+    /// references (only present in PyInstaller multi-file `--onedir` style
+    /// bundles).
+    pub dependencies: Vec<String>,
+    /// True if the archive carries a splash screen resource (`x` type).
+    pub has_splash: bool,
+    /// Total number of entries in the CArchive TOC (including runtime
+    /// options and dependencies).
+    pub toc_entry_count: usize,
+    /// Per-`type_byte` entry counts. Keys are the raw single-byte type codes
+    /// observed (`'s'`, `'m'`, `'M'`, `'b'`, `'z'`, `'Z'`, `'d'`, `'o'`,
+    /// `'x'`, etc.).
+    pub type_counts: std::collections::BTreeMap<u8, usize>,
+    /// Sum of compressed sizes across the CArchive TOC.
+    pub compressed_size: u64,
+    /// Sum of uncompressed sizes across the CArchive TOC.
+    pub uncompressed_size: u64,
+}
+
+/// One decoded entry held in memory.
+#[derive(Debug, Clone)]
+pub struct MemoryEntry {
+    /// Archive-relative path. Forward slashes; never starts with `/`; never
+    /// contains `..` segments.
+    pub name: String,
+    /// Coarse classification.
+    pub kind: EntryKind,
+    /// Decompressed bytes. For `.pyc` outputs the bytes already include the
+    /// reconstructed pyc header.
+    pub data: Vec<u8>,
+}
+
+/// Result of an in-memory extraction.
+#[derive(Debug, Default)]
+pub struct MemoryStats {
+    /// Python version embedded in the cookie, if recovered. (major, minor).
+    pub py_version: Option<(u8, u8)>,
+    /// Names of TOC entries marked as Python source entry points (`s` type).
+    pub entry_points: Vec<String>,
+    /// All decoded entries (CArchive top-level + PYZ contents).
+    pub entries: Vec<MemoryEntry>,
+    /// Recovered build provenance.
+    pub provenance: Provenance,
+}
+
+/// Result of a disk-based extraction.
 #[derive(Debug, Default)]
 pub struct Stats {
-    /// Number of files written to the output directory (top-level + PYZ contents).
+    /// Number of files written to the output directory.
     pub files_written: usize,
     /// Python version embedded in the cookie, if recovered. (major, minor).
     pub py_version: Option<(u8, u8)>,
@@ -67,27 +149,26 @@ pub fn is_pyinstaller(data: &[u8]) -> bool {
     memchr::memmem::rfind(data, MAGIC).is_some()
 }
 
-/// Extract a PyInstaller archive into `out_dir`.
+/// Decode every CArchive + PYZ entry into an in-memory [`Vec`].
 ///
-/// `out_dir` is created if it does not exist. Existing files inside it may be
-/// overwritten on name collision (deduplication is handled per-archive via a
-/// numeric suffix when the same name appears twice).
-pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
-    let cookie_pos =
-        memchr::memmem::rfind(data, MAGIC).ok_or(Error::NotPyInstaller)?;
-
+/// No filesystem I/O is performed.
+pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
+    let cookie_pos = memchr::memmem::rfind(data, MAGIC).ok_or(Error::NotPyInstaller)?;
     let cookie = parse_cookie(data, cookie_pos)?;
-    fs::create_dir_all(out_dir)?;
 
-    let mut stats = Stats {
+    let mut stats = MemoryStats {
         py_version: Some(cookie.py_version),
         ..Default::default()
     };
+    stats.provenance.python_version = Some(cookie.py_version);
+    stats.provenance.python_lib = cookie.pylibname.clone();
+    stats.provenance.cookie_version = if cookie.is_v21 { "2.1+" } else { "2.0" };
 
-    let mut writer = Writer::new(out_dir);
+    // Indices in stats.entries that need pyc magic back-patching once we learn it.
+    let mut bare_pyc_indices: Vec<usize> = Vec::new();
     let mut pyc_magic: Option<[u8; 4]> = None;
-    let mut bare_pycs: Vec<PathBuf> = Vec::new();
-    let mut pyz_blobs: Vec<PathBuf> = Vec::new();
+    // Defer PYZ walking until after the top-level pass so we know pyc magic.
+    let mut pyz_blobs: Vec<Vec<u8>> = Vec::new();
 
     let toc = data
         .get(cookie.toc_pos..cookie.toc_pos.saturating_add(cookie.toc_len))
@@ -101,9 +182,33 @@ pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
         };
         cursor = cursor.saturating_add(entry.entry_size);
 
-        // Runtime options / dependencies are not files.
-        if entry.type_byte == b'd' || entry.type_byte == b'o' {
-            continue;
+        stats.provenance.toc_entry_count = stats.provenance.toc_entry_count.saturating_add(1);
+        *stats
+            .provenance
+            .type_counts
+            .entry(entry.type_byte)
+            .or_insert(0) += 1;
+        stats.provenance.compressed_size = stats
+            .provenance
+            .compressed_size
+            .saturating_add(entry.compressed_size as u64);
+        stats.provenance.uncompressed_size = stats
+            .provenance
+            .uncompressed_size
+            .saturating_add(entry.uncompressed_size as u64);
+
+        // Runtime options and dependencies aren't files — they're metadata
+        // baked into the TOC entry name.
+        match entry.type_byte {
+            b'o' => {
+                stats.provenance.runtime_options.push(entry.name.clone());
+                continue;
+            }
+            b'd' => {
+                stats.provenance.dependencies.push(entry.name.clone());
+                continue;
+            }
+            _ => {}
         }
 
         let abs_pos = cookie
@@ -118,71 +223,125 @@ pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
 
         match entry.type_byte {
             b's' => {
-                // Python source entry point — wrap as .pyc with a placeholder header.
-                let path = writer.path_for(&format!("{safe_name}.pyc"));
-                stats.entry_points.push(safe_name.clone());
+                // Python source entry point — wrap as .pyc with placeholder magic
+                // for now; we may patch the magic at the end.
                 let body = decompress_to_vec(raw, entry.compressed_flag)?;
-                write_pyc(&path, pyc_magic.as_ref(), cookie.py_version, &body)?;
-                if pyc_magic.is_none() {
-                    bare_pycs.push(path);
+                let pyc = build_pyc(pyc_magic.as_ref(), cookie.py_version, &body);
+                stats.entry_points.push(safe_name.clone());
+                stats.provenance.entry_points.push(safe_name.clone());
+                let needs_patch = pyc_magic.is_none();
+                stats.entries.push(MemoryEntry {
+                    name: format!("{safe_name}.pyc"),
+                    kind: EntryKind::PySource,
+                    data: pyc,
+                });
+                if needs_patch {
+                    bare_pyc_indices.push(stats.entries.len() - 1);
                 }
-                stats.files_written += 1;
+            }
+            b'x' => {
+                // Splash screen resource — usually a PNG.
+                stats.provenance.has_splash = true;
+                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                stats.entries.push(MemoryEntry {
+                    name: safe_name,
+                    kind: EntryKind::Splash,
+                    data: body,
+                });
             }
             b'M' | b'm' => {
-                // Modules / packages: pyc files. Pre-5.3 keeps the header,
-                // post-5.3 drops it.
-                let path = writer.path_for(&format!("{safe_name}.pyc"));
                 let body = decompress_to_vec(raw, entry.compressed_flag)?;
-                if body.len() >= 4 && &body[2..4] == b"\r\n" {
+                let (pyc, needs_patch) = if body.len() >= 4 && &body[2..4] == b"\r\n" {
+                    // Pre-PyInstaller 5.3 format: header is intact.
                     if pyc_magic.is_none() {
                         if let Ok(m) = body[0..4].try_into() {
                             pyc_magic = Some(m);
                         }
                     }
-                    write_raw(&path, &body)?;
+                    (body, false)
                 } else {
-                    write_pyc(&path, pyc_magic.as_ref(), cookie.py_version, &body)?;
-                    if pyc_magic.is_none() {
-                        bare_pycs.push(path);
-                    }
+                    // Post-5.3: header is stripped.
+                    let needs_patch = pyc_magic.is_none();
+                    (
+                        build_pyc(pyc_magic.as_ref(), cookie.py_version, &body),
+                        needs_patch,
+                    )
+                };
+                stats.entries.push(MemoryEntry {
+                    name: format!("{safe_name}.pyc"),
+                    kind: EntryKind::PyModule,
+                    data: pyc,
+                });
+                if needs_patch {
+                    bare_pyc_indices.push(stats.entries.len() - 1);
                 }
-                stats.files_written += 1;
             }
             b'z' | b'Z' => {
-                let path = writer.path_for(&safe_name);
-                stream_to_file(raw, entry.compressed_flag, &path)?;
-                stats.files_written += 1;
-                pyz_blobs.push(path);
+                // Defer; the raw PYZ blob itself is internal — we yield only its inner files.
+                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                pyz_blobs.push(body);
             }
             _ => {
-                let path = writer.path_for(&safe_name);
-                stream_to_file(raw, entry.compressed_flag, &path)?;
-                stats.files_written += 1;
+                // Generic data / native library — stream-decompress to a Vec.
+                let body = decompress_to_vec(raw, entry.compressed_flag)?;
+                stats.entries.push(MemoryEntry {
+                    name: safe_name,
+                    kind: EntryKind::Binary,
+                    data: body,
+                });
             }
         }
     }
 
-    // Walk PYZ archives now that we may have learned the pyc magic.
-    for pyz_path in pyz_blobs {
-        let pyz_data = match fs::read(&pyz_path) {
-            Ok(b) => b,
-            Err(e) => {
-                tracing::debug!("pyinstx: cannot read pyz {pyz_path:?}: {e}");
-                continue;
-            }
-        };
-        let inner_dir = pyz_path.with_extension("pyz_extracted");
-        let written = extract_pyz(&pyz_data, &inner_dir, &mut pyc_magic, cookie.py_version)?;
-        stats.files_written = stats.files_written.saturating_add(written);
+    // Walk PYZ archives now that pyc_magic may be known.
+    for (idx, pyz) in pyz_blobs.into_iter().enumerate() {
+        let prefix = format!("PYZ-{idx:02}.pyz_extracted");
+        walk_pyz_into(
+            &pyz,
+            &prefix,
+            &mut pyc_magic,
+            cookie.py_version,
+            &mut stats.entries,
+        );
     }
 
-    // Patch bare pyc files now that we know the magic (if we ever learned it).
+    // Patch bare pyc magic in already-emitted entries.
     if let Some(magic) = pyc_magic {
-        for path in bare_pycs {
-            patch_pyc_magic(&path, &magic)?;
+        for idx in bare_pyc_indices {
+            if let Some(entry) = stats.entries.get_mut(idx) {
+                if entry.data.len() >= 4 {
+                    entry.data[0..4].copy_from_slice(&magic);
+                }
+            }
         }
     }
 
+    Ok(stats)
+}
+
+/// Extract a PyInstaller archive into `out_dir`.
+///
+/// Convenience wrapper that calls [`extract_to_memory`] and writes each entry
+/// to disk. `out_dir` is created if it does not exist.
+pub fn extract(data: &[u8], out_dir: &Path) -> Result<Stats, Error> {
+    let mem = extract_to_memory(data)?;
+    fs::create_dir_all(out_dir)?;
+
+    let mut stats = Stats {
+        py_version: mem.py_version,
+        entry_points: mem.entry_points,
+        ..Default::default()
+    };
+
+    let mut writer = Writer::new(out_dir);
+    for entry in mem.entries {
+        let path = writer.path_for(&entry.name);
+        ensure_parent(&path)?;
+        let mut f = BufWriter::new(File::create(&path)?);
+        f.write_all(&entry.data)?;
+        f.flush()?;
+        stats.files_written = stats.files_written.saturating_add(1);
+    }
     Ok(stats)
 }
 
@@ -195,21 +354,19 @@ struct Cookie {
     toc_pos: usize,
     toc_len: usize,
     py_version: (u8, u8),
+    is_v21: bool,
+    /// Bundled Python library filename (only present in v21+ cookies).
+    pylibname: Option<String>,
 }
 
 fn parse_cookie(data: &[u8], cookie_pos: usize) -> Result<Cookie, Error> {
-    // Distinguish 2.0 from 2.1+: 2.1+ has the python lib name string starting
-    // 24 bytes after the cookie magic. The reference checks for "python" in
-    // the next 64 bytes lower-cased.
     let probe_start = cookie_pos
         .checked_add(COOKIE_V20)
         .ok_or(Error::Malformed("cookie position overflow"))?;
     let probe = data
         .get(probe_start..probe_start.saturating_add(64))
         .unwrap_or(&[]);
-    let is_v21 = probe
-        .windows(6)
-        .any(|w| w.eq_ignore_ascii_case(b"python"));
+    let is_v21 = probe.windows(6).any(|w| w.eq_ignore_ascii_case(b"python"));
 
     let cookie_size = if is_v21 { COOKIE_V21 } else { COOKIE_V20 };
     let cookie_end = cookie_pos
@@ -219,15 +376,7 @@ fn parse_cookie(data: &[u8], cookie_pos: usize) -> Result<Cookie, Error> {
         .get(cookie_pos..cookie_end)
         .ok_or(Error::Malformed("cookie out of bounds"))?;
 
-    // Layout (big-endian):
-    //   [0..8]   magic
-    //   [8..12]  length_of_package (u32)
-    //   [12..16] toc offset within overlay (u32)
-    //   [16..20] toc length (i32)
-    //   [20..24] python version (i32)
-    //   [24..88] python lib name (v21 only)
-    let length_of_package =
-        u32::from_be_bytes(arr4(cookie, 8)?) as usize;
+    let length_of_package = u32::from_be_bytes(arr4(cookie, 8)?) as usize;
     let toc = u32::from_be_bytes(arr4(cookie, 12)?) as usize;
     let toc_len = u32::from_be_bytes(arr4(cookie, 16)?) as usize;
     let pyver = u32::from_be_bytes(arr4(cookie, 20)?) as usize;
@@ -258,11 +407,29 @@ fn parse_cookie(data: &[u8], cookie_pos: usize) -> Result<Cookie, Error> {
         return Err(Error::Malformed("toc extends beyond file"));
     }
 
+    let pylibname = if is_v21 {
+        // Bytes 24..88 of the cookie are a NUL-padded ASCII filename.
+        let raw = cookie.get(24..88).unwrap_or(&[]);
+        let trimmed = match raw.iter().position(|&b| b == 0) {
+            Some(idx) => &raw[..idx],
+            None => raw,
+        };
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(String::from_utf8_lossy(trimmed).into_owned())
+        }
+    } else {
+        None
+    };
+
     Ok(Cookie {
         overlay_pos,
         toc_pos,
         toc_len,
         py_version: (py_major, py_minor),
+        is_v21,
+        pylibname,
     })
 }
 
@@ -280,7 +447,6 @@ struct TocEntry {
     entry_size: usize,
     position: usize,
     compressed_size: usize,
-    #[allow(dead_code)]
     uncompressed_size: usize,
     compressed_flag: u8,
     type_byte: u8,
@@ -288,14 +454,6 @@ struct TocEntry {
 }
 
 fn parse_toc_entry(toc: &[u8], cursor: usize) -> Option<TocEntry> {
-    // Per-entry layout (big-endian):
-    //   [0..4]  entrySize (i32)            -- includes the entrySize field itself
-    //   [4..8]  entryPos (u32)
-    //   [8..12] cmprsdDataSize (u32)
-    //   [12..16] uncmprsdDataSize (u32)
-    //   [16]   cmprsFlag (u8)
-    //   [17]   typeCmprsData (1 byte char)
-    //   [18..]  name (NUL-padded, length = entrySize - 18)
     let header_len = 18;
     let entry_size_bytes = toc.get(cursor..cursor + 4)?;
     let entry_size = i32::from_be_bytes(entry_size_bytes.try_into().ok()?);
@@ -312,7 +470,6 @@ fn parse_toc_entry(toc: &[u8], cursor: usize) -> Option<TocEntry> {
     let compressed_flag = *entry.get(16)?;
     let type_byte = *entry.get(17)?;
     let name_bytes = entry.get(18..)?;
-    // Strip trailing NULs and decode lossily — names are usually ASCII.
     let trimmed = match name_bytes.iter().position(|&b| b == 0) {
         Some(idx) => &name_bytes[..idx],
         None => name_bytes,
@@ -339,76 +496,84 @@ fn parse_toc_entry(toc: &[u8], cursor: usize) -> Option<TocEntry> {
 // PYZ extraction
 // ---------------------------------------------------------------------------
 
-fn extract_pyz(
+fn walk_pyz_into(
     pyz: &[u8],
-    out_dir: &Path,
+    prefix: &str,
     pyc_magic: &mut Option<[u8; 4]>,
     py_version: (u8, u8),
-) -> Result<usize, Error> {
+    out: &mut Vec<MemoryEntry>,
+) {
     if pyz.len() < 12 || &pyz[0..4] != PYZ_MAGIC {
-        return Ok(0);
+        return;
     }
-    fs::create_dir_all(out_dir)?;
-
-    let inner_pyc_magic: [u8; 4] = pyz[4..8]
-        .try_into()
-        .map_err(|_| Error::Malformed("pyz pyc magic"))?;
+    let inner_pyc_magic: [u8; 4] = match pyz[4..8].try_into() {
+        Ok(m) => m,
+        Err(_) => return,
+    };
     if pyc_magic.is_none() {
         *pyc_magic = Some(inner_pyc_magic);
     }
-    let toc_pos = u32::from_be_bytes(pyz[8..12].try_into().unwrap_or([0; 4])) as usize;
+    let toc_bytes = match pyz.get(8..12) {
+        Some(b) => b,
+        None => return,
+    };
+    let toc_pos = u32::from_be_bytes(match toc_bytes.try_into() {
+        Ok(b) => b,
+        Err(_) => return,
+    }) as usize;
     if toc_pos >= pyz.len() {
-        return Ok(0);
+        return;
     }
 
-    // Marshal-decode the inner TOC (a list of (name, (ispkg, pos, length)) tuples).
     let toc = match marshal::parse_pyz_toc(&pyz[toc_pos..]) {
         Ok(t) => t,
         Err(e) => {
             tracing::debug!("pyz marshal decode failed: {e:?}");
-            return Ok(0);
+            return;
         }
     };
 
-    let mut writer = Writer::new(out_dir);
-    let mut written = 0usize;
-
     for entry in toc {
-        let safe_key = sanitize_path(&entry.key.replace('.', std::path::MAIN_SEPARATOR_STR));
+        let safe_key = sanitize_path(&entry.key.replace('.', "/"));
         let rel = if entry.is_pkg {
-            format!("{safe_key}/__init__.pyc")
+            format!("{prefix}/{safe_key}/__init__.pyc")
         } else {
-            format!("{safe_key}.pyc")
+            format!("{prefix}/{safe_key}.pyc")
         };
-        let out_path = writer.path_for(&rel);
         let blob = match pyz.get(entry.pos..entry.pos.saturating_add(entry.length)) {
             Some(b) => b,
             None => continue,
         };
         if entry.length == 0 {
-            write_pyc(&out_path, Some(&inner_pyc_magic), py_version, &[])?;
-            written += 1;
+            out.push(MemoryEntry {
+                name: rel,
+                kind: EntryKind::PyzMember,
+                data: build_pyc(Some(&inner_pyc_magic), py_version, &[]),
+            });
             continue;
         }
         match decompress_to_vec(blob, 1) {
             Ok(decoded) => {
-                write_pyc(&out_path, Some(&inner_pyc_magic), py_version, &decoded)?;
-                written += 1;
+                out.push(MemoryEntry {
+                    name: rel,
+                    kind: EntryKind::PyzMember,
+                    data: build_pyc(Some(&inner_pyc_magic), py_version, &decoded),
+                });
             }
             Err(_) => {
-                // Encrypted or corrupt — drop the raw blob with a marker.
-                let raw_path = out_path.with_extension("pyc.encrypted");
-                write_raw(&raw_path, blob)?;
-                written += 1;
+                // Encrypted or corrupt — emit the raw blob as a Binary entry.
+                out.push(MemoryEntry {
+                    name: format!("{rel}.encrypted"),
+                    kind: EntryKind::Binary,
+                    data: blob.to_vec(),
+                });
             }
         }
     }
-
-    Ok(written)
 }
 
 // ---------------------------------------------------------------------------
-// I/O helpers
+// Helpers
 // ---------------------------------------------------------------------------
 
 struct Writer {
@@ -455,16 +620,10 @@ fn sanitize_path(name: &str) -> String {
         if component.is_empty() || component == "." {
             continue;
         }
-        let safe = if component == ".." {
-            "__"
-        } else {
-            component
-        };
+        let safe = if component == ".." { "__" } else { component };
         if !out.is_empty() {
-            out.push(std::path::MAIN_SEPARATOR);
+            out.push('/');
         }
-        // Strip characters that are illegal on Windows so cleave can extract
-        // these archives on any host without write failures.
         for ch in safe.chars() {
             if matches!(ch, '\0' | ':' | '*' | '?' | '<' | '>' | '|' | '"') {
                 out.push('_');
@@ -488,24 +647,6 @@ fn ensure_parent(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
-fn stream_to_file(src: &[u8], compressed_flag: u8, path: &Path) -> Result<(), Error> {
-    ensure_parent(path)?;
-    let file = File::create(path)?;
-    let mut writer = BufWriter::new(file);
-    if compressed_flag == 1 {
-        let mut decoder = ZlibDecoder::new(src);
-        // Tolerate corrupt zlib streams: write what we successfully decoded,
-        // log the rest. Malware sometimes ships truncated entries.
-        if let Err(e) = io::copy(&mut decoder, &mut writer) {
-            tracing::debug!("pyinstx zlib stream error for {path:?}: {e}");
-        }
-    } else {
-        writer.write_all(src)?;
-    }
-    writer.flush()?;
-    Ok(())
-}
-
 fn decompress_to_vec(src: &[u8], compressed_flag: u8) -> Result<Vec<u8>, Error> {
     if compressed_flag != 1 {
         return Ok(src.to_vec());
@@ -516,49 +657,34 @@ fn decompress_to_vec(src: &[u8], compressed_flag: u8) -> Result<Vec<u8>, Error> 
     Ok(out)
 }
 
-fn write_raw(path: &Path, data: &[u8]) -> Result<(), Error> {
-    ensure_parent(path)?;
-    fs::write(path, data)?;
-    Ok(())
-}
-
-fn write_pyc(
-    path: &Path,
-    pyc_magic: Option<&[u8; 4]>,
-    py_version: (u8, u8),
-    body: &[u8],
-) -> Result<(), Error> {
-    ensure_parent(path)?;
-    let mut f = BufWriter::new(File::create(path)?);
-    let placeholder = [0u8; 4];
-    let header = pyc_magic.copied().unwrap_or(placeholder);
-    f.write_all(&header)?;
+fn build_pyc(pyc_magic: Option<&[u8; 4]>, py_version: (u8, u8), body: &[u8]) -> Vec<u8> {
+    let header = pyc_magic.copied().unwrap_or([0u8; 4]);
+    // Header: magic(4) + flags-or-timestamp(4) + size-or-hash(0..8) + body.
     let (major, minor) = py_version;
-    if major >= 3 && minor >= 7 {
-        // PEP-552 deterministic pyc: 4 bytes flags + 8 bytes (timestamp+size or hash).
-        f.write_all(&[0u8; 4])?;
-        f.write_all(&[0u8; 8])?;
+    let prelude_len = if major >= 3 && minor >= 7 {
+        4 + 4 + 8
+    } else if major >= 3 && minor >= 3 {
+        4 + 4 + 4
     } else {
-        // Pre-3.7: 4-byte timestamp; 3.3+ adds a 4-byte size.
-        f.write_all(&[0u8; 4])?;
+        4 + 4
+    };
+    let mut out = Vec::with_capacity(prelude_len + body.len());
+    out.extend_from_slice(&header);
+    if major >= 3 && minor >= 7 {
+        out.extend_from_slice(&[0u8; 4]); // flags
+        out.extend_from_slice(&[0u8; 8]); // timestamp+size or hash
+    } else {
+        out.extend_from_slice(&[0u8; 4]); // timestamp
         if major >= 3 && minor >= 3 {
-            f.write_all(&[0u8; 4])?;
+            out.extend_from_slice(&[0u8; 4]); // size
         }
     }
-    f.write_all(body)?;
-    f.flush()?;
-    Ok(())
-}
-
-fn patch_pyc_magic(path: &Path, magic: &[u8; 4]) -> Result<(), Error> {
-    use std::io::{Seek, SeekFrom};
-    let mut f = std::fs::OpenOptions::new().write(true).open(path)?;
-    f.seek(SeekFrom::Start(0))?;
-    f.write_all(magic)?;
-    Ok(())
+    out.extend_from_slice(body);
+    out
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -580,5 +706,19 @@ mod tests {
         assert_eq!(sanitize_path("/abs/path"), "abs/path");
         assert_eq!(sanitize_path(""), "unnamed");
         assert_eq!(sanitize_path("a/./b"), "a/b");
+    }
+
+    #[test]
+    fn build_pyc_lengths() {
+        // Python 3.11: 4 + 4 + 8 = 16 byte prelude
+        let p = build_pyc(Some(&[1, 2, 3, 4]), (3, 11), b"body");
+        assert_eq!(p.len(), 16 + 4);
+        assert_eq!(&p[0..4], &[1, 2, 3, 4]);
+        // Python 3.5: 4 + 4 + 4 = 12 byte prelude
+        let p = build_pyc(Some(&[1, 2, 3, 4]), (3, 5), b"body");
+        assert_eq!(p.len(), 12 + 4);
+        // Python 2.7: 4 + 4 = 8 byte prelude
+        let p = build_pyc(Some(&[1, 2, 3, 4]), (2, 7), b"body");
+        assert_eq!(p.len(), 8 + 4);
     }
 }

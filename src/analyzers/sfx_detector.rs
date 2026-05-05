@@ -167,6 +167,11 @@ fn try_extract(
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
 ) -> Option<AnalysisReport> {
+    // PyInstaller path: extract + analyze entirely in memory, no tmpdir.
+    if kind == SfxKind::PyInstaller {
+        return analyze_pyinstaller_in_memory(data, file_path, capability_mapper, yara_engine);
+    }
+
     let tmp = tempfile::tempdir().ok()?;
     let extracted = match kind {
         SfxKind::Nsis => run_7z(file_path, tmp.path()),
@@ -177,7 +182,7 @@ fn try_extract(
                 false
             }
         }
-        SfxKind::PyInstaller => run_pyinstx(data, tmp.path()),
+        SfxKind::PyInstaller => unreachable!("handled above"),
     };
 
     if !extracted {
@@ -185,6 +190,28 @@ fn try_extract(
     }
 
     analyze_dir(tmp.path(), file_path, capability_mapper, yara_engine)
+}
+
+fn analyze_pyinstaller_in_memory(
+    data: &[u8],
+    file_path: &Path,
+    capability_mapper: Option<Arc<CapabilityMapper>>,
+    yara_engine: Option<Arc<YaraEngine>>,
+) -> Option<AnalysisReport> {
+    let mut analyzer = ArchiveAnalyzer::new();
+    if let Some(mapper) = capability_mapper {
+        analyzer = analyzer.with_capability_mapper_arc(mapper);
+    }
+    if let Some(engine) = yara_engine {
+        analyzer = analyzer.with_yara_arc(engine);
+    }
+    match analyzer.analyze_pyinstaller_bytes(data, file_path) {
+        Ok(report) => Some(report),
+        Err(e) => {
+            tracing::debug!("pyinstx in-memory analysis failed: {e}");
+            None
+        }
+    }
 }
 
 fn tool_available(name: &str) -> bool {
@@ -231,16 +258,6 @@ fn run_7z(src: &Path, out: &Path) -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
-}
-
-fn run_pyinstx(data: &[u8], out: &Path) -> bool {
-    match pyinstx::extract(data, out) {
-        Ok(stats) => stats.files_written > 0,
-        Err(e) => {
-            tracing::debug!("pyinstx extraction failed: {e}");
-            false
-        }
-    }
 }
 
 fn run_innoextract(src: &Path, out: &Path) -> bool {

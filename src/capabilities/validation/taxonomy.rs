@@ -1260,6 +1260,17 @@ fn trait_targets_binaries(trait_def: &TraitDefinition) -> bool {
         || trait_def.r#for.iter().any(|ft| is_binary_file_type(*ft))
 }
 
+/// Returns true if every effective target file type is binary.
+///
+/// Mixed traits like `for: [pe, shell]` should not be forced to specify
+/// binary section filters because those filters have no meaning for the
+/// non-binary half of the target set.
+fn trait_targets_only_binaries(trait_def: &TraitDefinition) -> bool {
+    !trait_def.r#for.contains(&FileType::All)
+        && !trait_def.r#for.is_empty()
+        && trait_def.r#for.iter().all(|ft| is_binary_file_type(*ft))
+}
+
 /// Returns true if the condition has a section filter or positional constraint applied to it.
 /// This includes: section/offset/offset_range/section_offset/section_offset_range fields
 /// on string/raw/hex conditions, or a Section type.
@@ -1578,7 +1589,7 @@ pub(crate) fn find_wellknown_missing_section_filter(
         .iter()
         .filter(|t| {
             extract_trait_tier(&t.id) == "well-known"
-                && trait_targets_binaries(t)
+                && trait_targets_only_binaries(t)
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })
@@ -1608,7 +1619,7 @@ pub(crate) fn find_meta_missing_section_filter(
         .iter()
         .filter(|t| {
             extract_trait_tier(&t.id) == "metadata"
-                && trait_targets_binaries(t)
+                && trait_targets_only_binaries(t)
                 && condition_supports_section_filter(&t.r#if)
                 && !condition_has_section_filter(&t.r#if)
         })

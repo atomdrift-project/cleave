@@ -46,7 +46,11 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn new(buf: &'a [u8]) -> Self {
-        Self { buf, pos: 0, refs: Vec::new() }
+        Self {
+            buf,
+            pos: 0,
+            refs: Vec::new(),
+        }
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], MarshalError> {
@@ -209,7 +213,12 @@ pub(crate) fn parse_pyz_toc(data: &[u8]) -> Result<Vec<PyzEntry>, MarshalError> 
             Some(Value::Int(n)) if *n >= 0 => *n as usize,
             _ => continue,
         };
-        out.push(PyzEntry { key: key_str, is_pkg, pos, length });
+        out.push(PyzEntry {
+            key: key_str,
+            is_pkg,
+            pos,
+            length,
+        });
     }
     Ok(out)
 }

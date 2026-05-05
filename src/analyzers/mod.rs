@@ -517,9 +517,30 @@ pub fn check_extension_content_mismatch(
             true,
         ));
     }
+    if is_linux_apk_archive(file_path, det.file_type, ext_type) {
+        return None;
+    }
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = format!("{ext_type:?}");
     Some((ext_desc, content_desc, false))
+}
+
+fn is_linux_apk_archive(file_path: &Path, content_type: FileType, ext_type: FileType) -> bool {
+    path_ends_with_ci(file_path, ".apk")
+        && ext_type == FileType::Zip
+        && matches!(
+            content_type,
+            FileType::Tar | FileType::TarGz | FileType::TarBz2 | FileType::TarXz | FileType::TarZst
+        )
+}
+
+fn path_ends_with_ci(path: &Path, suffix: &str) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            name.len() >= suffix.len()
+                && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
+        })
 }
 
 /// Re-export the canonical file type from the fileid crate.
@@ -810,6 +831,18 @@ mod tests {
     fn bridge_msi_oledoc_is_not_mismatch() {
         let oledoc = b"\xD0\xCF\x11\xE0\xA1\xB1\x1A\xE1";
         assert!(check_extension_content_mismatch(Path::new("setup.msi"), oledoc).is_none());
+    }
+
+    #[test]
+    fn bridge_linux_apk_targz_is_not_mismatch() {
+        let gzip = [0x1f, 0x8b, 0x08, 0x00];
+        assert!(check_extension_content_mismatch(Path::new("package.apk"), &gzip).is_none());
+    }
+
+    #[test]
+    fn bridge_android_apk_zip_is_not_mismatch() {
+        let zip = b"PK\x03\x04android package";
+        assert!(check_extension_content_mismatch(Path::new("package.apk"), zip).is_none());
     }
 
     #[test]

@@ -320,6 +320,73 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
     result
 }
 
+fn extract_single_group_alternation(pattern: &str) -> Option<(String, Vec<String>, String)> {
+    let mut unwrapped = pattern;
+    if unwrapped.starts_with("(?i)") {
+        unwrapped = &unwrapped[4..];
+    }
+
+    let mut escape = false;
+    let mut in_char_class = false;
+    let mut depth = 0usize;
+    let mut group_start = None;
+    let mut group_end = None;
+
+    for (idx, ch) in unwrapped.char_indices() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' => escape = true,
+            '[' if !in_char_class => in_char_class = true,
+            ']' if in_char_class => in_char_class = false,
+            '(' if !in_char_class => {
+                if depth == 0 {
+                    if group_start.is_some() {
+                        return None;
+                    }
+                    group_start = Some(idx);
+                }
+                depth += 1;
+            }
+            ')' if !in_char_class => {
+                if depth == 0 {
+                    return None;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    group_end = Some(idx);
+                }
+            }
+            '|' if !in_char_class && depth == 0 => return None,
+            _ => {}
+        }
+    }
+
+    let (start, end) = (group_start?, group_end?);
+    if depth != 0 || end <= start + 1 {
+        return None;
+    }
+
+    let prefix = normalize_regex(&unwrapped[..start]);
+    let suffix = normalize_regex(&unwrapped[end + 1..]);
+    let inside = &unwrapped[start + 1..end];
+    let alternatives = split_top_level_alternation(inside);
+    if alternatives.len() <= 1 {
+        return None;
+    }
+
+    Some((
+        prefix,
+        alternatives
+            .into_iter()
+            .map(|alt| decode_hex_escapes(alt))
+            .collect(),
+        suffix,
+    ))
+}
+
 /// Decode common hex escapes in patterns (\xNN → character)
 /// This allows detecting duplicates like '\x27' vs "'"
 pub(super) fn decode_hex_escapes(pattern: &str) -> String {
@@ -2071,6 +2138,7 @@ pub(crate) fn check_regex_alternative_subsets(
     struct RegexWithAlternatives {
         pattern: String,
         alternatives: Vec<String>, // Normalized alternatives
+        grouped_alternatives: Option<(String, Vec<String>, String)>,
         condition_type: String,
         trait_id: String,
         file_path: String,
@@ -2103,6 +2171,18 @@ pub(crate) fn check_regex_alternative_subsets(
                 regex_patterns.push(RegexWithAlternatives {
                     pattern,
                     alternatives: normalized_alts,
+                    grouped_alternatives: None,
+                    condition_type: condition_type.to_string(),
+                    trait_id: trait_def.id.clone(),
+                    file_path: file_path.clone(),
+                    for_types: for_types.clone(),
+                    case_insensitive,
+                });
+            } else if let Some((prefix, alts, suffix)) = extract_single_group_alternation(&pattern) {
+                regex_patterns.push(RegexWithAlternatives {
+                    pattern,
+                    alternatives: Vec::new(),
+                    grouped_alternatives: Some((prefix, alts, suffix)),
                     condition_type: condition_type.to_string(),
                     trait_id: trait_def.id.clone(),
                     file_path: file_path.clone(),
@@ -2167,8 +2247,23 @@ pub(crate) fn check_regex_alternative_subsets(
             let set2: HashSet<&String> = p2.alternatives.iter().collect();
 
             // Check if one is a subset of the other
-            let p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
-            let p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
+            let mut p1_subset_of_p2 = !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
+            let mut p2_subset_of_p1 = !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
+
+            if !(p1_subset_of_p2 || p2_subset_of_p1) {
+                if let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
+                    (&p1.grouped_alternatives, &p2.grouped_alternatives)
+                {
+                    if prefix1 == prefix2 && suffix1 == suffix2 {
+                        let set1: HashSet<&String> = alts1.iter().collect();
+                        let set2: HashSet<&String> = alts2.iter().collect();
+                        p1_subset_of_p2 =
+                            set1.is_subset(&set2) && set1.len() < set2.len();
+                        p2_subset_of_p1 =
+                            set2.is_subset(&set1) && set2.len() < set1.len();
+                    }
+                }
+            }
 
             if p1_subset_of_p2 {
                 let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);

@@ -1773,6 +1773,46 @@ mod duplicate_tests {
     }
 
     #[test]
+    fn test_basename_regex_literal_overlap_blocked() {
+        use crate::capabilities::validation::duplicates::validate_regex_overlap_with_literal;
+
+        let traits = vec![
+            create_test_trait(
+                "basename_exact",
+                Condition::Basename {
+                    exact: Some("sshd".to_string()),
+                    substr: None,
+                    regex: None,
+                    case_insensitive: false,
+                    is_check: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Shell],
+                "file1.yaml",
+            ),
+            create_test_trait(
+                "basename_regex",
+                Condition::Basename {
+                    exact: None,
+                    substr: None,
+                    regex: Some("^(ssh|sshd|ssh_config)$".to_string()),
+                    case_insensitive: false,
+                    is_check: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::Shell],
+                "file2.yaml",
+            ),
+        ];
+
+        let mut warnings = Vec::new();
+        validate_regex_overlap_with_literal(&traits, &mut warnings);
+
+        assert!(!warnings.is_empty());
+        assert!(warnings.iter().any(|w| w.contains("sshd")));
+    }
+
+    #[test]
     fn test_regex_literal_overlap_different_criticality_allowed() {
         use crate::capabilities::validation::duplicates::validate_regex_overlap_with_literal;
 
@@ -1830,6 +1870,47 @@ mod duplicate_tests {
 
         // Different criticality should be allowed
         assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_basename_regex_alternative_subset_detected() {
+        use crate::capabilities::validation::duplicates::check_regex_alternative_subsets;
+
+        let traits = vec![
+            create_test_trait(
+                "subset",
+                Condition::Basename {
+                    exact: None,
+                    substr: None,
+                    regex: Some("\\.(test|spec)\\.[cm]?[jt]sx?$".to_string()),
+                    case_insensitive: false,
+                    is_check: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::JavaScript, FileType::TypeScript],
+                "file1.yaml",
+            ),
+            create_test_trait(
+                "superset",
+                Condition::Basename {
+                    exact: None,
+                    substr: None,
+                    regex: Some("\\.(test|spec|bench)\\.[cm]?[jt]sx?$".to_string()),
+                    case_insensitive: false,
+                    is_check: None,
+                    compiled_regex: None,
+                },
+                vec![FileType::JavaScript, FileType::TypeScript],
+                "file2.yaml",
+            ),
+        ];
+
+        let mut warnings = Vec::new();
+        check_regex_alternative_subsets(&traits, &mut warnings);
+
+        assert!(!warnings.is_empty());
+        assert!(warnings[0].contains("REGEX ALTERNATIVE SUBSET"));
+        assert!(warnings[0].contains("\\.(test|spec)\\.[cm]?[jt]sx?$"));
     }
 
     #[test]
@@ -4722,6 +4803,107 @@ mod raw_should_use_string_value_tests {
         find_raw_should_use_string_value(&[t], &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("type: text"));
+    }
+}
+
+#[cfg(test)]
+mod section_filter_validation_tests {
+    use crate::capabilities::validation::taxonomy::{
+        find_meta_missing_section_filter, find_wellknown_missing_section_filter,
+    };
+    use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    fn text_trait(id: &str, for_types: Vec<FileType>) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 0.8,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: Condition::Text {
+                exact: None,
+                substr: Some("ProjectDiscovery".to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+                compiled_finder: None,
+            },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: for_types,
+            for_from_groups: false,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yml"),
+            precision: None,
+        }
+    }
+
+    #[test]
+    fn wellknown_section_filter_skips_mixed_binary_and_script_targets() {
+        let traits = vec![text_trait(
+            "well-known/tool/test::mixed",
+            vec![FileType::Pe, FileType::Shell],
+        )];
+        let mut sources = HashMap::new();
+        sources.insert(
+            "well-known/tool/test::mixed".to_string(),
+            "./well-known/tool/test/traits.yaml".to_string(),
+        );
+        let result = find_wellknown_missing_section_filter(&traits, &sources);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn wellknown_section_filter_flags_binary_only_targets() {
+        let traits = vec![text_trait(
+            "well-known/tool/test::binary",
+            vec![FileType::Pe],
+        )];
+        let mut sources = HashMap::new();
+        sources.insert(
+            "well-known/tool/test::binary".to_string(),
+            "./well-known/tool/test/traits.yaml".to_string(),
+        );
+        let result = find_wellknown_missing_section_filter(&traits, &sources);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].0, "well-known/tool/test::binary");
+    }
+
+    #[test]
+    fn metadata_section_filter_skips_mixed_binary_and_script_targets() {
+        let traits = vec![text_trait(
+            "metadata/binary/test::mixed",
+            vec![FileType::Pe, FileType::Shell],
+        )];
+        let mut sources = HashMap::new();
+        sources.insert(
+            "metadata/binary/test::mixed".to_string(),
+            "./metadata/binary/test/traits.yaml".to_string(),
+        );
+        let result = find_meta_missing_section_filter(&traits, &sources);
+        assert!(result.is_empty());
     }
 }
 

@@ -717,11 +717,37 @@ impl ArchiveAnalyzer {
             });
         }
 
+        self.analyze_in_memory_members(
+            members,
+            archive_path,
+            report,
+            start,
+            "ZIP archive",
+            "memory ZIP",
+            vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
+        );
+        Ok(())
+    }
+
+    /// Run the par_iter analysis + aggregation over a prebuilt
+    /// `Vec<MemoryArchiveMember>`. Used by both the ZIP and PyInstaller
+    /// in-memory paths.
+    fn analyze_in_memory_members(
+        &self,
+        members: Vec<MemoryArchiveMember>,
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        slow_log_label: &'static str,
+        tools_used: Vec<String>,
+    ) {
         let total_files = members.len();
         tracing::debug!(
             archive = %archive_path.display(),
             file_count = total_files,
-            "Starting in-memory ZIP member analysis"
+            archive_label,
+            "Starting in-memory archive member analysis"
         );
 
         let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(&members, |member| {
@@ -771,7 +797,8 @@ impl ArchiveAnalyzer {
                     size_bytes = member.data.len(),
                     elapsed_ms = elapsed.as_millis() as u64,
                     rayon_thread = ?rayon::current_thread_index(),
-                    "Slow archive member analysis (memory ZIP)",
+                    "Slow archive member analysis ({})",
+                    slow_log_label,
                 );
             }
 
@@ -888,16 +915,163 @@ impl ArchiveAnalyzer {
         report.archive_contents.extend(collected_archive_entries);
         report.files.extend(collected_files);
         report.metadata.errors.push(format!(
-            "ZIP archive: {} members, {} analyzed, {} traits and {} capabilities detected",
+            "{}: {} members, {} analyzed, {} traits and {} capabilities detected",
+            archive_label,
             total_files,
             files_analyzed,
             total_traits.len(),
             total_capabilities.len()
         ));
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used =
-            vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()];
+        report.metadata.tools_used = tools_used;
+    }
 
+    /// Analyze a PyInstaller-bundled executable entirely in memory. Decodes
+    /// every CArchive entry and PYZ contents via the `pyinstx` crate, then
+    /// feeds each as a [`MemoryArchiveMember`] into the same per-member
+    /// pipeline used for ZIP archives.
+    pub(super) fn analyze_pyinstaller_archive_in_memory(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+    ) -> Result<()> {
+        let mem = pyinstx::extract_to_memory(data)
+            .map_err(|e| anyhow::anyhow!("pyinstx extract: {e}"))?;
+
+        let members: Vec<MemoryArchiveMember> = mem
+            .entries
+            .iter()
+            .map(|entry| {
+                let logical = Path::new(&entry.name);
+                let file_type = crate::analyzers::detect_file_type_from_data(logical, &entry.data);
+                let sha256 = calculate_sha256(&entry.data);
+                MemoryArchiveMember {
+                    relative_path: entry.name.clone(),
+                    data: entry.data.clone(),
+                    file_type,
+                    sha256,
+                }
+            })
+            .collect();
+
+        // Find the SHA-256 of the bundled Python shared library, if present.
+        // Identifies the exact CPython distribution (official, embeddable,
+        // conda, custom rebuild) — strong "who built this" signal.
+        let bundled_python_lib_sha256 = mem.provenance.python_lib.as_deref().and_then(|name| {
+            members
+                .iter()
+                .find(|m| m.relative_path == name)
+                .map(|m| m.sha256.clone())
+        });
+
+        self.analyze_in_memory_members(
+            members,
+            archive_path,
+            report,
+            start,
+            "PyInstaller archive",
+            "memory PyInstaller",
+            vec!["archive_analyzer".to_string(), "pyinstx".to_string()],
+        );
+
+        // Build the `pyinstaller.*` KV subtree. Surfaces every provenance
+        // signal we recovered from the cookie + TOC: who (entry-point script
+        // names, bundled python-lib sha), what (per-type counts, totals,
+        // dependencies, splash flag), when (python version, cookie format
+        // version), where (runtime options that hint at intent — e.g.
+        // `pyi-hide-console`).
+        let prov = &mem.provenance;
+        let mut kv = serde_json::Map::new();
+        if let Some((maj, min)) = prov.python_version {
+            kv.insert(
+                "python_version".into(),
+                serde_json::Value::String(format!("{maj}.{min}")),
+            );
+        }
+        if let Some(lib) = &prov.python_lib {
+            kv.insert("python_lib".into(), serde_json::Value::String(lib.clone()));
+        }
+        if let Some(sha) = bundled_python_lib_sha256 {
+            kv.insert("python_lib_sha256".into(), serde_json::Value::String(sha));
+        }
+        kv.insert(
+            "cookie_version".into(),
+            serde_json::Value::String(prov.cookie_version.to_string()),
+        );
+        kv.insert(
+            "toc_entry_count".into(),
+            serde_json::Value::from(prov.toc_entry_count),
+        );
+        kv.insert(
+            "compressed_size".into(),
+            serde_json::Value::from(prov.compressed_size),
+        );
+        kv.insert(
+            "uncompressed_size".into(),
+            serde_json::Value::from(prov.uncompressed_size),
+        );
+        if prov.uncompressed_size > 0 {
+            let ratio = prov.compressed_size as f64 / prov.uncompressed_size as f64;
+            kv.insert(
+                "compression_ratio".into(),
+                serde_json::Value::from((ratio * 1000.0).round() / 1000.0),
+            );
+        }
+        kv.insert(
+            "has_splash".into(),
+            serde_json::Value::Bool(prov.has_splash),
+        );
+        if !prov.entry_points.is_empty() {
+            kv.insert(
+                "entry_points".into(),
+                serde_json::Value::Array(
+                    prov.entry_points
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if !prov.runtime_options.is_empty() {
+            kv.insert(
+                "runtime_options".into(),
+                serde_json::Value::Array(
+                    prov.runtime_options
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if !prov.dependencies.is_empty() {
+            kv.insert(
+                "dependencies".into(),
+                serde_json::Value::Array(
+                    prov.dependencies
+                        .iter()
+                        .map(|s| serde_json::Value::String(s.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if !prov.type_counts.is_empty() {
+            let mut counts = serde_json::Map::new();
+            for (tb, n) in &prov.type_counts {
+                let key = String::from_utf8_lossy(&[*tb]).into_owned();
+                counts.insert(key, serde_json::Value::from(*n));
+            }
+            kv.insert("type_counts".into(), serde_json::Value::Object(counts));
+        }
+        report.merge_kv_subtree("pyinstaller", serde_json::Value::Object(kv));
+
+        if let Some((maj, min)) = mem.py_version {
+            report
+                .metadata
+                .errors
+                .push(format!("PyInstaller bundle: Python {maj}.{min}"));
+        }
         Ok(())
     }
 

@@ -729,8 +729,10 @@ fn is_dynamic_loader_soname(name: &str) -> bool {
 /// minimal stub binaries don't carry an empty `kv_tree` field.
 pub(crate) fn attach_to_report(report: &mut AnalysisReport) {
     let kv = build_binary_kv(report);
-    if kv.as_object().is_some_and(|m| !m.is_empty()) {
-        report.kv_tree = Some(Box::new(kv));
+    if let Value::Object(map) = kv {
+        for (ns, value) in map {
+            report.merge_kv_subtree(&ns, value);
+        }
     }
 }
 

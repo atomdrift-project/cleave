@@ -1740,6 +1740,16 @@ impl PEAnalyzer {
                 embedded_archive_count = embedded_archive_count.saturating_add(1);
                 report.findings.extend(archive_report.findings);
                 report.files.extend(archive_report.files);
+                // Merge per-format kv subtrees from the inner archive report
+                // (e.g. `pyinstaller.*`) into the host PE's kv_tree so they
+                // surface in the host's `k` field at finalize time.
+                if let Some(inner_kv) = archive_report.kv_tree {
+                    if let serde_json::Value::Object(map) = *inner_kv {
+                        for (ns, value) in map {
+                            report.merge_kv_subtree(&ns, value);
+                        }
+                    }
+                }
                 for tool in archive_report.metadata.tools_used {
                     if !tools_used.contains(&tool) {
                         tools_used.push(tool);

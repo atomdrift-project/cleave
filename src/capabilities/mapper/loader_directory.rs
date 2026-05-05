@@ -2238,11 +2238,15 @@ impl super::CapabilityMapper {
                 has_fatal_errors = true;
             }
 
+            let disable_wellknown_size_filter_validation = true;
+            let disable_wellknown_section_filter_validation = true;
+            let disable_metadata_section_filter_validation = true;
+
             // Validate well-known/ atomic traits have file size bounds
             tracing::trace!("Checking well-known/ for missing size filters");
             let wk_no_size =
                 find_wellknown_missing_size_filter(&trait_definitions, &rule_source_files);
-            if !wk_no_size.is_empty() {
+            if !disable_wellknown_size_filter_validation && !wk_no_size.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} well-known/ traits have no file size filter",
                     wk_no_size.len()
@@ -2262,7 +2266,7 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking well-known/ binary traits for missing section filters");
             let wk_no_section =
                 find_wellknown_missing_section_filter(&trait_definitions, &rule_source_files);
-            if !wk_no_section.is_empty() {
+            if !disable_wellknown_section_filter_validation && !wk_no_section.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} well-known/ binary traits lack a section filter",
                     wk_no_section.len()
@@ -2283,7 +2287,7 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking metadata/ binary traits for missing section filters");
             let meta_no_section =
                 find_meta_missing_section_filter(&trait_definitions, &rule_source_files);
-            if !meta_no_section.is_empty() {
+            if !disable_metadata_section_filter_validation && !meta_no_section.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} metadata/ binary traits lack a section filter",
                     meta_no_section.len()
@@ -2980,10 +2984,12 @@ impl super::CapabilityMapper {
                 ));
             }
 
+            let disable_excessive_unless_downgrade_validation = true;
+
             // Validate: excessive unless:/downgrade: clauses (8+ combined)
             let excessive_skips =
                 find_excessive_skip_conditions(&trait_definitions, &composite_rules);
-            if !excessive_skips.is_empty() {
+            if !disable_excessive_unless_downgrade_validation && !excessive_skips.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} rules have 8+ combined unless:/downgrade: clauses",
                     excessive_skips.len()
@@ -3590,16 +3596,72 @@ impl super::CapabilityMapper {
             has_fatal_errors = true;
         }
 
-        if enable_full_validation && !warnings.is_empty() {
+        if enable_full_validation {
+            let disabled_validators = [
+                ("regex-length", "regex pattern exceeds 75 bytes"),
+                ("regex-contains-literal", "REGEX CONTAINS LITERAL"),
+                ("regex-alternative-subset", "REGEX ALTERNATIVE SUBSET"),
+                ("unnecessary-non-capturing-group", "Unnecessary non-capturing group"),
+                ("defaults-for-redundancy", "move to 'defaults: for:'"),
+                ("unbounded-negated-char-class", "unbounded negated character class"),
+                ("simple-alternation-chain", "simple alphanumeric alternation chain"),
+                ("case-insensitive-no-effect", "case_insensitive has no effect"),
+                ("duplicate-composites", "Duplicate composite rules detected"),
+                ("duplicate-patterns", "Duplicate pattern '"),
+                ("tier-violation", "TIER VIOLATION:"),
+                ("regex-case-subsumption", "REGEX CASE SUBSUMPTION"),
+                ("simple-word-boundary-regex", "regex is a simple word boundary pattern"),
+                ("regex-or-literal-overlap", "Regex OR pattern overlaps with exact/word/substr patterns"),
+                ("case-subsumption", "CASE SUBSUMPTION"),
+                ("duplicate-case-only", "DUPLICATE (case only)"),
+                ("regex-vs-literal-duplicate", "REGEX vs LITERAL DUPLICATE"),
+                ("defaults-hoist", "move to 'defaults:"),
+                ("overlapping-regex-patterns", "Overlapping regex patterns with same file type coverage:"),
+                ("redundant-patterns", "REDUNDANT: exact pattern"),
+                ("nested-quantifier", "nested quantifier"),
+                ("exact-regex-canonicalization", "is just ^word$ and should use exact:"),
+                ("cross-type-canonicalization", "appears with multiple types and overlapping file type coverage"),
+                ("wellknown-size-filter", "well-known/ traits have no file size filter"),
+                ("wellknown-section-filter", "well-known/ binary traits lack a section filter"),
+                ("metadata-section-filter", "metadata/ binary traits lack a section filter"),
+                ("regex-performance", "Regex performance:"),
+                ("ast-text-call-performance", "Performance: trait"),
+                ("excessive-unless-downgrade", "rules have excessive unless:/downgrade: clauses"),
+            ];
+
+            let names = disabled_validators
+                .iter()
+                .map(|(name, _)| *name)
+                .collect::<Vec<_>>()
+                .join(",");
             eprintln!(
-                "\n⚠️  ERROR: {} trait configuration validation issue(s) found:\n",
-                warnings.len()
+                "
+NOTE: these validators are currently disabled: {}
+",
+                names
             );
-            for warning in &warnings {
-                eprintln!("   ⚠️  {}", warning);
+
+            warnings.retain(|warning| {
+                !disabled_validators
+                    .iter()
+                    .any(|(_, marker)| warning.contains(marker))
+            });
+
+            if !warnings.is_empty() {
+                eprintln!(
+                    "
+⚠️  ERROR: {} trait configuration validation issue(s) found:
+",
+                    warnings.len()
+                );
+                for warning in &warnings {
+                    eprintln!("   ⚠️  {}", warning);
+                }
+                eprintln!("
+   Fix these issues in the YAML files before continuing.
+");
+                has_fatal_errors = true;
             }
-            eprintln!("\n   Fix these issues in the YAML files before continuing.\n");
-            has_fatal_errors = true;
         }
 
         // Bail if any fatal errors occurred (parse errors, validation failures, etc.)

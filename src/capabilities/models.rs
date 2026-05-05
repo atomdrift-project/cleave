@@ -138,6 +138,10 @@ pub(crate) struct RawCompositeRule {
     // Proximity constraint: all evidence must be within N bytes/characters
     #[serde(default)]
     pub(crate) near_bytes: Option<usize>,
+    // Co-occurrence scope (see crate::composite_rules::Scope).
+    // Defaults to Scope::Outer (current behavior) when omitted.
+    #[serde(default)]
+    pub(crate) scope: Option<crate::composite_rules::Scope>,
     // File-level skip conditions
     #[serde(default)]
     pub(crate) unless: Option<Vec<crate::composite_rules::Condition>>,

@@ -78,6 +78,7 @@ mod proximity_scripting_symbols_tests {
             needs: None,
             near_lines,
             near_bytes,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }

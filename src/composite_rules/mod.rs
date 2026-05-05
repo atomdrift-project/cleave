@@ -27,7 +27,7 @@ pub(crate) use condition::Condition;
 pub use condition::StringValidator;
 pub(crate) use context::EvaluationContext;
 pub(crate) use section_map::SectionMap;
-pub(crate) use traits::{CompositeTrait, DowngradeConditions, TraitDefinition};
+pub(crate) use traits::{CompositeTrait, DowngradeConditions, Scope, TraitDefinition};
 
 /// Clear condition evaluation statistics.
 /// Delegates to the internal `traits::clear_condition_stats`.

@@ -1479,6 +1479,119 @@ impl TraitDefinition {
     }
 }
 
+/// Scope of evidence co-occurrence for a composite rule.
+///
+/// A composite's conditions can match in different parts of the analysis
+/// tree. `Scope` controls how tightly evidence from distinct conditions
+/// must share an analysis-tree ancestor before the composite is allowed
+/// to fire. Lower variants are more permissive; higher variants are more
+/// strict.
+///
+/// The default (omitted from YAML) is [`Scope::Outer`], which preserves
+/// the historical behavior: any evidence within the on-disk input.
+///
+/// ```text
+/// Outer    →  anywhere within the input given to cleave (default)
+/// Archive  →  same nearest enclosing archive entry
+///             (degrades to Outer when no archive is in the path)
+/// File     →  same leaf-file (the deepest file-shaped unit, e.g. a
+///             PE inside a zip; ignores decoded payload layers below)
+/// Leaf     →  same exact analyzed unit, including decoded payload layers
+/// ```
+///
+/// Two pieces of evidence share scope iff their scope keys are equal,
+/// where the key is computed by [`Scope::key`] from each evidence's
+/// `Evidence.location`.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum Scope {
+    /// Anywhere within the input given to cleave. Today's default.
+    #[default]
+    Outer,
+    /// Same nearest enclosing archive entry. For evidence that is not
+    /// inside an archive, degrades to [`Scope::Outer`] (empty key —
+    /// same key as every other non-archive evidence in the input).
+    Archive,
+    /// Same leaf-file. The deepest file-shaped unit (e.g. a PE
+    /// extracted from a zip). Decoded payload layers below the
+    /// file are pooled together at the file level.
+    File,
+    /// Same exact analyzed unit, including decoded payload layers.
+    Leaf,
+}
+
+impl Scope {
+    /// Compute the scope key for a piece of evidence given its
+    /// `Evidence.location`. Two evidence items share scope iff their
+    /// scope keys are equal.
+    ///
+    /// The key is a borrowed substring of `location` (or the empty
+    /// string), so this is allocation-free.
+    fn key<'a>(self, location: Option<&'a str>) -> &'a str {
+        match (self, location) {
+            // Outer: every evidence shares the same (empty) key.
+            (Scope::Outer, _) => "",
+            // No location info: collapse to outer-equivalent for the
+            // strict variants too. Such evidence (sentinels from `none:`
+            // exclusions, etc.) is tied to the input as a whole.
+            (_, None) => "",
+            // Leaf: exact location match required.
+            (Scope::Leaf, Some(loc)) => loc,
+            // File: strip any decoded-payload suffix; what remains is
+            // the leaf-file identifier.
+            (Scope::File, Some(loc)) => strip_decode_suffix(loc),
+            // Archive: nearest enclosing archive entry path.
+            (Scope::Archive, Some(loc)) => parent_archive(loc),
+        }
+    }
+}
+
+/// Strip cleave's decoded-payload suffix from a location, returning
+/// the leaf-file portion. Decoded payload locations carry the
+/// `encoding_chain:` prefix; for those the file-level key collapses
+/// to the empty string (same input).
+///
+/// For archive entry locations like `archive:foo.zip!bar.so`, no
+/// decode suffix is present and the input is returned unchanged.
+fn strip_decode_suffix(location: &str) -> &str {
+    if location.starts_with("encoding_chain:") {
+        // Decoded layer with no associated file path. Collapse to
+        // input-wide key so file-scoped composites still pool input
+        // evidence with decoded evidence from the same input.
+        ""
+    } else {
+        location
+    }
+}
+
+/// For an archive entry location, return the path of its nearest
+/// enclosing archive (i.e. the path with the trailing `!`-separated
+/// component stripped). For non-archive locations, return the empty
+/// string — `archive` scope degrades to `outer` in that case.
+///
+/// Archive paths have the shape `archive:<path>` where `<path>` may
+/// contain `!` separators for nested archives:
+///   archive:foo.so                    → "archive:"          (single-level)
+///   archive:foo.zip!bar.so            → "archive:foo.zip"   (parent zip)
+///   archive:outer.zip!inner.zip!x.so  → "archive:outer.zip!inner.zip"
+fn parent_archive(location: &str) -> &str {
+    let Some(after_prefix) = location.strip_prefix("archive:") else {
+        return "";
+    };
+    // Drop any encoded-payload suffix that may follow the entry path.
+    let entry_path = match after_prefix.find("::") {
+        Some(idx) => &after_prefix[..idx],
+        None => after_prefix,
+    };
+    match entry_path.rfind('!') {
+        // Nested entry: keep `archive:<path-up-to-last-!>`.
+        Some(idx) => &location[.."archive:".len() + idx],
+        // Single-level entry: all peers in this archive share the bare
+        // prefix as their key.
+        None => "archive:",
+    }
+}
+
 /// Boolean logic for combining conditions/traits
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -1546,6 +1659,12 @@ pub(crate) struct CompositeTrait {
     /// Proximity constraint: at least count_min findings must be within N bytes/characters
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub near_bytes: Option<usize>,
+
+    /// Scope of evidence co-occurrence (see [`Scope`]). When omitted,
+    /// defaults to [`Scope::Outer`] — historical behavior of pooling
+    /// all evidence in the input.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub scope: Option<Scope>,
 
     /// File-level skip conditions - skip entire rule if ANY condition matches
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1855,7 +1974,18 @@ impl CompositeTrait {
             return None;
         }
 
-        let result = positive_result;
+        let mut result = positive_result;
+
+        // Apply scope filter (e.g. `scope: leaf` for archive-FP suppression).
+        // Default Scope::Outer is a no-op. When the filter rejects all
+        // scope buckets, the rule does not fire.
+        let proximity_tags = match self.apply_scope_filter(result.evidence, proximity_tags) {
+            Some((ev, tags)) => {
+                result.evidence = ev;
+                tags
+            }
+            None => return None,
+        };
 
         if result.matched {
             // Check proximity constraints (near_lines, near_bytes)
@@ -2582,6 +2712,83 @@ impl CompositeTrait {
         )
     }
 
+    /// Number of distinct conditions a co-occurrence check (scope, proximity)
+    /// must see represented before the rule is allowed to fire. Used by
+    /// both [`Self::apply_scope_filter`] and proximity checks.
+    fn min_distinct_conditions(&self) -> usize {
+        let all_count = self.all.as_ref().map_or(0, Vec::len);
+        let any_required = if self.any.is_some() {
+            self.needs.unwrap_or(1)
+        } else {
+            0
+        };
+        all_count + any_required
+    }
+
+    /// Restrict evidence to a single scope bucket, per the rule's
+    /// `scope:` field.
+    ///
+    /// Each piece of evidence is keyed by [`Scope::key`] applied to its
+    /// `Evidence.location`. Two evidence items share scope iff their keys
+    /// are equal. The filter chooses the first scope key whose tagged
+    /// evidence covers enough distinct condition indices to satisfy the
+    /// rule's positive structure (`all` + `needs`-of-`any`), and drops
+    /// every evidence item from other scope buckets.
+    ///
+    /// Returns `None` if no single scope bucket meets the rule's
+    /// minimum-distinct-conditions threshold; otherwise returns the
+    /// filtered (`evidence`, `tagged_locations`) pair.
+    ///
+    /// `Scope::Outer` (the default) is a no-op fast path: every key is
+    /// the empty string, so all evidence is in one bucket.
+    fn apply_scope_filter(
+        &self,
+        evidence: Vec<Evidence>,
+        tagged_locations: Vec<TaggedLocation>,
+    ) -> Option<(Vec<Evidence>, Vec<TaggedLocation>)> {
+        let scope = self.scope.unwrap_or(Scope::Outer);
+        if scope == Scope::Outer {
+            return Some((evidence, tagged_locations));
+        }
+        let min_distinct = self.min_distinct_conditions();
+        if min_distinct == 0 {
+            // Vacuous rule (no positive conditions) — scope is moot.
+            return Some((evidence, tagged_locations));
+        }
+
+        // Collect the unique scope keys appearing in tagged_locations,
+        // then for each key count how many distinct condition indices
+        // it covers. The first key meeting the threshold wins.
+        // BTreeSet for deterministic iteration order — useful for
+        // tests and reproducibility.
+        let unique_keys: std::collections::BTreeSet<&str> = tagged_locations
+            .iter()
+            .map(|t| scope.key(t.location.as_deref()))
+            .collect();
+
+        let winning_key = unique_keys
+            .into_iter()
+            .find(|key| {
+                let conds: std::collections::BTreeSet<usize> = tagged_locations
+                    .iter()
+                    .filter(|t| scope.key(t.location.as_deref()) == *key)
+                    .map(|t| t.condition_index)
+                    .collect();
+                conds.len() >= min_distinct
+            })?
+            .to_string();
+
+        let filtered_tags: Vec<TaggedLocation> = tagged_locations
+            .into_iter()
+            .filter(|t| scope.key(t.location.as_deref()) == winning_key)
+            .collect();
+        let filtered_evidence: Vec<Evidence> = evidence
+            .into_iter()
+            .filter(|ev| scope.key(ev.location.as_deref()) == winning_key)
+            .collect();
+        Some((filtered_evidence, filtered_tags))
+    }
+
     /// Check if evidence satisfies proximity constraints.
     /// Returns None if constraints fail, otherwise returns the evidence unchanged.
     ///
@@ -2598,19 +2805,10 @@ impl CompositeTrait {
             return Some(evidence);
         }
 
-        // Derive min_distinct from rule structure.
-        // For `all`: every condition must contribute nearby evidence.
-        // For `any` with `needs`: that many conditions must contribute nearby evidence.
-        // Always at least 2 — proximity with a single item is vacuously true.
-        let min_distinct = {
-            let all_count = self.all.as_ref().map_or(0, Vec::len);
-            let any_required = if self.any.is_some() {
-                self.needs.unwrap_or(1)
-            } else {
-                0
-            };
-            (all_count + any_required).max(2)
-        };
+        // Proximity needs at least 2 distinct conditions to be meaningful
+        // — a single item is vacuously close to itself. (Scope uses the
+        // same count without the `.max(2)` floor.)
+        let min_distinct = self.min_distinct_conditions().max(2);
 
         // Track the winning window range for evidence filtering
         let mut line_window: Option<(usize, usize)> = None;
@@ -2981,4 +3179,301 @@ fn evidence_within_byte_range_grouped(
     }
 
     None
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod scope_tests {
+    //! Unit tests for the composite-rule `scope:` field.
+    //!
+    //! Two layers are exercised:
+    //!
+    //! 1. [`Scope::key`] — pure function; covers every value × every
+    //!    `Evidence.location` shape cleave produces today.
+    //! 2. [`CompositeTrait::apply_scope_filter`] — given fixture
+    //!    evidence + tagged_locations, asserts which scope bucket the
+    //!    filter selects and that evidence outside that bucket is
+    //!    dropped.
+
+    use super::*;
+
+    fn tag(condition_index: usize, location: &str) -> TaggedLocation {
+        TaggedLocation {
+            byte_offset: None,
+            location: Some(location.to_string()),
+            condition_index,
+        }
+    }
+
+    fn ev(location: &str) -> Evidence {
+        Evidence {
+            method: "test".to_string(),
+            source: String::new(),
+            value: String::new(),
+            location: Some(location.to_string()),
+            offsets: Vec::new(),
+            count: 0,
+        }
+    }
+
+    /// Build a minimal CompositeTrait fixture for filter tests. The
+    /// dummy `all:` slot of length `n_conditions` ensures
+    /// `min_distinct_conditions()` returns `n_conditions`.
+    fn composite_with(n_conditions: usize, scope: Option<Scope>) -> CompositeTrait {
+        let conds = (0..n_conditions)
+            .map(|_| Condition::Symbol {
+                exact: Some("x".to_string()),
+                substr: None,
+                regex: None,
+                platforms: None,
+                is_check: None,
+                kind: None,
+                not: None,
+                compiled_regex: None,
+                compiled_finder: None,
+            })
+            .collect();
+        CompositeTrait {
+            id: "t".to_string(),
+            desc: String::new(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: default_platforms(),
+            arch: default_architectures(),
+            r#for: default_file_types(),
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: Some(conds),
+            any: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope,
+            unless: None,
+            not: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::new(),
+            precision: None,
+            required_trait_indices: Vec::new(),
+        }
+    }
+
+    // ----- Scope::key -------------------------------------------------------
+
+    #[test]
+    fn outer_collapses_every_location_to_empty_string() {
+        for loc in [
+            None,
+            Some("archive:foo.zip!bar.so"),
+            Some("encoding_chain:base64+zlib"),
+            Some("0x1234"),
+        ] {
+            assert_eq!(Scope::Outer.key(loc), "");
+        }
+    }
+
+    #[test]
+    fn leaf_returns_exact_location() {
+        assert_eq!(Scope::Leaf.key(None), "");
+        assert_eq!(Scope::Leaf.key(Some("archive:foo.so")), "archive:foo.so");
+        assert_eq!(
+            Scope::Leaf.key(Some("encoding_chain:base64+zlib")),
+            "encoding_chain:base64+zlib"
+        );
+    }
+
+    #[test]
+    fn file_keeps_archive_path_drops_decoded_layers() {
+        // Archive entry: file-level == leaf-level.
+        assert_eq!(Scope::File.key(Some("archive:foo.so")), "archive:foo.so");
+        // Encoded payloads collapse to the input-wide key.
+        assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib")), "");
+        assert_eq!(Scope::File.key(None), "");
+    }
+
+    #[test]
+    fn archive_returns_parent_archive_for_nested() {
+        assert_eq!(
+            Scope::Archive.key(Some("archive:outer.zip!inner.zip!bar.so")),
+            "archive:outer.zip!inner.zip"
+        );
+        assert_eq!(
+            Scope::Archive.key(Some("archive:outer.zip!bar.so")),
+            "archive:outer.zip"
+        );
+    }
+
+    #[test]
+    fn archive_returns_bare_prefix_for_single_level() {
+        assert_eq!(Scope::Archive.key(Some("archive:foo.so")), "archive:");
+        assert_eq!(Scope::Archive.key(Some("archive:bar.so")), "archive:");
+    }
+
+    #[test]
+    fn archive_degrades_to_empty_for_non_archive_locations() {
+        assert_eq!(Scope::Archive.key(Some("encoding_chain:base64+zlib")), "");
+        assert_eq!(Scope::Archive.key(Some("0x1234")), "");
+        assert_eq!(Scope::Archive.key(None), "");
+    }
+
+    // ----- apply_scope_filter -----------------------------------------------
+
+    #[test]
+    fn outer_scope_is_a_no_op_passthrough() {
+        let rule = composite_with(2, None);
+        let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
+        let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
+
+        let (filtered_ev, filtered_tags) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("outer never rejects");
+        assert_eq!(filtered_ev.len(), 2);
+        assert_eq!(filtered_tags.len(), 2);
+    }
+
+    #[test]
+    fn leaf_scope_rejects_when_conditions_span_two_leaves() {
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
+        let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
+
+        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+    }
+
+    #[test]
+    fn leaf_scope_accepts_when_both_conditions_in_one_leaf() {
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![ev("archive:a.so"), ev("archive:a.so")];
+        let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:a.so")];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("both in same leaf");
+        assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn leaf_scope_drops_evidence_from_losing_buckets() {
+        // Condition 0 has evidence in two leaves; condition 1 has
+        // evidence only in `a.so`. Only the `a.so` bucket has both
+        // conditions; evidence in `b.so` is dropped.
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![
+            ev("archive:a.so"),
+            ev("archive:b.so"),
+            ev("archive:a.so"),
+        ];
+        let tags = vec![
+            tag(0, "archive:a.so"),
+            tag(0, "archive:b.so"),
+            tag(1, "archive:a.so"),
+        ];
+
+        let (filtered_ev, filtered_tags) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("a.so bucket wins");
+        assert_eq!(filtered_ev.len(), 2);
+        assert!(filtered_ev
+            .iter()
+            .all(|e| e.location.as_deref() == Some("archive:a.so")));
+        assert_eq!(filtered_tags.len(), 2);
+    }
+
+    #[test]
+    fn archive_scope_accepts_two_entries_in_same_archive() {
+        let rule = composite_with(2, Some(Scope::Archive));
+        let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
+        let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("same archive");
+        assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn archive_scope_rejects_two_entries_in_different_nested_archives() {
+        let rule = composite_with(2, Some(Scope::Archive));
+        let evidence = vec![
+            ev("archive:outer.zip!inner1.zip!a.so"),
+            ev("archive:outer.zip!inner2.zip!b.so"),
+        ];
+        let tags = vec![
+            tag(0, "archive:outer.zip!inner1.zip!a.so"),
+            tag(1, "archive:outer.zip!inner2.zip!b.so"),
+        ];
+
+        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+    }
+
+    #[test]
+    fn archive_scope_pools_entries_in_same_nested_archive() {
+        let rule = composite_with(2, Some(Scope::Archive));
+        let evidence = vec![
+            ev("archive:outer.zip!inner.zip!a.so"),
+            ev("archive:outer.zip!inner.zip!b.so"),
+        ];
+        let tags = vec![
+            tag(0, "archive:outer.zip!inner.zip!a.so"),
+            tag(1, "archive:outer.zip!inner.zip!b.so"),
+        ];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("same nested archive");
+        assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn file_scope_pools_decoded_layers_with_their_input() {
+        // `scope: file` collapses encoded-payload layers down to the
+        // input level, so two decoded-layer pieces of evidence pool
+        // together under the same file-level key.
+        let rule = composite_with(2, Some(Scope::File));
+        let evidence = vec![
+            ev("encoding_chain:base64"),
+            ev("encoding_chain:base64+zlib"),
+        ];
+        let tags = vec![
+            tag(0, "encoding_chain:base64"),
+            tag(1, "encoding_chain:base64+zlib"),
+        ];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("file scope pools input + decoded layers");
+        assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn leaf_scope_separates_decoded_layers_from_each_other() {
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![
+            ev("encoding_chain:base64"),
+            ev("encoding_chain:base64+zlib"),
+        ];
+        let tags = vec![
+            tag(0, "encoding_chain:base64"),
+            tag(1, "encoding_chain:base64+zlib"),
+        ];
+
+        assert!(rule.apply_scope_filter(evidence, tags).is_none());
+    }
+
+    #[test]
+    fn single_condition_rule_satisfies_any_scope() {
+        // 1 condition → min_distinct == 1 → any single bucket
+        // satisfies, but the filter still pins to exactly one bucket.
+        let rule = composite_with(1, Some(Scope::Leaf));
+        let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
+        let tags = vec![tag(0, "archive:a.so"), tag(0, "archive:b.so")];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("single condition is trivially in-scope");
+        assert_eq!(filtered_ev.len(), 1);
+    }
 }

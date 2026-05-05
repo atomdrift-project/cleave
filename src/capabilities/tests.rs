@@ -686,6 +686,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
@@ -759,6 +760,7 @@ fn test_apply_composite_defaults_unset_with_none() {
         size_max: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         condition: Some(Condition::Text {
             is_check: None,
             exact: Some("test".to_string()),
@@ -1045,6 +1047,7 @@ fn test_composite_referencing_atomic_trait() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1087,6 +1090,7 @@ fn test_composite_of_composites_two_levels() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1116,6 +1120,7 @@ fn test_composite_of_composites_two_levels() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1163,6 +1168,7 @@ fn test_composite_three_level_chain() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1217,6 +1223,7 @@ fn test_composite_circular_dependency_handled() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1246,6 +1253,7 @@ fn test_composite_circular_dependency_handled() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1292,6 +1300,7 @@ fn test_composite_prefix_matching_in_chain() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1342,6 +1351,7 @@ fn test_composite_requires_count_in_chain() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1386,6 +1396,7 @@ fn test_precision_direct_conditions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1439,6 +1450,7 @@ fn test_precision_file_type_filter() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1536,6 +1548,7 @@ fn test_precision_recursive_expansion() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1571,6 +1584,7 @@ fn test_precision_recursive_expansion() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1628,6 +1642,7 @@ fn test_precision_cycle_detection() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1658,6 +1673,7 @@ fn test_precision_cycle_detection() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1711,6 +1727,7 @@ fn test_precision_caching() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1775,6 +1792,7 @@ fn test_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1805,6 +1823,7 @@ fn test_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -1882,6 +1901,7 @@ fn test_suspicious_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -1909,6 +1929,7 @@ fn test_suspicious_precision_threshold_validation() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2096,6 +2117,7 @@ fn test_precision_mixed_conditions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: Some(vec![Condition::Text {
             is_check: None,
             exact: Some("string4".to_string()),
@@ -2164,6 +2186,7 @@ fn test_precision_deep_nesting() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -2194,6 +2217,7 @@ fn test_precision_deep_nesting() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -2224,6 +2248,7 @@ fn test_precision_deep_nesting() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
 
         unless: None,
         not: None,
@@ -2315,6 +2340,7 @@ fn test_precision_correct_algorithm() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -2467,6 +2493,7 @@ fn test_precision_traits_with_size_restrictions() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3115,6 +3142,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: Some(vec![Condition::Trait {
             id: "metadata/dylib::libc".to_string(), // OK
         }]),
@@ -3172,6 +3200,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3697,6 +3726,7 @@ fn test_composite_precision_calibration_band() {
         needs: Some(1),
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3827,6 +3857,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3854,6 +3885,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -3886,6 +3918,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         needs: Some(1),
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -4079,6 +4112,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         needs: Some(2),
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -4181,6 +4215,7 @@ fn test_inherited_composite_scores_are_compressed() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,
@@ -4208,6 +4243,7 @@ fn test_inherited_composite_scores_are_compressed() {
         needs: None,
         near_lines: None,
         near_bytes: None,
+            scope: None,
         unless: None,
         not: None,
         downgrade: None,

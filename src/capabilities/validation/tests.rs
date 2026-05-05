@@ -2798,6 +2798,7 @@ mod taxonomy_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }
@@ -2831,6 +2832,7 @@ mod taxonomy_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }
@@ -3469,6 +3471,7 @@ mod constraint_tests {
             needs: None,
             near_lines: Some(10),
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }];
@@ -3504,6 +3507,7 @@ mod constraint_tests {
             needs: None,
             near_lines: Some(10),
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }];
@@ -3538,6 +3542,7 @@ mod constraint_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }];
@@ -3572,6 +3577,7 @@ mod constraint_tests {
             needs: Some(0),
             near_lines: None,
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }];
@@ -3605,6 +3611,7 @@ mod constraint_tests {
             needs: Some(1),
             near_lines: None,
             near_bytes: None,
+            scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }];
@@ -3644,6 +3651,7 @@ mod autoprefix_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             unless,
             not: None,
             downgrade,
@@ -3808,6 +3816,7 @@ mod orphan_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             unless: None,
             not: None,
             downgrade,
@@ -4158,6 +4167,7 @@ mod excessive_file_types_tests {
             needs: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             unless: None,
             not: None,
             downgrade: None,
@@ -4310,6 +4320,7 @@ mod defaults_tests {
             condition: None,
             near_lines: None,
             near_bytes: None,
+            scope: None,
             unless: None,
             not: None,
             downgrade: None,

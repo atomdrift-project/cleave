@@ -907,6 +907,7 @@ pub(crate) fn apply_composite_defaults(
         needs: raw.needs,
         near_lines: raw.near_lines,
         near_bytes: raw.near_bytes,
+        scope: raw.scope,
         unless: raw.unless,
         not: raw.not,
         downgrade: raw.downgrade,

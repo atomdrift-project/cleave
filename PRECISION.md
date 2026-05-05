@@ -52,6 +52,7 @@ Precision is proportional to the length of the pattern:
 3. **Use Structural Anchors**: Anchoring a search to a specific `section` or `offset` significantly boosts precision.
 4. **Recursive Complexity**: Deeply nested composite rules can accumulate high precision, but ensure each level remains semantically meaningful.
 5. **Word Boundaries**: Use `word: "..."` instead of `substr: "..."` when matching identifiers to avoid partial matches and gain a small precision boost.
+6. **Tighten Cross-Source FPs with `scope:`**: When a composite rule fires on archive entries that just happen to coincide (e.g. one condition matches in entry A, another in entry B of the same zip), add `scope: leaf` (most strict — same analyzed unit), `scope: file` (same leaf-file, pooled with its decoded layers), or `scope: archive` (same archive entry, the looser-than-leaf option). Default `scope: outer` preserves today's behavior. Scope filtering happens before `near_bytes`/`near_lines`, so the two compose: scope picks the source bucket, proximity narrows within it.
 
 ## Limitations
 

@@ -701,6 +701,7 @@ const ALLOWED_METADATA_BINARY: &[&str] = &[
 /// Document internals — traits that require document parsing (OLE, OOXML, PDF objects).
 /// Binary parsing belongs in binary/, file identification in file/.
 const ALLOWED_METADATA_DOCUMENT: &[&str] = &[
+    "chm",    // Compiled HTML Help (ITSF/ITSP/PMGL)
     "html",   // HTML structure
     "office", // Office documents (VBA, OOXML, ActiveMime)
     "ole",    // OLE compound documents

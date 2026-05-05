@@ -752,6 +752,10 @@ impl ArchiveAnalyzer {
             if let Some(chm_value) = crate::analyzers::chm::chm_kv::extract(data) {
                 report.merge_kv_subtree("chm", chm_value);
             }
+            if let Some(chm_metrics) = crate::analyzers::chm::chm_kv::metrics(data) {
+                let metrics = report.metrics.get_or_insert_with(Metrics::default);
+                metrics.chm = Some(chm_metrics);
+            }
         }
 
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {

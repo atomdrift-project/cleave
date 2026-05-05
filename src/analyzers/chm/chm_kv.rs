@@ -1,43 +1,80 @@
-//! `chm.*` kv subtree — CHM container metadata.
+//! `chm.*` kv subtree + `chm` metrics for CHM containers.
 //!
-//! Surfaces information that lives inside CHM control files
-//! (`#SYSTEM`, `::DataSpace/NameList`, the directory roster) but not
-//! inside the LZX-compressed user content. Cheap to extract because
-//! all the source records are in the Uncompressed section.
+//! kv (`chm.*`) carries direct, attribution-grade fields lifted out of
+//! ITSF/ITSP/`#SYSTEM` — who built it, where (locale), when (rebuild
+//! counter), what's inside (entry roster, content sections, presence
+//! flags), and the LZX framing parameters. Ratios, sums, and mismatch
+//! flags that need to be computed from those raw fields live on
+//! `ChmMetrics` instead, per the project's "extrapolation belongs in
+//! metrics" rule.
 
 use serde::Serialize;
 use serde_json::Value;
 
-use super::Chm;
+use super::{Chm, ChmEntry};
+use crate::types::container_metrics::ChmMetrics;
 
 /// `chm.*` kv tree. All fields are optional; only fields with data
 /// get serialized.
 #[derive(Default, Serialize)]
 struct ChmKv {
-    /// Number of internal directory entries (excluding control files).
+    /// ITSF header signals (version, locale, rebuild counter).
     #[serde(skip_serializing_if = "Option::is_none")]
-    entry_count: Option<u32>,
+    itsf: Option<ChmItsf>,
+    /// `#SYSTEM` records — who/where/when from the compile pass.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<ChmSystem>,
+    /// LZX framing for `MSCompressed/Content`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lzx: Option<ChmLzx>,
+
     /// Names of every user-visible internal file (skipping `#`/`::`/`$`).
+    /// Use `size_max:`/`size_min:` against this path to gate on entry
+    /// count from a trait condition; the absolute number is mirrored
+    /// to `metrics.chm.user_entry_count` for `field: ... max: N`-style
+    /// rules.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     entries: Vec<String>,
     /// Names of the named content sections (typically `Uncompressed`,
     /// `MSCompressed`).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     content_sections: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<ChmSystem>,
+
     /// True if any user-visible HTML topic was found in the directory.
     has_html: bool,
     /// True if a TOC file (`.hhc`) is present in the directory.
     has_toc: bool,
     /// True if an index file (`.hhk`) is present in the directory.
     has_index: bool,
-    /// LZX window size (bytes), if MSCompressed/ControlData was found.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lzx_window_bytes: Option<u64>,
-    /// LZX reset interval in bytes (uncompressed), if known.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    lzx_reset_interval_bytes: Option<u64>,
+    /// True if `$OBJINST` (active-content object instances) is present.
+    /// HTML Help's ShortCut control and other ActiveX-instantiated
+    /// objects record their instance data here.
+    has_objinst: bool,
+    /// True if `$WWKeywordLinks/Property` is present (the
+    /// keyword-search subsystem). HHA Workshop emits it for any
+    /// non-trivial help build.
+    has_keyword_links: bool,
+    /// True if `$WWAssociativeLinks/Property` is present.
+    has_associative_links: bool,
+    /// True if `$FIftiMain` (full-text index) is present. Authentic
+    /// HHA-built CHMs almost always have one; hand-rolled droppers
+    /// often skip it.
+    has_fifti: bool,
+}
+
+/// `chm.itsf.*` — ITSF v3 header fields.
+#[derive(Default, Serialize)]
+struct ChmItsf {
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    version: u32,
+    /// Last-modified counter (the file rebuild generation; not a
+    /// timestamp). Same source rebuilt produces the same value.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    timestamp_counter: u32,
+    /// Windows LCID at the ITSF level — the locale of the compiling
+    /// box. (`#SYSTEM.locale_id` is the locale the *content* targets.)
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    lcid: u32,
 }
 
 /// `chm.system.*` — fields parsed from the `#SYSTEM` control file.
@@ -51,8 +88,14 @@ struct ChmSystem {
     default_window: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     default_font: Option<String>,
+    /// HHA Workshop / Sandcastle / custom compiler version string.
+    /// Strong "who built it" signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     compiler_version: Option<String>,
+    /// Original CHM source filename (HHA `#SYSTEM` code 6). Often
+    /// reveals the local path on the build machine.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chm_filename: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     locale_id: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -61,6 +104,39 @@ struct ChmSystem {
     /// (suggests authentic build) — useful as a baseline for malware
     /// triage.
     has_compiler_version: bool,
+    /// Internal-only: count of `InfoType` records in `#SYSTEM`.
+    /// Surfaced on `metrics.chm.infotype_count` rather than as kv
+    /// (counts go in metrics).
+    #[serde(skip)]
+    infotype_count: u32,
+}
+
+/// `chm.lzx.*` — MSCompressed/Content framing parameters.
+///
+/// Direct values from `MSCompressed/ControlData` and the `ResetTable`
+/// header — no aggregation. Counts (`reset_count`) live on
+/// `metrics.chm.lzx_reset_count` instead.
+#[derive(Default, Serialize)]
+struct ChmLzx {
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    window_bytes: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    reset_interval_bytes: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    block_len: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    uncompressed_size: u64,
+    #[serde(skip_serializing_if = "is_zero_u64")]
+    compressed_size: u64,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
+}
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Extract the `chm.*` kv subtree from raw CHM bytes. Returns `None`
@@ -68,34 +144,58 @@ struct ChmSystem {
 #[must_use]
 pub(crate) fn extract(data: &[u8]) -> Option<Value> {
     let chm = Chm::parse(data).ok()?;
+    let kv = build_kv(&chm);
+    serde_json::to_value(kv).ok()
+}
+
+/// Compute the `ChmMetrics` (derived ratios + per-entry aggregates)
+/// for a CHM file. Returns `None` for non-CHM input or when the file
+/// has no signals worth surfacing.
+#[must_use]
+pub(crate) fn metrics(data: &[u8]) -> Option<ChmMetrics> {
+    let chm = Chm::parse(data).ok()?;
+    Some(build_metrics(&chm, data.len() as u64))
+}
+
+fn build_kv(chm: &Chm<'_>) -> ChmKv {
     let mut kv = ChmKv::default();
 
-    // Content section names live in `::DataSpace/NameList` (in the
-    // Uncompressed section). The format is:
-    //   u16 length_in_words
-    //   u16 num_entries
-    //   then for each entry: u16 name_length_words, UTF-16LE name (no NUL)
-    if let Some(entry) = chm.entries.iter().find(|e| e.name == "::DataSpace/NameList") {
-        if let Some(bytes) = read_uncompressed_entry(&chm, entry) {
+    kv.itsf = Some(ChmItsf {
+        version: chm.itsf.version,
+        timestamp_counter: chm.itsf.timestamp_counter,
+        lcid: chm.itsf.lcid,
+    });
+
+    // Content section names live in `::DataSpace/NameList`.
+    if let Some(entry) = chm
+        .entries
+        .iter()
+        .find(|e| e.name == "::DataSpace/NameList")
+    {
+        if let Some(bytes) = read_uncompressed_entry(chm, entry) {
             kv.content_sections = parse_namelist(bytes);
         }
     }
 
-    // Per-entry roster — surface only user-visible names.
+    // Per-entry roster + presence flags.
     let mut entries = Vec::new();
     let mut html_count = 0u32;
     for e in &chm.entries {
         if e.length == 0 {
             continue;
         }
-        // CHM directory names usually carry a leading '/' for user-visible
-        // files. Strip it before classifying so '/#SYSTEM' and '/$OBJINST'
-        // are correctly recognized as control files.
-        let stripped = e.name.strip_prefix('/').unwrap_or(&e.name);
-        if stripped.starts_with('#')
-            || stripped.starts_with("::")
-            || stripped.starts_with('$')
-        {
+        let stripped = strip_leading_slash(&e.name);
+        if is_control_name(stripped) {
+            // Detect specific control entries we want to flag.
+            if stripped == "$OBJINST" {
+                kv.has_objinst = true;
+            } else if stripped == "$WWKeywordLinks/Property" {
+                kv.has_keyword_links = true;
+            } else if stripped == "$WWAssociativeLinks/Property" {
+                kv.has_associative_links = true;
+            } else if stripped == "$FIftiMain" {
+                kv.has_fifti = true;
+            }
             continue;
         }
         if e.name == "/" || e.name.ends_with('/') {
@@ -114,7 +214,6 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
         entries.push(e.name.clone());
     }
     kv.has_html = html_count > 0;
-    kv.entry_count = Some(entries.len() as u32);
     if entries.len() <= 256 {
         kv.entries = entries;
     }
@@ -125,29 +224,131 @@ pub(crate) fn extract(data: &[u8]) -> Option<Value> {
         .iter()
         .find(|e| e.name == "/#SYSTEM" || e.name == "#SYSTEM")
     {
-        if let Some(bytes) = read_uncompressed_entry(&chm, entry) {
+        if let Some(bytes) = read_uncompressed_entry(chm, entry) {
             kv.system = Some(parse_system(bytes));
         }
     }
 
-    // LZX parameters from ControlData.
-    if let Some(entry) = chm
-        .entries
-        .iter()
-        .find(|e| e.name == "::DataSpace/Storage/MSCompressed/ControlData")
-    {
-        if let Some(bytes) = read_uncompressed_entry(&chm, entry) {
-            if let Some((window, reset)) = parse_control_data_kv(bytes) {
-                kv.lzx_window_bytes = Some(window);
-                kv.lzx_reset_interval_bytes = Some(reset);
-            }
+    // LZX framing — pull from the parser's accessor so we don't
+    // re-walk ControlData / ResetTable.
+    if let Some(p) = chm.lzx_params() {
+        kv.lzx = Some(ChmLzx {
+            window_bytes: p.window_bytes,
+            reset_interval_bytes: p.reset_interval_bytes,
+            block_len: p.block_len,
+            uncompressed_size: p.uncompressed_size,
+            compressed_size: p.compressed_size,
+        });
+    }
+
+    kv
+}
+
+fn build_metrics(chm: &Chm<'_>, file_size: u64) -> ChmMetrics {
+    let mut m = ChmMetrics::default();
+
+    let mut control_count = 0u32;
+    let mut user_count = 0u32;
+    let mut user_total = 0u64;
+    let mut user_max = 0u64;
+    let mut html = 0u32;
+    let mut script = 0u32;
+    let mut image = 0u32;
+    let mut user_names: Vec<String> = Vec::new();
+    for e in &chm.entries {
+        let stripped = strip_leading_slash(&e.name);
+        if is_control_name(stripped) {
+            control_count += 1;
+            continue;
+        }
+        if e.name == "/" || e.name.ends_with('/') {
+            continue;
+        }
+        if e.length == 0 {
+            continue;
+        }
+        user_count += 1;
+        user_total = user_total.saturating_add(e.length);
+        if e.length > user_max {
+            user_max = e.length;
+        }
+        let lower = e.name.to_ascii_lowercase();
+        if lower.ends_with(".html") || lower.ends_with(".htm") {
+            html += 1;
+        }
+        if lower.ends_with(".js") || lower.ends_with(".vbs") || lower.ends_with(".wsf") {
+            script += 1;
+        }
+        if lower.ends_with(".png")
+            || lower.ends_with(".jpg")
+            || lower.ends_with(".jpeg")
+            || lower.ends_with(".gif")
+            || lower.ends_with(".bmp")
+        {
+            image += 1;
+        }
+        user_names.push(stripped.to_string());
+    }
+    m.user_entry_count = user_count;
+    m.control_entry_count = control_count;
+    m.html_entry_count = html;
+    m.script_entry_count = script;
+    m.image_entry_count = image;
+    m.max_user_entry_size = user_max;
+    m.total_user_entry_size = user_total;
+    if file_size > 0 {
+        m.user_byte_ratio = (user_total as f64 / file_size as f64) as f32;
+    }
+
+    if let Some(p) = chm.lzx_params() {
+        m.lzx_reset_count = p.reset_count;
+        if p.compressed_size > 0 {
+            m.lzx_compression_ratio =
+                (p.uncompressed_size as f64 / p.compressed_size as f64) as f32;
         }
     }
 
-    serde_json::to_value(kv).ok()
+    // Mismatch / consistency flags — derived from #SYSTEM + roster.
+    if let Some(entry) = chm
+        .entries
+        .iter()
+        .find(|e| e.name == "/#SYSTEM" || e.name == "#SYSTEM")
+    {
+        if let Some(bytes) = read_uncompressed_entry(chm, entry) {
+            let sys = parse_system(bytes);
+            m.no_compiler_version = !sys.has_compiler_version;
+            m.infotype_count = sys.infotype_count;
+            if let Some(topic) = sys.default_topic.as_deref() {
+                let lower = topic.to_ascii_lowercase();
+                m.default_topic_missing = !user_names
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(topic) || n.to_ascii_lowercase() == lower);
+            }
+            if let (Some(title), Some(topic)) = (sys.title.as_deref(), sys.default_topic.as_deref())
+            {
+                m.title_topic_mismatch = title != topic
+                    && !title.is_empty()
+                    && !topic.is_empty()
+                    && !title.eq_ignore_ascii_case(topic);
+            }
+        }
+    } else {
+        // No #SYSTEM at all: count as missing compiler version.
+        m.no_compiler_version = true;
+    }
+
+    m
 }
 
-fn read_uncompressed_entry<'a>(chm: &'a Chm<'_>, entry: &super::ChmEntry) -> Option<&'a [u8]> {
+fn strip_leading_slash(name: &str) -> &str {
+    name.strip_prefix('/').unwrap_or(name)
+}
+
+fn is_control_name(stripped: &str) -> bool {
+    stripped.starts_with('#') || stripped.starts_with("::") || stripped.starts_with('$')
+}
+
+fn read_uncompressed_entry<'a>(chm: &'a Chm<'_>, entry: &ChmEntry) -> Option<&'a [u8]> {
     if entry.section != 0 {
         return None;
     }
@@ -216,8 +417,15 @@ fn parse_system(bytes: &[u8]) -> ChmSystem {
                     ]));
                 }
             }
+            5 => {
+                // InfoType record — count occurrences only; payload format
+                // is opaque to us here.
+                sys.infotype_count = sys.infotype_count.saturating_add(1);
+            }
             6 => {
-                // CHM file basename — not retained (PII path noise).
+                // CHM source filename — useful for build-machine
+                // attribution. Decode but bail on garbage.
+                sys.chm_filename = decode_cstr(payload);
             }
             9 => {
                 // Compiler version string (e.g. "HHA Version 4.74.8702").
@@ -229,17 +437,6 @@ fn parse_system(bytes: &[u8]) -> ChmSystem {
         }
     }
     sys
-}
-
-fn parse_control_data_kv(bytes: &[u8]) -> Option<(u64, u64)> {
-    if bytes.len() < 0x1c || &bytes[4..8] != b"LZXC" {
-        return None;
-    }
-    let reset_interval_chunks = u32::from_le_bytes([bytes[0x0c], bytes[0x0d], bytes[0x0e], bytes[0x0f]]);
-    let window_chunks = u32::from_le_bytes([bytes[0x10], bytes[0x11], bytes[0x12], bytes[0x13]]);
-    let window_bytes = u64::from(window_chunks) * 0x8000;
-    let reset_bytes = u64::from(reset_interval_chunks) * 0x8000;
-    Some((window_bytes, reset_bytes))
 }
 
 fn decode_cstr(b: &[u8]) -> Option<String> {
@@ -289,15 +486,24 @@ mod tests {
     }
 
     #[test]
-    fn parse_control_data_window() {
-        let mut data = vec![0u8; 0x1c];
-        data[4..8].copy_from_slice(b"LZXC");
-        // reset_interval = 2
-        data[0x0c..0x10].copy_from_slice(&2u32.to_le_bytes());
-        // window = 0x10 → 0x10 * 0x8000 = 0x80000 (512 KB)
-        data[0x10..0x14].copy_from_slice(&0x10u32.to_le_bytes());
-        let (window, reset) = parse_control_data_kv(&data).unwrap();
-        assert_eq!(window, 0x80000);
-        assert_eq!(reset, 0x10000);
+    fn system_counts_infotypes() {
+        // version=3, three InfoType (code=5) records
+        let mut data = vec![3, 0, 0, 0];
+        for _ in 0..3 {
+            data.extend_from_slice(&5u16.to_le_bytes());
+            data.extend_from_slice(&2u16.to_le_bytes());
+            data.extend_from_slice(&[0xaa, 0xbb]);
+        }
+        let sys = parse_system(&data);
+        assert_eq!(sys.infotype_count, 3);
+    }
+
+    #[test]
+    fn control_name_classification() {
+        assert!(is_control_name("#SYSTEM"));
+        assert!(is_control_name("$OBJINST"));
+        assert!(is_control_name("::DataSpace/NameList"));
+        assert!(!is_control_name("help.html"));
+        assert!(!is_control_name("page_1.html"));
     }
 }

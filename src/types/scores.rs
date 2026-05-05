@@ -4,7 +4,7 @@ use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
-use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
+use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
 use super::file_metrics::FileMetrics;
 use super::image_metrics::ImageMetrics;
 use super::jpeg_metrics::JpegMetrics;
@@ -129,6 +129,10 @@ pub struct Metrics {
     /// Archive file metrics (zip, tar, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub archive: Option<ArchiveMetrics>,
+    /// CHM (Compiled HTML Help) container metrics — derived ratios
+    /// and per-entry aggregates layered on top of the raw `chm.*` kv.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chm: Option<ChmMetrics>,
     /// npm package.json metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub package_json: Option<PackageJsonMetrics>,

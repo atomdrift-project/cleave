@@ -234,6 +234,7 @@ const DISABLED_VALIDATOR_IDS: &[&str] = &[
     "redundant-patterns",
     "cross-type-canonicalization",
     "leaf-yaml",
+    "full-directory-composite",
     "regex-performance",
     "ast-text-call-performance",
     "excessive-unless-downgrade",
@@ -331,6 +332,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         display_id: "leaf-yaml",
         description: "YAML traits are defined above leaf directories.",
         fix: "Put YAML in leaf directories named for the shared technique; flatten child YAML up when extra depth adds no ML signal.",
+    },
+    ValidatorSpec {
+        id: "full-directory-composite",
+        category: ValidatorCategory::Reuse,
+        display_id: "full-dir",
+        description: "Composite enumerates every trait in a directory.",
+        fix: "Use directory syntax for any: clauses; for all: clauses, create a meaningful technique composite or split the directory.",
     },
     ValidatorSpec {
         id: "duplicate-patterns",

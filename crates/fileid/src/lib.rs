@@ -382,6 +382,20 @@ fn is_shebang_juke(detected: FileType, ext_type: FileType) -> bool {
         )
 }
 
+fn allows_heuristic_extension_override(file_type: FileType) -> bool {
+    matches!(
+        file_type,
+        FileType::Zip
+            | FileType::Jar
+            | FileType::Ooxml
+            | FileType::Odf
+            | FileType::Cab
+            | FileType::Chm
+            | FileType::Rar
+            | FileType::SevenZ
+    )
+}
+
 /// Detect file type from content + path. Content is trusted first, extension as fallback.
 ///
 /// Returns `None` if the file format cannot be identified.
@@ -425,33 +439,54 @@ pub fn detect(path: &Path, data: &[u8]) -> Option<Detection> {
         });
     }
 
-    // Stage 2: Filename / extension
-    if let Some(file_type) = ext::detect_from_path(path) {
+    // Stage 2: Well-known filename match (LICENSE, package.json, Makefile,
+    // …). These are explicit names users type — no aliasing or content
+    // ambiguity, so they outrank both heuristics and extension fallback.
+    if ext::is_filename_match(path) {
+        if let Some(file_type) = ext::detect_from_path(path) {
+            return Some(Detection {
+                file_type,
+                source: DetectionSource::Filename,
+                ext_match: ExtensionMatch::Consistent,
+            });
+        }
+    }
+
+    let ext_ft = ext::detect_from_path(path);
+    let heuristic_may_override_ext = ext_ft
+        .map(allows_heuristic_extension_override)
+        .unwrap_or(true);
+
+    // Stage 3: Content heuristics for unknown extensions and extension-claimed
+    // containers/polyglots. Ordinary source extensions stay authoritative here:
+    // language keyword scoring is too weak to override `.go`, `.js`, `.swift`,
+    // etc. Container extensions are different because a non-magic `.zip` body
+    // may be a script payload wearing an archive name.
+    if heuristic_may_override_ext && !ext::is_data_format(path) {
+        if let Some(file_type) = heuristics::detect_from_content(data) {
+            let ext_match = match ext_ft {
+                Some(e) if e != file_type => ExtensionMatch::Different(e),
+                None if path.extension().is_some() => ExtensionMatch::Unknown,
+                Some(_) | None => ExtensionMatch::Consistent,
+            };
+            return Some(Detection {
+                file_type,
+                source: DetectionSource::Heuristic,
+                ext_match,
+            });
+        }
+    }
+
+    // Stage 4: Extension fallback (used when no content-first detector resolved
+    // and the filename was not well-known).
+    if let Some(file_type) = ext_ft {
         // HTML extension requires content validation
         if file_type == FileType::Html && !heuristics::looks_like_html(data) {
             return None;
         }
         return Some(Detection {
             file_type,
-            source: if ext::is_filename_match(path) {
-                DetectionSource::Filename
-            } else {
-                DetectionSource::Extension
-            },
-            ext_match: ExtensionMatch::Consistent,
-        });
-    }
-
-    // Skip data/config formats — don't let heuristics misclassify them
-    if ext::is_data_format(path) {
-        return None;
-    }
-
-    // Stage 3: Lightweight content heuristics
-    if let Some(file_type) = heuristics::detect_from_content(data) {
-        return Some(Detection {
-            file_type,
-            source: DetectionSource::Heuristic,
+            source: DetectionSource::Extension,
             ext_match: ExtensionMatch::Consistent,
         });
     }
@@ -1252,6 +1287,104 @@ mod tests {
         let det = detect(Path::new("/tmp/fn-list/LICENSE"), data).unwrap();
         assert_eq!(det.file_type, FileType::Text);
         assert_eq!(det.source, DetectionSource::Filename);
+    }
+
+    // ── Content-first detection beats extension-only fallback ────────
+
+    /// Real-world polyglot: a `.zip` file whose first KB is a VBScript
+    /// payload (CHM/EOCD-comment dropper). Trusting the `.zip` extension
+    /// would route to the ZIP analyzer and fail outright; the heuristic
+    /// must take precedence so the script content gets analyzed and the
+    /// extension/content mismatch surfaces.
+    #[test]
+    fn polyglot_zip_extension_with_vbscript_body_detected_as_vbs() {
+        let body = b"On Error Resume Next\r\n\
+            Dim S1, FSO, Shell\r\n\
+            Set FSO = CreateObject(\"Scripting.FileSystemObject\")\r\n\
+            Set Shell = CreateObject(\"WScript.Shell\")\r\n\
+            Set S1 = CreateObject(\"ADODB.Stream\")\r\n";
+        let det = detect(Path::new("Wallets.zip"), body).unwrap();
+        assert_eq!(det.file_type, FileType::Vbs);
+        assert_eq!(det.source, DetectionSource::Heuristic);
+        // The mismatch must be visible to callers (cleave reports it as a
+        // suspicious "extension says X but content is Y" finding).
+        assert!(det.extension_mismatch());
+        assert_eq!(det.extension_type(), Some(FileType::Zip));
+    }
+
+    /// Same idea, but with PowerShell content under a `.zip` extension —
+    /// covers the `.NET reflection AMSI bypass` shape we sometimes see
+    /// dropped under decoy archive names.
+    #[test]
+    fn polyglot_zip_extension_with_powershell_body_detected_as_ps1() {
+        let body = b"$ErrorActionPreference = 'SilentlyContinue'\n\
+            Invoke-Expression $payload\n\
+            [Reflection.Assembly]::Load($bytes)\n";
+        let det = detect(Path::new("update.zip"), body).unwrap();
+        assert_eq!(det.file_type, FileType::PowerShell);
+        assert!(det.extension_mismatch());
+    }
+
+    /// Negative: a real ZIP (PK magic) under `.zip` must still resolve
+    /// via magic detection, *not* via heuristics — even if the archive
+    /// happens to embed text that resembles script keywords later in the
+    /// file. Heuristics scan only the first few KB so PK at offset 0
+    /// short-circuits cleanly.
+    #[test]
+    fn real_zip_still_detected_by_magic_not_heuristics() {
+        let mut data = b"PK\x03\x04".to_vec();
+        // Append some script-like text that *would* trigger heuristics if
+        // we ever reached them.
+        data.extend_from_slice(b"WScript.Shell CreateObject Option Explicit");
+        let det = detect(Path::new("real.zip"), &data).unwrap();
+        assert_eq!(det.file_type, FileType::Zip);
+        assert_eq!(det.source, DetectionSource::Magic);
+        assert!(!det.extension_mismatch());
+    }
+
+    #[test]
+    fn source_extension_beats_weak_language_heuristics() {
+        let go = b"package main\n\nimport \"log/slog\"\n\nfunc main() { slog.Info(\"ok\") }\n";
+        let det = detect(Path::new("main.go"), go).unwrap();
+        assert_eq!(det.file_type, FileType::Go);
+        assert_eq!(det.source, DetectionSource::Extension);
+        assert!(!det.extension_mismatch());
+
+        let js = b"const fs = require('fs');\nvar x = 1;\nmodule.exports = x;\n";
+        let det = detect(Path::new("index.js"), js).unwrap();
+        assert_eq!(det.file_type, FileType::JavaScript);
+        assert_eq!(det.source, DetectionSource::Extension);
+        assert!(!det.extension_mismatch());
+    }
+
+    /// Negative: a `.cargo.toml` file with text content stays in its
+    /// declared role via the extension/filename path. Data formats are
+    /// listed in `ext::is_data_format` precisely so heuristics doesn't
+    /// second-guess them — even if the body's first few KB include
+    /// keyword sequences that look script-like.
+    #[test]
+    fn data_format_extension_skips_heuristics() {
+        // YAML body deliberately seeded with `===` and `WScript.` —
+        // both are heuristic triggers — to confirm `.yaml` short-
+        // circuits past the heuristic stage.
+        let body = b"name: example\n=== heading ===\n# WScript.Shell mention\nfield: value\n";
+        let det = detect(Path::new("config.yaml"), body);
+        // `.yaml` isn't a recognised type in fileid's enum (treated as a
+        // data format that the analyzer pipeline handles elsewhere), so
+        // the function returning `None` here is correct — the important
+        // assertion is that we did NOT misclassify this as JavaScript /
+        // VBScript via heuristics. If a regression makes heuristics fire,
+        // `det` would be `Some(JavaScript)` or similar instead of `None`.
+        if let Some(d) = det {
+            assert!(
+                !matches!(
+                    d.file_type,
+                    FileType::JavaScript | FileType::Vbs | FileType::PowerShell
+                ),
+                "yaml body misclassified as {:?}",
+                d.file_type
+            );
+        }
     }
 
     #[test]

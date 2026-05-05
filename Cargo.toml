@@ -213,7 +213,7 @@ libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
 encoding_rs = "0.8"  # Character encoding detection and conversion
-stng = { git = "https://codeberg.org/atomdrift/stng.git" }
+stng = { path = "../stng" }
 
 # Logging (tracing is the modern standard, more powerful than log+env_logger)
 tracing = "0.1"

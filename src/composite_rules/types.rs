@@ -311,6 +311,8 @@ pub(crate) enum FileType {
     Rpm,
     /// Chrome extension (.crx)
     Crx,
+    /// Compiled HTML Help (.chm)
+    Chm,
     /// VS Code extension (.vsix archive)
     VsixArchive,
     /// Firefox extension (.xpi)
@@ -427,6 +429,7 @@ impl FileType {
                 | FileType::Deb
                 | FileType::Rpm
                 | FileType::Crx
+                | FileType::Chm
                 | FileType::VsixArchive
                 | FileType::Xpi
                 | FileType::Ipa
@@ -522,6 +525,7 @@ impl FileType {
             FileType::Deb,
             FileType::Rpm,
             FileType::Crx,
+            FileType::Chm,
             FileType::VsixArchive,
             FileType::Xpi,
         ]
@@ -607,6 +611,7 @@ impl FileType {
             "deb" => FileType::Deb,
             "rpm" => FileType::Rpm,
             "crx" => FileType::Crx,
+            "chm" => FileType::Chm,
             "vsix" => FileType::VsixArchive,
             "xpi" => FileType::Xpi,
             _ => FileType::All,

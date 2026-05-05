@@ -100,7 +100,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "kinds",  // too vague
     "method", // everything is a method
     "methods",
-    "marker", // says only that a trait is a marker
+    "marker",  // says only that a trait is a marker
     "markers", // says only that traits are markers
     "misc",    // dumping ground
     "modes",   // dumping ground
@@ -134,6 +134,12 @@ const PARENT_DUPLICATE_EXCEPTIONS: &[&str] = &[
     "micro-behaviors/os/firewall/firewalld",     // firewalld is a specific firewall daemon name
     "objectives/persistence/system/systemd",     // systemd is a specific init system name
 ];
+
+/// Directories where a normally-vague segment has precise local meaning.
+const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[(
+    "metadata/package/fields/types",
+    "types", // package.json `types`/`typings` entry point field
+)];
 
 /// Maximum number of traits allowed in a single directory.
 /// Directories exceeding this should be split into subdirectories.
@@ -848,6 +854,12 @@ pub(crate) fn find_banned_directory_segments(trait_dirs: &[String]) -> Vec<(Stri
         for segment in dir_path.split('/') {
             let lower = segment.to_lowercase();
             if BANNED_DIRECTORY_SEGMENTS.contains(&lower.as_str()) {
+                if BANNED_SEGMENT_EXCEPTIONS
+                    .iter()
+                    .any(|(path, allowed)| dir_path == *path && lower == *allowed)
+                {
+                    continue;
+                }
                 violations.push((dir_path.clone(), segment.to_string()));
                 break; // Only report first violation per path
             }

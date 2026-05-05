@@ -88,7 +88,7 @@ fn test_symbol_condition() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -139,7 +139,7 @@ fn test_all() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -209,7 +209,7 @@ fn test_count() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -262,7 +262,7 @@ fn test_string_exact_condition() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -322,7 +322,7 @@ fn test_any() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -1860,7 +1860,7 @@ fn test_basename_in_composite_rule() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -1930,7 +1930,7 @@ fn test_composite_unless_skips_rule() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -1983,7 +1983,7 @@ fn test_composite_unless_allows_rule() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2043,7 +2043,7 @@ fn test_composite_unless_with_basename() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2132,7 +2132,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2223,7 +2223,7 @@ fn test_needs_with_any_only_respects_threshold() {
         needs: Some(3), // Require 3 matches, but only 2 exist
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2299,7 +2299,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         needs: Some(2), // Require 2 matches, and 2 exist
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2349,7 +2349,7 @@ fn test_required_trait_prefilter_for_any_needs_is_not_overconstrained() {
         needs: Some(3),
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2407,7 +2407,7 @@ fn test_required_trait_prefilter_keeps_all_and_fully_required_any_refs() {
         needs: Some(2),
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2513,7 +2513,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
         needs: Some(3), // Require 3 from any, but only 1 matches
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2630,7 +2630,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         needs: Some(3), // Require 3 from any, and 3 match
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2707,7 +2707,7 @@ fn test_needs_with_all_and_any_all_fails() {
         needs: Some(1),
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -2793,7 +2793,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
         needs: None, // No needs constraint - default is any 1
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -3143,7 +3143,7 @@ fn test_near_lines_any_with_needs() {
         needs: Some(3),
         near_lines: Some(10),
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -3208,7 +3208,7 @@ fn test_near_lines_any_with_needs_too_spread() {
         needs: Some(3),
         near_lines: Some(10),
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -3272,7 +3272,7 @@ fn test_near_lines_all_plus_any() {
         needs: Some(2),
         near_lines: Some(10),
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -4047,7 +4047,7 @@ fn test_composite_downgrade_all_match() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         downgrade: Some(DowngradeConditions {
             all: Some(vec![
                 Condition::Trait {
@@ -4131,7 +4131,7 @@ fn test_composite_downgrade_none_blocks() {
         needs: None,
         near_lines: None,
         near_bytes: None,
-            scope: None,
+        scope: None,
         downgrade: Some(DowngradeConditions {
             all: None,
             any: Some(vec![Condition::Trait {
@@ -4310,7 +4310,7 @@ fn test_proximity_any_needs_cross_condition() {
         needs: Some(2),
         near_lines: Some(5),
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };
@@ -4405,7 +4405,7 @@ fn test_proximity_does_not_boost_confidence() {
         needs: None,
         near_lines: Some(5),
         near_bytes: None,
-            scope: None,
+        scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
     };

@@ -5,7 +5,7 @@
 //! auto-prefixing trait references, and detecting redundant patterns.
 
 use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Find atomic traits whose `if:` clause references themselves
 /// (`type: trait, id: <self>`). Such traits never fire — the runtime
@@ -208,6 +208,70 @@ pub(crate) fn find_redundant_any_refs(
     for (dir, trait_ids) in dir_refs {
         if trait_ids.len() >= 4 {
             violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
+        }
+    }
+
+    violations
+}
+
+/// Find `any:` or `all:` clauses that explicitly list every atomic trait in a directory.
+///
+/// For `any:`, directory references already mean "any rule in this directory", so a composite like:
+///
+/// ```yaml
+/// any:
+///   - id: foo/bar::a
+///   - id: foo/bar::b
+/// ```
+///
+/// is needlessly hand-maintained when `foo/bar` contains only `a` and `b`.
+///
+/// For `all:`, directory syntax is not equivalent because directory references are any-of
+/// prefix matches at runtime. Still, listing every trait in a directory is usually a taxonomy
+/// smell: the directory has become the rule definition instead of a reusable technique bucket.
+///
+/// This catches both local and external directories, and complements `find_redundant_any_refs`,
+/// which catches large same-directory groups even when they do not cover the whole directory.
+///
+/// Returns `(rule_id, clause, directory, trait_count, trait_ids)` for violations.
+#[must_use]
+pub(crate) fn find_clause_refs_covering_directory(
+    rule: &CompositeTrait,
+    dir_traits: &HashMap<String, HashSet<String>>,
+) -> Vec<(String, &'static str, String, usize, Vec<String>)> {
+    let mut violations = Vec::new();
+
+    fn collect_clause_refs(conditions: &[Condition]) -> HashMap<String, HashSet<String>> {
+        let mut dir_refs: HashMap<String, HashSet<String>> = HashMap::new();
+        for cond in conditions {
+            if let Condition::Trait { id } = cond {
+                if let Some(idx) = id.find("::") {
+                    dir_refs
+                        .entry(id[..idx].to_string())
+                        .or_default()
+                        .insert(id.clone());
+                }
+            }
+        }
+        dir_refs
+    }
+
+    for (clause, conditions) in [("any", rule.any.as_deref()), ("all", rule.all.as_deref())] {
+        let Some(conditions) = conditions else {
+            continue;
+        };
+        for (dir, refs) in collect_clause_refs(conditions) {
+            let Some(traits) = dir_traits.get(&dir) else {
+                continue;
+            };
+            if traits.len() < 2 || refs.len() != traits.len() {
+                continue;
+            }
+            if refs.is_superset(traits) {
+                let mut trait_ids: Vec<String> = refs.into_iter().collect();
+                trait_ids.sort();
+                violations.push((rule.id.clone(), clause, dir, trait_ids.len(), trait_ids));
+            }
         }
     }
 

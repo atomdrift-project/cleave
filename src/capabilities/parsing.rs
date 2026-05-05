@@ -509,6 +509,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "deb" => vec![RuleFileType::Deb],
                 "rpm" => vec![RuleFileType::Rpm],
                 "crx" => vec![RuleFileType::Crx],
+                "chm" => vec![RuleFileType::Chm],
                 "vsix-archive" => vec![RuleFileType::VsixArchive],
                 "xpi" => vec![RuleFileType::Xpi],
                 "zst" => vec![RuleFileType::Zst],

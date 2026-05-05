@@ -3361,11 +3361,7 @@ mod scope_tests {
         // evidence only in `a.so`. Only the `a.so` bucket has both
         // conditions; evidence in `b.so` is dropped.
         let rule = composite_with(2, Some(Scope::Leaf));
-        let evidence = vec![
-            ev("archive:a.so"),
-            ev("archive:b.so"),
-            ev("archive:a.so"),
-        ];
+        let evidence = vec![ev("archive:a.so"), ev("archive:b.so"), ev("archive:a.so")];
         let tags = vec![
             tag(0, "archive:a.so"),
             tag(0, "archive:b.so"),

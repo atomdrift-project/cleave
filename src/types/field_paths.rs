@@ -26,7 +26,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     use super::binary_metrics::{
         BinaryMetrics, ConsistencyMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
     };
-    use super::container_metrics::{ArchiveMetrics, PackageJsonMetrics};
+    use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
     use super::language_metrics::{
         CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
@@ -140,6 +140,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
     for field in PackageJsonMetrics::valid_field_paths() {
         paths.insert(format!("package_json.{}", field));
+    }
+    for field in ChmMetrics::valid_field_paths() {
+        paths.insert(format!("chm.{}", field));
     }
 
     // Image metrics (shared across PNG and JPEG)

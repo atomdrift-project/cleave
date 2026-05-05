@@ -95,6 +95,91 @@ pub struct ArchiveMetrics {
     pub extra_field_size: u64,
 }
 
+/// CHM (Compiled HTML Help) container metrics.
+///
+/// Holds the *computed* / *derived* numbers — anything that requires
+/// extrapolation from raw fields (sums, ratios, mismatch flags) lives
+/// here. Direct ITSF/ITSP/`#SYSTEM` field values are surfaced as kv
+/// (`chm.*`) instead.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
+pub struct ChmMetrics {
+    // === Size/shape ratios ===
+    /// LZX compression ratio for `MSCompressed/Content`
+    /// (uncompressed_size / compressed_size). Below ~1.5 on text-only
+    /// CHMs is unusually low (suggests already-encoded / encrypted
+    /// payload masquerading as help content).
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub lzx_compression_ratio: f32,
+    /// Fraction of total file bytes occupied by user-visible content
+    /// (HTML topics, images, scripts) — vs. CHM control records,
+    /// tables, and trailing slack. Tiny droppers often score very low
+    /// because most of the CHM is overhead.
+    #[serde(default, skip_serializing_if = "is_zero_f32")]
+    pub user_byte_ratio: f32,
+
+    // === Per-entry size aggregates ===
+    /// Largest user-visible entry, in bytes. A 1-entry CHM whose only
+    /// payload is < 4 KB is almost always a hand-rolled dropper.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub max_user_entry_size: u64,
+    /// Sum of user-visible entry sizes (uncompressed). Compare with the
+    /// total CHM file size and `lzx_uncompressed_size` (kv) for a
+    /// "what's the rest of this file doing here" signal.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub total_user_entry_size: u64,
+
+    // === Counts ===
+    /// Number of user-visible directory entries (`help.html`,
+    /// `Topic.htm`, etc.). Use `field: chm.user_entry_count, max: N`
+    /// from a trait to gate on dropper shape.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub user_entry_count: u32,
+    /// Number of CHM-internal control entries (`#SYSTEM`, `$OBJINST`,
+    /// `::DataSpace/...`, etc.). Useful as a denominator alongside
+    /// `user_entry_count`.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub control_entry_count: u32,
+    /// Number of `InfoType` records in `#SYSTEM` (HHA "subset" /
+    /// information-type tagging). Most attack CHMs have 0; legitimate
+    /// help typically has several.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub infotype_count: u32,
+    /// Number of LZX reset points in the MSCompressed stream. 1 means
+    /// the entire content fits in a single 32 KB-or-less frame —
+    /// characteristic of small payload-only CHMs.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub lzx_reset_count: u32,
+    /// Number of user-visible entries whose name suggests an HTML
+    /// topic (`.html`, `.htm`).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub html_entry_count: u32,
+    /// Number of user-visible entries whose name suggests a script
+    /// (`.js`, `.vbs`, `.wsh`).
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub script_entry_count: u32,
+    /// Number of user-visible entries whose name suggests an image.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub image_entry_count: u32,
+
+    // === Mismatch / consistency flags ===
+    /// True when `#SYSTEM` declares a `default_topic` that does not
+    /// appear in the directory entries — common in
+    /// stripped-down/repackaged CHMs.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub default_topic_missing: bool,
+    /// True when `#SYSTEM.title` and `#SYSTEM.default_topic` are both
+    /// set but disagree about which `*.html`/`*.hhc` the help opens
+    /// to. Genuine HHA-Workshop output picks one and reuses it; mixed
+    /// values appear in scratch-built droppers.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub title_topic_mismatch: bool,
+    /// True when no `HHA Version`/compiler-version `#SYSTEM` record is
+    /// present — most legitimate CHMs carry one, hand-built droppers
+    /// often don't.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub no_compiler_version: bool,
+}
+
 /// package.json metrics for npm supply chain analysis
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PackageJsonMetrics {

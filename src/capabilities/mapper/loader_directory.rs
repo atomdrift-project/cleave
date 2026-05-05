@@ -19,18 +19,19 @@ use crate::capabilities::validation::{
     find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_composite_only_wellknown_files, find_condition_scope_violations, find_depth_violations,
-    find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_second_level_directories, find_empty_condition_clauses,
-    find_excessive_file_types, find_excessive_skip_conditions, find_for_only_duplicates,
-    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
-    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
-    find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
-    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
-    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_clause_refs_covering_directory, find_composite_only_wellknown_files,
+    find_condition_scope_violations, find_depth_violations, find_duplicate_atomic_traits,
+    find_duplicate_composite_rules, find_duplicate_second_level_directories,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
+    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
+    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
+    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
+    find_malware_subcategory_violations, find_meta_missing_section_filter,
+    find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
+    find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
+    find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
+    find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_raw_should_use_text,
     find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
     find_redundant_unix_platforms, find_self_referencing_traits, find_short_pattern_warnings,
@@ -53,7 +54,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -2549,6 +2550,78 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} composite rules have redundant any: clauses (use directory notation)",
                     redundant_any_refs.len()
+                ));
+            }
+
+            // Validate that any:/all: clauses don't enumerate every atomic trait in a directory.
+            // `any:` should use directory notation; `all:` should be a more meaningful composite.
+            tracing::trace!("Checking for full-directory composite clauses");
+            let mut dir_traits: HashMap<String, HashSet<String>> = HashMap::new();
+            let disable_full_directory_composite =
+                crate::validation_controls::is_validator_disabled("full-directory-composite");
+            if !disable_full_directory_composite {
+                for trait_def in &trait_definitions {
+                    if let Some(idx) = trait_def.id.find("::") {
+                        dir_traits
+                            .entry(trait_def.id[..idx].to_string())
+                            .or_default()
+                            .insert(trait_def.id.clone());
+                    }
+                }
+            }
+            let mut full_dir_clauses = Vec::new();
+            if !disable_full_directory_composite {
+                for rule in &composite_rules {
+                    let violations = find_clause_refs_covering_directory(rule, &dir_traits);
+                    for (rule_id, clause, dir, count, trait_ids) in violations {
+                        let source_file = rule_source_files
+                            .get(&rule_id)
+                            .map(std::string::String::as_str)
+                            .unwrap_or("unknown");
+                        full_dir_clauses.push((
+                            rule_id,
+                            clause,
+                            dir,
+                            count,
+                            trait_ids,
+                            source_file.to_string(),
+                        ));
+                    }
+                }
+            }
+
+            if !full_dir_clauses.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composite rules enumerate entire trait directories",
+                    full_dir_clauses.len()
+                );
+                eprintln!("   A composite should not hand-maintain a list of every atomic trait in a directory:\n");
+                for (rule_id, clause, dir, count, trait_ids, source_file) in &full_dir_clauses {
+                    let line_hint = find_line_number(source_file, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' {}: clause covers all {} traits in '{}'",
+                            source_file, line, rule_id, clause, count, dir
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' {}: clause covers all {} traits in '{}'",
+                            source_file, rule_id, clause, count, dir
+                        );
+                    }
+                    eprintln!("      Traits: {}", trait_ids.join(", "));
+                    if *clause == "any" {
+                        eprintln!(
+                            "      Recommendation: Replace the explicit list with 'id: {}'.\n",
+                            dir
+                        );
+                    } else {
+                        eprintln!("      Recommendation: Create a meaningful technique composite, or split the directory so the all: clause names a narrower behavior.\n");
+                    }
+                }
+                warnings.push(format!(
+                    "{} composite rules enumerate entire trait directories",
+                    full_dir_clauses.len()
                 ));
             }
 

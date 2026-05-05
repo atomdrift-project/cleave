@@ -100,6 +100,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "kinds",  // too vague
     "method", // everything is a method
     "methods",
+    "marker", // says only that a trait is a marker
+    "markers", // says only that traits are markers
     "misc",    // dumping ground
     "modes",   // dumping ground
     "new",     // temporal, will rot

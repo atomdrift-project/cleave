@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "crates/pyinstx", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -163,6 +163,7 @@ cpio = "0.4"
 zstd = "0.13"
 unrar = "0.5"
 cab = "0.6"
+lzx = { path = "crates/lzx" }
 rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Parallelization

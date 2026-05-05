@@ -154,6 +154,14 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
                 None
             }
         }
+        b'I' => {
+            // Compiled HTML Help: ITSF
+            if data.starts_with(b"ITSF") {
+                Some((FileType::Chm, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
         b'{' => {
             // RTF: {\rtf
             if data.starts_with(b"{\\rtf") {

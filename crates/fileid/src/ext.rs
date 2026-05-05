@@ -235,6 +235,7 @@ fn detect_from_extension(path: &Path) -> Option<FileType> {
         "crx" => Some(FileType::Crx),
         "pkg" => Some(FileType::Pkg),
         "cab" => Some(FileType::Cab),
+        "chm" => Some(FileType::Chm),
         "gz" => Some(FileType::Gz),
         "bz2" => Some(FileType::Bz2),
         "xz" => Some(FileType::Xz),

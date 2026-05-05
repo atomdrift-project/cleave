@@ -773,6 +773,7 @@ dependencies = [
  "libc",
  "lnk",
  "lru",
+ "lzx",
  "malecule",
  "md-5",
  "memchr",
@@ -2551,6 +2552,10 @@ dependencies = [
  "libc",
  "pkg-config",
 ]
+
+[[package]]
+name = "lzx"
+version = "0.1.0"
 
 [[package]]
 name = "lzxd"

@@ -150,6 +150,9 @@ pub enum FileType {
     Pkg,
     /// Cabinet archive (.cab)
     Cab,
+    /// Compiled HTML Help (.chm) — Microsoft ITSF/ITOL container with
+    /// LZX-compressed HTML topics. Common malware delivery vector.
+    Chm,
     /// Chrome extension (.crx)
     Crx,
     /// AppleScript source file (.applescript, .scpt)
@@ -222,6 +225,7 @@ impl FileType {
                 | Self::Rpm
                 | Self::Pkg
                 | Self::Cab
+                | Self::Chm
                 | Self::Crx
                 | Self::Jar
         )
@@ -1138,6 +1142,20 @@ mod tests {
     #[test]
     fn lnk_by_ext() {
         assert_ext("shortcut.lnk", FileType::Lnk);
+    }
+
+    #[test]
+    fn chm_magic() {
+        // ITSF header: ITSF + version=3 + header_len + 1 + timestamp + lcid
+        let mut data = b"ITSF".to_vec();
+        data.extend_from_slice(&3u32.to_le_bytes()); // version
+        data.extend_from_slice(&[0u8; 24]); // padding
+        assert_detect("help.chm", &data, FileType::Chm);
+    }
+
+    #[test]
+    fn chm_by_ext() {
+        assert_ext("help.chm", FileType::Chm);
     }
 
     #[test]

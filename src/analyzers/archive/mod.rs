@@ -748,6 +748,12 @@ impl ArchiveAnalyzer {
             }
         }
 
+        if matches!(file_type, FileType::Chm) {
+            if let Some(chm_value) = crate::analyzers::chm::chm_kv::extract(data) {
+                report.merge_kv_subtree("chm", chm_value);
+            }
+        }
+
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
             if let Ok((mut seeded_entries, archive_metrics)) =
                 zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
@@ -756,6 +762,36 @@ impl ArchiveAnalyzer {
                 let metrics = report.metrics.get_or_insert_with(Metrics::default);
                 metrics.archive = Some(archive_metrics);
             }
+        }
+
+        if matches!(file_type, FileType::Chm) {
+            self.analyze_chm_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            let hostile_reasons = guard.take_reasons();
+            let suppress_path_traversal =
+                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            push_archive_hostile_findings(
+                &mut report,
+                hostile_reasons,
+                "archive_analyzer",
+                suppress_path_traversal,
+            );
+            report.structure.push(StructuralFeature {
+                id: format!("archive/{}", archive_type_str),
+                desc: format!("{} archive", archive_type_str),
+                evidence: vec![Evidence {
+                    method: "extension".to_string(),
+                    source: "archive_analyzer".to_string(),
+                    value: archive_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+            self.evaluate_container_findings(&mut report);
+            return Ok(report);
         }
 
         if matches!(file_type, FileType::Zip | FileType::Jar)

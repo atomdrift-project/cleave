@@ -729,6 +729,90 @@ impl ArchiveAnalyzer {
         Ok(())
     }
 
+    /// Analyze a CHM container entirely in memory. Decodes every internal
+    /// file (LZX-decompressing the `MSCompressed/Content` blob in one
+    /// shot) and feeds each user-visible entry to the same per-member
+    /// pipeline used for ZIP archives. No bytes are written to disk.
+    ///
+    /// CHM members are by definition help-page payloads — HTML topics,
+    /// embedded scripts, sometimes images. cleave's default archive
+    /// policy skips "non-program" members (HTML, markdown) unless
+    /// `--all-files` is set, but for CHM that policy throws away
+    /// exactly the content we need to scan for HTML-Help dropper
+    /// patterns. We forward to a clone of `self` whose analysis
+    /// options have `all_files = true` so every member gets analyzed.
+    pub(super) fn analyze_chm_archive_in_memory(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+    ) -> Result<()> {
+        let (raw_members, traversals) = crate::analyzers::chm::collect_members(data)?;
+
+        for path in traversals {
+            guard.add_hostile_reason(HostileArchiveReason::PathTraversal(path));
+        }
+
+        let mut members = Vec::with_capacity(raw_members.len());
+        for m in raw_members {
+            if !guard.check_file_count() {
+                anyhow::bail!(
+                    "Exceeded maximum file count ({})",
+                    super::guards::MAX_FILE_COUNT
+                );
+            }
+            if m.data.len() as u64 > super::guards::MAX_FILE_SIZE {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: m.relative_path.clone(),
+                    size: m.data.len() as u64,
+                });
+                continue;
+            }
+            if !guard.check_bytes(m.data.len() as u64, &m.relative_path) {
+                anyhow::bail!("Exceeded maximum total extraction size");
+            }
+            let logical = Path::new(&m.relative_path);
+            let file_type = crate::analyzers::detect_file_type_from_data(logical, &m.data);
+            let sha256 = calculate_sha256(&m.data);
+            members.push(MemoryArchiveMember {
+                relative_path: m.relative_path,
+                data: m.data,
+                file_type,
+                sha256,
+            });
+        }
+
+        // Force `all_files = true` for CHM member analysis. This is the
+        // only knob that changes; everything else (depth, mapper, yara,
+        // cancellation) carries over via `with_*` chaining.
+        let chm_options = match self.analysis_options.as_ref() {
+            Some(opts) => crate::AnalysisOptions {
+                all_files: true,
+                ..(**opts).clone()
+            },
+            None => crate::AnalysisOptions {
+                all_files: true,
+                ..Default::default()
+            },
+        };
+        let chm_analyzer = self
+            .with_extraction_archive_sha256("")
+            .with_analysis_options(std::sync::Arc::new(chm_options));
+
+        chm_analyzer.analyze_in_memory_members(
+            members,
+            archive_path,
+            report,
+            start,
+            "CHM archive",
+            "memory CHM",
+            vec!["archive_analyzer".to_string(), "in_memory_chm".to_string()],
+        );
+        Ok(())
+    }
+
     /// Run the par_iter analysis + aggregation over a prebuilt
     /// `Vec<MemoryArchiveMember>`. Used by both the ZIP and PyInstaller
     /// in-memory paths.

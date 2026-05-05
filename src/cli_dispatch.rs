@@ -369,10 +369,7 @@ pub(crate) fn dispatch_command(
             run_version();
             return Ok(None);
         }
-        Some(cli::Command::Validate) => {
-            validate_command()?;
-            return Ok(None);
-        }
+        Some(cli::Command::Validate) => validate_command(ctx.format)?,
         Some(cli::Command::Diff {
             old,
             new,

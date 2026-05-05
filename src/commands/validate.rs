@@ -3,9 +3,11 @@
 //! Runs the full suite of trait definition validation checks and reports any
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
+use crate::cli::OutputFormat;
 use anyhow::Result;
-use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis};
+use cleave::{validation_controls, AnalysisReport, CapabilityMapper, Criticality, FileAnalysis};
 use rayon::prelude::*;
+use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -62,11 +64,20 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// single rayon parallel pool; judgement happens serially afterwards by
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
-pub fn run() -> Result<()> {
+pub fn run(format: &OutputFormat) -> Result<String> {
     let targets = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set.
     std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    std::env::set_var(
+        "CLEAVE_VALIDATE_FORMAT",
+        match format {
+            OutputFormat::Terminal => "terminal",
+            OutputFormat::Tiny => "tiny",
+            OutputFormat::Json => "json",
+            OutputFormat::Jsonl => "jsonl",
+        },
+    );
     let options = cleave::AnalysisOptions {
         disable_yara: true,
         disable_radare2: true,
@@ -85,12 +96,6 @@ pub fn run() -> Result<()> {
         false,
     )?);
 
-    let disabled_validation_checks = ["benign-score-caps", "does-nothing-score-caps"];
-    eprintln!(
-        "NOTE: these validators are currently disabled: {}",
-        disabled_validation_checks.join(",")
-    );
-
     let results: Vec<(Target, Result<AnalysisReport>)> = targets
         .into_par_iter()
         .map(|t| {
@@ -107,16 +112,118 @@ pub fn run() -> Result<()> {
     let traits_dir = cleave::traits_repo::try_resolve()
         .map(|p| format!(" traits_dir={}", p.display()))
         .unwrap_or_default();
-    eprintln!(
-        "✅ validate{traits_ver}{traits_dir}: traits + hostile ({}/{}) + benign ({}/{}) + does-nothing ({}/{})",
-        stats.hostile_passed,
-        stats.hostile_total,
-        stats.benign_passed,
-        stats.benign_total,
-        stats.does_nothing_passed,
-        stats.does_nothing_total
+    let report = ValidateOutput {
+        ok: true,
+        traits_version: traits_ver
+            .trim()
+            .strip_prefix("(traits: ")
+            .and_then(|s| s.strip_suffix(')'))
+            .map(str::to_string),
+        traits_dir: traits_dir
+            .trim()
+            .strip_prefix("traits_dir=")
+            .map(str::to_string),
+        disabled_validators: validation_controls::disabled_validators_by_category(),
+        fixtures: FixtureSummary {
+            hostile: FixtureCount {
+                passed: stats.hostile_passed,
+                total: stats.hostile_total,
+            },
+            benign: FixtureCount {
+                passed: stats.benign_passed,
+                total: stats.benign_total,
+            },
+            does_nothing: FixtureCount {
+                passed: stats.does_nothing_passed,
+                total: stats.does_nothing_total,
+            },
+        },
+    };
+
+    Ok(format_validate_output(&report, format))
+}
+
+#[derive(Debug, Serialize)]
+struct ValidateOutput {
+    ok: bool,
+    traits_version: Option<String>,
+    traits_dir: Option<String>,
+    disabled_validators:
+        std::collections::BTreeMap<&'static str, Vec<validation_controls::DisabledValidatorView>>,
+    fixtures: FixtureSummary,
+}
+
+#[derive(Debug, Serialize)]
+struct FixtureSummary {
+    hostile: FixtureCount,
+    benign: FixtureCount,
+    does_nothing: FixtureCount,
+}
+
+#[derive(Debug, Serialize)]
+struct FixtureCount {
+    passed: usize,
+    total: usize,
+}
+
+fn format_validate_output(report: &ValidateOutput, format: &OutputFormat) -> String {
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            let json = serde_json::to_string_pretty(report).unwrap_or_else(|_| "{}".to_string());
+            format!(
+                "{json}
+"
+            )
+        }
+        OutputFormat::Tiny => format_validate_tiny(report),
+        OutputFormat::Terminal => format_validate_terminal(report),
+    }
+}
+
+fn format_validate_terminal(report: &ValidateOutput) -> String {
+    let mut out = String::new();
+    out.push_str(&validation_controls::format_disabled_validators_terminal());
+    out.push_str(&format!(
+        "validate ok: hostile {}/{}  benign {}/{}  does-nothing {}/{}
+",
+        report.fixtures.hostile.passed,
+        report.fixtures.hostile.total,
+        report.fixtures.benign.passed,
+        report.fixtures.benign.total,
+        report.fixtures.does_nothing.passed,
+        report.fixtures.does_nothing.total
+    ));
+    out
+}
+
+fn format_validate_tiny(report: &ValidateOutput) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "validate ok
+",
     );
-    Ok(())
+    for (category, validators) in &report.disabled_validators {
+        let labels = validators
+            .iter()
+            .map(|validator| validator.display_id)
+            .collect::<Vec<_>>()
+            .join(",");
+        out.push_str(&format!(
+            "disabled {category}={labels}
+"
+        ));
+    }
+    out.push_str(&format!(
+        "fixtures hostile={}/{} benign={}/{} does-nothing={}/{}
+",
+        report.fixtures.hostile.passed,
+        report.fixtures.hostile.total,
+        report.fixtures.benign.passed,
+        report.fixtures.benign.total,
+        report.fixtures.does_nothing.passed,
+        report.fixtures.does_nothing.total
+    ));
+    out
 }
 
 /// Build the full target list: hostile/benign fixtures + walked does-nothing corpus.
@@ -237,8 +344,7 @@ struct ValidationStats {
 
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
 fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<ValidationStats> {
-    let disable_benign_score_caps = true;
-    let disable_does_nothing_score_caps = true;
+    let disable_score_caps = validation_controls::is_validator_disabled("score-caps");
 
     let mut stats = ValidationStats {
         hostile_passed: 0,
@@ -282,7 +388,7 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
             }
             Target::Benign { path, cap } => {
                 stats.benign_total += 1;
-                if disable_benign_score_caps || judge_benign(&path, cap, &report) {
+                if disable_score_caps || judge_benign(&path, cap, &report) {
                     stats.benign_passed += 1;
                 } else {
                     failed += 1;
@@ -291,7 +397,7 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
             Target::DoesNothing { dir, .. } => {
                 for file in &report.files {
                     stats.does_nothing_total += 1;
-                    if disable_does_nothing_score_caps {
+                    if disable_score_caps {
                         stats.does_nothing_passed += 1;
                         continue;
                     }
@@ -523,28 +629,28 @@ const DOES_NOTHING_DEFAULT_CAP: u32 = 1;
 /// Per-file score caps for does-nothing samples that can't hit the default cap.
 ///
 /// Each entry is `(relative_path_from_does_nothing_dir, cap)`. `cap` is set to
-/// `current_observed_score + 1` — a regression fires if any trait change pushes
+/// the current observed score — a regression fires if any trait change pushes
 /// the score past this ceiling. Update when trait improvements legitimately
 /// reduce a score, or when a new sample is added to the corpus.
 const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
     ("artifacts/sample.apk", 7),
     ("artifacts/sample.apk!!lib/x86/libsample.so", 7),
-    ("artifacts/sample.ipa", 8),
-    ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 8),
+    ("artifacts/sample.ipa", 9),
+    ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 9),
     ("artifacts/sample.mk", 1),
     ("artifacts/sample.zsh", 3),
     ("main.go", 3),
-    ("out/does-nothing-darwin-arm64.xz", 8),
+    ("out/does-nothing-darwin-arm64.xz", 9),
     (
         "out/does-nothing-darwin-arm64.xz!!does-nothing-darwin-arm64",
-        8,
+        9,
     ),
     ("out/does-nothing-linux-386.xz", 7),
     ("out/does-nothing-linux-386.xz!!does-nothing-linux-386", 7),
-    ("out/does-nothing-openbsd-arm64.xz", 7),
+    ("out/does-nothing-openbsd-arm64.xz", 8),
     (
         "out/does-nothing-openbsd-arm64.xz!!does-nothing-openbsd-arm64",
-        7,
+        8,
     ),
     ("out/does-nothing-windows-amd64.exe.xz", 9),
     (

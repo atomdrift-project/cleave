@@ -51,179 +51,203 @@ pub(crate) fn find_duplicate_traits_and_composites(
     composite_rules: &[CompositeTrait],
     warnings: &mut Vec<String>,
 ) {
+    find_duplicate_atomic_traits(trait_definitions, warnings);
+    find_duplicate_composite_rules(composite_rules, warnings);
+}
+
+pub(crate) fn find_duplicate_atomic_traits(
+    trait_definitions: &[TraitDefinition],
+    warnings: &mut Vec<String>,
+) {
     use rayon::prelude::*;
 
     let start = std::time::Instant::now();
 
-    // Pass 1: Detect duplicate atomic traits using hash-based deduplication
-    // OPTIMIZATION: Uses u64 hash as key (50x faster than Vec<u8> comparisons)
-    if !trait_definitions.is_empty() {
-        tracing::debug!(
-            "Starting atomic trait duplicate detection for {} traits",
-            trait_definitions.len()
-        );
-        let serialize_start = std::time::Instant::now();
-
-        // Process in parallel chunks (no locks needed)
-        let chunk_size = (trait_definitions.len() / rayon::current_num_threads()).max(1000);
-        let trait_maps: Vec<HashMap<u64, Vec<String>>> = trait_definitions
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
-                for t in chunk {
-                    // Serialize the trait's unique characteristics including filter fields
-                    if let Ok(serialized) = bincode::serde::encode_to_vec(
-                        (
-                            &t.r#if,
-                            &t.platforms,
-                            &t.r#for,
-                            &t.not,
-                            &t.unless,
-                            &t.size_min,
-                            &t.size_max,
-                            &t.count_min,
-                            &t.count_max,
-                            &t.per_kb_min,
-                            &t.per_kb_max,
-                            &t.entropy_min,
-                            &t.entropy_max,
-                        ),
-                        bincode::config::standard(),
-                    ) {
-                        // Hash the serialized data to get a u64 key (much faster HashMap operations)
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
-
-                        let mut hasher = DefaultHasher::new();
-                        serialized.hash(&mut hasher);
-                        let hash_key = hasher.finish();
-
-                        local_map.entry(hash_key).or_default().push(t.id.clone());
-                    }
-                }
-                local_map
-            })
-            .collect();
-
-        tracing::debug!(
-            "Atomic trait parallel hashing took {:?}",
-            serialize_start.elapsed()
-        );
-
-        // Merge maps sequentially (fast since we have few chunks)
-        let merge_start = std::time::Instant::now();
-        let mut final_map: HashMap<u64, Vec<String>> = HashMap::new();
-        for map in trait_maps {
-            for (k, mut v) in map {
-                final_map.entry(k).or_default().append(&mut v);
-            }
-        }
-        tracing::debug!("Atomic trait merge took {:?}", merge_start.elapsed());
-
-        let check_start = std::time::Instant::now();
-        for (_hash, ids) in final_map {
-            if ids.len() > 1 {
-                warnings.push(format!(
-                    "Duplicate atomic traits detected (same search parameters): {}",
-                    ids.join(", ")
-                ));
-            }
-        }
-        tracing::debug!(
-            "Atomic trait duplicate check took {:?}",
-            check_start.elapsed()
-        );
-        tracing::debug!(
-            "Total atomic trait processing took {:?}",
-            serialize_start.elapsed()
-        );
+    if trait_definitions.is_empty() {
+        return;
     }
 
-    // Pass 2: Detect duplicate composite rules using hash-based deduplication
-    // OPTIMIZATION: Uses u64 hash as key (50x faster than Vec<u8> comparisons)
-    if !composite_rules.is_empty() {
-        tracing::debug!(
-            "Starting composite rule duplicate detection for {} rules",
-            composite_rules.len()
-        );
-        let composite_start = std::time::Instant::now();
+    tracing::debug!(
+        "Starting atomic trait duplicate detection for {} traits",
+        trait_definitions.len()
+    );
+    let serialize_start = std::time::Instant::now();
 
-        // Process in parallel chunks (no locks needed)
-        let chunk_size = (composite_rules.len() / rayon::current_num_threads()).max(1000);
-        let composite_maps: Vec<HashMap<u64, Vec<String>>> = composite_rules
-            .par_chunks(chunk_size)
-            .map(|chunk| {
-                let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
-                for r in chunk {
-                    // Skip rules with no conditions
-                    if r.all.is_none() && r.any.is_none() && r.unless.is_none() {
-                        continue;
-                    }
+    // Process in parallel chunks (no locks needed)
+    let chunk_size = (trait_definitions.len() / rayon::current_num_threads()).max(1000);
+    let trait_maps: Vec<HashMap<u64, Vec<String>>> = trait_definitions
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
+            for t in chunk {
+                // Serialize the trait's unique characteristics including filter fields
+                if let Ok(serialized) = bincode::serde::encode_to_vec(
+                    (
+                        &t.r#if,
+                        &t.platforms,
+                        &t.r#for,
+                        &t.not,
+                        &t.unless,
+                        &t.size_min,
+                        &t.size_max,
+                        &t.count_min,
+                        &t.count_max,
+                        &t.per_kb_min,
+                        &t.per_kb_max,
+                        &t.entropy_min,
+                        &t.entropy_max,
+                    ),
+                    bincode::config::standard(),
+                ) {
+                    // Hash the serialized data to get a u64 key (much faster HashMap operations)
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
 
-                    // Serialize the rule's unique characteristics
-                    if let Ok(serialized) = bincode::serde::encode_to_vec(
-                        (
-                            &r.all,
-                            &r.any,
-                            &r.unless,
-                            &r.needs,
-                            &r.r#for,
-                            &r.platforms,
-                            &r.size_min,
-                            &r.size_max,
-                        ),
-                        bincode::config::standard(),
-                    ) {
-                        // Hash the serialized data to get a u64 key
-                        use std::collections::hash_map::DefaultHasher;
-                        use std::hash::{Hash, Hasher};
+                    let mut hasher = DefaultHasher::new();
+                    serialized.hash(&mut hasher);
+                    let hash_key = hasher.finish();
 
-                        let mut hasher = DefaultHasher::new();
-                        serialized.hash(&mut hasher);
-                        let hash_key = hasher.finish();
-
-                        local_map.entry(hash_key).or_default().push(r.id.clone());
-                    }
+                    local_map.entry(hash_key).or_default().push(t.id.clone());
                 }
-                local_map
-            })
-            .collect();
-
-        tracing::debug!(
-            "Composite rule parallel hashing took {:?}",
-            composite_start.elapsed()
-        );
-
-        // Merge maps sequentially
-        let merge_start = std::time::Instant::now();
-        let mut final_map: HashMap<u64, Vec<String>> = HashMap::new();
-        for map in composite_maps {
-            for (k, mut v) in map {
-                final_map.entry(k).or_default().append(&mut v);
             }
-        }
-        tracing::debug!("Composite rule merge took {:?}", merge_start.elapsed());
+            local_map
+        })
+        .collect();
 
-        let composite_check_start = std::time::Instant::now();
-        for (_hash, ids) in final_map {
-            if ids.len() > 1 {
-                warnings.push(format!(
-                    "Duplicate composite rules detected (same conditions): {}",
-                    ids.join(", ")
-                ));
-            }
+    tracing::debug!(
+        "Atomic trait parallel hashing took {:?}",
+        serialize_start.elapsed()
+    );
+
+    // Merge maps sequentially (fast since we have few chunks)
+    let merge_start = std::time::Instant::now();
+    let mut final_map: HashMap<u64, Vec<String>> = HashMap::new();
+    for map in trait_maps {
+        for (k, mut v) in map {
+            final_map.entry(k).or_default().append(&mut v);
         }
-        tracing::debug!(
-            "Composite rule duplicate check took {:?}",
-            composite_check_start.elapsed()
-        );
-        tracing::debug!(
-            "Total composite rule processing took {:?}",
-            composite_start.elapsed()
-        );
+    }
+    tracing::debug!("Atomic trait merge took {:?}", merge_start.elapsed());
+
+    let check_start = std::time::Instant::now();
+    for (_hash, ids) in final_map {
+        if ids.len() > 1 {
+            warnings.push(format!(
+                "Duplicate atomic traits detected (same search parameters): {}",
+                ids.join(", ")
+            ));
+        }
+    }
+    tracing::debug!(
+        "Atomic trait duplicate check took {:?}",
+        check_start.elapsed()
+    );
+    tracing::debug!(
+        "Total atomic trait processing took {:?}",
+        serialize_start.elapsed()
+    );
+    tracing::debug!(
+        "Total duplicate atomic detection took {:?}",
+        start.elapsed()
+    );
+}
+
+pub(crate) fn find_duplicate_composite_rules(
+    composite_rules: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    use rayon::prelude::*;
+
+    let start = std::time::Instant::now();
+
+    if composite_rules.is_empty() {
+        return;
     }
 
-    tracing::debug!("Total duplicate detection took {:?}", start.elapsed());
+    // OPTIMIZATION: Uses u64 hash as key (50x faster than Vec<u8> comparisons)
+    tracing::debug!(
+        "Starting composite rule duplicate detection for {} rules",
+        composite_rules.len()
+    );
+    let composite_start = std::time::Instant::now();
+
+    // Process in parallel chunks (no locks needed)
+    let chunk_size = (composite_rules.len() / rayon::current_num_threads()).max(1000);
+    let composite_maps: Vec<HashMap<u64, Vec<String>>> = composite_rules
+        .par_chunks(chunk_size)
+        .map(|chunk| {
+            let mut local_map: HashMap<u64, Vec<String>> = HashMap::with_capacity(chunk.len());
+            for r in chunk {
+                // Skip rules with no conditions
+                if r.all.is_none() && r.any.is_none() && r.unless.is_none() {
+                    continue;
+                }
+
+                // Serialize the rule's unique characteristics
+                if let Ok(serialized) = bincode::serde::encode_to_vec(
+                    (
+                        &r.all,
+                        &r.any,
+                        &r.unless,
+                        &r.needs,
+                        &r.r#for,
+                        &r.platforms,
+                        &r.size_min,
+                        &r.size_max,
+                    ),
+                    bincode::config::standard(),
+                ) {
+                    // Hash the serialized data to get a u64 key
+                    use std::collections::hash_map::DefaultHasher;
+                    use std::hash::{Hash, Hasher};
+
+                    let mut hasher = DefaultHasher::new();
+                    serialized.hash(&mut hasher);
+                    let hash_key = hasher.finish();
+
+                    local_map.entry(hash_key).or_default().push(r.id.clone());
+                }
+            }
+            local_map
+        })
+        .collect();
+
+    tracing::debug!(
+        "Composite rule parallel hashing took {:?}",
+        composite_start.elapsed()
+    );
+
+    // Merge maps sequentially
+    let merge_start = std::time::Instant::now();
+    let mut final_map: HashMap<u64, Vec<String>> = HashMap::new();
+    for map in composite_maps {
+        for (k, mut v) in map {
+            final_map.entry(k).or_default().append(&mut v);
+        }
+    }
+    tracing::debug!("Composite rule merge took {:?}", merge_start.elapsed());
+
+    let composite_check_start = std::time::Instant::now();
+    for (_hash, ids) in final_map {
+        if ids.len() > 1 {
+            warnings.push(format!(
+                "Duplicate composite rules detected (same conditions): {}",
+                ids.join(", ")
+            ));
+        }
+    }
+    tracing::debug!(
+        "Composite rule duplicate check took {:?}",
+        composite_check_start.elapsed()
+    );
+    tracing::debug!(
+        "Total composite rule processing took {:?}",
+        composite_start.elapsed()
+    );
+    tracing::debug!(
+        "Total duplicate composite detection took {:?}",
+        start.elapsed()
+    );
 }
 
 /// Split a regex pattern on top-level `|` only — not inside parentheses or brackets.
@@ -2178,7 +2202,8 @@ pub(crate) fn check_regex_alternative_subsets(
                     for_types: for_types.clone(),
                     case_insensitive,
                 });
-            } else if let Some((prefix, alts, suffix)) = extract_single_group_alternation(&pattern) {
+            } else if let Some((prefix, alts, suffix)) = extract_single_group_alternation(&pattern)
+            {
                 regex_patterns.push(RegexWithAlternatives {
                     pattern,
                     alternatives: Vec::new(),
@@ -2247,8 +2272,10 @@ pub(crate) fn check_regex_alternative_subsets(
             let set2: HashSet<&String> = p2.alternatives.iter().collect();
 
             // Check if one is a subset of the other
-            let mut p1_subset_of_p2 = !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
-            let mut p2_subset_of_p1 = !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
+            let mut p1_subset_of_p2 =
+                !set1.is_empty() && set1.is_subset(&set2) && set1.len() < set2.len();
+            let mut p2_subset_of_p1 =
+                !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
 
             if !(p1_subset_of_p2 || p2_subset_of_p1) {
                 if let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
@@ -2257,10 +2284,8 @@ pub(crate) fn check_regex_alternative_subsets(
                     if prefix1 == prefix2 && suffix1 == suffix2 {
                         let set1: HashSet<&String> = alts1.iter().collect();
                         let set2: HashSet<&String> = alts2.iter().collect();
-                        p1_subset_of_p2 =
-                            set1.is_subset(&set2) && set1.len() < set2.len();
-                        p2_subset_of_p1 =
-                            set2.is_subset(&set1) && set2.len() < set1.len();
+                        p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
+                        p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
                     }
                 }
             }

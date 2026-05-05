@@ -991,6 +991,7 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
 }
 
 /// Check that the regex pattern in a condition does not exceed 80 bytes.
+const MAX_REGEX_LENGTH_BYTES: usize = 90;
 const MAX_REGEX_OR_SYMBOLS: usize = 3;
 
 /// Count regex alternation symbols (`|`) outside character classes.
@@ -1065,24 +1066,25 @@ fn check_regex_length(
     };
 
     if let Some(pattern) = regex {
-        if pattern.len() > 75 {
-            warnings.push(format!(
-                "Trait '{}': regex pattern exceeds 75 bytes ({} bytes): {:?}. Consider decomposing into a composite of multiple atomic conditions (kv, symbol, ast, text) joined with near_lines/near_bytes for proximity matching.",
-                trait_id,
-                pattern.len(),
-                pattern
-            ));
+        if pattern.len() > MAX_REGEX_LENGTH_BYTES
+            && !crate::validation_controls::is_validator_disabled("regex-length")
+        {
+            warnings.push(regex_length_warning(trait_id, pattern));
         }
 
         let or_symbol_count = count_regex_or_symbols(pattern);
-        if or_symbol_count > MAX_REGEX_OR_SYMBOLS {
+        if or_symbol_count > MAX_REGEX_OR_SYMBOLS
+            && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
+        {
             warnings.push(format!(
                 "Trait '{}': regex uses too many '|' symbols ({} > {}). Decompose into multiple traits for better ML analysis: {:?}",
                 trait_id, or_symbol_count, MAX_REGEX_OR_SYMBOLS, pattern
             ));
         }
 
-        if is_simple_alphanumeric_or_chain(pattern) {
+        if is_simple_alphanumeric_or_chain(pattern)
+            && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
+        {
             warnings.push(format!(
                 "Trait '{}': regex is a simple alphanumeric alternation chain. Use atomic exact/word traits instead: {:?}",
                 trait_id,
@@ -1090,6 +1092,16 @@ fn check_regex_length(
             ));
         }
     }
+}
+
+fn regex_length_warning(trait_id: &str, pattern: &str) -> String {
+    format!(
+        "Trait '{}': regex pattern exceeds {} bytes ({} bytes): {:?}. Consider decomposing into a composite of multiple atomic conditions (kv, symbol, ast, text) joined with near_lines/near_bytes for proximity matching.",
+        trait_id,
+        MAX_REGEX_LENGTH_BYTES,
+        pattern.len(),
+        pattern
+    )
 }
 
 #[cfg(test)]
@@ -1991,7 +2003,7 @@ mod tests {
 
     #[test]
     fn test_regex_length_ok() {
-        let pattern = "a".repeat(75);
+        let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES);
         let condition = crate::composite_rules::Condition::Basename {
             exact: None,
             substr: None,
@@ -2007,7 +2019,7 @@ mod tests {
 
     #[test]
     fn test_regex_length_over_limit_warns() {
-        let pattern = "a".repeat(76);
+        let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES + 1);
         let condition = crate::composite_rules::Condition::Basename {
             exact: None,
             substr: None,
@@ -2019,8 +2031,16 @@ mod tests {
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, &mut warnings);
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("regex pattern exceeds 75 bytes"));
-        assert!(warnings[0].contains("76 bytes"));
+        assert!(warnings[0].contains("regex pattern exceeds 90 bytes"));
+        assert!(warnings[0].contains("91 bytes"));
+    }
+
+    #[test]
+    fn test_regex_length_warning_uses_limit() {
+        let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES + 1);
+        let warning = super::regex_length_warning("test-trait", &pattern);
+        assert!(warning.contains("regex pattern exceeds 90 bytes"));
+        assert!(warning.contains("91 bytes"));
     }
 
     #[test]

@@ -20,17 +20,17 @@ use crate::capabilities::validation::{
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
     find_composite_only_wellknown_files, find_condition_scope_violations, find_depth_violations,
-    find_duplicate_second_level_directories, find_duplicate_traits_and_composites,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
-    find_malware_subcategory_violations, find_meta_missing_section_filter,
-    find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
-    find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
-    find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules,
+    find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_excessive_file_types, find_excessive_skip_conditions, find_for_only_duplicates,
+    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
+    find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
+    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
+    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
+    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_pure_alias_traits, find_raw_should_use_text,
     find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
     find_redundant_unix_platforms, find_self_referencing_traits, find_short_pattern_warnings,
@@ -81,6 +81,64 @@ struct BrokenTraitReference {
     source_file: String,
     line_hint: Option<usize>,
     suggestion: Option<String>,
+}
+
+fn push_parsing_warning(
+    warnings: &mut crate::validation_controls::ValidationIssues,
+    path_str: &str,
+    warning: String,
+) {
+    if warning.starts_with("Unknown file type") {
+        warnings.push_id("unknown-file-type", format!("{path_str}: {warning}"));
+    } else if warning.starts_with("Invalid file type") {
+        warnings.push_id("invalid-file-type", format!("{path_str}: {warning}"));
+    } else if warning.contains("regex pattern exceeds") {
+        let message = if warning.contains(" (in ") {
+            warning
+        } else {
+            format!("{warning} (in {path_str})")
+        };
+        warnings.push_id("regex-length", message);
+    } else if warning.contains("too many '|' symbols")
+        || warning.contains("simple alphanumeric alternation chain")
+    {
+        warnings.push_id(
+            "simple-alternation-chain",
+            format!("{warning} (in {path_str})"),
+        );
+    } else {
+        warnings.push_legacy(warning);
+    }
+}
+
+fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> Vec<String> {
+    let mut yaml_dirs: Vec<_> = yaml_files
+        .iter()
+        .filter_map(|path| path.parent())
+        .map(|path| path.to_path_buf())
+        .collect();
+    yaml_dirs.sort_unstable();
+    yaml_dirs.dedup();
+
+    let mut violations = Vec::new();
+    for file in yaml_files {
+        let Some(dir) = file.parent() else {
+            continue;
+        };
+        let has_yaml_descendant = yaml_dirs
+            .iter()
+            .any(|child| child != dir && child.starts_with(dir));
+        if has_yaml_descendant {
+            let display = file
+                .strip_prefix(root)
+                .unwrap_or(file)
+                .to_string_lossy()
+                .to_string();
+            violations.push(display);
+        }
+    }
+    violations.sort_unstable();
+    violations
 }
 
 fn trait_local_id(id: &str) -> &str {
@@ -555,7 +613,7 @@ impl super::CapabilityMapper {
         let mut trait_source_files: HashMap<String, String> = HashMap::new(); // trait_id -> file_path
         let mut rule_source_files: HashMap<String, String> = HashMap::new(); // rule_id -> file_path
         let mut files_processed = 0;
-        let mut warnings: Vec<String> = Vec::new();
+        let mut warnings = crate::validation_controls::ValidationIssues::new();
         let mut parse_errors: Vec<String> = Vec::new();
 
         for result in sorted_results {
@@ -570,7 +628,7 @@ impl super::CapabilityMapper {
             files_processed += 1;
 
             // Collect YAML pattern warnings
-            warnings.extend(yaml_warnings);
+            warnings.extend_legacy(yaml_warnings);
 
             // Calculate the prefix from the directory path relative to traits/
             // e.g., traits/credential/java/traits.yaml -> credential/java
@@ -634,24 +692,20 @@ impl super::CapabilityMapper {
             // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type")
-                    || warning.starts_with("Invalid file type")
-                {
-                    warnings.push(format!("{}: {}", path_str, warning));
-                } else {
-                    warnings.push(warning);
-                }
+                push_parsing_warning(&mut warnings, &path_str, warning);
             }
 
             // Per-file: check for values that should use defaults, and values redundant with defaults
-            if enable_full_validation {
+            if enable_full_validation
+                && !crate::validation_controls::is_validator_disabled("defaults-hoist")
+            {
                 let path_str = path.display().to_string();
                 for (field, value) in find_should_use_defaults(
                     &mappings.traits,
                     &mappings.composite_rules,
                     &mappings.defaults,
                 ) {
-                    warnings.push(format!(
+                    warnings.push_id("defaults-hoist", format!(
                         "{path_str}: all {} items set '{field}' to {value} — move to 'defaults: {field}: {value}'",
                         mappings.traits.len() + mappings.composite_rules.len(),
                     ));
@@ -661,7 +715,7 @@ impl super::CapabilityMapper {
                     &mappings.composite_rules,
                     &mappings.defaults,
                 ) {
-                    warnings.push(format!(
+                    warnings.push_id("defaults-hoist", format!(
                         "'{id}' in {path_str}: '{field}' matches the file default — remove the explicit '{field}:' from this item",
                     ));
                 }
@@ -703,18 +757,24 @@ impl super::CapabilityMapper {
                 // Per-trait validation checks - skip when validation is disabled
                 if enable_full_validation {
                     // Check for greedy regex patterns
-                    if let Some(warning) = trait_def.r#if.check_greedy_patterns() {
-                        warnings.push(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
+                    if !crate::validation_controls::is_validator_disabled("nested-quantifier") {
+                        if let Some(warning) = trait_def.r#if.check_greedy_patterns() {
+                            warnings.push_id(
+                                "nested-quantifier",
+                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                            );
+                        }
                     }
                     // Check for word boundary regex patterns that should use type: word
-                    if let Some(warning) = trait_def.r#if.check_word_boundary_regex() {
-                        warnings.push(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
+                    if !crate::validation_controls::is_validator_disabled(
+                        "simple-word-boundary-regex",
+                    ) {
+                        if let Some(warning) = trait_def.r#if.check_word_boundary_regex() {
+                            warnings.push_id(
+                                "simple-word-boundary-regex",
+                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                            );
+                        }
                     }
 
                     // Check for short case-insensitive patterns (high collision risk)
@@ -722,7 +782,7 @@ impl super::CapabilityMapper {
                         .r#if
                         .check_short_case_insensitive(trait_def.r#for.len())
                     {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -730,7 +790,7 @@ impl super::CapabilityMapper {
 
                     // Check for improper use of not: field
                     if let Some(warning) = trait_def.check_not_field_usage() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -738,7 +798,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid criticality level
                     if let Some(warning) = trait_def.check_criticality() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -746,7 +806,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid confidence value
                     if let Some(warning) = trait_def.check_confidence() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -754,7 +814,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid size constraints
                     if let Some(warning) = trait_def.check_size_constraints() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -762,7 +822,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid entropy constraints
                     if let Some(warning) = trait_def.check_entropy_constraints() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -770,7 +830,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid count constraints
                     if let Some(warning) = trait_def.check_count_constraints() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -778,7 +838,7 @@ impl super::CapabilityMapper {
 
                     // Check for invalid density constraints
                     if let Some(warning) = trait_def.check_density_constraints() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -786,7 +846,7 @@ impl super::CapabilityMapper {
 
                     // Check for mutually exclusive match types in condition
                     if let Some(warning) = trait_def.r#if.check_match_exclusivity() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -794,7 +854,7 @@ impl super::CapabilityMapper {
 
                     // Check for empty patterns
                     if let Some(warning) = trait_def.r#if.check_empty_patterns() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -802,7 +862,7 @@ impl super::CapabilityMapper {
 
                     // Check for overly short patterns
                     if let Some(warning) = trait_def.r#if.check_short_patterns() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -810,7 +870,7 @@ impl super::CapabilityMapper {
 
                     // Check for symbol regex patterns with whitespace or word boundaries
                     if let Some(warning) = trait_def.r#if.check_symbol_regex_whitespace() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -818,23 +878,28 @@ impl super::CapabilityMapper {
 
                     // Check for literal strings used as regex
                     if let Some(warning) = trait_def.r#if.check_literal_regex() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
                     }
 
                     // Check for useless case_insensitive
-                    if let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha() {
-                        warnings.push(format!(
-                            "trait '{}' in {:?}: {}",
-                            trait_def.id, path, warning
-                        ));
+                    if !crate::validation_controls::is_validator_disabled(
+                        "case-insensitive-no-effect",
+                    ) {
+                        if let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha()
+                        {
+                            warnings.push_id(
+                                "case-insensitive-no-effect",
+                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                            );
+                        }
                     }
 
                     // Check for count_min: 0
                     if let Some(warning) = trait_def.check_count_min_value() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -842,7 +907,7 @@ impl super::CapabilityMapper {
 
                     // Check for description quality
                     if let Some(warning) = trait_def.check_description_quality() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -850,7 +915,7 @@ impl super::CapabilityMapper {
 
                     // Check for empty not: array
                     if let Some(warning) = trait_def.check_empty_not_array() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -858,7 +923,7 @@ impl super::CapabilityMapper {
 
                     // Check for empty unless: array
                     if let Some(warning) = trait_def.check_empty_unless_array() {
-                        warnings.push(format!(
+                        warnings.push_legacy(format!(
                             "trait '{}' in {:?}: {}",
                             trait_def.id, path, warning
                         ));
@@ -866,23 +931,29 @@ impl super::CapabilityMapper {
                 }
 
                 // Check for ID conflicts with previously loaded traits (cross-file duplicates)
-                if trait_definitions_map.contains_key(&trait_def.id) {
-                    warnings.push(format!(
-                        "Trait ID '{}' defined in multiple files - last definition wins",
-                        trait_def.id
-                    ));
+                if trait_definitions_map.contains_key(&trait_def.id)
+                    && !crate::validation_controls::is_validator_disabled("duplicate-composites")
+                {
+                    warnings.push_id(
+                        "duplicate-composites",
+                        format!(
+                            "Trait ID '{}' defined in multiple files - last definition wins",
+                            trait_def.id
+                        ),
+                    );
                     // HashMap insert will automatically replace the old one
                 }
 
                 // Check for ID conflicts with composite rules
                 if composite_rules_map.contains_key(&trait_def.id) {
-                    warnings.push(format!(
+                    warnings.push_legacy(format!(
                         "Rule ID '{}' defined as both trait and composite rule - trait will be used",
                         trait_def.id
                     ));
                     if let Some(comp_file) = rule_source_files.get(&trait_def.id) {
-                        warnings.push(format!("  Trait: {}", path.display()));
-                        warnings.push(format!("  Composite (will be replaced): {}", comp_file));
+                        warnings.push_legacy(format!("  Trait: {}", path.display()));
+                        warnings
+                            .push_legacy(format!("  Composite (will be replaced): {}", comp_file));
                     }
                     // Remove the composite rule
                     composite_rules_map.remove(&trait_def.id);
@@ -959,13 +1030,7 @@ impl super::CapabilityMapper {
             // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type")
-                    || warning.starts_with("Invalid file type")
-                {
-                    warnings.push(format!("{}: {}", path_str, warning));
-                } else {
-                    warnings.push(warning);
-                }
+                push_parsing_warning(&mut warnings, &path_str, warning);
             }
 
             // Merge composite_rules with auto-prefixed IDs, applying file-level defaults
@@ -993,22 +1058,28 @@ impl super::CapabilityMapper {
                 }
 
                 // Check for duplicate rule ID with other composite rules
-                if composite_rules_map.contains_key(&rule.id) {
-                    warnings.push(format!(
-                        "Composite rule '{}' defined in multiple files - last definition wins",
-                        rule.id
-                    ));
+                if composite_rules_map.contains_key(&rule.id)
+                    && !crate::validation_controls::is_validator_disabled("duplicate-composites")
+                {
+                    warnings.push_id(
+                        "duplicate-composites",
+                        format!(
+                            "Composite rule '{}' defined in multiple files - last definition wins",
+                            rule.id
+                        ),
+                    );
                     // HashMap insert will automatically replace the old one
                 }
 
                 // Check for ID conflicts with trait definitions
                 if trait_definitions_map.contains_key(&rule.id) {
-                    warnings.push(format!(
+                    warnings.push_legacy(format!(
                         "Rule ID '{}' defined as both trait and composite rule - composite will be used",
                         rule.id
                     ));
-                    warnings.push("  Trait (will be replaced): (already loaded)".to_string());
-                    warnings.push(format!("  Composite: {}", path.display()));
+                    warnings
+                        .push_legacy("  Trait (will be replaced): (already loaded)".to_string());
+                    warnings.push_legacy(format!("  Composite: {}", path.display()));
                     // Remove the trait definition
                     trait_definitions_map.remove(&rule.id);
                 }
@@ -1031,13 +1102,7 @@ impl super::CapabilityMapper {
             // Add file path to file-type warnings, append others as-is
             let path_str = path.display().to_string();
             for warning in parsing_warnings {
-                if warning.starts_with("Unknown file type")
-                    || warning.starts_with("Invalid file type")
-                {
-                    warnings.push(format!("{}: {}", path_str, warning));
-                } else {
-                    warnings.push(warning);
-                }
+                push_parsing_warning(&mut warnings, &path_str, warning);
             }
 
             if debug {
@@ -1052,13 +1117,15 @@ impl super::CapabilityMapper {
 
         // Check for structurally invalid file types (empty for:) — always fatal.
         // Trait-level for: [none] is intentionally allowed to unset inherited defaults.
-        let invalid_ft_errors: Vec<&String> = warnings
+        let invalid_ft_errors: Vec<&crate::validation_controls::ValidationIssue> = warnings
             .iter()
-            .filter(|w| w.contains("Invalid file type"))
+            .filter(|w| w.validator_id == "invalid-file-type")
             .collect();
         if !invalid_ft_errors.is_empty() {
-            let mut sorted_errors: Vec<&str> =
-                invalid_ft_errors.iter().map(|e| e.as_str()).collect();
+            let mut sorted_errors: Vec<&str> = invalid_ft_errors
+                .iter()
+                .map(|e| e.message.as_str())
+                .collect();
             sorted_errors.sort();
 
             return Err(anyhow::anyhow!(
@@ -1069,14 +1136,16 @@ impl super::CapabilityMapper {
 
         // Check for unrecognized file types (forward-compat: newer traits, older binary)
         // In validation mode these are errors; otherwise just log at info and continue
-        let unknown_ft_warnings: Vec<&String> = warnings
+        let unknown_ft_warnings: Vec<&crate::validation_controls::ValidationIssue> = warnings
             .iter()
-            .filter(|w| w.contains("Unknown file type"))
+            .filter(|w| w.validator_id == "unknown-file-type")
             .collect();
         if !unknown_ft_warnings.is_empty() {
             if enable_full_validation {
-                let mut sorted_errors: Vec<&str> =
-                    unknown_ft_warnings.iter().map(|e| e.as_str()).collect();
+                let mut sorted_errors: Vec<&str> = unknown_ft_warnings
+                    .iter()
+                    .map(|e| e.message.as_str())
+                    .collect();
                 sorted_errors.sort();
 
                 return Err(anyhow::anyhow!(
@@ -1085,7 +1154,7 @@ impl super::CapabilityMapper {
                 ));
             }
             for w in &unknown_ft_warnings {
-                tracing::info!("{} — skipping rule (update cleave for support)", w);
+                tracing::info!("{} — skipping rule (update cleave for support)", w.message);
             }
         }
 
@@ -1139,24 +1208,28 @@ impl super::CapabilityMapper {
         if enable_precision_scoring {
             let precision_warning_start = warnings.len();
 
-            validate_hostile_trait_precision(
-                &mut trait_definitions,
-                &mut warnings,
-                min_hostile_precision,
-                min_suspicious_precision,
-            );
+            warnings.collect_as("precision", |warnings| {
+                validate_hostile_trait_precision(
+                    &mut trait_definitions,
+                    warnings,
+                    min_hostile_precision,
+                    min_suspicious_precision,
+                );
+            });
             precalculate_all_composite_precisions(&mut composite_rules, &trait_definitions);
-            validate_hostile_composite_precision(
-                &mut composite_rules,
-                &trait_definitions,
-                &mut warnings,
-                min_hostile_precision,
-                min_suspicious_precision,
-            );
+            warnings.collect_as("precision", |warnings| {
+                validate_hostile_composite_precision(
+                    &mut composite_rules,
+                    &trait_definitions,
+                    warnings,
+                    min_hostile_precision,
+                    min_suspicious_precision,
+                );
+            });
 
             if !enable_full_validation {
-                for warning in &warnings[precision_warning_start..] {
-                    eprintln!("Warning: {}", warning);
+                for warning in &warnings.as_slice()[precision_warning_start..] {
+                    eprintln!("Warning: {}", warning.compact_message());
                 }
                 warnings.truncate(precision_warning_start);
             }
@@ -1168,73 +1241,115 @@ impl super::CapabilityMapper {
         if enable_full_validation {
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1c/15: Detecting duplicate traits and composites");
-            find_duplicate_traits_and_composites(
-                &trait_definitions,
-                &composite_rules,
-                &mut warnings,
-            );
+            if !crate::validation_controls::is_validator_disabled("dupe-atomic") {
+                warnings.collect_as("dupe-atomic", |warnings| {
+                    find_duplicate_atomic_traits(&trait_definitions, warnings);
+                });
+            }
+            if !crate::validation_controls::is_validator_disabled("duplicate-composites") {
+                warnings.collect_as("duplicate-composites", |warnings| {
+                    find_duplicate_composite_rules(&composite_rules, warnings);
+                });
+            }
             tracing::trace!("Step 1c completed in {:?}", step_start.elapsed());
 
             // Detect string pattern duplicates and overlaps
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1d/15: Detecting string pattern duplicates and overlaps");
-            find_string_pattern_duplicates(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("duplicate-patterns") {
+                warnings.collect_as("duplicate-patterns", |warnings| {
+                    find_string_pattern_duplicates(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1d completed in {:?}", step_start.elapsed());
 
             // Check for regex OR patterns overlapping with exact matches
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1e/15: Checking for regex OR patterns overlapping exact matches");
-            check_regex_or_overlapping_exact(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("regex-or-literal-overlap") {
+                warnings.collect_as("regex-or-literal-overlap", |warnings| {
+                    check_regex_or_overlapping_exact(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1e completed in {:?}", step_start.elapsed());
 
             let step_start = std::time::Instant::now();
             tracing::trace!(
                 "Step 1e2/15: Checking for overlapping regex patterns with same filetype coverage"
             );
-            check_overlapping_regex_patterns(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("overlapping-regex-patterns") {
+                warnings.collect_as("overlapping-regex-patterns", |warnings| {
+                    check_overlapping_regex_patterns(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1e2 completed in {:?}", step_start.elapsed());
 
             // Catch structurally-identical regex pairs (e.g. only the inside of
             // a character class differs) — common copy/paste duplication.
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1e3/15: Checking for structurally duplicate regex patterns");
-            find_structural_regex_duplicates(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("redundant-patterns") {
+                warnings.collect_as("redundant-patterns", |warnings| {
+                    find_structural_regex_duplicates(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1e3 completed in {:?}", step_start.elapsed());
 
             // Check for simple regex that should be exact
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1f/15: Checking for regex patterns that should be exact");
-            check_regex_should_be_exact(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("exact-regex-canonicalization") {
+                warnings.collect_as("exact-regex-canonicalization", |warnings| {
+                    check_regex_should_be_exact(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1f completed in {:?}", step_start.elapsed());
 
             // Check for same pattern with different types
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1g/15: Checking for patterns with conflicting types");
-            check_same_string_different_types(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("cross-type-canonicalization") {
+                warnings.collect_as("cross-type-canonicalization", |warnings| {
+                    check_same_string_different_types(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1g completed in {:?}", step_start.elapsed());
 
             // Detect potentially slow regex patterns that could cause catastrophic backtracking
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h/15: Detecting potentially slow regex patterns");
-            find_slow_regex_patterns(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("regex-performance") {
+                warnings.collect_as("regex-performance", |warnings| {
+                    find_slow_regex_patterns(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1h completed in {:?}", step_start.elapsed());
 
             // Detect unnecessary non-capturing groups in regex patterns
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h2/15: Detecting non-capturing groups in regex patterns");
-            find_non_capturing_groups(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("unnecessary-non-capturing-group")
+            {
+                warnings.collect_as("unnecessary-non-capturing-group", |warnings| {
+                    find_non_capturing_groups(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1h2 completed in {:?}", step_start.elapsed());
 
             // Detect raw patterns on binary types that would be faster as text
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h3/15: Detecting raw patterns that should use text");
-            find_raw_should_use_text(&trait_definitions, &mut warnings);
+            warnings.collect_as("raw-should-use-text", |warnings| {
+                find_raw_should_use_text(&trait_definitions, warnings);
+            });
             tracing::trace!("Step 1h3 completed in {:?}", step_start.elapsed());
 
             // Detect string_literal patterns that should use text
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h4/15: Detecting literal-only text mismatches");
-            find_string_literal_should_use_text(&trait_definitions, &mut warnings);
+            warnings.collect_as("string-literal-should-use-text", |warnings| {
+                find_string_literal_should_use_text(&trait_definitions, warnings);
+            });
             tracing::trace!("Step 1h4 completed in {:?}", step_start.elapsed());
 
             // Detect text/raw function-call patterns on AST source types — these
@@ -1243,37 +1358,64 @@ impl super::CapabilityMapper {
             tracing::trace!(
                 "Step 1h5/15: Detecting text function-call patterns that should use symbol"
             );
-            find_ast_function_call_should_use_symbol(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("ast-text-call-performance") {
+                warnings.collect_as("ast-text-call-performance", |warnings| {
+                    find_ast_function_call_should_use_symbol(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1h5 completed in {:?}", step_start.elapsed());
 
             // Check for exact patterns contained by substr patterns (redundancy)
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1i/15: Checking for exact ⊂ substr containment");
-            check_exact_contained_by_substr(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("redundant-patterns") {
+                warnings.collect_as("redundant-patterns", |warnings| {
+                    check_exact_contained_by_substr(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1i completed in {:?}", step_start.elapsed());
 
             // Check for case-insensitive overlaps and subsumption
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1j/15: Checking for case-insensitive overlaps");
-            check_case_insensitive_overlaps(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("regex-case-subsumption")
+                || !crate::validation_controls::is_validator_disabled("case-subsumption")
+                || !crate::validation_controls::is_validator_disabled("duplicate-case-only")
+            {
+                warnings.collect_as("validation", |warnings| {
+                    check_case_insensitive_overlaps(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1j completed in {:?}", step_start.elapsed());
 
             // Check for regex vs literal overlaps (cross-type and containment)
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1k/15: Checking for regex vs literal overlaps");
-            check_regex_contains_literal(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("regex-contains-literal")
+                || !crate::validation_controls::is_validator_disabled("regex-vs-literal-duplicate")
+            {
+                warnings.collect_as("validation", |warnings| {
+                    check_regex_contains_literal(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1k completed in {:?}", step_start.elapsed());
 
             // Check for regex alternative subsets and case-insensitive regex overlaps
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1l/15: Checking for regex alternative subsets");
-            check_regex_alternative_subsets(&trait_definitions, &mut warnings);
+            if !crate::validation_controls::is_validator_disabled("regex-alternative-subset") {
+                warnings.collect_as("regex-alternative-subset", |warnings| {
+                    check_regex_alternative_subsets(&trait_definitions, warnings);
+                });
+            }
             tracing::trace!("Step 1l completed in {:?}", step_start.elapsed());
 
             // Check for basename pattern duplicates
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1m/15: Checking for basename pattern duplicates");
-            check_basename_pattern_duplicates(&trait_definitions, &mut warnings);
+            warnings.collect_as("basename-duplicate", |warnings| {
+                check_basename_pattern_duplicates(&trait_definitions, warnings);
+            });
             tracing::trace!("Step 1m completed in {:?}", step_start.elapsed());
         } else {
             tracing::trace!(
@@ -1343,6 +1485,34 @@ impl super::CapabilityMapper {
                     warnings.push(format!("unknown subdirectory: {error}"));
                 }
                 has_fatal_errors = true;
+            }
+
+            // Check for YAML files above leaf directories.
+            tracing::trace!("Step 2c/15: Checking for non-leaf YAML files");
+            let non_leaf_yaml_files = find_non_leaf_yaml_files(&yaml_files, dir_path);
+            if !non_leaf_yaml_files.is_empty()
+                && !crate::validation_controls::is_validator_disabled("leaf-yaml")
+            {
+                eprintln!(
+                    "\n❌ ERROR: {} YAML files are not in leaf directories",
+                    non_leaf_yaml_files.len()
+                );
+                eprintln!("   A directory with YAML files must not also have YAML-bearing child directories.");
+                eprintln!("   Choose one taxonomy level: move parent YAML into a leaf named for the shared technique,");
+                eprintln!("   or flatten child YAML up when the extra directory adds no ML-visible technique signal.");
+                eprintln!("   Prefer language/platform-neutral technique names; use platform directories only when");
+                eprintln!("   the technique itself is platform-specific. Keep depth reasonable.\n");
+                for file in &non_leaf_yaml_files {
+                    eprintln!("   {file}");
+                }
+                eprintln!();
+                warnings.push_id(
+                    "leaf-yaml",
+                    format!(
+                        "{} YAML files are above YAML-bearing child directories",
+                        non_leaf_yaml_files.len()
+                    ),
+                );
             }
 
             // Check for taxonomy violations: platform/language names as directories
@@ -1472,6 +1642,7 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} files are too shallow (need 2-4 subdirectories in micro-behaviors/obj)",
                     shallow.len()
                 );
+                    eprintln!("   Add technique-bearing directories, not filler names; filenames can carry language/platform.");
                     for (path, depth, _) in &shallow {
                         eprintln!("   {} ({} subdirs, need 2-4)", path, depth);
                     }
@@ -1481,6 +1652,7 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} files are too deep (max 4 subdirectories in micro-behaviors/obj)",
                     deep.len()
                 );
+                    eprintln!("   Collapse language/platform or filler levels into filenames; keep paths focused on technique.");
                     for (path, depth, _) in &deep {
                         eprintln!("   {} ({} subdirs, max 4)", path, depth);
                     }
@@ -2238,9 +2410,10 @@ impl super::CapabilityMapper {
                 has_fatal_errors = true;
             }
 
-            let disable_wellknown_size_filter_validation = true;
-            let disable_wellknown_section_filter_validation = true;
-            let disable_metadata_section_filter_validation = true;
+            let disable_wellknown_size_filter_validation =
+                crate::validation_controls::is_validator_disabled("wellknown-size-filter");
+            let disable_binary_section_filter_validation =
+                crate::validation_controls::is_validator_disabled("binary-section-filter");
 
             // Validate well-known/ atomic traits have file size bounds
             tracing::trace!("Checking well-known/ for missing size filters");
@@ -2266,7 +2439,7 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking well-known/ binary traits for missing section filters");
             let wk_no_section =
                 find_wellknown_missing_section_filter(&trait_definitions, &rule_source_files);
-            if !disable_wellknown_section_filter_validation && !wk_no_section.is_empty() {
+            if !disable_binary_section_filter_validation && !wk_no_section.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} well-known/ binary traits lack a section filter",
                     wk_no_section.len()
@@ -2287,7 +2460,7 @@ impl super::CapabilityMapper {
             tracing::trace!("Checking metadata/ binary traits for missing section filters");
             let meta_no_section =
                 find_meta_missing_section_filter(&trait_definitions, &rule_source_files);
-            if !disable_metadata_section_filter_validation && !meta_no_section.is_empty() {
+            if !disable_binary_section_filter_validation && !meta_no_section.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} metadata/ binary traits lack a section filter",
                     meta_no_section.len()
@@ -2984,7 +3157,8 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            let disable_excessive_unless_downgrade_validation = true;
+            let disable_excessive_unless_downgrade_validation =
+                crate::validation_controls::is_validator_disabled("excessive-unless-downgrade");
 
             // Validate: excessive unless:/downgrade: clauses (8+ combined)
             let excessive_skips =
@@ -3101,9 +3275,11 @@ impl super::CapabilityMapper {
             }
 
             // Validate: orphaned component traits not referenced by any rule
+            let disable_orphaned_components_validation =
+                crate::validation_controls::is_validator_disabled("orphaned-components");
             let orphaned_components =
                 find_orphaned_components(&trait_definitions, &composite_rules, &rule_source_files);
-            if !orphaned_components.is_empty() {
+            if !disable_orphaned_components_validation && !orphaned_components.is_empty() {
                 eprintln!(
                     "\n⚠️  WARNING: {} component traits are never referenced",
                     orphaned_components.len()
@@ -3167,22 +3343,30 @@ impl super::CapabilityMapper {
 
             // Validate: directories with too many traits (should be split)
             let oversized_dirs = find_oversized_trait_directories(&trait_definitions);
-            if !oversized_dirs.is_empty() {
+            if !oversized_dirs.is_empty()
+                && !crate::validation_controls::is_validator_disabled("oversized-dir")
+            {
                 eprintln!(
                     "\n❌ ERROR: {} directories have more than {} traits",
                     oversized_dirs.len(),
                     MAX_TRAITS_PER_DIRECTORY
                 );
-                eprintln!("   Consider splitting these into subdirectories:\n");
+                eprintln!("   Why: the ML pipeline sees directory structure, not trait IDs; broad directories hide shared behavior.");
+                eprintln!("   Split by language/platform-neutral technique so similar behavior groups across implementations.");
+                eprintln!("   Use platform directories only when the technique itself is platform-specific.");
+                eprintln!("   Keep depth reasonable; prefer one meaningful subdirectory level over a deep taxonomy.\n");
                 for (dir_path, count) in &oversized_dirs {
                     eprintln!("   {}: {} traits", dir_path, count);
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} directories exceed {} traits (consider splitting)",
-                    oversized_dirs.len(),
-                    MAX_TRAITS_PER_DIRECTORY
-                ));
+                warnings.push_id(
+                    "oversized-dir",
+                    format!(
+                        "{} directories exceed {} traits (split by portable technique; keep depth reasonable)",
+                        oversized_dirs.len(),
+                        MAX_TRAITS_PER_DIRECTORY
+                    ),
+                );
             }
 
             let mut broken_refs = Vec::new();
@@ -3597,69 +3781,21 @@ impl super::CapabilityMapper {
         }
 
         if enable_full_validation {
-            let disabled_validators = [
-                ("regex-length", "regex pattern exceeds 75 bytes"),
-                ("regex-contains-literal", "REGEX CONTAINS LITERAL"),
-                ("regex-alternative-subset", "REGEX ALTERNATIVE SUBSET"),
-                ("unnecessary-non-capturing-group", "Unnecessary non-capturing group"),
-                ("defaults-for-redundancy", "move to 'defaults: for:'"),
-                ("unbounded-negated-char-class", "unbounded negated character class"),
-                ("simple-alternation-chain", "simple alphanumeric alternation chain"),
-                ("case-insensitive-no-effect", "case_insensitive has no effect"),
-                ("duplicate-composites", "Duplicate composite rules detected"),
-                ("duplicate-patterns", "Duplicate pattern '"),
-                ("tier-violation", "TIER VIOLATION:"),
-                ("regex-case-subsumption", "REGEX CASE SUBSUMPTION"),
-                ("simple-word-boundary-regex", "regex is a simple word boundary pattern"),
-                ("regex-or-literal-overlap", "Regex OR pattern overlaps with exact/word/substr patterns"),
-                ("case-subsumption", "CASE SUBSUMPTION"),
-                ("duplicate-case-only", "DUPLICATE (case only)"),
-                ("regex-vs-literal-duplicate", "REGEX vs LITERAL DUPLICATE"),
-                ("defaults-hoist", "move to 'defaults:"),
-                ("overlapping-regex-patterns", "Overlapping regex patterns with same file type coverage:"),
-                ("redundant-patterns", "REDUNDANT: exact pattern"),
-                ("nested-quantifier", "nested quantifier"),
-                ("exact-regex-canonicalization", "is just ^word$ and should use exact:"),
-                ("cross-type-canonicalization", "appears with multiple types and overlapping file type coverage"),
-                ("wellknown-size-filter", "well-known/ traits have no file size filter"),
-                ("wellknown-section-filter", "well-known/ binary traits lack a section filter"),
-                ("metadata-section-filter", "metadata/ binary traits lack a section filter"),
-                ("regex-performance", "Regex performance:"),
-                ("ast-text-call-performance", "Performance: trait"),
-                ("excessive-unless-downgrade", "rules have excessive unless:/downgrade: clauses"),
-            ];
-
-            let names = disabled_validators
-                .iter()
-                .map(|(name, _)| *name)
-                .collect::<Vec<_>>()
-                .join(",");
-            eprintln!(
-                "
-NOTE: these validators are currently disabled: {}
-",
-                names
-            );
-
-            warnings.retain(|warning| {
-                !disabled_validators
-                    .iter()
-                    .any(|(_, marker)| warning.contains(marker))
-            });
-
             if !warnings.is_empty() {
-                eprintln!(
-                    "
-⚠️  ERROR: {} trait configuration validation issue(s) found:
-",
-                    warnings.len()
-                );
-                for warning in &warnings {
-                    eprintln!("   ⚠️  {}", warning);
-                }
-                eprintln!("
-   Fix these issues in the YAML files before continuing.
-");
+                let rendered = match std::env::var("CLEAVE_VALIDATE_FORMAT").ok().as_deref() {
+                    Some("tiny") => crate::validation_controls::format_validation_issues_tiny(
+                        warnings.as_slice(),
+                    ),
+                    Some("json") | Some("jsonl") => {
+                        crate::validation_controls::format_validation_issues_json(
+                            warnings.as_slice(),
+                        )
+                    }
+                    _ => crate::validation_controls::format_validation_issues_terminal(
+                        warnings.as_slice(),
+                    ),
+                };
+                eprintln!("{rendered}");
                 has_fatal_errors = true;
             }
         }
@@ -3671,8 +3807,8 @@ NOTE: these validators are currently disabled: {}
             for e in &parse_errors {
                 details.push(format!("parse error: {e}"));
             }
-            for w in &warnings {
-                details.push(format!("validation: {w}"));
+            for issue in warnings.iter() {
+                details.push(format!("validation: {}", issue.compact_message()));
             }
             anyhow::bail!(
                 "Trait loading failed due to {} validation error(s):\n{}",

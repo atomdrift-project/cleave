@@ -39,6 +39,7 @@ pub mod test_rules;
 pub mod test_rules_filters_test;
 pub mod traits_repo;
 mod upx;
+pub(crate) mod validation_controls;
 
 // Standalone RTF parser (can be used independently)
 pub mod rtf;

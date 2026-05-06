@@ -32,11 +32,22 @@ use tree_sitter::{Language, Parser};
 const MAX_SAFE_INDENT_STACK_DEPTH: usize = 450;
 const TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE: usize = 1024;
 
+/// Files larger than this skip AST parsing entirely. Tree-sitter's external
+/// scanner `ts_parser__external_scanner_serialize` asserts `length <= 1024`;
+/// on large generated files (e.g. protobuf descriptors) nested-state
+/// accumulation can trigger that C-level abort before Rust can intervene.
+/// Files this large are almost always machine-generated and gain little from
+/// AST analysis anyway.
+const MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
 #[derive(Debug)]
 struct AstSkipFinding {
     id: &'static str,
     desc: String,
     evidence: String,
+    /// True when the skip reason is itself a security signal (e.g. obfuscation).
+    /// False for operational skips like file-too-large.
+    suspicious: bool,
 }
 
 /// Configuration for a language analyzer.
@@ -561,7 +572,7 @@ impl UnifiedSourceAnalyzer {
                 reason = %reason.desc,
                 "AST parsing skipped to avoid tree-sitter external scanner abort"
             );
-            report.findings.push(
+            let finding = if reason.suspicious {
                 crate::types::Finding::structural(reason.id.to_string(), reason.desc, 0.85)
                     .with_criticality(crate::types::Criticality::Suspicious)
                     .with_attack("T1027".to_string())
@@ -571,8 +582,24 @@ impl UnifiedSourceAnalyzer {
                         value: reason.evidence,
                         location: Some("source:indentation".to_string()),
                         ..Default::default()
-                    }]),
-            );
+                    }])
+            } else {
+                let mut f = crate::types::Finding::new(
+                    reason.id.to_string(),
+                    crate::types::FindingKind::Structural,
+                    reason.desc,
+                    0.0,
+                );
+                f.crit = crate::types::Criticality::Component;
+                f.evidence = vec![crate::types::Evidence {
+                    method: "parser-guard".to_string(),
+                    source: "tree-sitter".to_string(),
+                    value: reason.evidence,
+                    ..Default::default()
+                }];
+                f
+            };
+            report.findings.push(finding);
 
             let text = crate::analyzers::text_metrics::analyze_text(content);
             report.metrics = Some(crate::types::Metrics {
@@ -1421,6 +1448,25 @@ fn scanner_state_overflow_risk(
     file_type: &crate::analyzers::FileType,
     content: &str,
 ) -> Option<AstSkipFinding> {
+    // Guard against the C-level abort in ts_parser__external_scanner_serialize.
+    // All tree-sitter grammars with external scanners are at risk on very large
+    // files; this check must run before any language-specific logic.
+    if content.len() > MAX_AST_FILE_BYTES {
+        let size_kb = content.len() / 1024;
+        return Some(AstSkipFinding {
+            id: "metadata/analysis/ast-file-too-large",
+            desc: format!(
+                "AST parsing skipped: file size ({size_kb} KB) exceeds the {}-MB safety limit for tree-sitter external scanner serialization",
+                MAX_AST_FILE_BYTES / (1024 * 1024)
+            ),
+            evidence: format!(
+                "file_size_bytes={} limit_bytes={MAX_AST_FILE_BYTES} tree_sitter_serialization_buffer_bytes={TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE}",
+                content.len()
+            ),
+            suspicious: false,
+        });
+    }
+
     if !matches!(file_type, crate::analyzers::FileType::Python) {
         return None;
     }
@@ -1435,6 +1481,7 @@ fn scanner_state_overflow_risk(
             evidence: format!(
                 "language=python indent_stack_depth={depth} safe_depth_limit={MAX_SAFE_INDENT_STACK_DEPTH} tree_sitter_serialization_buffer_bytes={TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE}"
             ),
+            suspicious: true,
         })
     } else {
         None

@@ -1090,6 +1090,8 @@ impl PackageJsonAnalyzer {
         };
 
         if author_empty
+            && pkg.name.is_some()
+            && pkg.version.is_some()
             && !pkg.r#private
             && !has_local_dependency_protocols(pkg)
             && pkg.publisher.is_none()

@@ -1759,7 +1759,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 .encoding_chain
                 .iter()
                 .any(|encoding| encoding == "unicode-escape");
-        let crit = if is_unknown_unicode_escape {
+        let is_detached_signature_data = payload.detected_type == FileType::Unknown
+            && (path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sig"))
+                || payload
+                    .preview
+                    .to_ascii_lowercase()
+                    .starts_with("untrusted comment: signature"));
+        let crit = if is_unknown_unicode_escape || is_detached_signature_data {
             types::Criticality::Baseline
         } else {
             match payload.detected_type {
@@ -1771,7 +1780,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 _ => types::Criticality::Notable,
             }
         };
-        let desc = if is_unknown_unicode_escape {
+        let desc = if is_detached_signature_data {
+            "Encoded detached signature data".to_string()
+        } else if is_unknown_unicode_escape {
             "Decoded unicode-escape content".to_string()
         } else {
             format!(

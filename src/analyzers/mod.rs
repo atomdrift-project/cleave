@@ -521,9 +521,21 @@ pub fn check_extension_content_mismatch(
     if is_linux_apk_archive(file_path, det.file_type, ext_type) {
         return None;
     }
+    if is_xhtml_html_document(file_data, det.file_type, ext_type) {
+        return None;
+    }
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = format!("{ext_type:?}");
     Some((ext_desc, content_desc, false))
+}
+
+fn is_xhtml_html_document(file_data: &[u8], content_type: FileType, ext_type: FileType) -> bool {
+    if content_type != FileType::Xml || ext_type != FileType::Html {
+        return false;
+    }
+    let prefix_len = file_data.len().min(4096);
+    let prefix = String::from_utf8_lossy(&file_data[..prefix_len]).to_ascii_lowercase();
+    prefix.contains("<!doctype html") || prefix.contains("<html")
 }
 
 fn is_linux_apk_archive(file_path: &Path, content_type: FileType, ext_type: FileType) -> bool {
@@ -838,6 +850,14 @@ mod tests {
     fn bridge_linux_apk_targz_is_not_mismatch() {
         let gzip = [0x1f, 0x8b, 0x08, 0x00];
         assert!(check_extension_content_mismatch(Path::new("package.apk"), &gzip).is_none());
+    }
+
+    #[test]
+    fn bridge_xhtml_html_is_not_mismatch() {
+        let xhtml = br#"<?xml version="1.0" encoding="ascii"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN">
+<html xmlns="http://www.w3.org/1999/xhtml"></html>"#;
+        assert!(check_extension_content_mismatch(Path::new("api.html"), xhtml).is_none());
     }
 
     #[test]

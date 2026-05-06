@@ -92,10 +92,14 @@ pub(crate) fn aggregate_findings_by_directory(findings: &[Finding]) -> Vec<Findi
                     agg.matched_traits.push(finding.id.clone());
                 }
 
-                // Keep the one with higher criticality
-                // If criticality is same, keep the one with higher confidence
+                // Keep the one with higher criticality.
+                // Ties: higher confidence, then lexicographically smaller id so
+                // parallel trait evaluation order doesn't flip the displayed pick.
                 let should_replace = finding.crit > agg.best.crit
-                    || (finding.crit == agg.best.crit && finding.conf > agg.best.conf);
+                    || (finding.crit == agg.best.crit && finding.conf > agg.best.conf)
+                    || (finding.crit == agg.best.crit
+                        && finding.conf == agg.best.conf
+                        && finding.id < agg.best.id);
 
                 if should_replace {
                     agg.best = finding.clone();

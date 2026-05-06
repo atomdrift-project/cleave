@@ -190,6 +190,10 @@ sha1 = "0.10"
 # Authenticode SignerInfo signatures against the leaf cert pubkey.
 # Already a transitive dep via yara-x; pinning explicitly here.
 rsa = "0.9"
+# ECDSA verification (P-256, P-384) — for the ECDSA Authenticode case.
+# Already transitive deps; pinning explicitly here.
+p256 = { version = "0.13", features = ["ecdsa"] }
+p384 = { version = "0.13", features = ["ecdsa"] }
 # Non-crypto checksum for bound-import / build-host fingerprinting —
 # u32 output fits cleanly into the metric integer model.
 crc32fast = "1.5"

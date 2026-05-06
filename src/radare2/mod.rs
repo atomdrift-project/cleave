@@ -1178,12 +1178,11 @@ impl Radare2Analyzer {
                 largest_size = section_size;
             }
 
-            if crate::analyzers::metrics_utils::is_nonstandard_section_name(
-                file_type,
-                &section.name,
-            ) {
-                metrics.nonstandard_section_name_count += 1;
-            }
+            // Note: `nonstandard_section_name_count` is computed
+            // authoritatively from `report.sections` in
+            // `metrics_utils::populate_binary_metrics` — don't
+            // increment here or the count gets doubled when both
+            // paths run on the same report.
 
             // Per-family ratio accumulators. Matches the fuzzy-section naming used
             // elsewhere: `.text`, `__TEXT,__text`, `__text` all count as "text".

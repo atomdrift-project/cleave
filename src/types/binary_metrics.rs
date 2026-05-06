@@ -1262,6 +1262,21 @@ pub struct PeMetrics {
     /// the recomputed Authentihash with that algorithm.
     #[serde(default, skip_serializing_if = "is_false")]
     pub nested_signature_digest_mismatch: bool,
+    /// `has_signature && signature_verified == Some(false)` — the
+    /// SignerInfo signature exists but doesn't validate against the
+    /// leaf cert pubkey. Atomic-trait friendly (avoids `max: 0`
+    /// false-positive on unsigned binaries).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signature_verification_failed: bool,
+    /// SignerInfo's IssuerAndSerialNumber points at a cert that
+    /// disagrees with the leaf cleave's heuristic picked. Atomic-
+    /// trait friendly counterpart of `signer_info_matches_leaf`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signer_info_mismatches_leaf: bool,
+    /// Nested signature is present but its leaf cert isn't authorized
+    /// for code signing. Mirrors `signed_with_non_code_signing_leaf`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nested_leaf_lacks_code_signing_eku: bool,
 
     // === Structured kv carriers (kv-only — surfaced via binary_kv.rs) ===
     /// Per-section header summary as a carrier field

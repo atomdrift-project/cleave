@@ -317,6 +317,19 @@ fn is_standard_entry_section(name: &str) -> bool {
     )
 }
 
+/// True if a section is "BSS-like" (raw=0, virt>0) AND doesn't carry
+/// one of the conventional BSS-style PE section names. The metric
+/// targets packer/runtime-decompression patterns where a non-standard
+/// section name claims virtual memory the file doesn't back.
+/// `.bss` and `.tls` are excluded because Borland/Delphi/InnoSetup
+/// binaries routinely have them zero-raw.
+fn is_unusual_bss_like(name: &str, raw_size: u32, virtual_size: u32) -> bool {
+    if raw_size != 0 || virtual_size == 0 {
+        return false;
+    }
+    !matches!(name.to_ascii_lowercase().as_str(), ".bss" | "bss" | ".tls" | "tls")
+}
+
 fn fill_timestamp_parts_u32(timestamp: u32, year: &mut u32, month: &mut u32, day: &mut u32) {
     if timestamp == 0 {
         return;
@@ -513,6 +526,42 @@ fn dn_common_name<'a>(name: &'a x509_parser::x509::X509Name<'a>) -> Option<Strin
         .next()
         .and_then(|cn| cn.as_str().ok())
         .map(str::to_string)
+}
+
+/// Strip leading zeros from a hex string for serial-number
+/// comparisons. DER positive INTEGERs include a 0x00 prefix when the
+/// high bit of the first content byte would otherwise make the value
+/// look negative; x509-parser's `format!("{:x}", BigUint)` strips
+/// that padding. Returning the trimmed slice in-place avoids
+/// allocation. Empty input or all-zeros becomes `"0"`.
+fn normalize_serial_hex(s: &str) -> &str {
+    let trimmed = s.trim_start_matches('0');
+    if trimmed.is_empty() {
+        "0"
+    } else {
+        trimmed
+    }
+}
+
+/// Find the cert in `certs` whose issuer DN raw bytes equal
+/// `issuer_full_der` AND whose serial-number (formatted as
+/// `{:x}` and normalized via `normalize_serial_hex`) equals
+/// `serial_hex_normalized`. Used to resolve the authoritative
+/// signing cert via SignerInfo.IssuerAndSerialNumber instead of the
+/// `find_leaf_signer` heuristic, which can pick the timestamping
+/// leaf when both code-sign and timestamp chains share the certs SET.
+fn find_cert_by_issuer_and_serial<'a, 'b>(
+    certs: &'a [x509_parser::certificate::X509Certificate<'b>],
+    issuer_full_der: &[u8],
+    serial_hex_normalized: &str,
+) -> Option<&'a x509_parser::certificate::X509Certificate<'b>> {
+    certs.iter().find(|c| {
+        if c.tbs_certificate.issuer().as_raw() != issuer_full_der {
+            return false;
+        }
+        let serial_hex = format!("{:x}", c.tbs_certificate.serial);
+        normalize_serial_hex(&serial_hex) == serial_hex_normalized
+    })
 }
 
 /// True if the PKCS#7 SignedData blob contains the Microsoft
@@ -2179,7 +2228,48 @@ impl PEAnalyzer {
                             // PKCS#7 SignedData unauthenticated attrs.
                             metrics.has_nested_signature =
                                 pkcs7_has_nested_signature(pkcs7_data);
-                            if let Some(leaf) = find_leaf_signer(&certs) {
+                            // Parse SignerInfo FIRST — its
+                            // IssuerAndSerialNumber is the authoritative
+                            // pointer to the actual signing cert. We
+                            // use it to pick the leaf below, falling
+                            // back to the heuristic only when SI is
+                            // missing or its referenced cert isn't in
+                            // the bag (a strong tampering signal).
+                            let si_opt = parse_signer_info(pkcs7_data);
+                            if let Some(si) = &si_opt {
+                                metrics.signer_info_issuer = dn_first_cn_raw(si.issuer_raw);
+                                metrics.signer_info_serial = Some(si.serial_hex.clone());
+                            }
+                            let leaf_opt = si_opt
+                                .as_ref()
+                                .and_then(|si| {
+                                    let normalized =
+                                        normalize_serial_hex(&si.serial_hex).to_string();
+                                    find_cert_by_issuer_and_serial(
+                                        &certs,
+                                        si.issuer_raw,
+                                        &normalized,
+                                    )
+                                })
+                                .or_else(|| find_leaf_signer(&certs));
+                            // matches_leaf is set when SI was present
+                            // AND its referenced cert was the one we
+                            // chose. mismatches_leaf fires when SI is
+                            // present but no matching cert in the bag.
+                            if let (Some(si), Some(leaf)) = (&si_opt, leaf_opt) {
+                                let normalized = normalize_serial_hex(&si.serial_hex);
+                                let leaf_serial =
+                                    format!("{:x}", leaf.tbs_certificate.serial);
+                                let resolved_via_si = leaf.tbs_certificate.issuer().as_raw()
+                                    == si.issuer_raw
+                                    && normalize_serial_hex(&leaf_serial) == normalized;
+                                if resolved_via_si {
+                                    metrics.signer_info_matches_leaf = true;
+                                } else if !certs.is_empty() {
+                                    metrics.signer_info_mismatches_leaf = true;
+                                }
+                            }
+                            if let Some(leaf) = leaf_opt {
                                 metrics.leaf_subject =
                                     dn_common_name(leaf.tbs_certificate.subject());
                                 metrics.leaf_issuer = dn_common_name(leaf.tbs_certificate.issuer());
@@ -2219,35 +2309,13 @@ impl PEAnalyzer {
                                 h.update(leaf.as_ref());
                                 metrics.leaf_thumbprint_sha1 = Some(hex::encode(h.finalize()));
 
-                                // SignerInfo IssuerAndSerialNumber —
-                                // authoritative reference to the actual
-                                // signing cert (vs. our heuristic leaf).
-                                if let Some(si) = parse_signer_info(pkcs7_data) {
-                                    metrics.signer_info_issuer = dn_first_cn_raw(si.issuer_raw);
-                                    metrics.signer_info_serial = Some(si.serial_hex.clone());
-                                    // Compare via DER bytes when they
-                                    // match exactly; fall back to a
-                                    // CN+serial-value comparison since
-                                    // some signers emit slightly
-                                    // different DN encodings (UTF8String
-                                    // vs PrintableString).
-                                    let leaf_issuer_raw =
-                                        leaf.tbs_certificate.issuer().as_raw();
-                                    let leaf_serial_hex =
-                                        format!("{:x}", leaf.tbs_certificate.serial);
-                                    let serials_match = si
-                                        .serial_hex
-                                        .trim_start_matches('0')
-                                        == leaf_serial_hex.trim_start_matches('0');
-                                    let issuers_match = si.issuer_raw == leaf_issuer_raw
-                                        || metrics.signer_info_issuer == metrics.leaf_issuer;
-                                    metrics.signer_info_matches_leaf =
-                                        serials_match && issuers_match;
-                                    // Cryptographic verification of the
-                                    // SignerInfo signature against the
-                                    // leaf cert's public key. RSA only;
-                                    // other algorithms set the
-                                    // _algorithm_unsupported flag.
+                                // Cryptographic verification of the
+                                // SignerInfo signature against the
+                                // (now authoritative) leaf cert's
+                                // public key. RSA + ECDSA supported;
+                                // other algorithms set the
+                                // _algorithm_unsupported flag.
+                                if let Some(si) = &si_opt {
                                     if is_rsa_pkcs1v15_oid(&si.signature_alg_oid) {
                                         if let (Some(alg), Some(signed_bytes)) =
                                             (si.digest_alg, si.signed_attrs_der.as_deref())
@@ -2263,6 +2331,51 @@ impl PEAnalyzer {
                                                     signed_bytes,
                                                     &si.signature_bytes,
                                                 );
+                                        }
+                                    } else if is_ecdsa_oid(&si.signature_alg_oid) {
+                                        if let (Some(alg), Some(signed_bytes)) =
+                                            (si.digest_alg, si.signed_attrs_der.as_deref())
+                                        {
+                                            // SEC1-encoded EC point lives in
+                                            // the BIT STRING; the curve OID
+                                            // lives in algorithm.parameters.
+                                            let curve_oid = leaf
+                                                .tbs_certificate
+                                                .subject_pki
+                                                .algorithm
+                                                .parameters
+                                                .as_ref()
+                                                .and_then(|p| {
+                                                    extract_ec_curve_oid(p.data)
+                                                });
+                                            let curve = curve_oid
+                                                .as_deref()
+                                                .and_then(NamedCurve::from_oid);
+                                            let pubkey_sec1 = leaf
+                                                .tbs_certificate
+                                                .subject_pki
+                                                .subject_public_key
+                                                .data
+                                                .as_ref();
+                                            if let Some(c) = curve {
+                                                let result = verify_ecdsa_signature(
+                                                    pubkey_sec1,
+                                                    c,
+                                                    alg,
+                                                    signed_bytes,
+                                                    &si.signature_bytes,
+                                                );
+                                                if result.is_some() {
+                                                    metrics.signature_verified = result;
+                                                } else {
+                                                    // Off-pair (e.g. P-256+SHA-384).
+                                                    metrics.signature_algorithm_unsupported =
+                                                        true;
+                                                }
+                                            } else {
+                                                // ECDSA but curve not P-256/P-384.
+                                                metrics.signature_algorithm_unsupported = true;
+                                            }
                                         }
                                     } else {
                                         metrics.signature_algorithm_unsupported = true;
@@ -2319,6 +2432,19 @@ impl PEAnalyzer {
         metrics.signed_with_non_code_signing_leaf = metrics.has_signature
             && metrics.leaf_subject.is_some()
             && !metrics.leaf_eku_code_signing;
+        // Derived sibling booleans — atomic-trait friendly so authors
+        // can write `min: 1` instead of `max: 0` (which over-fires on
+        // unsigned binaries because the underlying field is absent).
+        metrics.signature_verification_failed =
+            metrics.has_signature && matches!(metrics.signature_verified, Some(false));
+        // signer_info_mismatches_leaf is set directly during cert
+        // resolution above when SignerInfo references a cert not in
+        // the bag — no derivation here. The legacy "heuristic
+        // disagrees with SI" semantics no longer apply because we
+        // now use SI as the authoritative leaf source.
+        metrics.nested_leaf_lacks_code_signing_eku = metrics.has_nested_signature
+            && metrics.nested_leaf_subject.is_some()
+            && !metrics.nested_leaf_eku_code_signing;
 
         // COFF symbol table — modern toolchains zero these fields.
         let pst = pe.header.coff_header.pointer_to_symbol_table;
@@ -2452,11 +2578,20 @@ impl PEAnalyzer {
             }
         }
 
-        // BSS-like sections: SizeOfRawData == 0, VirtualSize > 0.
+        // BSS-like sections — count only the *unusual* ones: standard
+        // names like `.bss` and `.tls` are routinely zero-raw on
+        // Borland/Delphi/InnoSetup binaries, so flagging them as
+        // "BSS-like" produces noise. The packer/runtime-decompression
+        // pattern this metric targets uses non-standard section names.
         metrics.bss_like_section_count = pe
             .sections
             .iter()
-            .filter(|s| s.size_of_raw_data == 0 && s.virtual_size > 0)
+            .filter(|s| {
+                let name = std::str::from_utf8(&s.name)
+                    .unwrap_or("")
+                    .trim_matches(char::from(0));
+                is_unusual_bss_like(name, s.size_of_raw_data, s.virtual_size)
+            })
             .count() as u32;
 
         // .NET native entry — only meaningful when CLR data is present.
@@ -3990,11 +4125,11 @@ fn extract_nested_signature(pkcs7: &[u8]) -> Option<&[u8]> {
     // Expect SET tag 0x31, then SEQUENCE 0x30 (the inner ContentInfo).
     let (set_inner, set_end) = parse_asn1_tag(pkcs7, cursor, 0x31)?;
     let set_slice = &pkcs7[set_inner..set_end];
-    let (seq_inner, seq_end) = parse_asn1_tag_at(set_slice, 0, 0x30)?;
-    // The nested SignedData is the full SEQUENCE we just parsed —
-    // hand back the slice starting at the SEQUENCE tag itself so the
-    // returned bytes parse as a top-level ContentInfo.
-    Some(&set_slice[seq_inner.saturating_sub(seq_inner - (seq_inner - 0))..seq_end])
+    let (_seq_inner, seq_end) = parse_asn1_tag_at(set_slice, 0, 0x30)?;
+    // Return the full SEQUENCE (tag + length + body) so the slice
+    // parses as a top-level ContentInfo when handed to downstream
+    // PKCS#7 helpers. The SEQUENCE starts at offset 0 of `set_slice`.
+    Some(&set_slice[0..seq_end])
 }
 
 /// True if the SignatureAlgorithm OID names an RSA-PKCS1v15 variant
@@ -4008,6 +4143,77 @@ fn is_rsa_pkcs1v15_oid(oid: &str) -> bool {
             | "1.2.840.113549.1.1.12" // sha384WithRSAEncryption
             | "1.2.840.113549.1.1.13" // sha512WithRSAEncryption
     )
+}
+
+/// True if the SignatureAlgorithm OID names an ECDSA variant.
+fn is_ecdsa_oid(oid: &str) -> bool {
+    matches!(
+        oid,
+        "1.2.840.10045.4.1"      // ecdsa-with-SHA1
+            | "1.2.840.10045.4.3.1" // ecdsa-with-SHA224
+            | "1.2.840.10045.4.3.2" // ecdsa-with-SHA256
+            | "1.2.840.10045.4.3.3" // ecdsa-with-SHA384
+            | "1.2.840.10045.4.3.4" // ecdsa-with-SHA512
+    )
+}
+
+/// Named elliptic curve cleave can verify ECDSA signatures over.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NamedCurve {
+    P256,
+    P384,
+}
+
+impl NamedCurve {
+    fn from_oid(oid: &str) -> Option<Self> {
+        match oid {
+            "1.2.840.10045.3.1.7" => Some(NamedCurve::P256), // secp256r1 / NIST P-256
+            "1.3.132.0.34" => Some(NamedCurve::P384),        // secp384r1 / NIST P-384
+            _ => None,
+        }
+    }
+}
+
+/// Extract the named-curve OID from a SubjectPublicKeyInfo's
+/// `algorithm.parameters` raw bytes. The SPKI structure is:
+///   SubjectPublicKeyInfo ::= SEQUENCE {
+///     algorithm AlgorithmIdentifier { algorithm OID, parameters ANY OPTIONAL },
+///     subjectPublicKey BIT STRING
+///   }
+/// For EC keys, `parameters` is an OBJECT IDENTIFIER naming the curve.
+fn extract_ec_curve_oid(spki_params: &[u8]) -> Option<String> {
+    // params is the raw `parameters` value — should be just an OID.
+    let (start, end) = parse_asn1_tag_at(spki_params, 0, 0x06)?;
+    Some(oid_dotted(&spki_params[start..end]))
+}
+
+/// Verify an ECDSA SignerInfo signature against the leaf cert's
+/// public key. Supports the conventional curve+hash pairs only:
+/// P-256 + SHA-256, P-384 + SHA-384. Off-pairs (e.g. P-256 + SHA-384)
+/// are extremely rare in PE Authenticode and return `None` so the
+/// caller can flag them as unsupported.
+fn verify_ecdsa_signature(
+    leaf_pubkey_sec1: &[u8],
+    curve: NamedCurve,
+    digest_alg: AuthAlg,
+    signed_message: &[u8],
+    signature: &[u8],
+) -> Option<bool> {
+    match (curve, digest_alg) {
+        (NamedCurve::P256, AuthAlg::Sha256) => {
+            use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+            let vk = VerifyingKey::from_sec1_bytes(leaf_pubkey_sec1).ok()?;
+            let sig = Signature::from_der(signature).ok()?;
+            Some(vk.verify(signed_message, &sig).is_ok())
+        }
+        (NamedCurve::P384, AuthAlg::Sha384) => {
+            use p384::ecdsa::{signature::Verifier, Signature, VerifyingKey};
+            let vk = VerifyingKey::from_sec1_bytes(leaf_pubkey_sec1).ok()?;
+            let sig = Signature::from_der(signature).ok()?;
+            Some(vk.verify(signed_message, &sig).is_ok())
+        }
+        _ => None,
+    }
 }
 
 /// Verify a SignerInfo's RSA-PKCS1v15 signature against the leaf
@@ -4032,7 +4238,7 @@ fn verify_rsa_pkcs1v15_signature(
             // Some certs encode SubjectPublicKeyInfo with RSAES wrapper —
             // try the SPKI form via x509-parser bytes.
             use rsa::pkcs8::DecodePublicKey;
-            RsaPublicKey::from_public_key_der(leaf_pubkey_der).map_err(|_| ())
+            RsaPublicKey::from_public_key_der(leaf_pubkey_der).map_err(|_e| ())
         })
         .ok()?;
     use rsa::pkcs1::DecodeRsaPublicKey;
@@ -4331,6 +4537,166 @@ mod tests {
         assert!(is_rsa_pkcs1v15_oid("1.2.840.113549.1.1.11"));
         assert!(is_rsa_pkcs1v15_oid("1.2.840.113549.1.1.5"));
         assert!(!is_rsa_pkcs1v15_oid("1.2.840.10045.4.3.2")); // ECDSA-SHA256
+    }
+
+    #[test]
+    fn test_is_ecdsa_oid() {
+        assert!(is_ecdsa_oid("1.2.840.10045.4.1"));
+        assert!(is_ecdsa_oid("1.2.840.10045.4.3.2"));
+        assert!(is_ecdsa_oid("1.2.840.10045.4.3.3"));
+        assert!(is_ecdsa_oid("1.2.840.10045.4.3.4"));
+        assert!(!is_ecdsa_oid("1.2.840.113549.1.1.11"));
+    }
+
+    #[test]
+    fn test_normalize_serial_hex_strips_leading_zeros() {
+        // DER positive INTEGERs prefix 0x00 when high bit set.
+        assert_eq!(normalize_serial_hex("00d0461b529f"), "d0461b529f");
+        assert_eq!(normalize_serial_hex("02c1c6d6"), "2c1c6d6");
+        // No leading zeros — passthrough.
+        assert_eq!(normalize_serial_hex("d0461b529f"), "d0461b529f");
+    }
+
+    #[test]
+    fn test_normalize_serial_hex_preserves_zero() {
+        // Pure-zero serial: don't strip everything away.
+        assert_eq!(normalize_serial_hex("0"), "0");
+        assert_eq!(normalize_serial_hex("00"), "0");
+        assert_eq!(normalize_serial_hex(""), "0");
+    }
+
+    #[test]
+    fn test_normalize_serial_hex_idempotent() {
+        // Apply twice → same result.
+        let once = normalize_serial_hex("00d0461b529f");
+        let twice = normalize_serial_hex(once);
+        assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn test_find_cert_by_issuer_and_serial_picks_match() {
+        // Two real self-signed test certs with distinct subjects+serials.
+        // Verify: targeting Cert B's issuer+serial returns Cert B,
+        // not Cert A.
+        use x509_parser::prelude::FromDer;
+        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
+        const CERT_B: &[u8] = include_bytes!("../../tests/fixtures/cert_b.der");
+        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
+        let (_, b) = x509_parser::certificate::X509Certificate::from_der(CERT_B).unwrap();
+        let certs = vec![a, b];
+        // Build the target from cert_b's actual fields.
+        let b_issuer = certs[1].tbs_certificate.issuer().as_raw();
+        let b_serial = format!("{:x}", certs[1].tbs_certificate.serial);
+        let b_serial_norm = normalize_serial_hex(&b_serial);
+        let found = find_cert_by_issuer_and_serial(&certs, b_issuer, b_serial_norm)
+            .expect("should find cert B");
+        assert_eq!(
+            dn_common_name(found.tbs_certificate.subject()).as_deref(),
+            Some("TestCertB")
+        );
+    }
+
+    #[test]
+    fn test_find_cert_by_issuer_and_serial_returns_none_on_mismatch() {
+        // Target an issuer that doesn't match any cert in the bag.
+        use x509_parser::prelude::FromDer;
+        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
+        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
+        let certs = vec![a];
+        let bogus_issuer = b"\x30\x10\x31\x0e\x30\x0c\x06\x03\x55\x04\x03\x0c\x05\x4f\x74\x68\x65\x72";
+        let result = find_cert_by_issuer_and_serial(&certs, bogus_issuer, "deadbeef");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_cert_by_issuer_and_serial_handles_padded_serial() {
+        // The function compares using normalized serial, so a DER-padded
+        // serial ("00d0461..." vs "d0461...") must match equivalent
+        // BigUint-formatted serials.
+        use x509_parser::prelude::FromDer;
+        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
+        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
+        let certs = vec![a];
+        let issuer = certs[0].tbs_certificate.issuer().as_raw();
+        let raw_serial = format!("{:x}", certs[0].tbs_certificate.serial);
+        // Manually prepend "00" to simulate DER padding on a positive int.
+        let padded = format!("00{}", raw_serial);
+        let normalized = normalize_serial_hex(&padded);
+        assert!(
+            find_cert_by_issuer_and_serial(&certs, issuer, normalized).is_some(),
+            "padded serial should still match after normalization"
+        );
+    }
+
+    #[test]
+    fn test_is_unusual_bss_like_excludes_dot_bss() {
+        // Standard `.bss` with rsize=0, vsize>0 must NOT count as unusual.
+        assert!(!is_unusual_bss_like(".bss", 0, 0x1000));
+        assert!(!is_unusual_bss_like("bss", 0, 0x1000));
+        assert!(!is_unusual_bss_like(".BSS", 0, 0x1000));
+    }
+
+    #[test]
+    fn test_is_unusual_bss_like_excludes_dot_tls() {
+        assert!(!is_unusual_bss_like(".tls", 0, 0x100));
+        assert!(!is_unusual_bss_like("tls", 0, 0x100));
+        assert!(!is_unusual_bss_like(".TLS", 0, 0x100));
+    }
+
+    #[test]
+    fn test_is_unusual_bss_like_flags_unusual_name() {
+        // Random/packer-style section name with rsize=0 vsize>0 IS unusual.
+        assert!(is_unusual_bss_like(".upx0", 0, 0x10000));
+        assert!(is_unusual_bss_like(".x", 0, 0x100));
+        assert!(is_unusual_bss_like(".decompr", 0, 0x10000));
+    }
+
+    #[test]
+    fn test_is_unusual_bss_like_requires_zero_raw() {
+        // Non-zero raw_size means the section is backed by file data.
+        assert!(!is_unusual_bss_like(".upx0", 1, 0x10000));
+    }
+
+    #[test]
+    fn test_is_unusual_bss_like_requires_nonzero_virtual() {
+        // Both raw and virtual zero is just an empty section, not BSS.
+        assert!(!is_unusual_bss_like(".upx0", 0, 0));
+    }
+
+    #[test]
+    fn test_named_curve_from_oid() {
+        assert_eq!(NamedCurve::from_oid("1.2.840.10045.3.1.7"), Some(NamedCurve::P256));
+        assert_eq!(NamedCurve::from_oid("1.3.132.0.34"), Some(NamedCurve::P384));
+        assert_eq!(NamedCurve::from_oid("1.3.132.0.35"), None); // P-521 unsupported
+        assert_eq!(NamedCurve::from_oid("9.9.9.9"), None);
+    }
+
+    #[test]
+    fn test_extract_ec_curve_oid() {
+        // SPKI parameters with just a curve OID: P-256 = 1.2.840.10045.3.1.7
+        let der_oid: [u8; 10] = [
+            0x06, 0x08, // OID, len 8
+            0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07,
+        ];
+        assert_eq!(
+            extract_ec_curve_oid(&der_oid).as_deref(),
+            Some("1.2.840.10045.3.1.7")
+        );
+    }
+
+    #[test]
+    fn test_verify_ecdsa_off_pair_returns_none() {
+        // Garbage inputs: we just want to confirm off-pair (P-256 + SHA-384)
+        // returns None so the caller flags algorithm_unsupported.
+        let garbage = vec![0u8; 65];
+        let result = verify_ecdsa_signature(
+            &garbage,
+            NamedCurve::P256,
+            AuthAlg::Sha384,
+            &[1, 2, 3],
+            &[0; 70],
+        );
+        assert_eq!(result, None);
     }
 
     #[test]

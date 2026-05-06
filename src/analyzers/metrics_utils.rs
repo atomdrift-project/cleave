@@ -120,10 +120,16 @@ pub(crate) fn is_nonstandard_section_name(file_type: &str, section_name: &str) -
         ),
         "pe" => !matches!(
             lower.as_str(),
+            // Conventional PE section names. `.xdata` (x64 SEH unwind
+            // tables) is added to the modern x64 baseline. `.symtab`
+            // is intentionally OMITTED — it's the Go-toolchain-only
+            // section name and surfacing it as nonstandard remains
+            // useful for Go-specific PE detection.
             "text"
                 | "rdata"
                 | "data"
                 | "pdata"
+                | "xdata"
                 | "rsrc"
                 | "reloc"
                 | "idata"
@@ -362,6 +368,10 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         let mut data_size: u64 = 0;
         let mut rsrc_size: u64 = 0;
 
+        // Reset before counting — this pass is authoritative over any
+        // earlier increments (e.g. from the radare2 path) so the count
+        // reflects exactly the sections in `report.sections`.
+        binary.nonstandard_section_name_count = 0;
         for section in &report.sections {
             total_size += section.size;
             if section.size > max_section_size {

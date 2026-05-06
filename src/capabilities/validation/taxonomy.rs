@@ -1405,8 +1405,12 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "micro-behaviors/communications/http/headers/",
     // Credential access patterns (passwords, tokens, keys, wallets) appear in any file
     "objectives/credential-access/",
+    // Sensitive credential paths can appear in source, scripts, configs, docs, and binaries
+    "micro-behaviors/fs/path/sensitive/credentials/",
     // IP discovery service hostnames are embedded in any executable (scripts, binaries, config)
     "micro-behaviors/communications/http/ip-discovery/",
+    // Shell language markers are intentionally shared across scripts, source, and binaries
+    "micro-behaviors/process/create/shell/lang/",
 ];
 
 /// Returns the effective platform count for a trait.

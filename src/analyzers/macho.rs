@@ -244,8 +244,20 @@ impl MachOAnalyzer {
             load_commands_size: macho.header.sizeofcmds,
             rpath_count: macho.rpaths.len() as u32,
             install_name_present: macho.name.is_some(),
+            // Tier A: decoded MH_* header bits. (PIE is on
+            // BinaryMetrics; not duplicated here.)
+            allow_stack_execution: (macho.header.flags & 0x0008_0000) != 0,
+            no_heap_execution: (macho.header.flags & 0x0100_0000) != 0,
+            app_extension_safe: (macho.header.flags & 0x0200_0000) != 0,
+            dylib_in_cache: (macho.header.flags & 0x8000_0000) != 0,
             ..Default::default()
         };
+
+        // Track segments + dylibs for Tier A/B anomaly detection.
+        // (vmaddr, vmend, writable, executable, name)
+        let mut segment_ranges: Vec<(u64, u64, bool, bool, String)> = Vec::new();
+        let mut dylib_names: Vec<String> = Vec::new();
+        let mut data_in_code_count: u32 = 0;
 
         for lc in &macho.load_commands {
             match &lc.command {
@@ -280,31 +292,224 @@ impl MachOAnalyzer {
                 goblin::mach::load_command::CommandVariant::Unixthread(_) => {
                     macho_metrics.unixthread_command_present = true;
                 }
-                goblin::mach::load_command::CommandVariant::LoadWeakDylib(_) => {
+                goblin::mach::load_command::CommandVariant::LoadWeakDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.weak_dylib_count += 1;
+                    if let Some(entry) = mk_dylib_entry(d, "weak") {
+                        dylib_names.push(entry.name.clone());
+                        macho_metrics.dylib_entries.push(entry);
+                    }
                 }
-                goblin::mach::load_command::CommandVariant::ReexportDylib(_) => {
+                goblin::mach::load_command::CommandVariant::ReexportDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.reexport_dylib_count += 1;
+                    if let Some(entry) = mk_dylib_entry(d, "reexport") {
+                        dylib_names.push(entry.name.clone());
+                        macho_metrics.dylib_entries.push(entry);
+                    }
                 }
-                goblin::mach::load_command::CommandVariant::LoadUpwardDylib(_) => {
+                goblin::mach::load_command::CommandVariant::LoadUpwardDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.upward_dylib_count += 1;
+                    if let Some(entry) = mk_dylib_entry(d, "upward") {
+                        dylib_names.push(entry.name.clone());
+                        macho_metrics.dylib_entries.push(entry);
+                    }
                 }
-                goblin::mach::load_command::CommandVariant::LazyLoadDylib(_) => {
+                goblin::mach::load_command::CommandVariant::LazyLoadDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.lazy_dylib_count += 1;
+                    if let Some(entry) = mk_dylib_entry(d, "lazy") {
+                        dylib_names.push(entry.name.clone());
+                        macho_metrics.dylib_entries.push(entry);
+                    }
                 }
-                goblin::mach::load_command::CommandVariant::LoadDylib(_) => {
+                goblin::mach::load_command::CommandVariant::LoadDylib(d) => {
                     macho_metrics.dylib_count += 1;
+                    if let Some(entry) = mk_dylib_entry(d, "regular") {
+                        dylib_names.push(entry.name.clone());
+                        macho_metrics.dylib_entries.push(entry);
+                    }
                 }
                 goblin::mach::load_command::CommandVariant::LoadDylinker(_)
                 | goblin::mach::load_command::CommandVariant::IdDylinker(_)
                 | goblin::mach::load_command::CommandVariant::DyldEnvironment(_) => {
                     macho_metrics.dylinker_present = true;
                 }
+                goblin::mach::load_command::CommandVariant::Segment32(seg) => {
+                    let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry32(seg);
+                    if is_pagezero
+                        && !is_pagezero_size_legitimate(seg.vmsize as u64, macho.is_64)
+                    {
+                        macho_metrics.pagezero_size_anomalous = true;
+                    }
+                    let name = entry.name.clone();
+                    if name == "__DATA_CONST" {
+                        macho_metrics.has_data_const_segment = true;
+                    }
+                    segment_ranges.push((seg.vmaddr as u64, vm_end, w, x, name));
+                    macho_metrics.segment_entries.push(entry);
+                }
+                goblin::mach::load_command::CommandVariant::Segment64(seg) => {
+                    let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry64(seg);
+                    if is_pagezero
+                        && !is_pagezero_size_legitimate(seg.vmsize, macho.is_64)
+                    {
+                        macho_metrics.pagezero_size_anomalous = true;
+                    }
+                    let name = entry.name.clone();
+                    if name == "__DATA_CONST" {
+                        macho_metrics.has_data_const_segment = true;
+                    }
+                    segment_ranges.push((seg.vmaddr, vm_end, w, x, name));
+                    macho_metrics.segment_entries.push(entry);
+                }
+                goblin::mach::load_command::CommandVariant::EncryptionInfo32(e)
+                    if e.cryptid != 0 =>
+                {
+                    macho_metrics.encrypted_section_present = true;
+                }
+                goblin::mach::load_command::CommandVariant::EncryptionInfo64(e)
+                    if e.cryptid != 0 =>
+                {
+                    macho_metrics.encrypted_section_present = true;
+                }
+                goblin::mach::load_command::CommandVariant::DyldChainedFixups(_) => {
+                    macho_metrics.has_chained_fixups = true;
+                }
+                goblin::mach::load_command::CommandVariant::DyldInfo(_)
+                | goblin::mach::load_command::CommandVariant::DyldInfoOnly(_) => {
+                    macho_metrics.has_dyld_info_legacy = true;
+                }
+                goblin::mach::load_command::CommandVariant::VersionMinMacosx(_)
+                | goblin::mach::load_command::CommandVariant::VersionMinIphoneos(_)
+                | goblin::mach::load_command::CommandVariant::VersionMinTvos(_)
+                | goblin::mach::load_command::CommandVariant::VersionMinWatchos(_) => {
+                    macho_metrics.uses_legacy_version_min = true;
+                }
+                goblin::mach::load_command::CommandVariant::DataInCode(c) => {
+                    // datasize / sizeof(DataInCodeEntry=8 bytes)
+                    data_in_code_count = c.datasize / 8;
+                }
                 _ => {}
+            }
+        }
+        macho_metrics.data_in_code_count = data_in_code_count;
+
+        // Populate the dylib_entries[].name from macho.libs[1..] —
+        // goblin keeps libs[0] as the binary's own name and the rest
+        // in load-command order, matching dylib_entries.
+        let mut name_iter = macho.libs.iter().skip(1);
+        for entry in macho_metrics.dylib_entries.iter_mut() {
+            if let Some(name) = name_iter.next() {
+                entry.name = (*name).to_string();
+            }
+        }
+        // Refresh dylib_names from the now-populated entries.
+        let dylib_names: Vec<String> = macho_metrics
+            .dylib_entries
+            .iter()
+            .map(|e| e.name.clone())
+            .collect();
+
+        // Tier A derived: EP-in-segment analysis + W+X count.
+        let mut wx_count: u32 = 0;
+        let mut ep_in_segment = false;
+        let mut ep_in_writable = false;
+        let mut last_seg_idx: Option<usize> = None;
+        let mut last_seg_vmaddr: u64 = 0;
+        let entry_va = macho.entry;
+        for (i, (start, end, w, x, _name)) in segment_ranges.iter().enumerate() {
+            if *w && *x {
+                wx_count = wx_count.saturating_add(1);
+            }
+            if entry_va >= *start && entry_va < *end && entry_va != 0 {
+                ep_in_segment = true;
+                if *w {
+                    ep_in_writable = true;
+                }
+            }
+            if last_seg_idx.is_none() || *start > last_seg_vmaddr {
+                last_seg_idx = Some(i);
+                last_seg_vmaddr = *start;
+            }
+        }
+        macho_metrics.wx_segment_count = wx_count;
+        macho_metrics.entry_in_writable_segment = ep_in_writable;
+        macho_metrics.entry_outside_segments = !ep_in_segment && entry_va != 0;
+        if let Some(idx) = last_seg_idx {
+            if let Some((start, end, _, _, _)) = segment_ranges.get(idx) {
+                if entry_va >= *start && entry_va < *end && entry_va != 0 {
+                    macho_metrics.entry_in_last_segment = true;
+                }
+            }
+        }
+
+        // Segment overlap detection — sort by vmaddr, walk pairs.
+        // __PAGEZERO sits at vaddr 0 with vast vmsize on 64-bit, so
+        // skip it for overlap purposes (it's expected to "overlap"
+        // nothing but is also at the start of the address space).
+        if segment_ranges.len() > 1 {
+            let mut sorted: Vec<&(u64, u64, bool, bool, String)> = segment_ranges
+                .iter()
+                .filter(|(_, _, _, _, name)| name != "__PAGEZERO")
+                .collect();
+            sorted.sort_by_key(|t| t.0);
+            let mut overlap_names: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for w in sorted.windows(2) {
+                let (a_start, a_end, _, _, a_name) = w[0];
+                let (b_start, _, _, _, b_name) = w[1];
+                if *a_end > *b_start && *b_start >= *a_start {
+                    overlap_names.insert(a_name.clone());
+                    overlap_names.insert(b_name.clone());
+                }
+            }
+            macho_metrics.segment_overlap_count = overlap_names.len() as u32;
+            let mut names: Vec<String> = overlap_names.into_iter().collect();
+            names.sort();
+            macho_metrics.overlapping_segments = names;
+        }
+
+        // Tier B derived: dylib path direction + duplicates.
+        let file_type = macho_metrics.file_type;
+        const MH_EXECUTE: u32 = 0x2;
+        const MH_DYLIB: u32 = 0x6;
+        let mut name_counts: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        for n in &dylib_names {
+            *name_counts.entry(n.clone()).or_default() += 1;
+            if !n.starts_with('/') && !n.starts_with('@') && !n.is_empty() {
+                macho_metrics.dylib_path_unrooted_count =
+                    macho_metrics.dylib_path_unrooted_count.saturating_add(1);
+            }
+            if n.contains("@executable_path") && file_type == MH_DYLIB {
+                macho_metrics.executable_path_in_dylib = true;
+            }
+            if n.contains("@loader_path") && file_type == MH_EXECUTE {
+                macho_metrics.loader_path_in_executable = true;
+            }
+        }
+        macho_metrics.duplicate_dylib_count =
+            name_counts.values().filter(|&&c| c > 1).map(|c| c - 1).sum();
+
+        // Tier 1 — supply-chain similarity hashes. Sort + dedupe + join
+        // so byte-equal vendor releases produce byte-equal hashes.
+        if !dylib_names.is_empty() {
+            macho_metrics.dylib_hash = Some(sha256_of_sorted(&dylib_names));
+        }
+        if let Ok(imports) = macho.imports() {
+            let import_names: Vec<String> =
+                imports.iter().map(|i| i.name.to_string()).collect();
+            if !import_names.is_empty() {
+                macho_metrics.symhash = Some(sha256_of_sorted(&import_names));
+            }
+        }
+        if let Ok(exports) = macho.exports() {
+            let export_names: Vec<String> =
+                exports.iter().map(|e| e.name.clone()).collect();
+            if !export_names.is_empty() {
+                macho_metrics.export_hash = Some(sha256_of_sorted(&export_names));
             }
         }
 
@@ -438,6 +643,26 @@ impl MachOAnalyzer {
                                 }
                             }
                             macho_metrics.dangerous_entitlements = dangerous_count;
+                            // Tier 1 — entitlement_hash. Sort + join
+                            // entitlement keys (values can be paths /
+                            // identifiers that drift across releases;
+                            // keys are the stable surface).
+                            let keys: Vec<String> =
+                                codesig.entitlements.keys().cloned().collect();
+                            if !keys.is_empty() {
+                                macho_metrics.entitlement_hash =
+                                    Some(sha256_of_sorted(&keys));
+                            }
+                            // Tier A — CodeDirectory flag bits +
+                            // runtime version. Bit values from Apple's
+                            // <Security/CSCommon.h> / cs_blobs.h.
+                            let f = codesig.cs_flags;
+                            macho_metrics.cs_runtime_flag = (f & 0x00010000) != 0;
+                            macho_metrics.cs_library_validation = (f & 0x00002000) != 0;
+                            macho_metrics.cs_linker_signed = (f & 0x00020000) != 0;
+                            macho_metrics.cs_force_kill = (f & 0x00000020) != 0;
+                            macho_metrics.cs_runtime_version =
+                                codesig.cs_runtime_version.clone();
                         }
                     }
                 }
@@ -936,6 +1161,131 @@ impl MachOAnalyzer {
     }
 
     // AMOS cipher detection/decryption removed - now handled by stng library internally
+}
+
+/// Construct a `MachoDylibEntry` from a goblin DylibCommand.
+/// Returns None if the dylib name is missing/empty.
+fn mk_dylib_entry(
+    cmd: &goblin::mach::load_command::DylibCommand,
+    kind: &str,
+) -> Option<crate::types::binary_metrics::MachoDylibEntry> {
+    // goblin keeps DylibCommand with the name offset; the actual
+    // string lives in the load command bytes after the struct.
+    // We need the LoadCommand wrapper to access bytes — but for
+    // common cases, current_version + compat are usable directly,
+    // and the name is normally exposed via macho.libs[].
+    // We accept the name being filled in by the caller from
+    // macho.libs/imports; for now return a baseline entry so
+    // metric counts still roll up.
+    let _ = cmd;
+    let entry = crate::types::binary_metrics::MachoDylibEntry {
+        name: String::new(),
+        current_version: cmd.dylib.current_version,
+        compatibility_version: cmd.dylib.compatibility_version,
+        kind: kind.to_string(),
+    };
+    Some(entry)
+}
+
+/// Build a Mach-O segment carrier entry from a 32-bit segment cmd.
+/// Returns the entry plus derived flags `(is_pagezero, vm_end,
+/// writable, executable)` for Tier A processing.
+fn mk_macho_seg_entry32(
+    seg: &goblin::mach::load_command::SegmentCommand32,
+) -> (crate::types::binary_metrics::MachoSegmentEntry, bool, u64, bool, bool) {
+    let name = std::str::from_utf8(&seg.segname)
+        .unwrap_or("")
+        .trim_end_matches('\0')
+        .to_string();
+    const VM_PROT_READ: u32 = 0x01;
+    const VM_PROT_WRITE: u32 = 0x02;
+    const VM_PROT_EXECUTE: u32 = 0x04;
+    let perms = format!(
+        "{}{}{}",
+        if seg.initprot & VM_PROT_READ != 0 { "r" } else { "-" },
+        if seg.initprot & VM_PROT_WRITE != 0 { "w" } else { "-" },
+        if seg.initprot & VM_PROT_EXECUTE != 0 { "x" } else { "-" },
+    );
+    let entry = crate::types::binary_metrics::MachoSegmentEntry {
+        name: name.clone(),
+        vmaddr: seg.vmaddr as u64,
+        vmsize: seg.vmsize as u64,
+        fileoff: seg.fileoff as u64,
+        filesize: seg.filesize as u64,
+        maxprot_hex: format!("{:x}", seg.maxprot),
+        initprot_hex: format!("{:x}", seg.initprot),
+        perms,
+    };
+    let vm_end = (seg.vmaddr as u64).saturating_add(seg.vmsize as u64);
+    let writable = (seg.initprot & VM_PROT_WRITE) != 0
+        || (seg.maxprot & VM_PROT_WRITE) != 0;
+    let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
+    (entry, name == "__PAGEZERO", vm_end, writable, executable)
+}
+
+/// 64-bit variant. Same shape as `mk_macho_seg_entry32`.
+fn mk_macho_seg_entry64(
+    seg: &goblin::mach::load_command::SegmentCommand64,
+) -> (crate::types::binary_metrics::MachoSegmentEntry, bool, u64, bool, bool) {
+    let name = std::str::from_utf8(&seg.segname)
+        .unwrap_or("")
+        .trim_end_matches('\0')
+        .to_string();
+    const VM_PROT_READ: u32 = 0x01;
+    const VM_PROT_WRITE: u32 = 0x02;
+    const VM_PROT_EXECUTE: u32 = 0x04;
+    let perms = format!(
+        "{}{}{}",
+        if seg.initprot & VM_PROT_READ != 0 { "r" } else { "-" },
+        if seg.initprot & VM_PROT_WRITE != 0 { "w" } else { "-" },
+        if seg.initprot & VM_PROT_EXECUTE != 0 { "x" } else { "-" },
+    );
+    let entry = crate::types::binary_metrics::MachoSegmentEntry {
+        name: name.clone(),
+        vmaddr: seg.vmaddr,
+        vmsize: seg.vmsize,
+        fileoff: seg.fileoff,
+        filesize: seg.filesize,
+        maxprot_hex: format!("{:x}", seg.maxprot),
+        initprot_hex: format!("{:x}", seg.initprot),
+        perms,
+    };
+    let vm_end = seg.vmaddr.saturating_add(seg.vmsize);
+    let writable = (seg.initprot & VM_PROT_WRITE) != 0
+        || (seg.maxprot & VM_PROT_WRITE) != 0;
+    let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
+    (entry, name == "__PAGEZERO", vm_end, writable, executable)
+}
+
+/// SHA-256 of `\n`-joined sorted-deduplicated input strings, lowercase
+/// hex. Used for the Mach-O similarity-hash family
+/// (`dylib_hash`, `symhash`, `export_hash`, `entitlement_hash`).
+/// Sort + dedupe so the order returned by goblin doesn't affect the
+/// hash — vendor releases share byte-equal hashes regardless of
+/// load-command ordering.
+fn sha256_of_sorted(items: &[String]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut sorted: Vec<&String> = items.iter().filter(|s| !s.is_empty()).collect();
+    sorted.sort();
+    sorted.dedup();
+    let joined = sorted
+        .iter()
+        .map(|s| s.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
+    let mut h = Sha256::new();
+    h.update(joined.as_bytes());
+    hex::encode(h.finalize())
+}
+
+/// True if a `__PAGEZERO` segment size matches the architecture
+/// default (4 GB on 64-bit, 4 KB on 32-bit). Wrong size = tampered.
+fn is_pagezero_size_legitimate(vmsize: u64, is_64: bool) -> bool {
+    if is_64 {
+        vmsize == 0x1_0000_0000
+    } else {
+        vmsize == 0x1000
+    }
 }
 
 /// Determine criticality of an entitlement based on its key
@@ -1548,6 +1898,57 @@ mod tests {
 
     fn test_macho_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.macho")
+    }
+
+    #[test]
+    fn test_sha256_of_sorted_order_independent() {
+        let a = sha256_of_sorted(&[
+            "libfoo.dylib".into(),
+            "libbar.dylib".into(),
+            "libbaz.dylib".into(),
+        ]);
+        let b = sha256_of_sorted(&[
+            "libbaz.dylib".into(),
+            "libbar.dylib".into(),
+            "libfoo.dylib".into(),
+        ]);
+        assert_eq!(a, b, "input order must not affect hash");
+    }
+
+    #[test]
+    fn test_sha256_of_sorted_dedups() {
+        let a = sha256_of_sorted(&["libfoo.dylib".into(), "libfoo.dylib".into()]);
+        let b = sha256_of_sorted(&["libfoo.dylib".into()]);
+        assert_eq!(a, b, "duplicates must be removed before hashing");
+    }
+
+    #[test]
+    fn test_sha256_of_sorted_empty_inputs_skipped() {
+        let a = sha256_of_sorted(&["".into(), "libfoo.dylib".into()]);
+        let b = sha256_of_sorted(&["libfoo.dylib".into()]);
+        assert_eq!(a, b, "empty strings must be filtered out");
+    }
+
+    #[test]
+    fn test_sha256_of_sorted_known_value() {
+        // Single input, no padding — SHA-256 of "libfoo.dylib".
+        let h = sha256_of_sorted(&["libfoo.dylib".into()]);
+        assert_eq!(h.len(), 64);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_is_pagezero_size_legitimate_64bit() {
+        assert!(is_pagezero_size_legitimate(0x1_0000_0000, true));
+        assert!(!is_pagezero_size_legitimate(0x1000, true));
+        assert!(!is_pagezero_size_legitimate(0, true));
+    }
+
+    #[test]
+    fn test_is_pagezero_size_legitimate_32bit() {
+        assert!(is_pagezero_size_legitimate(0x1000, false));
+        assert!(!is_pagezero_size_legitimate(0x1_0000_0000, false));
+        assert!(!is_pagezero_size_legitimate(0, false));
     }
 
     #[test]

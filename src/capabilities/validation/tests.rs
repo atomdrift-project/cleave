@@ -325,6 +325,57 @@ mod duplicate_tests {
         )
     }
 
+    fn create_raw_regex_in_section(
+        id: &str,
+        pattern: &str,
+        section: Option<&str>,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Raw {
+                exact: None,
+                substr: None,
+                regex: Some(pattern.to_string()),
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                section: section.map(str::to_string),
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                not: None,
+                compiled_regex: None,
+                compiled_finder: None,
+            },
+            for_types,
+            file_path,
+        )
+    }
+
+    fn create_basename_regex(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Basename {
+                exact: None,
+                substr: None,
+                regex: Some(pattern.to_string()),
+                case_insensitive: false,
+                is_check: None,
+                compiled_regex: None,
+            },
+            for_types,
+            file_path,
+        )
+    }
+
     // ========================================================================
     // Phase 1: Hex Escape Normalization Tests
     // ========================================================================
@@ -739,6 +790,50 @@ mod duplicate_tests {
         find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
 
         // No overlap - disjoint file types
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_dup_pattern_ignores_match_all_basename_carrier() {
+        let trait1 = create_basename_regex(
+            "metadata/binary/metrics/size::large-file",
+            ".",
+            vec![FileType::Pe],
+            "metadata/binary/metrics/size.yaml",
+        );
+        let trait2 = create_basename_regex(
+            "well-known/malware/test::tiny-file",
+            ".",
+            vec![FileType::Pe],
+            "well-known/malware/test/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        find_string_pattern_duplicates(&[trait1, trait2], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_dup_pattern_requires_same_section_scope() {
+        let unscoped = create_raw_regex_in_section(
+            "metadata/binary/anomaly/content::sha256",
+            "^[a-f0-9]{64}$",
+            None,
+            vec![FileType::Pe],
+            "metadata/binary/anomaly/content/hash.yaml",
+        );
+        let scoped = create_raw_regex_in_section(
+            "metadata/binary/anomaly/format::sha256-rdata",
+            "^[a-f0-9]{64}$",
+            Some(".rdata"),
+            vec![FileType::Pe],
+            "metadata/binary/anomaly/format/pe.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        find_string_pattern_duplicates(&[unscoped, scoped], &mut warnings);
+
         assert_eq!(warnings.len(), 0);
     }
 

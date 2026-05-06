@@ -65,6 +65,13 @@ pub(crate) struct CodeSignature {
     pub is_notarized: bool,
     /// Whether the code directory enables hardened runtime.
     pub has_hardened_runtime: bool,
+    /// CodeDirectory flags field (u32 BE). Decoded bits are
+    /// surfaced as cs_runtime_flag, cs_library_validation,
+    /// cs_linker_signed, cs_force_kill on MachoMetrics.
+    pub cs_flags: u32,
+    /// Minimum OS version embedded in CodeDirectory's `runtime` field
+    /// (CodeDirectory version ≥ 0x20500). `major.minor.patch` string.
+    pub cs_runtime_version: Option<String>,
     /// Bundle or executable identifier extracted from the code directory.
     pub identifier: Option<String>,
     /// CDHash — SHA-256 of the entire CodeDirectory blob (including
@@ -142,12 +149,19 @@ pub(crate) fn parse_code_signature(
 
     let signer = authorities.first().cloned();
 
-    // Check for hardened runtime flag in code directory
-    let has_hardened_runtime = if let Some(cd_data) = blobs.get(&CODE_DIRECTORY_MAGIC) {
-        check_hardened_runtime_flag(cd_data)
-    } else {
-        false
-    };
+    // Check for hardened runtime flag in code directory + extract
+    // raw flags + minOS embedded in `runtime` field.
+    let (has_hardened_runtime, cs_flags, cs_runtime_version) =
+        if let Some(cd_data) = blobs.get(&CODE_DIRECTORY_MAGIC) {
+            let (flags, runtime) = extract_codedir_flags_and_runtime(cd_data);
+            (
+                check_hardened_runtime_flag(cd_data),
+                flags,
+                runtime,
+            )
+        } else {
+            (false, 0u32, None)
+        };
 
     // Extract identifier from code directory
     let identifier = if let Some(cd_data) = blobs.get(&CODE_DIRECTORY_MAGIC) {
@@ -178,12 +192,42 @@ pub(crate) fn parse_code_signature(
         entitlements,
         is_notarized,
         has_hardened_runtime,
+        cs_flags,
+        cs_runtime_version,
         identifier,
         cdhash_sha256,
         requirements_sha256,
         requirements_slot_count,
         signing_time,
     })
+}
+
+/// Extract the CodeDirectory `flags` field (raw u32) plus the
+/// `runtime` minOS version (CodeDirectory ≥ 0x20500). The runtime
+/// field is at offset 84 within the post-header CodeDirectory body.
+/// `runtime` is encoded as `(major << 16) | (minor << 8) | patch`.
+fn extract_codedir_flags_and_runtime(cd_data: &[u8]) -> (u32, Option<String>) {
+    if cd_data.len() < 8 {
+        return (0, None);
+    }
+    let version = u32::from_be_bytes([cd_data[0], cd_data[1], cd_data[2], cd_data[3]]);
+    let flags = u32::from_be_bytes([cd_data[4], cd_data[5], cd_data[6], cd_data[7]]);
+    // The `runtime` field exists only in v0x20500+ CodeDirectories,
+    // at offset 84 (post-blob-header).
+    let runtime_version = if version >= 0x0002_0500 && cd_data.len() >= 88 {
+        let v = u32::from_be_bytes([cd_data[84], cd_data[85], cd_data[86], cd_data[87]]);
+        if v != 0 {
+            let major = (v >> 16) & 0xFFFF;
+            let minor = (v >> 8) & 0xFF;
+            let patch = v & 0xFF;
+            Some(format!("{major}.{minor}.{patch}"))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    (flags, runtime_version)
 }
 
 /// Scan a CMS blob for the PKCS#9 signing-time authenticated

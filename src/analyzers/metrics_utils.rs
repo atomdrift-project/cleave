@@ -505,41 +505,145 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
                 }
             }
 
-            binary.entry_point = macho.entry_point;
             binary.dependency_count = macho.dylib_count;
             binary.runtime_search_path_count = macho.rpath_count;
             binary.provenance_id_present = macho.uuid_present;
             binary.provenance_id_length = if macho.uuid_present { 16 } else { 0 };
             binary.has_signature = macho.has_code_signature;
-            binary.signature_valid = macho.signature_valid;
+            // Cross-format executable-stack signal — bridge from Mach-O.
+            // Mirrors the ELF bridge below.
+            if macho.allow_stack_execution {
+                binary.has_executable_stack = true;
+            }
+            if macho.entry_in_writable_segment {
+                binary.entry_in_writable_region = true;
+            }
+            binary.overlap_count = macho.segment_overlap_count;
         }
     } else if file_type == "elf" {
         if let Some(ref elf) = metrics.elf {
-            binary.entry_point = elf.entry_point;
-            binary.entry_in_nonstandard_section = elf.entry_not_in_text;
             binary.dependency_count = elf.needed_libs;
             binary.runtime_search_path_count = elf.rpath_count + elf.runpath_count;
             binary.debug_reference_count =
                 elf.debug_section_count + u32::from(elf.debuglink_present);
             binary.provenance_id_present = elf.build_id_present;
             binary.provenance_id_length = elf.build_id_length;
+            // Cross-format executable-stack signal — bridge from ELF.
+            binary.has_executable_stack = elf.executable_stack;
+            if elf.entry_in_writable_segment {
+                binary.entry_in_writable_region = true;
+            }
+            binary.overlap_count = elf.segment_overlap_count;
         }
     } else if file_type == "pe" {
         if let Some(ref pe) = metrics.pe {
-            binary.entry_point = pe.entry_point_rva as u64;
-            binary.entry_point_is_rva = true;
-            binary.entry_in_nonstandard_section = pe.entry_in_nonstandard_section;
             binary.dependency_count = pe.import_dll_count;
             binary.debug_reference_count = pe.debug_directory_entries;
             binary.has_signature = pe.has_signature;
-            binary.signature_valid = pe.signature_valid;
+            if pe.entry_in_writable_section {
+                binary.entry_in_writable_region = true;
+            }
+            binary.overlap_count = pe.section_overlap_count;
+            // Cross-format individual-signer signal — populated when
+            // PE leaf cert subject CN looks like a person's name.
+            if pe.has_signature {
+                if let Some(subject) = pe.leaf_subject.as_deref() {
+                    binary.signed_with_individual_cert = looks_like_personal_name(subject);
+                }
+            }
         }
     }
 }
 
+/// Heuristic: does this CN look like a personal name vs an
+/// organization? Returns true for things like
+/// `"BEACH JOHN WILLIAM"`, `"John Smith"`, or
+/// `"Jane Q. Doe"`; false for `"Microsoft Corporation"`,
+/// `"Privacy Technologies OU"`, etc.
+///
+/// Rules:
+///   * Strip middle initials (single uppercase letter possibly with
+///     trailing dot).
+///   * Reject if the CN contains an organization keyword (`Inc`,
+///     `LLC`, `Ltd`, `Corp`, `OU`, `Foundation`, `Software`, …).
+///   * Reject CNs containing `.com`/`.net`/etc. (looks like a
+///     hostname or TLS cert).
+///   * Accept if 2-4 alphabetic tokens, all start with uppercase
+///     letter, and total length < 50.
+fn looks_like_personal_name(cn: &str) -> bool {
+    let trimmed = cn.trim();
+    if trimmed.is_empty() || trimmed.len() > 60 {
+        return false;
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    let org_markers = [
+        " inc", " inc.", " llc", " ltd", " ltd.", " corp", " corporation",
+        "foundation", "software", "technolog", " ou", " gmbh", " ag",
+        "company", "limited", "co.,", "labs", "systems", "studio", "solutions",
+        "group", "industries", "international", " sa", "research",
+    ];
+    if org_markers.iter().any(|m| lower.contains(m)) {
+        return false;
+    }
+    if lower.contains(".com") || lower.contains(".net") || lower.contains(".org") {
+        return false;
+    }
+    let tokens: Vec<&str> = trimmed
+        .split_whitespace()
+        .filter(|t| !t.trim_end_matches('.').is_empty())
+        .collect();
+    if !(2..=4).contains(&tokens.len()) {
+        return false;
+    }
+    tokens.iter().all(|t| {
+        let bare = t.trim_end_matches('.');
+        !bare.is_empty()
+            && bare.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+            && bare.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{is_nonstandard_section_name, is_sentence_like_string};
+    use super::{is_nonstandard_section_name, is_sentence_like_string, looks_like_personal_name};
+
+    #[test]
+    fn test_looks_like_personal_name_accepts_realistic() {
+        assert!(looks_like_personal_name("BEACH JOHN WILLIAM"));
+        assert!(looks_like_personal_name("John Smith"));
+        assert!(looks_like_personal_name("Jane Q. Doe"));
+        assert!(looks_like_personal_name("Mary-Jane Watson"));
+        assert!(looks_like_personal_name("O'Brien Patrick"));
+    }
+
+    #[test]
+    fn test_looks_like_personal_name_rejects_orgs() {
+        assert!(!looks_like_personal_name("Microsoft Corporation"));
+        assert!(!looks_like_personal_name("Privacy Technologies OU"));
+        assert!(!looks_like_personal_name("Google Inc"));
+        assert!(!looks_like_personal_name("Acme Software Labs"));
+        assert!(!looks_like_personal_name("Foo Industries Limited"));
+    }
+
+    #[test]
+    fn test_looks_like_personal_name_rejects_hostnames() {
+        assert!(!looks_like_personal_name("itunes.apple.com"));
+        assert!(!looks_like_personal_name("update.example.org"));
+    }
+
+    #[test]
+    fn test_looks_like_personal_name_rejects_too_few_or_many() {
+        // single word
+        assert!(!looks_like_personal_name("Smith"));
+        // five words
+        assert!(!looks_like_personal_name("Aaa Bbb Ccc Ddd Eee"));
+    }
+
+    #[test]
+    fn test_looks_like_personal_name_rejects_empty_or_long() {
+        assert!(!looks_like_personal_name(""));
+        assert!(!looks_like_personal_name(&"X ".repeat(40)));
+    }
 
     #[test]
     fn sentence_like_requires_multiple_words() {

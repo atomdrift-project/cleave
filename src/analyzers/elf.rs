@@ -32,6 +32,21 @@ struct ElfNoteSummary {
     note_count: u32,
     build_id: Option<Vec<u8>>,
     truncated: bool,
+    /// `GNU_PROPERTY_X86_FEATURE_1_AND` IBT bit observed.
+    has_cet_ibt: bool,
+    /// `GNU_PROPERTY_X86_FEATURE_1_AND` SHSTK bit observed.
+    has_cet_shstk: bool,
+    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` BTI bit observed.
+    has_aarch64_bti: bool,
+    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` PAC bit observed.
+    has_aarch64_pac: bool,
+    /// Minimum kernel version from `NT_GNU_ABI_TAG` (e.g. `"3.2.0"`).
+    gnu_abi_min_kernel: Option<String>,
+    /// `GNU_PROPERTY_X86_ISA_1_NEEDED` decoded into a microarch
+    /// level string (`"x86-64"`, `"x86-64-v2"`, …).
+    x86_isa_level_required: Option<String>,
+    /// `GNU_PROPERTY_AARCH64_FEATURE_PAUTH` platform/version string.
+    pauth_scheme: Option<String>,
 }
 
 /// Analyzer for Linux ELF binaries (executables, shared objects, kernel modules)
@@ -47,6 +62,128 @@ pub(crate) struct ElfAnalyzer {
     skip_embedded_scan: bool,
     /// Per-request cancellation flag.
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+}
+
+/// Parse the descriptor of an `NT_GNU_PROPERTY_TYPE_0` note and
+/// extract the modern hardening bits we care about into the summary.
+///
+/// Layout: a stream of `[type:u32, datasz:u32, data:datasz, pad to 8]`
+/// records. We only inspect the X86_FEATURE_1_AND and
+/// AARCH64_FEATURE_1_AND types; everything else is skipped.
+fn parse_gnu_property_note(desc: &[u8], summary: &mut ElfNoteSummary) {
+    const GNU_PROPERTY_X86_FEATURE_1_AND: u32 = 0xc0000002;
+    const GNU_PROPERTY_X86_ISA_1_NEEDED: u32 = 0xc0008002;
+    const GNU_PROPERTY_AARCH64_FEATURE_1_AND: u32 = 0xc0000000;
+    const GNU_PROPERTY_AARCH64_FEATURE_PAUTH: u32 = 0xc0000001;
+    const X86_FEATURE_1_IBT: u32 = 0x1;
+    const X86_FEATURE_1_SHSTK: u32 = 0x2;
+    const AARCH64_FEATURE_1_BTI: u32 = 0x1;
+    const AARCH64_FEATURE_1_PAC: u32 = 0x2;
+
+    let mut p = 0usize;
+    while p + 8 <= desc.len() {
+        let t = u32::from_le_bytes([desc[p], desc[p + 1], desc[p + 2], desc[p + 3]]);
+        let dsz = u32::from_le_bytes([desc[p + 4], desc[p + 5], desc[p + 6], desc[p + 7]])
+            as usize;
+        let data_start = p + 8;
+        let Some(data_end) = data_start.checked_add(dsz) else {
+            break;
+        };
+        if data_end > desc.len() {
+            break;
+        }
+        if dsz >= 4 {
+            let bits = u32::from_le_bytes([
+                desc[data_start],
+                desc[data_start + 1],
+                desc[data_start + 2],
+                desc[data_start + 3],
+            ]);
+            match t {
+                GNU_PROPERTY_X86_FEATURE_1_AND => {
+                    if bits & X86_FEATURE_1_IBT != 0 {
+                        summary.has_cet_ibt = true;
+                    }
+                    if bits & X86_FEATURE_1_SHSTK != 0 {
+                        summary.has_cet_shstk = true;
+                    }
+                }
+                GNU_PROPERTY_AARCH64_FEATURE_1_AND => {
+                    if bits & AARCH64_FEATURE_1_BTI != 0 {
+                        summary.has_aarch64_bti = true;
+                    }
+                    if bits & AARCH64_FEATURE_1_PAC != 0 {
+                        summary.has_aarch64_pac = true;
+                    }
+                }
+                GNU_PROPERTY_X86_ISA_1_NEEDED => {
+                    // Highest bit set determines the required level:
+                    // 0x1 = baseline (x86-64), 0x2 = v2, 0x4 = v3, 0x8 = v4.
+                    let level = if bits & 0x8 != 0 {
+                        Some("x86-64-v4")
+                    } else if bits & 0x4 != 0 {
+                        Some("x86-64-v3")
+                    } else if bits & 0x2 != 0 {
+                        Some("x86-64-v2")
+                    } else if bits & 0x1 != 0 {
+                        Some("x86-64")
+                    } else {
+                        None
+                    };
+                    if let Some(s) = level {
+                        summary.x86_isa_level_required = Some(s.to_string());
+                    }
+                }
+                GNU_PROPERTY_AARCH64_FEATURE_PAUTH if dsz >= 8 => {
+                    // Encoded as platform:u32 + version:u32.
+                    {
+                        let platform = bits;
+                        let version = u32::from_le_bytes([
+                            desc[data_start + 4],
+                            desc[data_start + 5],
+                            desc[data_start + 6],
+                            desc[data_start + 7],
+                        ]);
+                        let scheme = match platform {
+                            0x1 => format!("llvm.{version}"),
+                            0x2 => format!("darwin.{version}"),
+                            _ => format!("platform_{platform:#x}.{version}"),
+                        };
+                        summary.pauth_scheme = Some(scheme);
+                    }
+                }
+                _ => {}
+            }
+        }
+        // Each record is 8-byte padded.
+        let next = (data_end + 7) & !7usize;
+        if next <= p {
+            break;
+        }
+        p = next;
+    }
+}
+
+/// Resolve an ELF program-header `p_type` to its symbolic name.
+/// Covers the standard PT_* values; falls back to `"PT_<hex>"` for
+/// processor- or OS-specific types.
+fn phdr_type_name(p_type: u32) -> String {
+    let name = match p_type {
+        0 => "PT_NULL",
+        1 => "PT_LOAD",
+        2 => "PT_DYNAMIC",
+        3 => "PT_INTERP",
+        4 => "PT_NOTE",
+        5 => "PT_SHLIB",
+        6 => "PT_PHDR",
+        7 => "PT_TLS",
+        0x6474_e550 => "PT_GNU_EH_FRAME",
+        0x6474_e551 => "PT_GNU_STACK",
+        0x6474_e552 => "PT_GNU_RELRO",
+        0x6474_e553 => "PT_GNU_PROPERTY",
+        _ => return format!("PT_{p_type:#x}"),
+    };
+    name.to_string()
 }
 
 impl ElfAnalyzer {
@@ -227,15 +364,54 @@ impl ElfAnalyzer {
                 }
 
                 summary.note_count = summary.note_count.saturating_add(1);
+                let name_bytes = &section_data[name_start..name_end];
+                let desc_bytes = &section_data[desc_start..desc_end];
+                let is_gnu = Self::is_gnu_note_name(name_bytes);
                 if summary.build_id.is_none()
                     && n_type == NT_GNU_BUILD_ID
                     && namesz <= MAX_ELF_NOTE_NAME_BYTES
                     && descsz <= MAX_ELF_BUILD_ID_BYTES
-                    && Self::is_gnu_note_name(&section_data[name_start..name_end])
+                    && is_gnu
                 {
-                    summary.build_id = Some(section_data[desc_start..desc_end].to_vec());
+                    summary.build_id = Some(desc_bytes.to_vec());
                 } else if namesz > MAX_ELF_NOTE_NAME_BYTES || descsz > MAX_ELF_BUILD_ID_BYTES {
                     summary.truncated = true;
+                }
+                // NT_GNU_ABI_TAG (1) — minimum kernel version when
+                // os == GNU/Linux (0).
+                if n_type == 1 && is_gnu && desc_bytes.len() >= 16 {
+                    let os = u32::from_le_bytes([
+                        desc_bytes[0],
+                        desc_bytes[1],
+                        desc_bytes[2],
+                        desc_bytes[3],
+                    ]);
+                    if os == 0 && summary.gnu_abi_min_kernel.is_none() {
+                        let major = u32::from_le_bytes([
+                            desc_bytes[4],
+                            desc_bytes[5],
+                            desc_bytes[6],
+                            desc_bytes[7],
+                        ]);
+                        let minor = u32::from_le_bytes([
+                            desc_bytes[8],
+                            desc_bytes[9],
+                            desc_bytes[10],
+                            desc_bytes[11],
+                        ]);
+                        let sub = u32::from_le_bytes([
+                            desc_bytes[12],
+                            desc_bytes[13],
+                            desc_bytes[14],
+                            desc_bytes[15],
+                        ]);
+                        summary.gnu_abi_min_kernel = Some(format!("{major}.{minor}.{sub}"));
+                    }
+                }
+                // NT_GNU_PROPERTY_TYPE_0 (5) — walk type-tagged
+                // properties for CET / BTI / PAC bits.
+                if n_type == 5 && is_gnu {
+                    parse_gnu_property_note(desc_bytes, &mut summary);
                 }
 
                 if next_offset > section_data.len() {
@@ -383,7 +559,7 @@ impl ElfAnalyzer {
                 let note_summary = self.summarize_elf_notes(&elf, data);
 
                 // Compute ELF-specific metrics
-                let elf_metrics = self.compute_elf_metrics(&elf, &note_summary);
+                let elf_metrics = self.compute_elf_metrics(&elf, &note_summary, data);
                 let symbols_found = !elf.syms.is_empty();
 
                 // Calculate code_size from goblin section flags (more accurate than radare2)
@@ -1176,7 +1352,12 @@ impl ElfAnalyzer {
         }
     }
     /// Compute ELF-specific metrics from parsed ELF binary
-    fn compute_elf_metrics<'a>(&self, elf: &Elf<'a>, note_summary: &ElfNoteSummary) -> ElfMetrics {
+    fn compute_elf_metrics<'a>(
+        &self,
+        elf: &Elf<'a>,
+        note_summary: &ElfNoteSummary,
+        data: &[u8],
+    ) -> ElfMetrics {
         use goblin::elf::dynamic::{
             DT_BIND_NOW, DT_FINI_ARRAYSZ, DT_GNU_HASH, DT_INIT_ARRAYSZ, DT_RPATH, DT_RUNPATH,
             DT_TEXTREL,
@@ -1251,6 +1432,15 @@ impl ElfAnalyzer {
             let mut fini_arraysz = 0u64;
 
             // Check for various dynamic tags
+            use goblin::elf::dynamic::{
+                DT_AUDIT, DT_DEBUG, DT_DEPAUDIT, DT_FLAGS_1, DT_PREINIT_ARRAYSZ, DT_RELACOUNT,
+                DT_VERSYM,
+            };
+            // DT_RELR family — modern compressed relocations.
+            // glibc 2.36+ / lld 13+. Not exposed by goblin as named
+            // constants; use literal values from the ELF spec.
+            const DT_RELR: u64 = 36;
+            let mut preinit_arraysz: u64 = 0;
             for dyn_entry in &dynamic.dyns {
                 match dyn_entry.d_tag {
                     DT_RPATH => metrics.rpath_set = true,
@@ -1263,8 +1453,31 @@ impl ElfAnalyzer {
                     }
                     DT_INIT_ARRAYSZ => init_arraysz = dyn_entry.d_val,
                     DT_FINI_ARRAYSZ => fini_arraysz = dyn_entry.d_val,
+                    DT_AUDIT => metrics.dt_audit_present = true,
+                    DT_DEPAUDIT => metrics.dt_depaudit_present = true,
+                    DT_FLAGS_1 => metrics.dt_flags_1 = dyn_entry.d_val as u32,
+                    // Tier A — modern toolchain / hardening signals.
+                    DT_RELR => metrics.dt_relr_present = true,
+                    DT_PREINIT_ARRAYSZ => preinit_arraysz = dyn_entry.d_val,
+                    DT_DEBUG if dyn_entry.d_val != 0 => {
+                        metrics.dt_debug_present = true;
+                    }
+                    DT_VERSYM if metrics.dt_versym_count == 0 => {
+                        // DT_VERSYM stores the address of the
+                        // versym table; presence implies versioned
+                        // symbols are used. Set to 1 as a marker;
+                        // the actual count is filled in below from
+                        // the section if available.
+                        metrics.dt_versym_count = 1;
+                    }
+                    DT_RELACOUNT => metrics.relacount = dyn_entry.d_val as u32,
                     _ => {}
                 }
+            }
+            let ptr_size_for_preinit = if elf.is_64 { 8u64 } else { 4u64 };
+            if preinit_arraysz > 0 {
+                metrics.dt_preinit_array_count =
+                    (preinit_arraysz / ptr_size_for_preinit) as u32;
             }
 
             // Compute array counts (each entry is pointer size: 8 bytes for 64-bit, 4 for 32-bit)
@@ -1277,13 +1490,81 @@ impl ElfAnalyzer {
             }
         }
 
-        // Program header analysis (security features)
-        for ph in &elf.program_headers {
+        // DT_NEEDED path-shape anomalies + DT_RUNPATH $ORIGIN check.
+        for needed in &metrics.needed {
+            if needed.starts_with('/') {
+                metrics.dt_needed_absolute_paths =
+                    metrics.dt_needed_absolute_paths.saturating_add(1);
+            }
+            if needed.split('/').any(|seg| seg == "..") {
+                metrics.dt_needed_traversal_count =
+                    metrics.dt_needed_traversal_count.saturating_add(1);
+            }
+        }
+        if metrics.runpaths.iter().any(|p| p.contains("$ORIGIN")) {
+            metrics.runpath_uses_origin = true;
+        }
+
+        // Program header analysis (security features + Tier A anomalies)
+        use goblin::elf::program_header::{PF_R, PF_W, PT_INTERP};
+        let mut interp_count = 0u32;
+        let mut wx_count = 0u32;
+        let mut load_ranges: Vec<(u64, u64, usize)> = Vec::new();
+        let mut bss_segments_present = false;
+        let mut entry_in_writable = false;
+        let mut entry_in_section = false;
+        let mut last_load_idx: Option<usize> = None;
+        let mut last_load_vaddr: u64 = 0;
+        let mut min_load_offset: Option<u64> = None;
+
+        for (idx, ph) in elf.program_headers.iter().enumerate() {
             if ph.p_type == PT_LOAD {
                 metrics.load_segment_max_p_filesz =
                     metrics.load_segment_max_p_filesz.max(ph.p_filesz);
                 metrics.load_segment_max_p_memsz = metrics.load_segment_max_p_memsz.max(ph.p_memsz);
+                let span = ph.p_memsz.max(ph.p_filesz);
+                let end = ph.p_vaddr.saturating_add(span);
+                load_ranges.push((ph.p_vaddr, end, idx));
+                if ph.p_filesz < ph.p_memsz {
+                    bss_segments_present = true;
+                }
+                if (ph.p_flags & PF_W) != 0 && (ph.p_flags & PF_X) != 0 {
+                    wx_count = wx_count.saturating_add(1);
+                }
+                if elf.entry >= ph.p_vaddr && elf.entry < end && elf.entry != 0 {
+                    entry_in_section = true;
+                    if (ph.p_flags & PF_W) != 0 {
+                        entry_in_writable = true;
+                    }
+                }
+                if last_load_idx.is_none() || ph.p_vaddr > last_load_vaddr {
+                    last_load_idx = Some(idx);
+                    last_load_vaddr = ph.p_vaddr;
+                }
+                min_load_offset = Some(
+                    min_load_offset
+                        .map(|m| m.min(ph.p_offset))
+                        .unwrap_or(ph.p_offset),
+                );
             }
+            // Carrier population — every program header surfaces via kv.
+            let perms = format!(
+                "{}{}{}",
+                if ph.p_flags & PF_R != 0 { "r" } else { "-" },
+                if ph.p_flags & PF_W != 0 { "w" } else { "-" },
+                if ph.p_flags & PF_X != 0 { "x" } else { "-" },
+            );
+            metrics
+                .segment_entries
+                .push(crate::types::binary_metrics::ElfSegmentEntry {
+                    p_type: phdr_type_name(ph.p_type),
+                    p_vaddr: ph.p_vaddr,
+                    p_offset: ph.p_offset,
+                    p_filesz: ph.p_filesz,
+                    p_memsz: ph.p_memsz,
+                    flags_hex: format!("{:x}", ph.p_flags),
+                    perms,
+                });
 
             match ph.p_type {
                 // GNU_RELRO present (partial unless DT_BIND_NOW also set)
@@ -1293,10 +1574,76 @@ impl ElfAnalyzer {
                 PT_GNU_STACK => {
                     // Check if stack is executable
                     metrics.nx_enabled = (ph.p_flags & PF_X) == 0;
+                    if (ph.p_flags & PF_X) != 0 {
+                        metrics.executable_stack = true;
+                    }
+                }
+                PT_INTERP => {
+                    interp_count = interp_count.saturating_add(1);
                 }
                 _ => {}
             }
         }
+
+        // Tier A derived signals.
+        metrics.wx_segment_count = wx_count;
+        metrics.entry_in_writable_segment = entry_in_writable;
+        metrics.entry_outside_segments = !entry_in_section && elf.entry != 0;
+        metrics.multiple_pt_interp = interp_count > 1;
+        if let Some(idx) = last_load_idx {
+            // EP in last segment when found section is the last by vaddr.
+            for ph in &elf.program_headers {
+                if ph.p_type == PT_LOAD {
+                    let span = ph.p_memsz.max(ph.p_filesz);
+                    let end = ph.p_vaddr.saturating_add(span);
+                    if elf.entry >= ph.p_vaddr && elf.entry < end && elf.entry != 0 {
+                        if elf.program_headers.iter().position(|p| std::ptr::eq(p, ph))
+                            == Some(idx)
+                        {
+                            metrics.entry_in_last_segment = true;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+        // Section overlap (count pairs of overlapping vaddr ranges).
+        if load_ranges.len() > 1 {
+            let mut sorted = load_ranges.clone();
+            sorted.sort_by_key(|t| t.0);
+            let mut overlap_idxs: std::collections::HashSet<usize> =
+                std::collections::HashSet::new();
+            for w in sorted.windows(2) {
+                let (a_start, a_end, a_idx) = w[0];
+                let (b_start, _, b_idx) = w[1];
+                if a_end > b_start && b_start >= a_start {
+                    overlap_idxs.insert(a_idx);
+                    overlap_idxs.insert(b_idx);
+                }
+            }
+            metrics.segment_overlap_count = overlap_idxs.len() as u32;
+            let mut names: Vec<String> = overlap_idxs
+                .into_iter()
+                .map(|i| format!("PT_LOAD#{i}"))
+                .collect();
+            names.sort();
+            metrics.overlapping_segments = names;
+        }
+        // First-segment gap: bytes between (e_phoff + e_phnum * e_phentsize)
+        // and the first PT_LOAD's p_offset.
+        let header_end = elf
+            .header
+            .e_phoff
+            .saturating_add(elf.header.e_phnum as u64 * elf.header.e_phentsize as u64);
+        if let Some(first_off) = min_load_offset {
+            if first_off > header_end {
+                metrics.first_segment_gap_bytes = (first_off - header_end) as u32;
+            }
+        }
+        // Section header count mismatch.
+        metrics.section_header_count_mismatch =
+            elf.header.e_shnum as usize != elf.section_headers.len();
+        let _ = bss_segments_present;
 
         // Symbol analysis
         let mut hidden_count = 0;
@@ -1333,8 +1680,25 @@ impl ElfAnalyzer {
         metrics.stack_canary = has_stack_chk;
 
         // Section analysis
+        let mut has_gnu_stack_section = false;
+        let mut has_dot_hash = false;
+        let mut has_dot_gnu_hash = false;
+        let mut has_dot_text_writable = false;
+        let mut has_dot_rodata_writable = false;
+        let mut has_symtab = false;
+        let mut compressed_count: u32 = 0;
+        let mut name_seen_count: std::collections::HashMap<String, u32> =
+            std::collections::HashMap::new();
+        const SHF_WRITE: u64 = 0x1;
+        const SHF_COMPRESSED: u64 = 0x800;
         for sh in &elf.section_headers {
+            if sh.sh_flags & SHF_COMPRESSED != 0 {
+                compressed_count = compressed_count.saturating_add(1);
+            }
             if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
+                if !name.is_empty() {
+                    *name_seen_count.entry(name.to_string()).or_default() += 1;
+                }
                 match name {
                     ".plt" => metrics.has_plt = true,
                     ".got" | ".got.plt" => metrics.has_got = true,
@@ -1344,7 +1708,81 @@ impl ElfAnalyzer {
                     n if n.starts_with(".debug") || n == ".zdebug" || n.starts_with(".zdebug") => {
                         metrics.debug_section_count += 1;
                     }
+                    ".note.GNU-stack" => has_gnu_stack_section = true,
+                    ".hash" => has_dot_hash = true,
+                    ".gnu.hash" => has_dot_gnu_hash = true,
+                    ".gnu.version" => {
+                        // 16-bit half per dynamic symbol — accurate
+                        // count overrides the marker set during the
+                        // dynamic-tag walk.
+                        let count = (sh.sh_size / 2) as u32;
+                        if count > 0 {
+                            metrics.dt_versym_count = count;
+                        }
+                    }
+                    ".text" if sh.sh_flags & SHF_WRITE != 0 => has_dot_text_writable = true,
+                    ".rodata" if sh.sh_flags & SHF_WRITE != 0 => has_dot_rodata_writable = true,
+                    ".symtab" => has_symtab = true,
                     _ => {}
+                }
+            }
+        }
+        // Tier B section-anomaly metrics.
+        // `.note.GNU-stack` absence is only meaningful for non-relocatable
+        // objects (executables / shared libraries). Object files (.o)
+        // legitimately omit it.
+        if !has_gnu_stack_section && elf.header.e_type != 1 {
+            metrics.gnu_stack_section_absent = true;
+        }
+        metrics.both_hash_and_gnu_hash_present = has_dot_hash && has_dot_gnu_hash;
+        metrics.duplicate_section_name_count =
+            name_seen_count.values().filter(|&&c| c > 1).count() as u32;
+        // Direct writes — the consistency layer used to bridge these
+        // through internal carriers; we now own the public fields.
+        metrics.text_section_writable = has_dot_text_writable;
+        metrics.rodata_writable = has_dot_rodata_writable;
+        // `stripped_but_symtab_present` is a derived bool: `.symtab`
+        // present AND no debug sections (set later when
+        // debug_section_count is finalised).
+        metrics.stripped_but_symtab_present = has_symtab && metrics.debug_section_count == 0;
+        metrics.compressed_sections_count = compressed_count;
+
+        // FORTIFY_SOURCE — count `__*_chk` imports in dynsym.
+        let mut fortify_count: u32 = 0;
+        for sym in elf.dynsyms.iter() {
+            if let Some(name) = elf.dynstrtab.get_at(sym.st_name) {
+                if name.starts_with("__") && name.ends_with("_chk") {
+                    fortify_count = fortify_count.saturating_add(1);
+                }
+            }
+        }
+        metrics.fortify_source_used = fortify_count;
+
+        // Linker family — derive from .comment section content if
+        // present. Common signatures: "GNU ld", "gold", "LLD", "mold".
+        for sh in &elf.section_headers {
+            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
+                if name == ".comment" {
+                    let start = sh.sh_offset as usize;
+                    let end = start.saturating_add(sh.sh_size as usize);
+                    if end <= data.len() && start < end {
+                        let comment = String::from_utf8_lossy(&data[start..end]);
+                        let family = if comment.contains("LLD ") || comment.contains("ld.lld") {
+                            Some("lld")
+                        } else if comment.contains("mold") {
+                            Some("mold")
+                        } else if comment.contains("gold") {
+                            Some("gold")
+                        } else if comment.contains("GNU ld") || comment.contains("GNU ld.bfd") {
+                            Some("gnu_ld")
+                        } else {
+                            None
+                        };
+                        if let Some(f) = family {
+                            metrics.linker_family = Some(f.to_string());
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1355,6 +1793,15 @@ impl ElfAnalyzer {
             metrics.build_id_length = build_id.len() as u32;
             metrics.build_id = Some(hex::encode(build_id));
         }
+        // Tier 2 — modern hardening markers from NT_GNU_PROPERTY_TYPE_0
+        // and the minimum-kernel string from NT_GNU_ABI_TAG.
+        metrics.has_cet_ibt = note_summary.has_cet_ibt;
+        metrics.has_cet_shstk = note_summary.has_cet_shstk;
+        metrics.has_aarch64_bti = note_summary.has_aarch64_bti;
+        metrics.has_aarch64_pac = note_summary.has_aarch64_pac;
+        metrics.gnu_abi_min_kernel = note_summary.gnu_abi_min_kernel.clone();
+        metrics.x86_isa_level_required = note_summary.x86_isa_level_required.clone();
+        metrics.pauth_scheme = note_summary.pauth_scheme.clone();
 
         metrics
     }
@@ -1600,6 +2047,72 @@ impl Analyzer for ElfAnalyzer {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn test_parse_gnu_property_x86_ibt_shstk() {
+        // One record: type=X86_FEATURE_1_AND (0xc0000002), datasz=4,
+        // data=u32(IBT|SHSTK = 0x3), padding to 8-byte alignment.
+        let mut desc = vec![];
+        desc.extend_from_slice(&0xc0000002u32.to_le_bytes());
+        desc.extend_from_slice(&4u32.to_le_bytes());
+        desc.extend_from_slice(&3u32.to_le_bytes()); // IBT | SHSTK
+        desc.extend_from_slice(&[0u8; 4]); // pad to 16 bytes
+        let mut s = ElfNoteSummary::default();
+        parse_gnu_property_note(&desc, &mut s);
+        assert!(s.has_cet_ibt);
+        assert!(s.has_cet_shstk);
+        assert!(!s.has_aarch64_bti);
+        assert!(!s.has_aarch64_pac);
+    }
+
+    #[test]
+    fn test_parse_gnu_property_aarch64_bti_pac() {
+        let mut desc = vec![];
+        desc.extend_from_slice(&0xc0000000u32.to_le_bytes());
+        desc.extend_from_slice(&4u32.to_le_bytes());
+        desc.extend_from_slice(&3u32.to_le_bytes()); // BTI | PAC
+        desc.extend_from_slice(&[0u8; 4]);
+        let mut s = ElfNoteSummary::default();
+        parse_gnu_property_note(&desc, &mut s);
+        assert!(s.has_aarch64_bti);
+        assert!(s.has_aarch64_pac);
+        assert!(!s.has_cet_ibt);
+    }
+
+    #[test]
+    fn test_parse_gnu_property_empty_desc_safe() {
+        let mut s = ElfNoteSummary::default();
+        parse_gnu_property_note(&[], &mut s);
+        assert!(!s.has_cet_ibt);
+    }
+
+    #[test]
+    fn test_parse_gnu_property_unknown_type_skipped() {
+        let mut desc = vec![];
+        desc.extend_from_slice(&0xdeadbeefu32.to_le_bytes());
+        desc.extend_from_slice(&4u32.to_le_bytes());
+        desc.extend_from_slice(&0xffffffffu32.to_le_bytes());
+        desc.extend_from_slice(&[0u8; 4]);
+        let mut s = ElfNoteSummary::default();
+        parse_gnu_property_note(&desc, &mut s);
+        assert!(!s.has_cet_ibt);
+        assert!(!s.has_aarch64_bti);
+    }
+
+    #[test]
+    fn test_phdr_type_name_known() {
+        assert_eq!(phdr_type_name(1), "PT_LOAD");
+        assert_eq!(phdr_type_name(3), "PT_INTERP");
+        assert_eq!(phdr_type_name(0x6474_e551), "PT_GNU_STACK");
+        assert_eq!(phdr_type_name(0x6474_e552), "PT_GNU_RELRO");
+    }
+
+    #[test]
+    fn test_phdr_type_name_unknown_falls_back_to_hex() {
+        let s = phdr_type_name(0xdeadbeef);
+        assert!(s.starts_with("PT_"));
+        assert!(s.contains("0xdeadbeef"));
+    }
 
     fn push_u16(out: &mut Vec<u8>, value: u16) {
         out.extend_from_slice(&value.to_le_bytes());

@@ -492,6 +492,9 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                            encoding: Option<Vec<String>>| {
         let is_regex = match_type == "regex";
         let normalized = normalize_pattern_for_comparison(&value, is_regex);
+        if is_non_reusable_atom(condition_type, match_type, &normalized) {
+            return;
+        }
 
         patterns.push((
             normalized,
@@ -660,25 +663,34 @@ fn canonical_encoding_scope(encoding: &Option<EncodingSpec>) -> Option<Vec<Strin
     }
 }
 
-fn matcher_context_overlaps(a: &PatternLocation, b: &PatternLocation) -> bool {
+fn is_non_reusable_atom(condition_type: &str, match_type: &str, normalized: &str) -> bool {
+    if match_type != "regex" {
+        return false;
+    }
+
+    // Match-all regexes are often used as carriers for size, density, or parser
+    // metrics. They are not meaningful reusable atoms and sharing them would
+    // erase the actual technique signal.
+    matches!(condition_type, "basename" | "encoded") && matches!(normalized, "." | ".*")
+}
+
+fn matcher_context_reusable_as_is(a: &PatternLocation, b: &PatternLocation) -> bool {
     if a.condition_type != b.condition_type || a.match_type != b.match_type {
         return false;
     }
-    if !section_scope_overlaps(a.section.as_deref(), b.section.as_deref()) {
+    if !section_scope_equivalent(a.section.as_deref(), b.section.as_deref()) {
         return false;
     }
     if a.condition_type != "encoded" {
         return true;
     }
-    match (&a.encoding, &b.encoding) {
-        (None, _) | (_, None) => true,
-        (Some(a_enc), Some(b_enc)) => a_enc.iter().any(|enc| b_enc.contains(enc)),
-    }
+    a.encoding == b.encoding
 }
 
-fn section_scope_overlaps(a: Option<&str>, b: Option<&str>) -> bool {
+fn section_scope_equivalent(a: Option<&str>, b: Option<&str>) -> bool {
     match (a, b) {
-        (None, _) | (_, None) => true,
+        (None, None) => true,
+        (None, Some(_)) | (Some(_), None) => false,
         (Some(a), Some(b)) => {
             let a = canonical_section_scope(a);
             let b = canonical_section_scope(b);
@@ -790,7 +802,7 @@ pub(crate) fn find_string_pattern_duplicates(
         'outer: for i in 0..locations.len() {
             for j in (i + 1)..locations.len() {
                 if locations[i].file_path != locations[j].file_path
-                    && matcher_context_overlaps(&locations[i], &locations[j])
+                    && matcher_context_reusable_as_is(&locations[i], &locations[j])
                     && has_filetype_overlap(&locations[i], &locations[j])
                 {
                     has_overlap = true;
@@ -815,7 +827,7 @@ pub(crate) fn find_string_pattern_duplicates(
                 if loc_a.file_path == loc_b.file_path {
                     continue;
                 }
-                if !matcher_context_overlaps(loc_a, loc_b) {
+                if !matcher_context_reusable_as_is(loc_a, loc_b) {
                     continue;
                 }
 

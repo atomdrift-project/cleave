@@ -2478,6 +2478,35 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 macho_metrics.swift_section_count = swift_sections.len() as u32;
             }
 
+            // Tier A — count entries in __objc_classlist and
+            // __swift5_proto. Each entry is a pointer (8 bytes on
+            // 64-bit / 4 bytes on 32-bit), so size / pointer width
+            // gives the count.
+            let metrics = report
+                .metrics
+                .get_or_insert_with(crate::types::scores::Metrics::default);
+            let macho_metrics = metrics
+                .macho
+                .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
+            let ptr_size = if macho_metrics.class_bits == 64 { 8 } else { 4 };
+            // ObjC class list lives in __DATA_CONST,__objc_classlist
+            // on modern binaries; older builds use __DATA,__objc_classlist.
+            for seg in &["__DATA_CONST", "__DATA"] {
+                if let Some(bytes) =
+                    super::macho_extractors::find_section(raw_data, seg, "__objc_classlist")
+                {
+                    macho_metrics.objc_class_count = (bytes.len() / ptr_size) as u32;
+                    break;
+                }
+            }
+            if let Some(bytes) =
+                super::macho_extractors::find_section(raw_data, "__TEXT", "__swift5_proto")
+            {
+                // __swift5_proto entries are 4-byte signed offsets,
+                // not pointers — count by 4 regardless of arch.
+                macho_metrics.swift_protocol_count = (bytes.len() / 4) as u32;
+            }
+
             // Embedded plists in __TEXT — Info.plist and launchd_plist.
             // Command-line tools and self-installing daemons stash these
             // directly in the text segment instead of carrying a
@@ -2515,19 +2544,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 macho_metrics.is_notarized = true;
             }
 
-            // Cross-format: mirror CDHash under hashes.* alongside
-            // imphash, rich_header_hash, etc. — `hashes.*` is the
-            // single canonical home for similarity / cluster hashes
-            // regardless of source format.
-            if let Some(cdh) = cdhash_for_hashes {
-                let hashes = augment
-                    .entry(String::from("hashes"))
-                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
-                if let Some(h) = hashes.as_object_mut() {
-                    h.entry("cdhash_sha256".to_string())
-                        .or_insert_with(|| json!(cdh));
-                }
-            }
+            // CDHash lives at `signing.cdhash_sha256` (set above);
+            // not mirrored to `hashes.*` per the no-mirror principle.
+            let _ = cdhash_for_hashes;
         }
     }
 
@@ -2755,18 +2774,11 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
-    // Cross-format consistency checks. These are derived
-    // interpretations (boolean comparisons over kv data), so they
-    // live on `report.metrics.consistency` rather than in the kv
-    // tree. Trait authors target them via
-    // `type: metrics, field: consistency.<name>, min: 1`.
-    let consistency = compute_consistency_with_metrics(&augment, report.metrics.as_ref());
-    if !consistency_is_default(&consistency) {
-        let metrics = report
-            .metrics
-            .get_or_insert_with(crate::types::scores::Metrics::default);
-        metrics.consistency = Some(consistency);
-    }
+    // Cross-source consistency checks. These derived booleans
+    // compare two fields populated from independent sources within
+    // the same binary; the result lives on the format-specific
+    // metric struct (no separate consistency pool).
+    apply_consistency_checks(report, &augment);
 
     if augment.is_empty() {
         return;
@@ -2843,57 +2855,118 @@ fn plist_to_json(v: &plist::Value) -> serde_json::Value {
 /// fields are present and obviously incompatible, never on absence
 /// alone. The optional `metrics` argument unlocks checks that need
 /// typed numeric fields (vs the kv tree's serialized JSON form).
-fn compute_consistency_with_metrics(
+/// Apply cross-source consistency checks directly to the
+/// format-specific metric structs on `report.metrics`. Each check
+/// compares two fields populated from independent sources within
+/// the same binary and writes the boolean result to the appropriate
+/// format struct. No separate consistency pool — fields land on
+/// `pe.*`, `elf.*`, or `macho.*` per their semantic scope.
+fn apply_consistency_checks(
+    report: &mut AnalysisReport,
     augment: &serde_json::Map<String, serde_json::Value>,
-    metrics: Option<&crate::types::scores::Metrics>,
-) -> crate::types::binary_metrics::ConsistencyMetrics {
-    let mut out = crate::types::binary_metrics::ConsistencyMetrics::default();
+) {
+    let metrics = report
+        .metrics
+        .get_or_insert_with(crate::types::scores::Metrics::default);
 
-    // PE Authenticode cert issued after build. The leaf cert's
-    // not_before is when the cert was *issued*; if that's after the
-    // binary's COFF timestamp, the binary was created/repackaged
-    // before the signing cert existed — only possible if it was
-    // re-signed with a newer cert later.
-    //
-    // Filter out deterministic-build cases where pe.timestamp is a
-    // content hash that can legitimately appear in the future
-    // (`pe.is_reproducible_build`). Also skip when timestamp is 0
-    // (also a deterministic marker).
-    if let Some(m) = metrics.and_then(|m| m.pe.as_ref()) {
-        let cert_issued = m.leaf_not_before;
-        let build_ts = m.timestamp as i64;
-        if cert_issued > 0 && build_ts > 0 && !m.is_reproducible_build && cert_issued > build_ts {
-            out.cert_issued_after_build = true;
+    // === PE checks ===
+    if let Some(pe) = metrics.pe.as_mut() {
+        // Cert issued after build: cert.not_before > pe.timestamp,
+        // skipping deterministic-build cases (REPRO / timestamp == 0).
+        let cert_issued = pe.leaf_not_before;
+        let build_ts = pe.timestamp as i64;
+        if cert_issued > 0 && build_ts > 0 && !pe.is_reproducible_build && cert_issued > build_ts {
+            pe.cert_issued_after_build = true;
         }
-
-        if let (Some(signer), Some(pdb)) = (m.primary_signer.as_deref(), m.pdb_path.as_deref()) {
+        // Cert org vs PDB path divergence.
+        if let (Some(signer), Some(pdb)) = (pe.primary_signer.as_deref(), pe.pdb_path.as_deref()) {
             if !signer.contains("Microsoft") && !signer.contains("Windows") {
-                out.cert_org_pdb_mismatch = cert_org_pdb_mismatch(signer, pdb);
+                pe.cert_org_pdb_mismatch = cert_org_pdb_mismatch(signer, pdb);
             }
         }
     }
 
-    // Mach-O code-sig CodeDirectory identifier vs embedded Info.plist
-    // CFBundleIdentifier. Vendors set them in lockstep; divergence
-    // typically means the binary was re-signed with a different
-    // identity but the embedded plist wasn't rewritten to match.
-    let signing_bundle = augment
-        .get("signing")
-        .and_then(|v| v.get("bundle_identifier"))
-        .and_then(|v| v.as_str());
-    let plist_bundle = augment
-        .get("macho")
-        .and_then(|v| v.get("info_plist"))
-        .and_then(|v| v.get("CFBundleIdentifier"))
-        .and_then(|v| v.as_str());
-    if let (Some(a), Some(b)) = (signing_bundle, plist_bundle) {
-        if a != b {
-            out.bundle_identifier_mismatch = true;
+    // === Mach-O checks (need direct access to macho metrics) ===
+    if let Some(macho) = metrics.macho.as_mut() {
+        // __TEXT writability — VM_PROT_WRITE in initprot.
+        for seg in &macho.segment_entries {
+            if seg.name == "__TEXT" {
+                let bits = u32::from_str_radix(&seg.initprot_hex, 16).unwrap_or(0);
+                if bits & 0x2 != 0 {
+                    macho.text_segment_writable = true;
+                    break;
+                }
+            }
+        }
+        // Dylib install-name mismatch — only meaningful for MH_DYLIB.
+        const MH_DYLIB: u32 = 0x6;
+        if macho.file_type == MH_DYLIB && macho.install_name_present {
+            if let (Some(install_name), Some(target_path)) = (
+                augment
+                    .get("macho")
+                    .and_then(|v| v.get("install_name"))
+                    .and_then(|v| v.as_str()),
+                augment
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        augment
+                            .get("file")
+                            .and_then(|v| v.get("path"))
+                            .and_then(|v| v.as_str())
+                    }),
+            ) {
+                let install_basename = std::path::Path::new(install_name)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let actual_basename = std::path::Path::new(target_path)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                if !install_basename.is_empty()
+                    && !actual_basename.is_empty()
+                    && install_basename != actual_basename
+                {
+                    macho.dylib_install_name_mismatch = true;
+                }
+            }
+        }
+        // Bundle identifier mismatch (codedir vs Info.plist).
+        let signing_bundle = augment
+            .get("signing")
+            .and_then(|v| v.get("bundle_identifier"))
+            .and_then(|v| v.as_str());
+        let plist_bundle = augment
+            .get("macho")
+            .and_then(|v| v.get("info_plist"))
+            .and_then(|v| v.get("CFBundleIdentifier"))
+            .and_then(|v| v.as_str());
+        if let (Some(a), Some(b)) = (signing_bundle, plist_bundle) {
+            if a != b {
+                macho.bundle_identifier_mismatch = true;
+            }
+        }
+        // Universal binary mixed-signing state across slices.
+        if let Some(slices) = augment
+            .get("macho")
+            .and_then(|v| v.get("slices"))
+            .and_then(|v| v.as_array())
+        {
+            let signed: Vec<bool> = slices
+                .iter()
+                .filter_map(|s| {
+                    s.get("has_code_signature")
+                        .and_then(serde_json::Value::as_bool)
+                })
+                .collect();
+            if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
+                macho.slice_signing_divergence = true;
+            }
         }
     }
 
-    // PE side-by-side manifest assembly version vs VERSIONINFO
-    // ProductVersion. Tolerate trailing-zero differences.
+    // === PE manifest version vs VERSIONINFO product_version ===
     let manifest_ver = augment
         .get("pe")
         .and_then(|v| v.get("manifest"))
@@ -2907,14 +2980,13 @@ fn compute_consistency_with_metrics(
         .and_then(|v| v.as_str());
     if let (Some(a), Some(b)) = (manifest_ver, info_ver) {
         if !versions_equivalent(a, b) {
-            out.manifest_product_version_mismatch = true;
+            if let Some(pe) = metrics.pe.as_mut() {
+                pe.manifest_product_version_mismatch = true;
+            }
         }
     }
 
-    // ELF build.distro reports a distro incompatible with the
-    // observed toolchain version (e.g. Ubuntu + gcc 14.x — Ubuntu
-    // 24.04 ships gcc 13.2 max). Conservative — only fires on
-    // (distro, major) pairs known not to exist as default.
+    // === ELF distro/toolchain implausibility + DWARF mixed flags ===
     let distro = augment
         .get("build")
         .and_then(|v| v.get("distro"))
@@ -2923,63 +2995,29 @@ fn compute_consistency_with_metrics(
         .get("build")
         .and_then(|v| v.get("toolchain"))
         .and_then(|v| v.as_str());
-    if let (Some(d), Some(t)) = (distro, toolchain) {
-        if distro_toolchain_implausible(d, t) {
-            out.distro_toolchain_implausible = true;
-        }
-    }
-
-    // DWARF: multiple producer strings = mixed toolchains.
     let n_producers = augment
         .get("dwarf")
         .and_then(|v| v.get("producers"))
         .and_then(|v| v.as_array())
         .map_or(0, Vec::len);
-    if n_producers > 1 {
-        out.dwarf_mixed_producers = true;
-    }
     let n_comp_dirs = augment
         .get("dwarf")
         .and_then(|v| v.get("comp_dirs"))
         .and_then(|v| v.as_array())
         .map_or(0, Vec::len);
-    if n_comp_dirs > 1 {
-        out.dwarf_mixed_comp_dirs = true;
-    }
-
-    // Mach-O fat binary with mixed signing state across slices.
-    if let Some(slices) = augment
-        .get("macho")
-        .and_then(|v| v.get("slices"))
-        .and_then(|v| v.as_array())
-    {
-        let signed: Vec<bool> = slices
-            .iter()
-            .filter_map(|s| {
-                s.get("has_code_signature")
-                    .and_then(serde_json::Value::as_bool)
-            })
-            .collect();
-        if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
-            out.macho_slice_signing_divergence = true;
+    if let Some(elf) = metrics.elf.as_mut() {
+        if let (Some(d), Some(t)) = (distro, toolchain) {
+            if distro_toolchain_implausible(d, t) {
+                elf.distro_toolchain_implausible = true;
+            }
+        }
+        if n_producers > 1 {
+            elf.dwarf_mixed_producers = true;
+        }
+        if n_comp_dirs > 1 {
+            elf.dwarf_mixed_comp_dirs = true;
         }
     }
-
-    out
-}
-
-/// True when no consistency flag is set — used to skip allocating
-/// the struct on `report.metrics.consistency` when there's nothing
-/// to surface.
-fn consistency_is_default(c: &crate::types::binary_metrics::ConsistencyMetrics) -> bool {
-    !c.bundle_identifier_mismatch
-        && !c.manifest_product_version_mismatch
-        && !c.distro_toolchain_implausible
-        && !c.dwarf_mixed_producers
-        && !c.dwarf_mixed_comp_dirs
-        && !c.macho_slice_signing_divergence
-        && !c.cert_issued_after_build
-        && !c.cert_org_pdb_mismatch
 }
 
 /// Returns true when no word from `signer_org` appears as a component
@@ -3566,37 +3604,65 @@ mod tests {
         assert!(!distro_toolchain_implausible("nixos", "gcc 14.2.0"));
     }
 
+    fn empty_report() -> AnalysisReport {
+        AnalysisReport::new(crate::types::core::TargetInfo {
+            path: String::new(),
+            file_type: String::new(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        })
+    }
+    fn report_with_macho() -> AnalysisReport {
+        let mut report = empty_report();
+        let mut metrics = crate::types::scores::Metrics::default();
+        metrics.macho = Some(crate::types::binary_metrics::MachoMetrics::default());
+        report.metrics = Some(metrics);
+        report
+    }
+    fn report_with_pe() -> AnalysisReport {
+        let mut report = empty_report();
+        let mut metrics = crate::types::scores::Metrics::default();
+        metrics.pe = Some(crate::types::binary_metrics::PeMetrics::default());
+        report.metrics = Some(metrics);
+        report
+    }
+    fn report_with_elf() -> AnalysisReport {
+        let mut report = empty_report();
+        let mut metrics = crate::types::scores::Metrics::default();
+        metrics.elf = Some(crate::types::binary_metrics::ElfMetrics::default());
+        report.metrics = Some(metrics);
+        report
+    }
+
     #[test]
     fn consistency_bundle_identifier_mismatch() {
         use serde_json::json;
         let mut aug = serde_json::Map::new();
-        aug.insert(
-            "signing".into(),
-            json!({"bundle_identifier": "com.apple.ls"}),
-        );
+        aug.insert("signing".into(), json!({"bundle_identifier": "com.apple.ls"}));
         aug.insert(
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.attacker.payload"}}),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(c.bundle_identifier_mismatch);
+        let mut report = report_with_macho();
+        apply_consistency_checks(&mut report, &aug);
+        let macho = report.metrics.unwrap().macho.unwrap();
+        assert!(macho.bundle_identifier_mismatch);
     }
 
     #[test]
     fn consistency_no_false_positive_when_matching() {
         use serde_json::json;
         let mut aug = serde_json::Map::new();
-        aug.insert(
-            "signing".into(),
-            json!({"bundle_identifier": "com.apple.ls"}),
-        );
+        aug.insert("signing".into(), json!({"bundle_identifier": "com.apple.ls"}));
         aug.insert(
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.apple.ls"}}),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(!c.bundle_identifier_mismatch);
-        assert!(consistency_is_default(&c));
+        let mut report = report_with_macho();
+        apply_consistency_checks(&mut report, &aug);
+        let macho = report.metrics.unwrap().macho.unwrap();
+        assert!(!macho.bundle_identifier_mismatch);
     }
 
     #[test]
@@ -3610,8 +3676,10 @@ mod tests {
                 "version_info": {"product_version": "9.9.9.9"},
             }),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(c.manifest_product_version_mismatch);
+        let mut report = report_with_pe();
+        apply_consistency_checks(&mut report, &aug);
+        let pe = report.metrics.unwrap().pe.unwrap();
+        assert!(pe.manifest_product_version_mismatch);
     }
 
     #[test]
@@ -3625,8 +3693,10 @@ mod tests {
                 "version_info": {"product_version": "1.2.3"},
             }),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(!c.manifest_product_version_mismatch);
+        let mut report = report_with_pe();
+        apply_consistency_checks(&mut report, &aug);
+        let pe = report.metrics.unwrap().pe.unwrap();
+        assert!(!pe.manifest_product_version_mismatch);
     }
 
     #[test]
@@ -3637,8 +3707,10 @@ mod tests {
             "dwarf".into(),
             json!({"producers": ["GNU C 13.2.0", "clang 17.0.0"]}),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(c.dwarf_mixed_producers);
+        let mut report = report_with_elf();
+        apply_consistency_checks(&mut report, &aug);
+        let elf = report.metrics.unwrap().elf.unwrap();
+        assert!(elf.dwarf_mixed_producers);
     }
 
     #[test]
@@ -3652,8 +3724,10 @@ mod tests {
                 {"arch": "arm64",  "has_code_signature": false},
             ]}),
         );
-        let c = compute_consistency_with_metrics(&aug, None);
-        assert!(c.macho_slice_signing_divergence);
+        let mut report = report_with_macho();
+        apply_consistency_checks(&mut report, &aug);
+        let macho = report.metrics.unwrap().macho.unwrap();
+        assert!(macho.slice_signing_divergence);
     }
 
     /// Build a minimal ELF whose only non-shstrtab section is

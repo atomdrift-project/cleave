@@ -244,7 +244,6 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
 const DISABLED_VALIDATOR_IDS: &[&str] = &[
     "regex-contains-literal",
     "regex-alternative-subset",
-    "duplicate-patterns",
     "overlapping-regex-patterns",
     "redundant-patterns",
     "cross-type-canonicalization",

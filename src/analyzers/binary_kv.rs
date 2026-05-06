@@ -295,8 +295,15 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
     if let Some(bin) = metrics.binary.as_ref() {
         if bin.has_signature {
             out.insert("is_signed".into(), json!(true));
-            if let Some(valid) = bin.signature_valid {
-                out.insert("signature_valid".into(), json!(valid));
+            // signature_valid lives on the format-specific struct; pull
+            // from whichever format is present.
+            let valid = metrics
+                .pe
+                .as_ref()
+                .and_then(|p| p.signature_valid)
+                .or_else(|| metrics.macho.as_ref().and_then(|m| m.signature_valid));
+            if let Some(v) = valid {
+                out.insert("signature_valid".into(), json!(v));
             }
         }
     }
@@ -580,6 +587,14 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             .collect();
         out.insert("data_directories".into(), Value::Array(arr));
     }
+    // TLS callback addresses (RVAs) — list-style kv carrier so trait
+    // authors can match individual callback RVAs.
+    if !pe.tls_callback_addresses.is_empty() {
+        out.insert(
+            "tls_callback_addresses".into(),
+            json!(pe.tls_callback_addresses.clone()),
+        );
+    }
     // Rich Header CompID + count + product-name tuples.
     if !pe.rich_header_compids.is_empty() {
         let arr: Vec<Value> = pe
@@ -730,6 +745,87 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
         out.insert("runpath".into(), json!(elf.runpaths.clone()));
     }
 
+    // Per-program-header carrier — surface every PT_* entry so trait
+    // authors can match individual segment permissions / extents.
+    if !elf.segment_entries.is_empty() {
+        let arr: Vec<Value> = elf
+            .segment_entries
+            .iter()
+            .map(|s| {
+                json!({
+                    "p_type": s.p_type,
+                    "p_vaddr": s.p_vaddr,
+                    "p_offset": s.p_offset,
+                    "p_filesz": s.p_filesz,
+                    "p_memsz": s.p_memsz,
+                    "flags_hex": s.flags_hex,
+                    "perms": s.perms,
+                })
+            })
+            .collect();
+        out.insert("segments".into(), Value::Array(arr));
+    }
+    // Decoded DT_FLAGS_1 named-bit subtree (mirrors PE
+    // `pe.dll_characteristics.*`). Bits per glibc <elf.h>.
+    if elf.dt_flags_1 != 0 {
+        let mut flags = Map::new();
+        let f = elf.dt_flags_1;
+        let pairs: &[(u32, &str)] = &[
+            (0x00000001, "now"),
+            (0x00000002, "global"),
+            (0x00000004, "group"),
+            (0x00000008, "nodelete"),
+            (0x00000010, "loadfltr"),
+            (0x00000020, "initfirst"),
+            (0x00000040, "noopen"),
+            (0x00000080, "origin"),
+            (0x00000100, "direct"),
+            (0x00000200, "trans"),
+            (0x00000400, "interpose"),
+            (0x00000800, "nodeflib"),
+            (0x00001000, "nodump"),
+            (0x00002000, "confalt"),
+            (0x00004000, "endfiltee"),
+            (0x00008000, "dispreldne"),
+            (0x00010000, "disprelpnd"),
+            (0x00020000, "nodirect"),
+            (0x00040000, "ignmuldef"),
+            (0x00080000, "noksyms"),
+            (0x00100000, "nohdr"),
+            (0x00200000, "edited"),
+            (0x00400000, "noreloc"),
+            (0x00800000, "symintpose"),
+            (0x01000000, "globaudit"),
+            (0x02000000, "singleton"),
+            (0x04000000, "stub"),
+            (0x08000000, "pie"),
+        ];
+        for (bit, name) in pairs {
+            if f & bit != 0 {
+                flags.insert((*name).to_string(), json!(true));
+            }
+        }
+        if !flags.is_empty() {
+            out.insert("dt_flags_1".into(), Value::Object(flags));
+        }
+    }
+
+    // Tier A — modern toolchain / hardening surface for trait
+    // authors. These are raw enough to live in kv (they're either
+    // version strings or linker family names, no interpretation).
+    if let Some(s) = elf.x86_isa_level_required.as_deref() {
+        out.insert("x86_isa_level_required".into(), json!(s));
+    }
+    if let Some(s) = elf.pauth_scheme.as_deref() {
+        out.insert("pauth_scheme".into(), json!(s));
+    }
+    if let Some(s) = elf.linker_family.as_deref() {
+        out.insert("linker_family".into(), json!(s));
+    }
+    if let Some(s) = elf.gnu_abi_min_kernel.as_deref() {
+        out.insert("gnu_abi_min_kernel".into(), json!(s));
+    }
+
     if out.is_empty() {
         return None;
     }
@@ -755,6 +851,131 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             macho.sdk_major, macho.sdk_minor, macho.sdk_patch
         );
         out.insert("sdk_version".into(), json!(sdk));
+    }
+
+    // Per-segment carrier — every LC_SEGMENT entry surfaces.
+    if !macho.segment_entries.is_empty() {
+        let arr: Vec<Value> = macho
+            .segment_entries
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "vmaddr": s.vmaddr,
+                    "vmsize": s.vmsize,
+                    "fileoff": s.fileoff,
+                    "filesize": s.filesize,
+                    "maxprot_hex": s.maxprot_hex,
+                    "initprot_hex": s.initprot_hex,
+                    "perms": s.perms,
+                })
+            })
+            .collect();
+        out.insert("segments".into(), Value::Array(arr));
+    }
+    // Per-dylib carrier — install_name + versions + load kind.
+    if !macho.dylib_entries.is_empty() {
+        let arr: Vec<Value> = macho
+            .dylib_entries
+            .iter()
+            .map(|d| {
+                json!({
+                    "name": d.name,
+                    "current_version": d.current_version,
+                    "compatibility_version": d.compatibility_version,
+                    "kind": d.kind,
+                })
+            })
+            .collect();
+        out.insert("dylibs".into(), Value::Array(arr));
+    }
+    // Modern-vs-legacy markers (mirror cleave's existing
+    // `pe.is_reproducible_build`-style booleans).
+    if macho.has_chained_fixups {
+        out.insert("has_chained_fixups".into(), json!(true));
+    }
+    if macho.has_dyld_info_legacy {
+        out.insert("has_dyld_info_legacy".into(), json!(true));
+    }
+    // Decoded MH_* header flags subtree — mirrors PE's
+    // `pe.dll_characteristics.*` decoded named-bit pattern.
+    if macho.flags != 0 {
+        let mut hf = Map::new();
+        let f = macho.flags;
+        let pairs: &[(u32, &str)] = &[
+            (0x0000_0001, "noundefs"),
+            (0x0000_0002, "incrlink"),
+            (0x0000_0004, "dyldlink"),
+            (0x0000_0008, "bindatload"),
+            (0x0000_0010, "prebound"),
+            (0x0000_0020, "split_segs"),
+            (0x0000_0080, "twolevel"),
+            (0x0000_0400, "weak_defines"),
+            (0x0000_0800, "binds_to_weak"),
+            (0x0000_1000, "subsections_via_symbols"),
+            (0x0008_0000, "allow_stack_execution"),
+            (0x0010_0000, "root_safe"),
+            (0x0020_0000, "pie"),
+            (0x0080_0000, "has_tlv_descriptors"),
+            (0x0100_0000, "no_heap_execution"),
+            (0x0200_0000, "app_extension_safe"),
+            (0x0400_0000, "nlist_outofsync_with_dyldinfo"),
+            (0x0800_0000, "sim_support"),
+            (0x8000_0000, "dylib_in_cache"),
+        ];
+        for (bit, name) in pairs {
+            if f & bit != 0 {
+                hf.insert((*name).to_string(), json!(true));
+            }
+        }
+        if !hf.is_empty() {
+            out.insert("header_flags".into(), Value::Object(hf));
+        }
+    }
+    // Decoded CodeDirectory flag bits when signed — mirrors the
+    // header_flags pattern but for the codesign side. Sourced from
+    // the per-bit booleans on MachoMetrics (raw flags live on
+    // CodeSignature, not exposed at the metric level).
+    let mut cs = Map::new();
+    if macho.cs_runtime_flag {
+        cs.insert("runtime".into(), json!(true));
+    }
+    if macho.cs_library_validation {
+        cs.insert("library_validation".into(), json!(true));
+    }
+    if macho.cs_linker_signed {
+        cs.insert("linker_signed".into(), json!(true));
+    }
+    if macho.cs_force_kill {
+        cs.insert("force_kill".into(), json!(true));
+    }
+    if !cs.is_empty() {
+        out.insert("cs_flags".into(), Value::Object(cs));
+    }
+    if let Some(rv) = macho.cs_runtime_version.as_deref() {
+        out.insert("cs_runtime_version".into(), json!(rv));
+    }
+    if macho.has_data_const_segment {
+        out.insert("has_data_const_segment".into(), json!(true));
+    }
+    if !macho.overlapping_segments.is_empty() {
+        out.insert(
+            "overlapping_segments".into(),
+            json!(macho.overlapping_segments.clone()),
+        );
+    }
+    // Tier 1 — supply-chain similarity hashes (machofile-inspired).
+    if let Some(h) = macho.dylib_hash.as_deref() {
+        out.insert("dylib_hash".into(), json!(h));
+    }
+    if let Some(h) = macho.symhash.as_deref() {
+        out.insert("symhash".into(), json!(h));
+    }
+    if let Some(h) = macho.export_hash.as_deref() {
+        out.insert("export_hash".into(), json!(h));
+    }
+    if let Some(h) = macho.entitlement_hash.as_deref() {
+        out.insert("entitlement_hash".into(), json!(h));
     }
 
     if out.is_empty() {
@@ -942,6 +1163,9 @@ mod tests {
         let m = Metrics {
             binary: Some(BinaryMetrics {
                 has_signature: true,
+                ..Default::default()
+            }),
+            pe: Some(crate::types::binary_metrics::PeMetrics {
                 signature_valid: Some(true),
                 ..Default::default()
             }),

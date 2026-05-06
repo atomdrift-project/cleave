@@ -31,7 +31,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 
     // Import all metrics types
     use super::binary_metrics::{
-        BinaryMetrics, ConsistencyMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
+        BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
     };
     use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
     use super::language_metrics::{
@@ -134,9 +134,6 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     for field in MachoMetrics::valid_field_paths() {
         paths.insert(format!("macho.{}", field));
     }
-    for field in ConsistencyMetrics::valid_field_paths() {
-        paths.insert(format!("consistency.{}", field));
-    }
     for field in JavaClassMetrics::valid_field_paths() {
         paths.insert(format!("java_class.{}", field));
     }
@@ -232,7 +229,7 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     }
 
     use super::binary_metrics::{
-        BinaryMetrics, ConsistencyMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
+        BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
     };
     use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
     use super::language_metrics::{
@@ -259,7 +256,6 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     add!("elf", ElfMetrics);
     add!("pe", PeMetrics);
     add!("macho", MachoMetrics);
-    add!("consistency", ConsistencyMetrics);
     add!("java_class", JavaClassMetrics);
     add!("archive", ArchiveMetrics);
     add!("package_json", PackageJsonMetrics);

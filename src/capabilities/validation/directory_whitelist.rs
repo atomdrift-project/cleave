@@ -303,6 +303,7 @@ const ALLOWED_MB_FS: &[&str] = &[
     "proc",
     "quota",
     "read",
+    "search",
     "shell-ops",
     "swap",
     "sync",

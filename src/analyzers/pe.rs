@@ -2981,6 +2981,14 @@ impl PEAnalyzer {
 
         if let Some(tls_data) = &pe.tls_data {
             metrics.tls_callbacks = tls_data.callbacks.len() as u32;
+            // Tier A — surface individual callback RVAs (image-base
+            // subtracted) so trait authors can match by location.
+            let image_base = metrics.image_base;
+            metrics.tls_callback_addresses = tls_data
+                .callbacks
+                .iter()
+                .map(|&va| (va.saturating_sub(image_base)) as u32)
+                .collect();
         }
 
         // Bound Import Directory (IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT=11).
@@ -3537,6 +3545,21 @@ fn parse_load_config(
         if body.len() >= 0x94 {
             metrics.cfg_guard_flags = read_u32(body, 0x90).unwrap_or(0);
         }
+        // Tier A — Load Config v2 (Win10+) fields. Field offsets per
+        // IMAGE_LOAD_CONFIG_DIRECTORY64 winnt.h definition.
+        if body.len() >= 0xB8 {
+            metrics.guard_long_jump_target_count =
+                read_u64(body, 0xB0).unwrap_or(0) as u32;
+        }
+        // DynamicValueRelocTable (RVA at 0xB8) — presence-only
+        // signal for the modern dynamic-relocation feature.
+        if body.len() >= 0xC0 && read_u64(body, 0xB8).unwrap_or(0) != 0 {
+            metrics.dynamic_value_reloc_table_present = true;
+        }
+        if body.len() >= 0xD8 {
+            metrics.guard_eh_continuation_table_count =
+                read_u64(body, 0xD0).unwrap_or(0) as u32;
+        }
     } else {
         if body.len() >= 0x44 {
             metrics.security_cookie = read_u32(body, 0x40).unwrap_or(0) as u64;
@@ -3552,6 +3575,16 @@ fn parse_load_config(
         }
         if body.len() >= 0x60 {
             metrics.cfg_guard_flags = read_u32(body, 0x5C).unwrap_or(0);
+        }
+        // Tier A — Load Config v2 32-bit field offsets.
+        if body.len() >= 0x74 {
+            metrics.guard_long_jump_target_count = read_u32(body, 0x70).unwrap_or(0);
+        }
+        if body.len() >= 0x78 && read_u32(body, 0x74).unwrap_or(0) != 0 {
+            metrics.dynamic_value_reloc_table_present = true;
+        }
+        if body.len() >= 0x88 {
+            metrics.guard_eh_continuation_table_count = read_u32(body, 0x84).unwrap_or(0);
         }
     }
 }

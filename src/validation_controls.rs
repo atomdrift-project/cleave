@@ -233,7 +233,6 @@ const DISABLED_VALIDATOR_IDS: &[&str] = &[
     "overlapping-regex-patterns",
     "redundant-patterns",
     "cross-type-canonicalization",
-    "leaf-yaml",
     "full-directory-composite",
     "regex-performance",
     "ast-text-call-performance",

@@ -721,7 +721,8 @@ pub struct ElfMetrics {
     /// banners signal a mixed-toolchain build (xz-class tampering).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub comment_entry_count: u32,
-    /// Distinct toolchain banner strings in .comment section.
+    /// Distinct toolchain banner strings in .comment section
+    ///
     /// A value greater than 1 means at least one input object was
     /// built with a different banner than the rest of the binary.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -1172,23 +1173,24 @@ pub struct PeMetrics {
     pub signature_overlay_padding_bytes: u64,
 
     // === Authenticode signature verification (LIEF-equivalent coverage) ===
-    /// Friendly name of the digest algorithm the SignedData claims the
-    /// file was hashed with (e.g. `"sha256"`). Read from
+    /// Digest algorithm name claimed by the SignedData structure
+    ///
+    /// Friendly name (e.g. `"sha256"`). Read from
     /// SpcIndirectDataContent.messageDigest.digestAlgorithm. None when
     /// the SPC structure couldn't be parsed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_digest_algorithm: Option<String>,
-    /// Hex string of the file digest the SignedData claims (the value
-    /// the signature was actually made over). Read from
-    /// SpcIndirectDataContent.messageDigest.digest. Compare against
-    /// the matching `authentihash_<alg>` to detect tampering.
+    /// Hex digest the SignedData claims was computed over the file
+    ///
+    /// Read from SpcIndirectDataContent.messageDigest.digest. Compare
+    /// against the matching `authentihash_<alg>` to detect tampering.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_digest: Option<String>,
-    /// The digest the SignedData was made over does NOT match the
-    /// recomputed Authentihash. Strong tampering signal — the file
-    /// was modified after signing while the signature blob was kept.
-    /// Catches the "drop a backdoor into a previously-signed binary"
-    /// attack pattern that bare cert-chain validity checks miss.
+    /// SignedData digest does not match the recomputed Authentihash
+    ///
+    /// Strong tampering signal — the file was modified after signing
+    /// while the signature blob was kept. Catches the "drop a backdoor
+    /// into a previously-signed binary" attack pattern.
     #[serde(default, skip_serializing_if = "is_false")]
     pub signature_digest_mismatch: bool,
     /// Authentihash computed with SHA-1 (legacy Authenticode).
@@ -1200,37 +1202,40 @@ pub struct PeMetrics {
     /// Authentihash computed with SHA-512.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub authentihash_sha512: Option<String>,
-    /// Common Name from SignerInfo.IssuerAndSerialNumber.issuer — the
-    /// authoritative reference to which cert in the SignedData certs
+    /// SignerInfo issuer CN identifying the actual signing cert
+    ///
+    /// Authoritative reference to which cert in the SignedData certs
     /// SET actually signed the binary. Distinct from `leaf_issuer`
-    /// (which uses cleave's heuristic leaf-finder); when these
-    /// disagree, the heuristic picked the wrong cert.
+    /// (which uses cleave's heuristic leaf-finder).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_info_issuer: Option<String>,
+    /// SignerInfo serial number of the cert that signed the binary
+    ///
     /// SignerInfo.IssuerAndSerialNumber.serialNumber as lowercase hex.
     /// Authoritative serial of the cert that actually signed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer_info_serial: Option<String>,
-    /// SignerInfo's IssuerAndSerialNumber matches the leaf cert that
-    /// `find_leaf_signer` heuristically picked. False when the bag of
-    /// certs in the SignedData doesn't match the SignerInfo reference.
+    /// SignerInfo issuer/serial matches the heuristic leaf cert
+    ///
+    /// False when the bag of certs in the SignedData doesn't match
+    /// the SignerInfo IssuerAndSerialNumber reference.
     #[serde(default, skip_serializing_if = "is_false")]
     pub signer_info_matches_leaf: bool,
-    /// Result of cryptographically verifying the SignerInfo signature
-    /// against the leaf cert's public key. None when the signature
-    /// algorithm isn't supported (currently only RSA-PKCS1v15);
-    /// Some(true) when the signature is mathematically valid;
-    /// Some(false) when verification fails (the signature blob was
-    /// not produced by the holder of the leaf cert's private key).
+    /// Cryptographic result of verifying the SignerInfo signature
+    ///
+    /// None when algorithm isn't supported; Some(true) when valid;
+    /// Some(false) when the signature doesn't match the public key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_verified: Option<bool>,
-    /// SignerInfo signature algorithm isn't one cleave can verify.
-    /// Currently true for ECDSA, RSA-PSS, etc. Lets traits distinguish
+    /// Signature algorithm is not supported for verification
+    ///
+    /// Currently true for ECDSA, RSA-PSS, etc. Distinguishes
     /// "verification failed" from "verification not attempted".
     #[serde(default, skip_serializing_if = "is_false")]
     pub signature_algorithm_unsupported: bool,
-    /// Subject CN of the *nested* signature's leaf cert (Microsoft
-    /// NestedSignature attribute, OID 1.3.6.1.4.1.311.2.4.1).
+    /// Subject CN of the nested NestedSignature leaf certificate
+    ///
+    /// Microsoft NestedSignature attribute OID 1.3.6.1.4.1.311.2.4.1.
     /// When `has_nested_signature` is true, these `nested_*` fields
     /// describe the nested signer separately from the primary one.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1241,15 +1246,19 @@ pub struct PeMetrics {
     /// SHA-1 thumbprint of the nested signature's leaf cert DER.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nested_leaf_thumbprint_sha1: Option<String>,
-    /// Nested signature's leaf cert ExtendedKeyUsage includes
-    /// codeSigning OID. Mirrors `leaf_eku_code_signing`.
+    /// Nested signature leaf cert includes codeSigning EKU
+    ///
+    /// Mirrors `leaf_eku_code_signing` for the nested signer.
     #[serde(default, skip_serializing_if = "is_false")]
     pub nested_leaf_eku_code_signing: bool,
-    /// Friendly name of the nested signature's leaf cert signature
-    /// algorithm. Mirrors `leaf_signature_algorithm`.
+    /// Nested signature leaf cert signature algorithm name
+    ///
+    /// Mirrors `leaf_signature_algorithm` for the nested signer.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nested_leaf_signature_algorithm: Option<String>,
-    /// The digest the *nested* signature was made over does NOT match
+    /// Nested signature digest mismatches recomputed Authentihash
+    ///
+    /// The digest the nested signature was made over does NOT match
     /// the recomputed Authentihash with that algorithm.
     #[serde(default, skip_serializing_if = "is_false")]
     pub nested_signature_digest_mismatch: bool,
@@ -2285,6 +2294,46 @@ mod tests {
         assert!(metrics.entry_in_writable_section);
         assert!(metrics.entry_in_header);
         assert!(metrics.entry_outside_sections);
+    }
+
+    #[test]
+    fn test_pe_metrics_signature_verification_defaults() {
+        let m = PeMetrics::default();
+        assert!(m.signature_digest_algorithm.is_none());
+        assert!(m.signature_digest.is_none());
+        assert!(!m.signature_digest_mismatch);
+        assert!(m.authentihash_sha1.is_none());
+        assert!(m.authentihash_sha384.is_none());
+        assert!(m.authentihash_sha512.is_none());
+        assert!(m.signer_info_issuer.is_none());
+        assert!(m.signer_info_serial.is_none());
+        assert!(!m.signer_info_matches_leaf);
+        assert!(m.signature_verified.is_none());
+        assert!(!m.signature_algorithm_unsupported);
+        assert!(m.nested_leaf_subject.is_none());
+        assert!(m.nested_leaf_issuer.is_none());
+        assert!(m.nested_leaf_thumbprint_sha1.is_none());
+        assert!(!m.nested_leaf_eku_code_signing);
+        assert!(m.nested_leaf_signature_algorithm.is_none());
+        assert!(!m.nested_signature_digest_mismatch);
+    }
+
+    #[test]
+    fn test_pe_metrics_signature_verification_set() {
+        let m = PeMetrics {
+            signature_digest_algorithm: Some("sha256".into()),
+            signature_digest: Some("abc123".into()),
+            signature_digest_mismatch: true,
+            authentihash_sha1: Some("def456".into()),
+            signer_info_matches_leaf: true,
+            signature_verified: Some(true),
+            nested_leaf_eku_code_signing: true,
+            ..Default::default()
+        };
+        assert!(m.signature_digest_mismatch);
+        assert_eq!(m.signature_verified, Some(true));
+        assert!(m.signer_info_matches_leaf);
+        assert!(m.nested_leaf_eku_code_signing);
     }
 
     #[test]

@@ -234,7 +234,12 @@ fn format_metrics_output(
                     };
 
                     let truncated_desc = if desc.len() > desc_w && desc_w > 1 {
-                        format!("{}…", &desc[..desc_w.saturating_sub(1)])
+                        // Find the last char boundary that fits within desc_w bytes.
+                        let mut end = desc_w.saturating_sub(1);
+                        while !desc.is_char_boundary(end) && end > 0 {
+                            end -= 1;
+                        }
+                        format!("{}…", &desc[..end])
                     } else {
                         desc.to_string()
                     };

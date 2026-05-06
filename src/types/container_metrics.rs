@@ -111,7 +111,7 @@ pub struct ChmMetrics {
     /// payload masquerading as help content).
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub lzx_compression_ratio: f32,
-    /// Fraction of total file bytes occupied by user-visible content
+    /// Fraction of file bytes in user-visible entries
     ///
     /// (HTML topics, images, scripts) — vs. CHM control records,
     /// tables, and trailing slack. Tiny droppers often score very low

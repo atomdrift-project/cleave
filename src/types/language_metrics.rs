@@ -621,44 +621,44 @@ pub struct PhpMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct RubyMetrics {
     // === Dynamic Execution ===
-    /// eval usage
+    /// Number of eval dynamic code execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_count: u32,
-    /// instance_eval usage
+    /// Number of instance_eval context switch calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub instance_eval_count: u32,
     /// class_eval/module_eval usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_module_eval_count: u32,
-    /// send/public_send usage
+    /// Number of send and public_send dispatch calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub send_count: u32,
     /// method_missing definitions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub method_missing_count: u32,
-    /// define_method usage
+    /// Number of define_method dynamic definitions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub define_method_count: u32,
 
     // === Command Execution ===
-    /// system() calls
+    /// Number of system() subprocess execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub system_count: u32,
-    /// exec() calls
+    /// Number of exec() process replacement calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_count: u32,
-    /// Backtick/x{} execution
+    /// Number of backtick subprocess execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub backtick_count: u32,
-    /// Open3/spawn usage
+    /// Number of Open3 and spawn subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub spawn_popen_count: u32,
 
     // === Serialization ===
-    /// Marshal.load usage
+    /// Number of Marshal.load deserialization calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub marshal_load_count: u32,
-    /// YAML.load usage (unsafe)
+    /// Number of YAML.load unsafe deserialization calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub yaml_load_count: u32,
 
@@ -666,18 +666,18 @@ pub struct RubyMetrics {
     /// const_get/const_set usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub const_manipulation: u32,
-    /// binding usage
+    /// Number of binding object capture calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub binding_usage: u32,
-    /// ObjectSpace usage
+    /// Number of ObjectSpace introspection call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub objectspace_usage: u32,
 
     // === Obfuscation ===
-    /// pack/unpack usage
+    /// Number of pack and unpack binary call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pack_unpack_count: u32,
-    /// chr/ord usage
+    /// Number of chr and ord conversion call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub chr_ord_count: u32,
 }
@@ -810,13 +810,13 @@ pub struct GoMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct RustMetrics {
     // === Unsafe ===
-    /// unsafe blocks
+    /// Number of unsafe code blocks
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unsafe_block_count: u32,
-    /// unsafe fn declarations
+    /// Number of unsafe fn function declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unsafe_fn_count: u32,
-    /// Raw pointer operations
+    /// Number of raw pointer dereference operations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub raw_pointer_count: u32,
     /// std::mem::transmute usage
@@ -824,13 +824,13 @@ pub struct RustMetrics {
     pub transmute_count: u32,
 
     // === FFI ===
-    /// extern fn declarations
+    /// Number of extern fn FFI function declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub extern_fn_count: u32,
-    /// extern blocks
+    /// Number of extern block FFI declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub extern_block_count: u32,
-    /// #[link] attributes
+    /// Number of #[link] library link attributes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub link_attribute_count: u32,
 
@@ -838,7 +838,7 @@ pub struct RustMetrics {
     /// std::process::Command usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub command_count: u32,
-    /// Shell execution patterns
+    /// Number of shell command execution patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub shell_count: u32,
 
@@ -846,21 +846,21 @@ pub struct RustMetrics {
     /// include_bytes! macro usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub include_bytes_count: u32,
-    /// include_str! macro usage
+    /// Number of include_str! file-embed calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub include_str_count: u32,
-    /// Embedded data size
+    /// Total bytes of include_bytes! embedded data
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub embedded_size: u64,
 
     // === Macros ===
-    /// Procedural macro usage
+    /// Number of procedural macro call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub proc_macro_count: u32,
-    /// macro_rules! definitions
+    /// Number of macro_rules! macro definitions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub macro_rules_count: u32,
-    /// asm! macro usage
+    /// Number of asm! inline assembly macro usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub asm_macro_count: u32,
 }

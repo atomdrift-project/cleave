@@ -427,8 +427,8 @@ mod duplicate_tests {
         check_exact_contained_by_substr(&[exact, substr], &mut warnings);
 
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("REDUNDANT"));
-        assert!(warnings[0].contains("exact pattern"));
+        assert!(warnings[0].contains("Exact pattern"));
+        assert!(warnings[0].contains("substr pattern"));
         assert!(warnings[0].contains("/dev/kmem"));
     }
 
@@ -556,7 +556,7 @@ mod duplicate_tests {
         check_regex_contains_literal(&[symbol_exact, raw_regex], &mut warnings);
 
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("REGEX vs LITERAL DUPLICATE"));
+        assert!(warnings[0].contains("Same pattern, different match types"));
         assert!(warnings[0].contains("cross-type"));
     }
 
@@ -581,7 +581,7 @@ mod duplicate_tests {
         check_regex_contains_literal(&[exact, regex], &mut warnings);
 
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("REGEX CONTAINS LITERAL"));
+        assert!(warnings[0].contains("Regex pattern matches literal"));
     }
 
     #[test]
@@ -683,8 +683,8 @@ mod duplicate_tests {
         find_string_pattern_duplicates(&[micro, objective], &mut warnings);
 
         assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("TIER VIOLATION"));
-        assert!(warnings[0].contains("objectives/ should REFERENCE micro-behaviors/"));
+        assert!(warnings[0].contains("Duplicate reusable atom"));
+        assert!(warnings[0].contains("Reference reusable atom"));
     }
 
     #[test]
@@ -3091,12 +3091,14 @@ mod taxonomy_tests {
 mod constraint_tests {
     use crate::capabilities::validation::constraints::{
         find_empty_condition_clauses, find_needs_zero, find_none_only_with_proximity,
-        find_pure_alias_traits,
+        find_pure_alias_traits, find_too_short_patterns,
     };
+    use crate::capabilities::validation::find_pure_directory_alias_composites;
     use crate::composite_rules::{
         Arch, CompositeTrait, Condition, FileType, Platform, TraitDefinition,
     };
     use crate::types::Criticality;
+    use std::collections::{HashMap, HashSet};
     use std::path::PathBuf;
 
     /// Helper to create a trait with a trait reference condition
@@ -3191,6 +3193,109 @@ mod constraint_tests {
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
         }
+    }
+
+    fn short_raw_trait(id: &str, condition: Condition) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: "short raw trait".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            r#if: condition,
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    fn raw_exact_with_offsets(
+        offset: Option<i64>,
+        offset_range: Option<(i64, Option<i64>)>,
+        section: Option<&str>,
+        section_offset: Option<i64>,
+        section_offset_range: Option<(i64, Option<i64>)>,
+    ) -> Condition {
+        Condition::Raw {
+            exact: Some("MZ".to_string()),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            is_check: None,
+            section: section.map(String::from),
+            offset,
+            offset_range,
+            section_offset,
+            section_offset_range,
+            not: None,
+            compiled_regex: None,
+            compiled_finder: None,
+        }
+    }
+
+    #[test]
+    fn short_patterns_allow_exact_or_limited_byte_offsets() {
+        let traits = vec![
+            short_raw_trait(
+                "test/absolute-offset",
+                raw_exact_with_offsets(Some(0), None, None, None, None),
+            ),
+            short_raw_trait(
+                "test/absolute-range",
+                raw_exact_with_offsets(None, Some((0, Some(64))), None, None, None),
+            ),
+            short_raw_trait(
+                "test/section-offset",
+                raw_exact_with_offsets(None, None, Some(".text"), Some(16), None),
+            ),
+            short_raw_trait(
+                "test/section-range",
+                raw_exact_with_offsets(None, None, Some(".rdata"), None, Some((8, Some(128)))),
+            ),
+        ];
+
+        assert!(find_too_short_patterns(&traits).is_empty());
+    }
+
+    #[test]
+    fn short_patterns_reject_open_or_large_byte_ranges() {
+        let traits = vec![
+            short_raw_trait(
+                "test/open-absolute-range",
+                raw_exact_with_offsets(None, Some((0, None)), None, None, None),
+            ),
+            short_raw_trait(
+                "test/large-absolute-range",
+                raw_exact_with_offsets(None, Some((0, Some(16_384))), None, None, None),
+            ),
+            short_raw_trait(
+                "test/open-section-range",
+                raw_exact_with_offsets(None, None, Some(".text"), None, Some((0, None))),
+            ),
+            short_raw_trait(
+                "test/large-section-range",
+                raw_exact_with_offsets(None, None, Some(".rdata"), None, Some((0, Some(16_384)))),
+            ),
+        ];
+
+        let violations = find_too_short_patterns(&traits);
+        assert_eq!(violations.len(), 4);
     }
 
     #[test]
@@ -3353,6 +3458,76 @@ mod constraint_tests {
         let violations = find_pure_alias_traits(&traits);
 
         assert_eq!(violations.len(), 2);
+    }
+
+    fn create_composite_any(id: &str, refs: &[&str]) -> CompositeTrait {
+        CompositeTrait {
+            required_trait_indices: Vec::new(),
+            id: id.to_string(),
+            desc: "test".to_string(),
+            conf: 1.0,
+            crit: Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![FileType::All],
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: Some(
+                refs.iter()
+                    .map(|id| Condition::Trait {
+                        id: (*id).to_string(),
+                    })
+                    .collect(),
+            ),
+            unless: None,
+            not: None,
+            downgrade: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            defined_in: PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    fn dir_traits(dir: &str, ids: &[&str]) -> HashMap<String, HashSet<String>> {
+        let mut map = HashMap::new();
+        map.insert(
+            dir.to_string(),
+            ids.iter().map(|id| (*id).to_string()).collect(),
+        );
+        map
+    }
+
+    #[test]
+    fn test_pure_directory_alias_composite_detected() {
+        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
+        let rules = vec![create_composite_any(
+            "foo/bar::alias",
+            &["foo/bar::a", "foo/bar::b"],
+        )];
+
+        let violations = find_pure_directory_alias_composites(&rules, &traits);
+
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].0, "foo/bar::alias");
+        assert_eq!(violations[0].1, "foo/bar");
+    }
+
+    #[test]
+    fn test_directory_alias_with_constraints_not_flagged() {
+        let traits = dir_traits("foo/bar", &["foo/bar::a", "foo/bar::b"]);
+        let mut rule = create_composite_any("foo/bar::alias", &["foo/bar::a", "foo/bar::b"]);
+        rule.needs = Some(2);
+
+        let violations = find_pure_directory_alias_composites(&[rule], &traits);
+
+        assert!(violations.is_empty());
     }
 
     #[test]

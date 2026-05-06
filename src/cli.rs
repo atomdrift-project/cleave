@@ -278,7 +278,15 @@ pub enum Command {
     /// Runs the full suite of validation checks (~60s+) and exits with a non-zero
     /// status code if any errors are found.
     /// Can also enable validation during scans via CLEAVE_VALIDATE=1.
-    Validate,
+    Validate {
+        /// Override excluded validators for this validation run.
+        ///
+        /// Comma-separated validator IDs or short display IDs. By default,
+        /// cleave uses the built-in temporary disabled set. Pass an empty
+        /// string (`--exclude ""`) to enable every validator.
+        #[arg(long, value_name = "IDS")]
+        exclude: Option<String>,
+    },
 
     /// Compare two versions for supply-chain attack detection.
     ///

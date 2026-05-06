@@ -10,7 +10,7 @@ use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
     eval_ast, eval_basename, eval_encoded, eval_hex, eval_metrics, eval_raw, eval_section,
     eval_string_literal, eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
-    ContentLocationParams,
+    ContentLocationParams, SectionParams,
 };
 use super::types::{
     default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
@@ -22,6 +22,7 @@ use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -49,6 +50,25 @@ const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.
 const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);
+
+fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> usize {
+    if !result.matched {
+        return 0;
+    }
+
+    if let Condition::Trait { id } = condition {
+        if !id.contains("::") && id.contains('/') {
+            let distinct: HashSet<&str> = result
+                .matched_trait_ids
+                .iter()
+                .map(String::as_str)
+                .collect();
+            return distinct.len().max(1);
+        }
+    }
+
+    1
+}
 
 /// Macro to time condition evaluation
 macro_rules! timed_eval {
@@ -1117,9 +1137,8 @@ impl TraitDefinition {
             let threshold = conditions.needs.unwrap_or(1);
             let mut matched_count = 0;
             for cond in any_conds {
-                if self.eval_condition(cond, ctx).matched {
-                    matched_count += 1;
-                }
+                let result = self.eval_condition(cond, ctx);
+                matched_count += condition_count_weight(cond, &result);
             }
             if matched_count < threshold {
                 return false;
@@ -1381,26 +1400,32 @@ impl TraitDefinition {
                 writable,
                 executable,
                 compare_to,
-                ratio_min,
-                ratio_max,
+                size_ratio_min,
+                size_ratio_max,
+                entropy_ratio_min,
+                entropy_ratio_max,
             } => timed_eval!(
                 "section",
                 eval_section(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    word.as_ref(),
-                    *case_insensitive,
-                    *length_min,
-                    *length_max,
-                    *entropy_min,
-                    *entropy_max,
-                    *readable,
-                    *writable,
-                    *executable,
-                    compare_to.as_ref(),
-                    *ratio_min,
-                    *ratio_max,
+                    &SectionParams {
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                        length_min: *length_min,
+                        length_max: *length_max,
+                        entropy_min: *entropy_min,
+                        entropy_max: *entropy_max,
+                        readable: *readable,
+                        writable: *writable,
+                        executable: *executable,
+                        compare_to: compare_to.as_ref(),
+                        size_ratio_min: *size_ratio_min,
+                        size_ratio_max: *size_ratio_max,
+                        entropy_ratio_min: *entropy_ratio_min,
+                        entropy_ratio_max: *entropy_ratio_max,
+                    },
                     ctx,
                 )
             ),
@@ -1527,14 +1552,10 @@ impl Scope {
     ///
     /// The key is a borrowed substring of `location` (or the empty
     /// string), so this is allocation-free.
-    fn key<'a>(self, location: Option<&'a str>) -> &'a str {
+    fn key(self, location: Option<&str>) -> &str {
         match (self, location) {
-            // Outer: every evidence shares the same (empty) key.
-            (Scope::Outer, _) => "",
-            // No location info: collapse to outer-equivalent for the
-            // strict variants too. Such evidence (sentinels from `none:`
-            // exclusions, etc.) is tied to the input as a whole.
-            (_, None) => "",
+            // Outer scope or no location info — all evidence shares one key.
+            (Scope::Outer, _) | (_, None) => "",
             // Leaf: exact location match required.
             (Scope::Leaf, Some(loc)) => loc,
             // File: strip any decoded-payload suffix; what remains is
@@ -2161,9 +2182,8 @@ impl CompositeTrait {
             let threshold = conditions.needs.unwrap_or(1);
             let mut matched_count = 0;
             for cond in any_conds {
-                if self.eval_condition(cond, ctx).matched {
-                    matched_count += 1;
-                }
+                let result = self.eval_condition(cond, ctx);
+                matched_count += condition_count_weight(cond, &result);
             }
             if matched_count < threshold {
                 return false;
@@ -2294,7 +2314,8 @@ impl CompositeTrait {
         for (i, condition) in conds.iter().enumerate() {
             let result = self.eval_condition(condition, ctx);
             if result.matched {
-                matched_count += 1;
+                let count_weight = condition_count_weight(condition, &result);
+                matched_count += count_weight;
                 // Tag evidence locations before merging
                 tags.extend(tag_evidence(&result.evidence, i));
                 // Limit evidence to prevent explosion
@@ -2303,7 +2324,7 @@ impl CompositeTrait {
                     all_evidence.extend(result.evidence.into_iter().take(remaining));
                 }
                 all_trait_ids.extend(result.matched_trait_ids);
-                precision_sum += result.precision;
+                precision_sum += result.precision * count_weight as f32;
             }
         }
 
@@ -2574,26 +2595,32 @@ impl CompositeTrait {
                 writable,
                 executable,
                 compare_to,
-                ratio_min,
-                ratio_max,
+                size_ratio_min,
+                size_ratio_max,
+                entropy_ratio_min,
+                entropy_ratio_max,
             } => timed_eval!(
                 "section",
                 eval_section(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    word.as_ref(),
-                    *case_insensitive,
-                    *length_min,
-                    *length_max,
-                    *entropy_min,
-                    *entropy_max,
-                    *readable,
-                    *writable,
-                    *executable,
-                    compare_to.as_ref(),
-                    *ratio_min,
-                    *ratio_max,
+                    &SectionParams {
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                        length_min: *length_min,
+                        length_max: *length_max,
+                        entropy_min: *entropy_min,
+                        entropy_max: *entropy_max,
+                        readable: *readable,
+                        writable: *writable,
+                        executable: *executable,
+                        compare_to: compare_to.as_ref(),
+                        size_ratio_min: *size_ratio_min,
+                        size_ratio_max: *size_ratio_max,
+                        entropy_ratio_min: *entropy_ratio_min,
+                        entropy_ratio_max: *entropy_ratio_max,
+                    },
                     ctx,
                 )
             ),

@@ -365,6 +365,13 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
         if pe.leaf_not_after != 0 {
             out.insert("not_after".into(), json!(pe.leaf_not_after));
         }
+        // Authentihash mirror — Authenticode-canonical SHA-256, useful
+        // for "same body, different cert" detection across releases.
+        if let Some(h) = pe.authentihash.as_deref() {
+            if !h.is_empty() {
+                out.insert("authentihash".into(), json!(h));
+            }
+        }
         // `chain_depth` is a derived count — lives on
         // `pe.cert_chain_depth` metric, not in kv.
     }
@@ -518,6 +525,77 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     // Resource types present (sorted, distinct RT_* names).
     if !pe.resource_types.is_empty() {
         out.insert("resource_types".into(), json!(pe.resource_types.clone()));
+    }
+    // Section-level malformations from `compute_pe_metrics`. Names come
+    // out as kv arrays so trait authors can target individual section
+    // names (e.g. `path: pe.overflowing_sections[*]`) the same way they
+    // do `pe.inflated_sections[*]`.  Counts live on metrics.
+    if !pe.overflowing_sections.is_empty() {
+        out.insert(
+            "overflowing_sections".into(),
+            json!(pe.overflowing_sections.clone()),
+        );
+    }
+    if !pe.misaligned_sections.is_empty() {
+        out.insert(
+            "misaligned_sections".into(),
+            json!(pe.misaligned_sections.clone()),
+        );
+    }
+    if !pe.overlapping_sections.is_empty() {
+        out.insert(
+            "overlapping_sections".into(),
+            json!(pe.overlapping_sections.clone()),
+        );
+    }
+    // Per-section header summary — characteristics + sizing per section.
+    if !pe.section_characteristics_entries.is_empty() {
+        let arr: Vec<Value> = pe
+            .section_characteristics_entries
+            .iter()
+            .map(|s| {
+                json!({
+                    "name": s.name,
+                    "characteristics_hex": s.characteristics_hex,
+                    "virtual_address": s.virtual_address,
+                    "virtual_size": s.virtual_size,
+                    "raw_size": s.raw_size,
+                })
+            })
+            .collect();
+        out.insert("section_characteristics".into(), Value::Array(arr));
+    }
+    // Non-zero data directory slots.
+    if !pe.data_directory_entries.is_empty() {
+        let arr: Vec<Value> = pe
+            .data_directory_entries
+            .iter()
+            .map(|d| {
+                json!({
+                    "name": d.name,
+                    "rva": d.rva,
+                    "size": d.size,
+                })
+            })
+            .collect();
+        out.insert("data_directories".into(), Value::Array(arr));
+    }
+    // Rich Header CompID + count + product-name tuples.
+    if !pe.rich_header_compids.is_empty() {
+        let arr: Vec<Value> = pe
+            .rich_header_compids
+            .iter()
+            .map(|r| {
+                let mut obj = serde_json::Map::new();
+                obj.insert("compid".into(), json!(r.compid));
+                obj.insert("count".into(), json!(r.count));
+                if let Some(p) = r.product.as_deref() {
+                    obj.insert("product".into(), json!(p));
+                }
+                Value::Object(obj)
+            })
+            .collect();
+        out.insert("rich_header_compids".into(), Value::Array(arr));
     }
 
     // Bound imports — DLL+timestamp pairs that fingerprint the

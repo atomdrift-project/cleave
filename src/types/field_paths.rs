@@ -5,12 +5,19 @@
 
 use std::collections::HashSet;
 
-/// Trait for types that can declare their valid field paths.
+/// Trait for types that can declare their valid field paths and descriptions.
 #[doc(hidden)]
 pub trait ValidFieldPaths {
-    /// Returns all valid field paths for this type
-    /// For example, BinaryMetrics might return ["code_to_data_ratio", "string_count", ...]
+    /// Returns all valid field paths for this type.
     fn valid_field_paths() -> Vec<&'static str>;
+
+    /// Returns `(field_name, doc_comment)` pairs for all public fields.
+    /// The doc comment is the concatenation of all `///` lines on the field.
+    /// Default implementation returns empty — types with manual `ValidFieldPaths`
+    /// impls get no descriptions unless they override this.
+    fn field_descriptions() -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
 }
 
 /// Returns all valid metric field paths for use in YAML rules
@@ -204,4 +211,140 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     paths
+}
+
+/// Returns a map of `"prefix.field"` → doc-comment description for every
+/// known metric field.  Only fields with a non-empty doc comment are included.
+#[must_use]
+pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'static str> {
+    use super::field_paths::ValidFieldPaths;
+
+    let mut map = std::collections::HashMap::new();
+
+    macro_rules! add {
+        ($prefix:expr, $ty:ty) => {
+            for (field, desc) in <$ty>::field_descriptions() {
+                if !desc.is_empty() {
+                    map.insert(format!("{}.{}", $prefix, field), desc);
+                }
+            }
+        };
+    }
+
+    use super::binary_metrics::{
+        BinaryMetrics, ConsistencyMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
+    };
+    use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
+    use super::language_metrics::{
+        CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
+        PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
+        ShellMetrics,
+    };
+    use super::scores::{
+        EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
+    };
+    use super::text_metrics::{
+        CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
+        StringMetrics, TextMetrics,
+    };
+
+    add!("text", TextMetrics);
+    add!("identifiers", IdentifierMetrics);
+    add!("strings", StringMetrics);
+    add!("comments", CommentMetrics);
+    add!("functions", FunctionMetrics);
+    add!("statements", StatementMetrics);
+    add!("imports", ImportMetrics);
+    add!("binary", BinaryMetrics);
+    add!("elf", ElfMetrics);
+    add!("pe", PeMetrics);
+    add!("macho", MachoMetrics);
+    add!("consistency", ConsistencyMetrics);
+    add!("java_class", JavaClassMetrics);
+    add!("archive", ArchiveMetrics);
+    add!("package_json", PackageJsonMetrics);
+    add!("chm", ChmMetrics);
+    add!("python", PythonMetrics);
+    add!("javascript", JavaScriptMetrics);
+    add!("powershell", PowerShellMetrics);
+    add!("shell", ShellMetrics);
+    add!("php", PhpMetrics);
+    add!("ruby", RubyMetrics);
+    add!("perl", PerlMetrics);
+    add!("go_metrics", GoMetrics);
+    add!("rust_metrics", RustMetrics);
+    add!("c_metrics", CMetrics);
+    add!("java", JavaSourceMetrics);
+    add!("lua", LuaMetrics);
+    add!("csharp", CSharpMetrics);
+    add!("obfuscation", ObfuscationScore);
+    add!("packing", PackingScore);
+    add!("supply_chain", SupplyChainScore);
+
+    // EncodedMetrics (skip nested struct fields, use sub-prefix for language variants)
+    for (field, desc) in EncodedMetrics::field_descriptions() {
+        if !desc.is_empty() && !matches!(field, "python" | "javascript" | "php" | "shell") {
+            map.insert(format!("encoded.{}", field), desc);
+        }
+    }
+    for lang in ["python", "javascript", "php", "shell"] {
+        for (field, desc) in EncodedLanguageMetrics::field_descriptions() {
+            if !desc.is_empty() {
+                map.insert(format!("encoded.{}.{}", lang, field), desc);
+            }
+        }
+    }
+
+    // Image metrics
+    use super::image_metrics::ImageMetrics;
+    use super::jpeg_metrics::JpegMetrics;
+    use super::png_metrics::PngMetrics;
+    add!("image", ImageMetrics);
+    add!("png", PngMetrics);
+    add!("jpeg", JpegMetrics);
+
+    // LNK / Office
+    use super::lnk_metrics::LnkMetrics;
+    add!("lnk", LnkMetrics);
+
+    use super::office_metrics::{OfficeMetrics, OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
+    for (field, desc) in OfficeMetrics::field_descriptions() {
+        if !desc.is_empty() && !matches!(field, "ole" | "ooxml" | "vba" | "xlm") {
+            map.insert(format!("office.{}", field), desc);
+        }
+    }
+    add!("office.ole", OleMetrics);
+    add!("office.ooxml", OoxmlMetrics);
+    add!("office.vba", VbaMetrics);
+    add!("office.xlm", XlmMetrics);
+
+    map
+}
+
+/// Return every described field whose first doc-comment line falls
+/// outside the 25–60 character target range, as `(path, len, first_line)`.
+/// Shown as warnings in `cleave metrics` terminal output.
+#[must_use]
+pub(crate) fn metric_description_violations() -> Vec<(String, usize, String)> {
+    let descs = all_metric_descriptions();
+    let mut violations: Vec<(String, usize, String)> = descs
+        .into_iter()
+        .filter_map(|(path, desc)| {
+            let first = desc
+                .split('\n')
+                .next()
+                .unwrap_or(desc)
+                .trim()
+                .trim_end_matches(['.', ',', ';', ':'])
+                .to_string();
+            let len = first.len();
+            if !(25..=60).contains(&len) {
+                Some((path, len, first))
+            } else {
+                None
+            }
+        })
+        .collect();
+    violations.sort_by(|a, b| a.0.cmp(&b.0));
+    violations
 }

@@ -12,10 +12,10 @@ use super::{is_zero_f32, is_zero_u32};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct ImageMetrics {
     // === Image dimensions ===
-    /// Image width in pixels
+    /// Image width measured in pixels
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub width: u32,
-    /// Image height in pixels
+    /// Image height measured in pixels
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub height: u32,
     /// Number of color channels (1=grayscale, 3=RGB, 4=RGBA)
@@ -34,13 +34,13 @@ pub struct ImageMetrics {
     pub edge_density: f32,
 
     // === Per-channel entropy ===
-    /// Red channel entropy
+    /// Shannon entropy of the red image channel
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub r_entropy: f32,
-    /// Green channel entropy
+    /// Shannon entropy of the green image channel
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub g_entropy: f32,
-    /// Blue channel entropy
+    /// Shannon entropy of the blue image channel
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub b_entropy: f32,
 }

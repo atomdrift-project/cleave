@@ -44,7 +44,7 @@ pub struct Metrics {
     /// Identifier (variable/function name) statistics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifiers: Option<IdentifierMetrics>,
-    /// String literal statistics
+    /// Statistics about string literals in the file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub strings: Option<StringMetrics>,
     /// Comment density and coverage metrics
@@ -56,7 +56,7 @@ pub struct Metrics {
     /// Statement type distribution
     #[serde(skip_serializing_if = "Option::is_none")]
     pub statements: Option<StatementMetrics>,
-    /// Import/dependency metrics
+    /// Import statement and dependency metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub imports: Option<ImportMetrics>,
     /// Encoded embedded-code counts
@@ -276,15 +276,15 @@ pub struct ObfuscationScore {
     /// Overall obfuscation score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,
-    /// Confidence in the score
+    /// Confidence in the overall obfuscation score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub conf: f32,
 
     // === Component Scores ===
-    /// Naming obfuscation score
+    /// Identifier naming obfuscation component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub naming_score: f32,
-    /// String obfuscation score
+    /// String literal obfuscation component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub string_score: f32,
     /// Structure obfuscation score
@@ -293,7 +293,7 @@ pub struct ObfuscationScore {
     /// Encoding obfuscation score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub encoding_score: f32,
-    /// Dynamic execution score
+    /// Dynamic code execution component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub dynamic_score: f32,
 
@@ -308,21 +308,21 @@ pub struct PackingScore {
     /// Overall packing score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,
-    /// Confidence in the score
+    /// Confidence in the overall packing score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub conf: f32,
 
     // === Component Scores ===
-    /// Entropy-based score
+    /// Section entropy component score for packing
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub entropy_score: f32,
-    /// Import analysis score
+    /// Import table analysis component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub import_score: f32,
-    /// String analysis score
+    /// String population analysis component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub string_score: f32,
-    /// Section analysis score
+    /// Section layout analysis component score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub section_score: f32,
 
@@ -340,21 +340,21 @@ pub struct SupplyChainScore {
     /// Overall risk score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,
-    /// Confidence in the score
+    /// Confidence in the overall supply chain score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub conf: f32,
 
     // === Component Scores ===
-    /// Install script risk
+    /// Risk score from install lifecycle scripts
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub install_script_score: f32,
-    /// Dependency risk
+    /// Risk score from non-registry dependencies
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub dependency_score: f32,
     /// Metadata completeness score
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub metadata_score: f32,
-    /// Typosquatting risk
+    /// Likelihood score for typosquatting attack
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub typosquat_score: f32,
 

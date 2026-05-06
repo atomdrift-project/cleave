@@ -520,7 +520,7 @@ fn provide_error_guidance(
         guidance.push_str("   • ast        - Match AST patterns (requires tree-sitter)\n");
         guidance.push_str("   • yara       - Match YARA rule results\n");
         guidance.push_str("   • syscall    - Match system calls\n");
-        guidance.push_str("   • section    - Section analysis (includes ratio checks via compare_to + ratio_min/max)\n");
+        guidance.push_str("   • section    - Section analysis (size/entropy ratio checks via compare_to + size_ratio_*/entropy_ratio_*)\n");
         guidance.push_str(
             "   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n",
         );
@@ -540,7 +540,7 @@ fn provide_error_guidance(
             );
         } else if context.contains("type: section_ratio") {
             guidance.push_str(
-                "\n   💡 `type: section_ratio` was folded into `type: section`. Use `compare_to:` + `ratio_min:`/`ratio_max:` on a section condition.\n",
+                "\n   💡 `type: section_ratio` was folded into `type: section`. Use `compare_to:` + `size_ratio_min:`/`size_ratio_max:` on a section condition.\n",
             );
         } else if context.contains("type: exports_count") {
             guidance.push_str(

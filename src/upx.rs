@@ -99,6 +99,7 @@ impl UPXDecompressor {
         let metadata = std::fs::metadata(temp_path)?;
         let mut permissions = metadata.permissions();
         if permissions.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
             permissions.set_readonly(false);
             std::fs::set_permissions(temp_path, permissions)?;
         }
@@ -390,6 +391,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::permissions_set_readonly_false)]
     fn test_copy_to_writable_temp_from_readonly_source() {
         let mut source = NamedTempFile::new().unwrap();
         source.write_all(b"UPX! readonly sample").unwrap();

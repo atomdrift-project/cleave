@@ -47,8 +47,8 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
         Err(_) => quote!(::cleave),
     };
 
-    // Extract field names from the struct
-    let field_names = match &input.data {
+    // Extract field names and doc comments from the struct
+    let fields_data: Vec<(String, String)> = match &input.data {
         Data::Struct(data_struct) => {
             match &data_struct.fields {
                 Fields::Named(fields) => {
@@ -56,14 +56,38 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
                         .named
                         .iter()
                         .filter_map(|field| {
-                            // Only include public fields
-                            if matches!(field.vis, syn::Visibility::Public(_)) {
-                                field.ident.as_ref().map(std::string::ToString::to_string)
-                            } else {
-                                None
+                            if !matches!(field.vis, syn::Visibility::Public(_)) {
+                                return None;
                             }
+                            let name = field.ident.as_ref()?.to_string();
+                            // Collect the first paragraph of /// doc lines (stop at
+                            // the first blank `///` line, like rustdoc does).
+                            let doc: String = {
+                                let lines: Vec<String> = field
+                                    .attrs
+                                    .iter()
+                                    .filter(|a| a.path().is_ident("doc"))
+                                    .filter_map(|a| {
+                                        if let syn::Meta::NameValue(nv) = &a.meta {
+                                            if let syn::Expr::Lit(lit) = &nv.value {
+                                                if let syn::Lit::Str(s) = &lit.lit {
+                                                    return Some(s.value());
+                                                }
+                                            }
+                                        }
+                                        None
+                                    })
+                                    .map(|s| s.trim().to_string())
+                                    .collect();
+                                lines
+                                    .into_iter()
+                                    .take_while(|s| !s.is_empty())
+                                    .collect::<Vec<_>>()
+                                    .join(" ")
+                            };
+                            Some((name, doc))
                         })
-                        .collect::<Vec<_>>()
+                        .collect()
                 }
                 _ => {
                     return syn::Error::new_spanned(
@@ -85,11 +109,17 @@ pub fn derive_valid_field_paths(input: TokenStream) -> TokenStream {
         }
     };
 
-    // Generate the implementation
+    let field_names: Vec<&str> = fields_data.iter().map(|(n, _)| n.as_str()).collect();
+    let field_docs: Vec<&str> = fields_data.iter().map(|(_, d)| d.as_str()).collect();
+
     let expanded = quote! {
         impl #crate_path::types::field_paths::ValidFieldPaths for #name {
             fn valid_field_paths() -> Vec<&'static str> {
                 vec![#(#field_names),*]
+            }
+
+            fn field_descriptions() -> Vec<(&'static str, &'static str)> {
+                vec![#((#field_names, #field_docs)),*]
             }
         }
     };

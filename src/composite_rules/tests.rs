@@ -2313,6 +2313,57 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
 }
 
 #[test]
+fn test_needs_with_directory_ref_counts_child_matches() {
+    let (report, data) = create_test_context();
+    let findings = vec![
+        finding_at_offset("micro-behaviors/data/text/config/xcode::scheme-file", 10),
+        finding_at_offset("micro-behaviors/data/text/config/xcode::scheme-renamer", 20),
+    ];
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None)
+        .with_additional_findings(&findings);
+
+    let mut rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "test/needs-directory-ref".to_string(),
+        desc: "Needs counts directory children".to_string(),
+        conf: 0.9,
+        crit: Criticality::Suspicious,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![FileType::All],
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![Condition::Trait {
+            id: "micro-behaviors/data/text/config/xcode".to_string(),
+        }]),
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: None,
+        near_bytes: None,
+        scope: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+    };
+
+    assert!(
+        rule.evaluate(&ctx).is_some(),
+        "Directory refs should contribute distinct child trait matches to needs"
+    );
+
+    rule.needs = Some(3);
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "Directory refs should not satisfy needs above the child match count"
+    );
+}
+
+#[test]
 fn test_required_trait_prefilter_for_any_needs_is_not_overconstrained() {
     let mut rule = CompositeTrait {
         required_trait_indices: Vec::new(),

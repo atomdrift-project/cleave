@@ -718,7 +718,7 @@ impl ArchiveAnalyzer {
         }
 
         self.analyze_in_memory_members(
-            members,
+            &members,
             archive_path,
             report,
             start,
@@ -802,7 +802,7 @@ impl ArchiveAnalyzer {
             .with_analysis_options(std::sync::Arc::new(chm_options));
 
         chm_analyzer.analyze_in_memory_members(
-            members,
+            &members,
             archive_path,
             report,
             start,
@@ -818,7 +818,7 @@ impl ArchiveAnalyzer {
     /// in-memory paths.
     fn analyze_in_memory_members(
         &self,
-        members: Vec<MemoryArchiveMember>,
+        members: &[MemoryArchiveMember],
         archive_path: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
@@ -834,7 +834,7 @@ impl ArchiveAnalyzer {
             "Starting in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(&members, |member| {
+        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {
             let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
             if self.is_cancelled() {
                 return None;
@@ -1051,7 +1051,7 @@ impl ArchiveAnalyzer {
         });
 
         self.analyze_in_memory_members(
-            members,
+            &members,
             archive_path,
             report,
             start,

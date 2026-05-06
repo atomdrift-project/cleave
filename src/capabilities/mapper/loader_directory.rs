@@ -11,15 +11,14 @@ use crate::capabilities::indexes::{
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    autoprefix_trait_refs, check_basename_pattern_duplicates, check_case_insensitive_overlaps,
-    check_exact_contained_by_substr, check_overlapping_regex_patterns,
-    check_regex_alternative_subsets, check_regex_contains_literal,
+    autoprefix_trait_refs, check_basename_pattern_duplicates, check_exact_contained_by_substr,
+    check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_clause_refs_covering_directory, find_composite_only_wellknown_files,
+    find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
     find_condition_scope_violations, find_depth_violations, find_duplicate_atomic_traits,
     find_duplicate_composite_rules, find_duplicate_second_level_directories,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
@@ -27,17 +26,18 @@ use crate::capabilities::validation::{
     find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
     find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
     find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
-    find_malware_subcategory_violations, find_meta_missing_section_filter,
-    find_metadata_cross_tier_refs, find_missing_search_patterns, find_needs_without_any,
-    find_needs_zero, find_non_capturing_groups, find_none_only_with_proximity,
-    find_objectives_wellknown_violations, find_orphaned_components, find_overlapping_conditions,
-    find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_raw_should_use_text,
-    find_redundant_any_refs, find_redundant_explicit_defaults, find_redundant_needs_one,
-    find_redundant_unix_platforms, find_self_referencing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
+    find_malware_subcategory_violations, find_many_directory_refs,
+    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
+    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
+    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
+    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
+    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -116,7 +116,7 @@ fn find_non_leaf_yaml_files(yaml_files: &[std::path::PathBuf], root: &Path) -> V
     let mut yaml_dirs: Vec<_> = yaml_files
         .iter()
         .filter_map(|path| path.parent())
-        .map(|path| path.to_path_buf())
+        .map(Path::to_path_buf)
         .collect();
     yaml_dirs.sort_unstable();
     yaml_dirs.dedup();
@@ -1316,7 +1316,7 @@ impl super::CapabilityMapper {
             }
             tracing::trace!("Step 1g completed in {:?}", step_start.elapsed());
 
-            // Detect potentially slow regex patterns that could cause catastrophic backtracking
+            // Detect regex patterns that are costly for broad raw/text scans.
             let step_start = std::time::Instant::now();
             tracing::trace!("Step 1h/15: Detecting potentially slow regex patterns");
             if !crate::validation_controls::is_validator_disabled("regex-performance") {
@@ -1383,9 +1383,13 @@ impl super::CapabilityMapper {
                 || !crate::validation_controls::is_validator_disabled("case-subsumption")
                 || !crate::validation_controls::is_validator_disabled("duplicate-case-only")
             {
-                warnings.collect_as("validation", |warnings| {
-                    check_case_insensitive_overlaps(&trait_definitions, warnings);
-                });
+                for (validator_id, message) in
+                    find_case_insensitive_overlap_issues(&trait_definitions)
+                {
+                    if !crate::validation_controls::is_validator_disabled(validator_id) {
+                        warnings.push_id(validator_id, message);
+                    }
+                }
             }
             tracing::trace!("Step 1j completed in {:?}", step_start.elapsed());
 
@@ -1395,9 +1399,12 @@ impl super::CapabilityMapper {
             if !crate::validation_controls::is_validator_disabled("regex-contains-literal")
                 || !crate::validation_controls::is_validator_disabled("regex-vs-literal-duplicate")
             {
-                warnings.collect_as("validation", |warnings| {
-                    check_regex_contains_literal(&trait_definitions, warnings);
-                });
+                for (validator_id, message) in find_regex_literal_overlap_issues(&trait_definitions)
+                {
+                    if !crate::validation_controls::is_validator_disabled(validator_id) {
+                        warnings.push_id(validator_id, message);
+                    }
+                }
             }
             tracing::trace!("Step 1k completed in {:?}", step_start.elapsed());
 
@@ -2553,13 +2560,15 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            // Validate that any:/all: clauses don't enumerate every atomic trait in a directory.
-            // `any:` should use directory notation; `all:` should be a more meaningful composite.
-            tracing::trace!("Checking for full-directory composite clauses");
+            // Validate that any:/all: clauses don't hand-maintain many refs to one directory.
+            // `any:` should use directory notation; `all:` should be split only for clear sub-techniques.
+            tracing::trace!("Checking for many directory references in composite clauses");
             let mut dir_traits: HashMap<String, HashSet<String>> = HashMap::new();
-            let disable_full_directory_composite =
-                crate::validation_controls::is_validator_disabled("full-directory-composite");
-            if !disable_full_directory_composite {
+            let disable_many_directory_references =
+                crate::validation_controls::is_validator_disabled("many-directory-references");
+            let disable_dir_alias_composite =
+                crate::validation_controls::is_validator_disabled("directory-alias-composite");
+            if !disable_many_directory_references || !disable_dir_alias_composite {
                 for trait_def in &trait_definitions {
                     if let Some(idx) = trait_def.id.find("::") {
                         dir_traits
@@ -2569,16 +2578,16 @@ impl super::CapabilityMapper {
                     }
                 }
             }
-            let mut full_dir_clauses = Vec::new();
-            if !disable_full_directory_composite {
+            let mut many_dir_ref_clauses = Vec::new();
+            if !disable_many_directory_references {
                 for rule in &composite_rules {
-                    let violations = find_clause_refs_covering_directory(rule, &dir_traits);
+                    let violations = find_many_directory_refs(rule, &dir_traits);
                     for (rule_id, clause, dir, count, trait_ids) in violations {
                         let source_file = rule_source_files
                             .get(&rule_id)
                             .map(std::string::String::as_str)
                             .unwrap_or("unknown");
-                        full_dir_clauses.push((
+                        many_dir_ref_clauses.push((
                             rule_id,
                             clause,
                             dir,
@@ -2590,13 +2599,13 @@ impl super::CapabilityMapper {
                 }
             }
 
-            if !full_dir_clauses.is_empty() {
+            if !many_dir_ref_clauses.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} composite rules enumerate entire trait directories",
-                    full_dir_clauses.len()
+                    "\n❌ ERROR: {} composite rules hand-maintain many refs to one directory",
+                    many_dir_ref_clauses.len()
                 );
-                eprintln!("   A composite should not hand-maintain a list of every atomic trait in a directory:\n");
-                for (rule_id, clause, dir, count, trait_ids, source_file) in &full_dir_clauses {
+                eprintln!("   A composite should not hand-maintain long lists of atomic traits from one directory:\n");
+                for (rule_id, clause, dir, count, trait_ids, source_file) in &many_dir_ref_clauses {
                     let line_hint = find_line_number(source_file, rule_id);
                     if let Some(line) = line_hint {
                         eprintln!(
@@ -2616,13 +2625,64 @@ impl super::CapabilityMapper {
                             dir
                         );
                     } else {
-                        eprintln!("      Recommendation: Create a meaningful technique composite, or split the directory so the all: clause names a narrower behavior.\n");
+                        eprintln!("      Recommendation: Keep small intentional bundles together; split only when there are clear sub-techniques.\n");
                     }
                 }
-                warnings.push(format!(
-                    "{} composite rules enumerate entire trait directories",
-                    full_dir_clauses.len()
-                ));
+                warnings.push_count(
+                    "many-directory-references",
+                    many_dir_ref_clauses.len(),
+                    format!(
+                        "{} composite rules hand-maintain many refs to one directory",
+                        many_dir_ref_clauses.len()
+                    ),
+                );
+            }
+
+            let dir_alias_composites = if disable_dir_alias_composite {
+                Vec::new()
+            } else {
+                find_pure_directory_alias_composites(&composite_rules, &dir_traits)
+            };
+            if !dir_alias_composites.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composites are pure directory aliases",
+                    dir_alias_composites.len()
+                );
+                eprintln!(
+                    "   These composites add no logic beyond matching any trait in a directory."
+                );
+                eprintln!("   Delete the composite and reference the directory directly:\n");
+                for (rule_id, dir, count, trait_ids) in &dir_alias_composites {
+                    let source_file = rule_source_files
+                        .get(rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    let line_hint = find_line_number(source_file, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' is equivalent to '{}'",
+                            source_file, line, rule_id, dir
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' is equivalent to '{}'",
+                            source_file, rule_id, dir
+                        );
+                    }
+                    eprintln!("      Traits ({}): {}", count, trait_ids.join(", "));
+                    eprintln!(
+                        "      Recommendation: Remove the composite and use 'id: {}'.\n",
+                        dir
+                    );
+                }
+                warnings.push_count(
+                    "directory-alias-composite",
+                    dir_alias_composites.len(),
+                    format!(
+                        "{} composites are pure directory aliases",
+                        dir_alias_composites.len()
+                    ),
+                );
             }
 
             // Validate that `any:` and `all:` clauses don't have exactly 1 item
@@ -3096,10 +3156,8 @@ impl super::CapabilityMapper {
                 eprintln!(
                     "   Short patterns must bound their search space (~8KB ideal). Add one of:"
                 );
-                eprintln!("   - offset or offset_range (absolute file position)");
-                eprintln!(
-                    "   - section + section_offset/section_offset_range (pinpoint within section)"
-                );
+                eprintln!("   - offset or small closed offset_range (absolute file position)");
+                eprintln!("   - section + section_offset or small closed section_offset_range");
                 eprintln!("   - section + size_max (bound total file size)\n");
                 for (id, pattern, kind) in &too_short {
                     let source = rule_source_files
@@ -3230,13 +3288,13 @@ impl super::CapabilityMapper {
                 ));
             }
 
-            let disable_excessive_unless_downgrade_validation =
-                crate::validation_controls::is_validator_disabled("excessive-unless-downgrade");
+            let disable_excessive_suppression_validation =
+                crate::validation_controls::is_validator_disabled("excessive-suppression");
 
-            // Validate: excessive unless:/downgrade: clauses (8+ combined)
+            // Validate: excessive unless:/downgrade: suppressions (8+ combined)
             let excessive_skips =
                 find_excessive_skip_conditions(&trait_definitions, &composite_rules);
-            if !disable_excessive_unless_downgrade_validation && !excessive_skips.is_empty() {
+            if !disable_excessive_suppression_validation && !excessive_skips.is_empty() {
                 eprintln!(
                     "\n❌ ERROR: {} rules have 8+ combined unless:/downgrade: clauses",
                     excessive_skips.len()
@@ -3269,10 +3327,14 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!();
-                warnings.push(format!(
-                    "{} rules have excessive unless:/downgrade: clauses",
-                    excessive_skips.len()
-                ));
+                warnings.push_count(
+                    "excessive-suppression",
+                    excessive_skips.len(),
+                    format!(
+                        "{} rules have excessive unless:/downgrade: clauses",
+                        excessive_skips.len()
+                    ),
+                );
             }
 
             // Validate: traits/rules with 7+ explicit file types (suggest a named group instead)
@@ -3853,8 +3915,8 @@ impl super::CapabilityMapper {
             has_fatal_errors = true;
         }
 
-        if enable_full_validation {
-            if !warnings.is_empty() {
+        if enable_full_validation && !warnings.is_empty() {
+            {
                 let rendered = match std::env::var("CLEAVE_VALIDATE_FORMAT").ok().as_deref() {
                     Some("tiny") => crate::validation_controls::format_validation_issues_tiny(
                         warnings.as_slice(),

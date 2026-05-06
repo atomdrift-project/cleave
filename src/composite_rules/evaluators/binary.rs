@@ -10,141 +10,118 @@ use super::build_regex;
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 
-/// Evaluate section condition - match sections by name, size, and entropy
-/// Replaces YARA patterns like: `for any section in pe.sections : (section.name matches /^UPX/)`
-#[allow(clippy::too_many_arguments)]
+/// Parameters for a `type: section` condition evaluation.
+#[derive(Default)]
+pub(crate) struct SectionParams<'p> {
+    pub exact: Option<&'p String>,
+    pub substr: Option<&'p String>,
+    pub regex: Option<&'p String>,
+    pub word: Option<&'p String>,
+    pub case_insensitive: bool,
+    pub length_min: Option<u64>,
+    pub length_max: Option<u64>,
+    pub entropy_min: Option<f64>,
+    pub entropy_max: Option<f64>,
+    pub readable: Option<bool>,
+    pub writable: Option<bool>,
+    pub executable: Option<bool>,
+    /// Reference section (or `"total"`) for both size and entropy ratio checks.
+    pub compare_to: Option<&'p String>,
+    pub size_ratio_min: Option<f64>,
+    pub size_ratio_max: Option<f64>,
+    pub entropy_ratio_min: Option<f64>,
+    pub entropy_ratio_max: Option<f64>,
+}
+
+/// Evaluate section condition - match sections by name, size, and entropy.
 #[must_use]
 pub(crate) fn eval_section<'a>(
-    exact: Option<&String>,
-    substr: Option<&String>,
-    regex: Option<&String>,
-    word: Option<&String>,
-    case_insensitive: bool,
-    length_min: Option<u64>,
-    length_max: Option<u64>,
-    entropy_min: Option<f64>,
-    entropy_max: Option<f64>,
-    readable: Option<bool>,
-    writable: Option<bool>,
-    executable: Option<bool>,
-    compare_to: Option<&String>,
-    ratio_min: Option<f64>,
-    ratio_max: Option<f64>,
+    p: &SectionParams<'_>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let mut evidence = Vec::new();
     let mut matched_total_size: u64 = 0;
     let mut matched_section_names: Vec<String> = Vec::new();
+    let mut matched_entropies: Vec<f64> = Vec::new();
 
     for section in &ctx.report.sections {
-        // Apply case sensitivity transformation
-        let (compare_name, compare_exact, compare_substr) = if case_insensitive {
+        let (compare_name, compare_exact, compare_substr) = if p.case_insensitive {
             (
                 section.name.to_lowercase(),
-                exact.map(|s| s.to_lowercase()),
-                substr.map(|s| s.to_lowercase()),
+                p.exact.map(|s| s.to_lowercase()),
+                p.substr.map(|s| s.to_lowercase()),
             )
         } else {
-            (section.name.clone(), exact.cloned(), substr.cloned())
+            (section.name.clone(), p.exact.cloned(), p.substr.cloned())
         };
 
         let name_matched = if let Some(exact_str) = &compare_exact {
             compare_name == *exact_str
         } else if let Some(substr_str) = &compare_substr {
             compare_name.contains(substr_str.as_str())
-        } else if let Some(regex_str) = regex {
-            let pattern = if case_insensitive {
+        } else if let Some(regex_str) = p.regex {
+            let pattern = if p.case_insensitive {
                 format!("(?i){}", regex_str)
             } else {
                 regex_str.clone()
             };
-            match build_regex(&pattern, false) {
-                Ok(re) => re.is_match(&section.name),
-                Err(_) => false,
-            }
-        } else if let Some(word_str) = word {
-            let pattern = if case_insensitive {
+            build_regex(&pattern, false).is_ok_and(|re| re.is_match(&section.name))
+        } else if let Some(word_str) = p.word {
+            let pattern = if p.case_insensitive {
                 format!(r"(?i)\b{}\b", regex::escape(word_str))
             } else {
                 format!(r"\b{}\b", regex::escape(word_str))
             };
-            match build_regex(&pattern, false) {
-                Ok(re) => re.is_match(&section.name),
-                Err(_) => false,
-            }
-        } else {
-            // No name pattern specified - match all sections
-            true
-        };
-
-        // Check size constraints
-        let size_ok = if let Some(min) = length_min {
-            section.size >= min
-        } else {
-            true
-        } && if let Some(max) = length_max {
-            section.size <= max
+            build_regex(&pattern, false).is_ok_and(|re| re.is_match(&section.name))
         } else {
             true
         };
 
-        // Check entropy constraints
-        let entropy_ok = if let Some(min) = entropy_min {
-            section.entropy >= min
-        } else {
-            true
-        } && if let Some(max) = entropy_max {
-            section.entropy <= max
-        } else {
-            true
-        };
+        let size_ok = p.length_min.is_none_or(|min| section.size >= min)
+            && p.length_max.is_none_or(|max| section.size <= max);
 
-        // Check permission constraints
+        let entropy_ok = p.entropy_min.is_none_or(|min| section.entropy >= min)
+            && p.entropy_max.is_none_or(|max| section.entropy <= max);
+
         let permissions_ok = {
             let mut ok = true;
             if let Some(perms) = &section.permissions {
-                if let Some(r) = readable {
+                if let Some(r) = p.readable {
                     ok = ok && (perms.contains('r') == r);
                 }
-                if let Some(w) = writable {
+                if let Some(w) = p.writable {
                     ok = ok && (perms.contains('w') == w);
                 }
-                if let Some(x) = executable {
+                if let Some(x) = p.executable {
                     ok = ok && (perms.contains('x') == x);
                 }
-            } else {
-                // If no permissions info, fail strict checks
-                if readable.is_some() || writable.is_some() || executable.is_some() {
-                    ok = false;
-                }
+            } else if p.readable.is_some() || p.writable.is_some() || p.executable.is_some() {
+                ok = false;
             }
             ok
         };
 
-        let matched = name_matched && size_ok && entropy_ok && permissions_ok;
-
-        if matched {
+        if name_matched && size_ok && entropy_ok && permissions_ok {
             matched_total_size = matched_total_size.saturating_add(section.size);
             matched_section_names.push(section.name.clone());
+            matched_entropies.push(section.entropy);
             let mut details = vec![];
-            if length_min.is_some() || length_max.is_some() {
+            if p.length_min.is_some() || p.length_max.is_some() {
                 details.push(format!("size: {}", section.size));
             }
-            if entropy_min.is_some() || entropy_max.is_some() {
+            if p.entropy_min.is_some() || p.entropy_max.is_some() {
                 details.push(format!("entropy: {:.2}", section.entropy));
             }
-            if readable.is_some() || writable.is_some() || executable.is_some() {
+            if p.readable.is_some() || p.writable.is_some() || p.executable.is_some() {
                 if let Some(perms) = &section.permissions {
                     details.push(format!("perms: {}", perms));
                 }
             }
-
             let value = if details.is_empty() {
                 section.name.clone()
             } else {
                 format!("{} ({})", section.name, details.join(", "))
             };
-
             if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                 evidence.push(Evidence {
                     method: "section".to_string(),
@@ -157,56 +134,43 @@ pub(crate) fn eval_section<'a>(
         }
     }
 
-    // Calculate precision matching other evaluators
-    let mut precision = if exact.is_some() {
+    let mut precision = if p.exact.is_some() {
         2.0
-    } else if regex.is_some() || word.is_some() {
+    } else if p.regex.is_some() || p.word.is_some() {
         1.5
-    } else if substr.is_some() {
-        1.0
-    } else if length_min.is_some() || length_max.is_some() {
-        // Size constraints alone (no name pattern)
+    } else if p.substr.is_some() || p.length_min.is_some() || p.length_max.is_some() {
         1.0
     } else {
         0.0
     };
-
-    // Add precision for size constraints
-    if length_min.is_some() {
+    if p.length_min.is_some() {
         precision += 0.5;
     }
-    if length_max.is_some() {
+    if p.length_max.is_some() {
         precision += 0.5;
     }
-
-    // Add precision for entropy constraints
-    if entropy_min.is_some() {
+    if p.entropy_min.is_some() {
         precision += 0.5;
     }
-    if entropy_max.is_some() {
+    if p.entropy_max.is_some() {
         precision += 0.5;
     }
-
-    // Add precision for permission constraints
-    if readable.is_some() {
+    if p.readable.is_some() {
         precision += 0.5;
     }
-    if writable.is_some() {
+    if p.writable.is_some() {
         precision += 0.5;
     }
-    if executable.is_some() {
+    if p.executable.is_some() {
         precision += 0.5;
     }
-
-    if case_insensitive {
+    if p.case_insensitive {
         precision *= 0.5;
     }
 
-    // Size-ratio check: (sum of matched section sizes) / (denominator).
-    // Denominator is the full file size when compare_to is None or "total",
-    // otherwise the sum of sections whose name matches the compare_to pattern.
-    let ratio_ok = if ratio_min.is_some() || ratio_max.is_some() {
-        let denom: u64 = match compare_to.map(String::as_str) {
+    // Size-ratio check.
+    let ratio_ok = if p.size_ratio_min.is_some() || p.size_ratio_max.is_some() {
+        let denom: u64 = match p.compare_to.map(String::as_str) {
             None | Some("total") => ctx.report.target.size_bytes,
             Some(pattern) => match build_regex(pattern, false) {
                 Ok(re) => ctx
@@ -219,23 +183,21 @@ pub(crate) fn eval_section<'a>(
                 Err(_) => 0,
             },
         };
-
         if denom == 0 {
             false
         } else {
             let ratio = matched_total_size as f64 / denom as f64;
-            let min_ok = ratio_min.is_none_or(|m| ratio >= m);
-            let max_ok = ratio_max.is_none_or(|m| ratio <= m);
-            let ok = min_ok && max_ok;
+            let ok = p.size_ratio_min.is_none_or(|m| ratio >= m)
+                && p.size_ratio_max.is_none_or(|m| ratio <= m);
             if ok {
-                precision += 1.0; // meaningful specificity bump for ratio check
-                if ratio_min.is_some() {
+                precision += 1.0;
+                if p.size_ratio_min.is_some() {
                     precision += 0.5;
                 }
-                if ratio_max.is_some() {
+                if p.size_ratio_max.is_some() {
                     precision += 0.5;
                 }
-                let denom_desc = compare_to.map_or("total", String::as_str);
+                let denom_desc = p.compare_to.map_or("total", String::as_str);
                 evidence.push(Evidence {
                     method: "section_ratio".to_string(),
                     source: "binary".to_string(),
@@ -257,9 +219,77 @@ pub(crate) fn eval_section<'a>(
         true
     };
 
+    // Entropy-ratio check.
+    let entropy_ratio_ok = if p.entropy_ratio_min.is_some() || p.entropy_ratio_max.is_some() {
+        if matched_entropies.is_empty() {
+            return ConditionResult::no_match();
+        }
+        let matched_mean = matched_entropies.iter().sum::<f64>() / matched_entropies.len() as f64;
+
+        let denom_entropies: Vec<f64> = if let Some(pattern) = p.compare_to {
+            match build_regex(pattern, false) {
+                Ok(re) => ctx
+                    .report
+                    .sections
+                    .iter()
+                    .filter(|s| re.is_match(&s.name) && s.entropy > 0.0)
+                    .map(|s| s.entropy)
+                    .collect(),
+                Err(_) => return ConditionResult::no_match(),
+            }
+        } else {
+            ctx.report
+                .sections
+                .iter()
+                .filter(|s| !matched_section_names.contains(&s.name) && s.entropy > 0.0)
+                .map(|s| s.entropy)
+                .collect()
+        };
+
+        if denom_entropies.is_empty() {
+            false
+        } else {
+            let denom_mean = denom_entropies.iter().sum::<f64>() / denom_entropies.len() as f64;
+            if denom_mean == 0.0 {
+                false
+            } else {
+                let ratio = matched_mean / denom_mean;
+                let ok = p.entropy_ratio_min.is_none_or(|m| ratio >= m)
+                    && p.entropy_ratio_max.is_none_or(|m| ratio <= m);
+                if ok {
+                    precision += 1.0;
+                    if p.entropy_ratio_min.is_some() {
+                        precision += 0.5;
+                    }
+                    if p.entropy_ratio_max.is_some() {
+                        precision += 0.5;
+                    }
+                    let denom_desc = p.compare_to.map_or("other sections", String::as_str);
+                    evidence.push(Evidence {
+                        method: "section_entropy_ratio".to_string(),
+                        source: "binary".to_string(),
+                        value: format!(
+                            "{} entropy {:.2} = {:.2}x {} mean entropy {:.2}",
+                            matched_section_names.join("+"),
+                            matched_mean,
+                            ratio,
+                            denom_desc,
+                            denom_mean,
+                        ),
+                        location: None,
+                        ..Default::default()
+                    });
+                }
+                ok
+            }
+        }
+    } else {
+        true
+    };
+
     let match_count = evidence.len();
     ConditionResult {
-        matched: match_count > 0 && ratio_ok,
+        matched: match_count > 0 && ratio_ok && entropy_ratio_ok,
         evidence,
         match_count,
         warnings: Vec::new(),

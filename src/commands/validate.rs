@@ -64,7 +64,8 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// single rayon parallel pool; judgement happens serially afterwards by
 /// scanning the collected reports. On success, prints a single summary line.
 /// On failure, prints only the failing files with their contributing findings.
-pub fn run(format: &OutputFormat) -> Result<String> {
+pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
+    validation_controls::set_disabled_validators_override(exclude)?;
     let targets = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set.

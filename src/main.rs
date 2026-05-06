@@ -150,7 +150,7 @@ fn main() -> Result<()> {
     // so skip the ~4 s (release) / ~18 s (debug) compile of 14 k+ inline YARA
     // rules that the prefetch triggers. Trait-structure validation doesn't
     // require YARA to have compiled either — mapper loading is independent.
-    let is_validate_command = matches!(args.command, Some(cli::Command::Validate));
+    let is_validate_command = matches!(args.command, Some(cli::Command::Validate { .. }));
     if !disabled.yara && !is_validate_command {
         cleave::prefetch_yara_engine(!disabled.third_party);
     }
@@ -158,7 +158,7 @@ fn main() -> Result<()> {
     // and suppresses the banner to stay terse on success.
     if !matches!(
         args.command,
-        Some(cli::Command::Version) | Some(cli::Command::Validate)
+        Some(cli::Command::Version) | Some(cli::Command::Validate { .. })
     ) {
         print_version_banner(format);
     }

@@ -33,10 +33,11 @@ pub struct LnkMetrics {
     /// Total whitespace characters in the arguments field.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub args_whitespace_total: u32,
-    /// Longest consecutive whitespace run in the arguments field.
+    /// Longest whitespace run in the arguments field
+    ///
     /// High values (>=50) match the ZDI-CAN-25373 obfuscation pattern.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub args_max_whitespace_run: u32,
-    /// True when `args_max_whitespace_run` crosses the obfuscation threshold.
+    /// Arguments contain excessive whitespace obfuscation
     pub args_excessive_whitespace: bool,
 }

@@ -457,7 +457,7 @@ fn parse_toc_entry(toc: &[u8], cursor: usize) -> Option<TocEntry> {
     let header_len = 18;
     let entry_size_bytes = toc.get(cursor..cursor + 4)?;
     let entry_size = i32::from_be_bytes(entry_size_bytes.try_into().ok()?);
-    if entry_size < header_len as i32 {
+    if entry_size < header_len {
         return None;
     }
     let entry_size = entry_size as usize;

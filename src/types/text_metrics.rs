@@ -42,7 +42,7 @@ pub struct TextMetrics {
     pub high_byte_ratio: f32,
 
     // === Line Statistics ===
-    /// Total lines in file
+    /// Total number of lines in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total_lines: u32,
     /// Average line length in characters
@@ -84,10 +84,10 @@ pub struct TextMetrics {
     /// Ratio of whitespace to total characters
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub whitespace_ratio: f32,
-    /// Tab characters count
+    /// Total number of tab characters in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub tab_count: u32,
-    /// Space characters count
+    /// Total number of space characters in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub space_count: u32,
     /// Mixed tabs and spaces for indentation
@@ -384,16 +384,16 @@ pub struct StringMetrics {
 /// Comment and documentation metrics
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct CommentMetrics {
-    /// Total comment count
+    /// Total number of comment blocks in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total: u32,
-    /// Lines that are comments
+    /// Number of source lines that are comments
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub lines: u32,
     /// Total characters in comments
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub chars: u64,
-    /// Comment to code ratio
+    /// Ratio of comment lines to total code lines
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub to_code_ratio: f32,
 
@@ -433,7 +433,7 @@ pub struct CommentMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct FunctionMetrics {
     // === Counts ===
-    /// Total functions/methods
+    /// Total number of functions and methods
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total: u32,
     /// Anonymous functions (lambdas, closures)
@@ -530,7 +530,7 @@ pub struct FunctionMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct StatementMetrics {
     // === Counts ===
-    /// Total statements in file
+    /// Total number of statements in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total: u32,
     /// Expression statements
@@ -576,7 +576,7 @@ pub struct StatementMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ImportMetrics {
     // === Counts ===
-    /// Total import statements
+    /// Total number of import statements in the file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total: u32,
     /// Unique modules imported

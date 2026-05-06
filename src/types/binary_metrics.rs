@@ -52,7 +52,7 @@ use super::{is_false, is_zero_f32, is_zero_f64, is_zero_u32, is_zero_u64};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct BinaryMetrics {
     // === Entropy ===
-    /// Overall file entropy (0-8 bits, higher = more random/compressed)
+    /// Shannon entropy of the entire file (0–8 scale)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub overall_entropy: f32,
     /// Code section average entropy (executable sections only)
@@ -69,14 +69,16 @@ pub struct BinaryMetrics {
     pub high_entropy_regions: u32,
 
     // === Size ===
-    /// Total executable code size in bytes (sum of all executable sections)
+    /// Total executable code size across all sections
+    ///
     /// - Mach-O: __text + __stubs + __stub_helper
     /// - ELF: sections with SHF_EXECINSTR flag
     /// - PE: sections with IMAGE_SCN_MEM_EXECUTE characteristic
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub code_size: u64,
 
-    /// Ratio of code to data: `code_size / (file_size - code_size)`
+    /// Ratio of executable code bytes to non-code bytes
+    ///
     /// - < 0.1: Packed/dropper (small code, large payload)
     /// - 0.2-2.0: Normal executable
     /// - > 10: Code-heavy (utilities, libraries)
@@ -84,7 +86,8 @@ pub struct BinaryMetrics {
     pub code_to_data_ratio: f32,
 
     // === Binary Properties ===
-    /// The structural parser failed to read this binary cleanly — either by
+    /// Structural parser encountered an error or panic
+    ///
     /// returning an error or by panicking on a malformed header. When set,
     /// the structure-derived fields below were populated from the rizin
     /// fallback analysis rather than the primary parser, and may be less
@@ -92,10 +95,10 @@ pub struct BinaryMetrics {
     /// `report.metadata.errors`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_malformed_structure: bool,
-    /// Has debug information
+    /// Binary contains debug symbols or DWARF data
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_debug_info: bool,
-    /// Is stripped (no symbols)
+    /// Binary has been stripped of symbol information
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_stripped: bool,
     /// Position Independent Executable
@@ -110,16 +113,16 @@ pub struct BinaryMetrics {
     /// Entry point is outside the primary expected code section
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_nonstandard_section: bool,
-    /// Relocation count
+    /// Total number of relocations in the binary
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub relocation_count: u32,
-    /// Linked dependency count
+    /// Number of linked library dependencies
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dependency_count: u32,
     /// Runtime library search path count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub runtime_search_path_count: u32,
-    /// Debug-reference count across format-specific debug tables/sections
+    /// Debug-reference count in format-specific tables
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_reference_count: u32,
     /// Stable build/provenance identifier present
@@ -136,13 +139,13 @@ pub struct BinaryMetrics {
     pub signature_valid: Option<bool>,
 
     // === Sections ===
-    /// Total section count
+    /// Total number of sections in the binary
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub section_count: u32,
-    /// Executable sections
+    /// Number of sections with execute permission set
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub executable_sections: u32,
-    /// Writable sections
+    /// Number of sections with write permission set
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub writable_sections: u32,
     /// W+X sections (self-modifying)
@@ -154,17 +157,20 @@ pub struct BinaryMetrics {
     /// Largest section ratio to file size
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub largest_section_ratio: f32,
-    /// Ratio of executable / code section bytes to the full file size.
+    /// Ratio of executable code section bytes to file size
+    ///
     /// Covers `.text` on PE/ELF, `__TEXT,__text` on Mach-O.
     /// Low values on non-packed binaries indicate compressed or hidden code.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub text_to_file_ratio: f32,
-    /// Ratio of writable data section bytes to the full file size.
+    /// Ratio of writable data section bytes to file size
+    ///
     /// Covers `.data` on PE/ELF, `__DATA,__data` on Mach-O.
     /// High values are a strong packer/obfuscator signal.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub data_to_file_ratio: f32,
-    /// Ratio of resource section bytes to the full file size.
+    /// Ratio of resource section bytes to total file size
+    ///
     /// PE `.rsrc` only; 0 elsewhere. High values indicate resource carriers.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub rsrc_to_file_ratio: f32,
@@ -174,15 +180,15 @@ pub struct BinaryMetrics {
     /// Count of nonstandard section names for the file format
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub nonstandard_section_name_count: u32,
-    /// Average section size
+    /// Mean size of binary sections in bytes
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_section_size: f32,
 
     // === Imports/Exports ===
-    /// Import count
+    /// Total number of imported symbols
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub import_count: u32,
-    /// Export count
+    /// Number of exported symbols
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub export_count: u32,
     /// Number of exports sharing an address with another export
@@ -193,19 +199,19 @@ pub struct BinaryMetrics {
     pub import_entropy: f32,
 
     // === Strings ===
-    /// String count
+    /// Count of extractable printable strings (len ≥ 4)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub string_count: u32,
-    /// Average string entropy
+    /// Mean Shannon entropy across extracted strings
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_string_entropy: f32,
-    /// High entropy strings
+    /// Strings with Shannon entropy above 4.5 bits
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub high_entropy_strings: u32,
     /// Strings in code sections (unusual)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub strings_in_code: u32,
-    /// Wide/UTF-16 string count
+    /// Count of wide (UTF-16) strings extracted
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub wide_string_count: u32,
     /// Sentence-like string count (multi-word printable strings)
@@ -214,10 +220,10 @@ pub struct BinaryMetrics {
     /// Ratio of sentence-like strings to all strings
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub sentence_string_ratio: f32,
-    /// Average string length
+    /// Mean length of extracted printable strings
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_string_length: f32,
-    /// Maximum string length
+    /// Length of the longest extracted printable string
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_string_length: u32,
     /// Standard deviation of string lengths
@@ -225,7 +231,8 @@ pub struct BinaryMetrics {
     pub string_length_stddev: f32,
 
     // === Functions ===
-    /// Depth of function analysis rizin performed, so rules can discriminate
+    /// Rizin function analysis depth: 0=skipped, 1=light, 2=full
+    ///
     /// metrics-driven detections based on the analysis budget:
     /// - `0` = skipped (`func_count` etc. are 0; function-count
     ///   thresholds should be ignored)
@@ -233,22 +240,25 @@ pub struct BinaryMetrics {
     /// - `2` = full (`aa;aap`; entry-point + prologue scan, richest metrics)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub func_analysis_depth: u32,
-    /// Function count
+    /// Total number of functions found by disassembly
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub func_count: u32,
-    /// Count of FUNC + IFUNC entries in `.dynsym` — the binary's
+    /// FUNC and IFUNC entries in the dynamic symbol table
+    ///
     /// public ABI surface. Compare with `func_count` to detect
     /// hidden-code growth between releases.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dynsym_func_count: u32,
-    /// `func_count - dynsym_func_count` — functions with no
+    /// Functions absent from the dynamic symbol table
+    ///
     /// dynsym entry (internal helpers). Disproportionate growth in
     /// this number with little change to `dynsym_func_count` between
     /// releases is the xz-class supply-chain signal: 99% of the new
     /// code is hidden from the public ABI.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub internal_func_count: u32,
-    /// Count of unnamed (no dynsym entry) functions with cyclomatic
+    /// Unnamed complex functions not in the dynamic symbol table
+    ///
     /// complexity > 50 (matches `high_complexity_funcs` threshold).
     /// The full ranked list lives at `binary.top_complex_unnamed[]`
     /// kv; this metric is the single-number trait target — drift
@@ -256,13 +266,13 @@ pub struct BinaryMetrics {
     /// ABI tie.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unnamed_complex_func_count: u32,
-    /// Average function size
+    /// Mean size of disassembled functions in bytes
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_func_size: f32,
     /// Tiny functions (<16 bytes)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub tiny_funcs: u32,
-    /// Huge functions (>64KB)
+    /// Functions larger than 64KB of code bytes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub huge_funcs: u32,
     /// Indirect call instructions
@@ -302,10 +312,10 @@ pub struct BinaryMetrics {
     /// Linear functions (no branches)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub linear_funcs: u32,
-    /// Recursive functions
+    /// Functions that call themselves directly
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub recursive_funcs: u32,
-    /// Non-returning functions
+    /// Functions that never return to their caller
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub noreturn_funcs: u32,
     /// Leaf functions (make no calls)
@@ -313,10 +323,10 @@ pub struct BinaryMetrics {
     pub leaf_funcs: u32,
 
     // === Stack ===
-    /// Average stack frame size
+    /// Mean stack frame size across all functions
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_stack_frame: f32,
-    /// Maximum stack frame size
+    /// Largest single stack frame seen during analysis
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_stack_frame: u32,
     /// Functions with large stack (>4KB)
@@ -327,30 +337,33 @@ pub struct BinaryMetrics {
     pub large_stack_func_names: Vec<String>,
 
     // === Overlay ===
-    /// Has overlay data
+    /// Binary has bytes appended after the last section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_overlay: bool,
-    /// Overlay size in bytes
+    /// Byte count of data appended after sections
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub overlay_size: u64,
     /// Overlay ratio to file size
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub overlay_ratio: f32,
-    /// Overlay entropy
+    /// Shannon entropy of the post-section overlay
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub overlay_entropy: f32,
 
     // === Embedded content ===
-    /// Embedded executables discovered inside this file (PE, ELF, Mach-O).
+    /// Count of embedded executable files detected inside binary
+    ///
     /// Source-agnostic — counts any validated embedded binary regardless of
     /// which detector found it (byte-scan, overlay, SFX extraction, …).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embedded_binary_count: u32,
-    /// Embedded archives discovered inside this file (zip, 7z, rar, gz, xz,
+    /// Count of embedded archive files detected inside binary
+    ///
     /// zstd, bz2, cab, lzh, iso, cpio, and SFX installer containers).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embedded_archive_count: u32,
-    /// Total embedded files: `embedded_binary_count + embedded_archive_count`
+    /// Total embedded files across all detector types
+    ///
     /// plus any other carved artifacts (images, scripts, …) future detectors
     /// report. Kept as a stable aggregate feature so the ML pipeline does not
     /// need to re-sum as new kinds are added.
@@ -552,22 +565,22 @@ pub struct ElfMetrics {
     /// ELF class in bits (32 or 64)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_bits: u32,
-    /// Little endian encoding
+    /// Binary uses little-endian byte order
     #[serde(default, skip_serializing_if = "is_false")]
     pub little_endian: bool,
-    /// Entry point address
+    /// Virtual address of the ELF entry point
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub entry_point: u64,
-    /// Program header count
+    /// Number of ELF program header entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub program_header_count: u32,
-    /// Section header count
+    /// Number of ELF section header entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub section_header_count: u32,
-    /// Entry point not in .text
+    /// Entry point falls outside the .text section
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_not_in_text: bool,
-    /// Entry point section name
+    /// Name of the section containing the entry point
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entry_section: Option<String>,
 
@@ -578,16 +591,16 @@ pub struct ElfMetrics {
     /// Interpreter present (PT_INTERP)
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_interpreter: bool,
-    /// SONAME present
+    /// Binary declares a shared-library SONAME
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_soname: bool,
-    /// RPATH set
+    /// Binary has at least one RPATH entry
     #[serde(default, skip_serializing_if = "is_false")]
     pub rpath_set: bool,
-    /// Number of RPATH entries
+    /// Number of RPATH directory entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rpath_count: u32,
-    /// RUNPATH set
+    /// Binary has at least one RUNPATH entry
     #[serde(default, skip_serializing_if = "is_false")]
     pub runpath_set: bool,
     /// Number of RUNPATH entries
@@ -596,19 +609,19 @@ pub struct ElfMetrics {
     /// SONAME string (DT_SONAME), e.g. `"libfoo.so.1"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soname: Option<String>,
-    /// Needed shared libraries (DT_NEEDED), in dynamic-section order.
+    /// Count of DT_NEEDED shared library dependencies
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub needed: Vec<String>,
     /// RPATH entries (DT_RPATH), one string per `:`-separated path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rpaths: Vec<String>,
-    /// RUNPATH entries (DT_RUNPATH), one string per `:`-separated path.
+    /// RUNPATH entries as a colon-separated string
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runpaths: Vec<String>,
-    /// DT_INIT_ARRAY count
+    /// Number of DT_INIT_ARRAY function pointers
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub init_array_count: u32,
-    /// DT_FINI_ARRAY count
+    /// Number of DT_FINI_ARRAY function pointers
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fini_array_count: u32,
 
@@ -622,7 +635,7 @@ pub struct ElfMetrics {
     /// Static symbol table count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub symtab_count: u32,
-    /// GNU hash present
+    /// GNU hash section is present in the binary
     #[serde(default, skip_serializing_if = "is_false")]
     pub gnu_hash_present: bool,
 
@@ -639,7 +652,7 @@ pub struct ElfMetrics {
     /// Dynamic REL relocation count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dynrel_count: u32,
-    /// PLT relocation count
+    /// Number of PLT relocation entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pltreloc_count: u32,
     /// Section relocation groups count
@@ -647,13 +660,13 @@ pub struct ElfMetrics {
     pub section_relocation_group_count: u32,
 
     // === Security Features ===
-    /// RELRO status
+    /// GNU_RELRO protection level (none/partial/full)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub relro: Option<String>,
-    /// TEXTREL present (bad)
+    /// Binary has text relocations (TEXTREL flag set)
     #[serde(default, skip_serializing_if = "is_false")]
     pub textrel_present: bool,
-    /// Stack canary
+    /// Binary uses stack-smashing protection canary
     #[serde(default, skip_serializing_if = "is_false")]
     pub stack_canary: bool,
     /// NX (non-executable stack)
@@ -661,19 +674,19 @@ pub struct ElfMetrics {
     pub nx_enabled: bool,
 
     // === Special Sections ===
-    /// Has .plt
+    /// Binary contains a .plt section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_plt: bool,
-    /// Has .got
+    /// Binary contains a .got section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_got: bool,
-    /// Has .eh_frame
+    /// Binary contains a .eh_frame unwind section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_eh_frame: bool,
-    /// Has .note section
+    /// Binary contains at least one .note section
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_note: bool,
-    /// Total ELF note count
+    /// Total number of ELF note entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub note_count: u32,
     /// GNU build-id note present
@@ -682,14 +695,16 @@ pub struct ElfMetrics {
     /// GNU build-id length in bytes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub build_id_length: u32,
-    /// GNU build-id hex string (lowercase, no separators).
+    /// GNU build-id hex string for this ELF binary
+    ///
     /// In-memory carrier only — surfaced to consumers via the
     /// cross-format `debug.build_id` kv path. Skipped from JSON so
     /// it doesn't show up twice (once as `elf.build_id` metric and
     /// once as `debug.build_id` kv) in analysis and diff output.
     #[serde(default, skip_serializing)]
     pub build_id: Option<String>,
-    /// DWARF compilation-unit count (`.debug_info`). Derived count →
+    /// Number of DWARF compilation units in .debug_info
+    ///
     /// lives on metrics; trait authors target `elf.dwarf_cu_count`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dwarf_cu_count: u32,
@@ -700,26 +715,30 @@ pub struct ElfMetrics {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_section_count: u32,
 
-    /// Total NUL-separated entries in `.comment`. One per input
-    /// object file. Distinct entries with different toolchain
+    /// Total NUL-separated entries in the .comment section
+    ///
+    /// One per input object file. Distinct entries with different toolchain
     /// banners signal a mixed-toolchain build (xz-class tampering).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub comment_entry_count: u32,
-    /// Distinct (deduplicated) entries in `.comment`. > 1 means at
-    /// least one input object was built with a different banner than
-    /// the rest of the binary.
+    /// Distinct toolchain banner strings in .comment section.
+    /// A value greater than 1 means at least one input object was
+    /// built with a different banner than the rest of the binary.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub comment_distinct_count: u32,
-    /// Count of canonical metadata sections that are absent from a
-    /// normally-toolchain-output ELF (.comment, .note.GNU-stack,
-    /// .note.gnu.property, .note.ABI-tag, .symtab, .strtab).
-    /// Aggressive stripping is itself a signal — distro releases
-    /// usually keep `.comment`, only `strip --strip-all` removes it.
+    /// Count of standard metadata sections stripped from binary
+    ///
+    /// Canonical sections absent from a normally-toolchain-output ELF
+    /// (.comment, .note.GNU-stack, .note.gnu.property, .note.ABI-tag,
+    /// .symtab, .strtab). Aggressive stripping is itself a signal —
+    /// distro releases usually keep `.comment`, only `strip --strip-all`
+    /// removes it.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub stripped_metadata_section_count: u32,
-    /// Count of `STT_GNU_IFUNC` entries in `.dynsym`. Trait authors
-    /// match individual names via `elf.ifunc_symbols[]` kv; this
-    /// metric supports min/max queries.
+    /// Count of STT_GNU_IFUNC entries in .dynsym
+    ///
+    /// Trait authors match individual names via `elf.ifunc_symbols[]` kv;
+    /// this metric supports min/max queries.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ifunc_count: u32,
 }
@@ -749,7 +768,7 @@ pub struct PeMetrics {
     /// Number of sections from the COFF header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub number_of_sections: u32,
-    /// Entry point RVA
+    /// Entry point relative virtual address
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub entry_point_rva: u32,
     /// Section containing the entry point RVA
@@ -764,7 +783,7 @@ pub struct PeMetrics {
     /// Checksum field is zero / absent
     #[serde(default, skip_serializing_if = "is_false")]
     pub checksum_missing: bool,
-    /// Recomputed PE checksum
+    /// Checksum recomputed from file bytes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub computed_checksum: u32,
     /// Stored checksum matches recomputed checksum
@@ -779,13 +798,13 @@ pub struct PeMetrics {
     /// Section alignment from the optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub section_alignment: u32,
-    /// Windows subsystem value
+    /// Windows subsystem value from optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub subsystem: u32,
     /// DLL characteristics bitfield
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dll_characteristics: u32,
-    /// Preferred image base
+    /// Preferred virtual base address for loading
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub image_base: u64,
     /// SizeOfImage from optional header
@@ -794,10 +813,10 @@ pub struct PeMetrics {
     /// SizeOfHeaders from optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub size_of_headers: u32,
-    /// Major linker version
+    /// Linker major version from optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub linker_major_version: u32,
-    /// Minor linker version
+    /// Linker minor version from optional header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub linker_minor_version: u32,
     /// Number of distinct imported DLLs
@@ -806,35 +825,38 @@ pub struct PeMetrics {
     /// Number of debug directory entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_directory_entries: u32,
-    /// Sorted, deduplicated list of IMAGE_DEBUG_TYPE_* values present in
-    /// the Debug Directory.  Surfaced verbatim so trait authors / ML can
-    /// learn arbitrary patterns; derived booleans below name the
+    /// Sorted list of IMAGE_DEBUG_TYPE values present
+    ///
+    /// Deduplicated list from the Debug Directory. Surfaced verbatim so trait
+    /// authors / ML can learn arbitrary patterns; derived booleans below name the
     /// supply-chain-relevant ones.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub debug_directory_types: Vec<u32>,
-    /// IMAGE_DEBUG_TYPE_REPRO (16) present — vendor explicitly opted into
-    /// deterministic / reproducible builds. A vendor that previously set
-    /// this and stops is a supply-chain swap signal.
+    /// REPRO debug entry present; deterministic build
+    ///
+    /// Vendor explicitly opted into reproducible builds. A vendor that previously
+    /// set this and stops is a supply-chain swap signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_reproducible_build: bool,
-    /// IMAGE_DEBUG_TYPE_POGO (13) present — Profile-Guided Optimization
-    /// trained data leaked into the binary. Characteristic of release
-    /// MSVC builds with `/LTCG /PGO`.
+    /// POGO debug entry present; PGO data is embedded
+    ///
+    /// Profile-Guided Optimization trained data leaked into the binary.
+    /// Characteristic of release MSVC builds with `/LTCG /PGO`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_pogo: bool,
-    /// IMAGE_DEBUG_TYPE_ILTCG (14) present — Incremental Link-Time
-    /// Code Generation marker.
+    /// ILTCG debug entry present; incremental LTCG was used
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_iltcg: bool,
-    /// IMAGE_DEBUG_TYPE_VC_FEATURE (12) present — MSVC feature counts.
+    /// VC_FEATURE debug entry present; MSVC feature counts
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_vc_feature: bool,
     /// PDB path from CodeView debug info, if present
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdb_path: Option<String>,
-    /// CodeView PDB GUID (RSDS / NB10) — the per-build identifier that
-    /// links a PE to its PDB. Hex string, no separators. Different per
-    /// build even for the same source; rotates on every link.
+    /// CodeView PDB GUID linking PE to its PDB file
+    ///
+    /// (RSDS / NB10) — the per-build identifier. Hex string, no separators.
+    /// Different per build even for the same source; rotates on every link.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codeview_guid: Option<String>,
     /// CodeView PDB age — incremented per-edit by some toolchains.
@@ -846,6 +868,12 @@ pub struct PeMetrics {
     /// Certificate table size in bytes
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub certificate_table_size: u64,
+    /// Security directory offset exceeds actual file length
+    ///
+    /// Any non-zero value that exceeds the file length is impossible in a valid PE
+    /// and indicates header tampering.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub security_directory_out_of_bounds: bool,
     /// Export directory timestamp as Unix epoch seconds
     #[serde(default)]
     pub export_timestamp: u32,
@@ -908,7 +936,7 @@ pub struct PeMetrics {
     /// Timestamp anomaly (future or ancient)
     #[serde(default, skip_serializing_if = "is_false")]
     pub timestamp_anomaly: bool,
-    /// Timestamp field is zero
+    /// COFF timestamp field is set to zero
     #[serde(default, skip_serializing_if = "is_false")]
     pub timestamp_is_zero: bool,
     /// Timestamp is before year 2000
@@ -917,24 +945,31 @@ pub struct PeMetrics {
     /// Timestamp is more than one year in the future
     #[serde(default, skip_serializing_if = "is_false")]
     pub timestamp_in_future: bool,
-    /// Checksum valid
+    /// Stored PE checksum matches computed value
     #[serde(default, skip_serializing_if = "is_false")]
     pub checksum_valid: bool,
-    /// Rich header present
+    /// Rich header found in the DOS-PE gap region
     #[serde(default, skip_serializing_if = "is_false")]
     pub rich_header_present: bool,
-    /// DOS stub modified
+    /// Standard DOS stub message is absent
     #[serde(default, skip_serializing_if = "is_false")]
     pub dos_stub_modified: bool,
+    /// DOS stub region bytes are all zero
+    ///
+    /// Legitimate compilers leave the standard "This program cannot be
+    /// run in DOS mode" message there; zeroing it is a low-cost anti-
+    /// static technique to defeat heuristics that scan that region.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dos_stub_zeroed: bool,
     /// Signing time occurs before the PE COFF timestamp
     #[serde(default, skip_serializing_if = "is_false")]
     pub signing_time_before_timestamp: bool,
 
     // === Sections ===
-    /// Resource section size
+    /// Size in bytes of the resource section
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub rsrc_size: u64,
-    /// Resource section entropy
+    /// Shannon entropy of the resource section contents
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub rsrc_entropy: f32,
     /// Unusual section alignment
@@ -943,15 +978,311 @@ pub struct PeMetrics {
     /// Entry point not in a standard code section name
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_nonstandard_section: bool,
+    /// Entry point is in a writable section
+    ///
+    /// Falls inside a section with `IMAGE_SCN_MEM_WRITE` (0x80000000). Legitimate
+    /// code sections are read+execute only; a writable EP section is the textbook
+    /// self-modifying / unpacker stub fingerprint. Orthogonal to the existing
+    /// `wx_sections` count — this metric isolates the section the loader
+    /// will actually start executing.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_in_writable_section: bool,
+    /// Entry point RVA falls inside the PE header region
+    ///
+    /// RVA is below `SizeOfHeaders`. pefile flags this as "cannot run under
+    /// Windows 8" — it's an old loader-confusion / anti-static trick.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_in_header: bool,
+    /// Entry point RVA falls outside all section extents
+    ///
+    /// Stricter than `entry_in_nonstandard_section`: that flag
+    /// fires when the EP section name is unusual; this one fires when
+    /// no section claims the EP at all. Strong header-tampering signal.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_outside_sections: bool,
+    /// Sections whose raw extent exceeds the file length
+    ///
+    /// Number of sections whose `PointerToRawData + SizeOfRawData`
+    /// exceeds the file length. Each such section claims to contain
+    /// data past the end of the file — a malformation pefile flags as
+    /// "Error parsing section: SizeOfRawData is larger than file".
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub section_raw_overflow_count: u32,
+    /// Names of sections extending past end of file
+    ///
+    /// In-memory carrier — surfaced via kv `pe.overflowing_sections[]`
+    /// so trait authors can match section names directly.
+    #[serde(default, skip_serializing)]
+    pub overflowing_sections: Vec<String>,
+    /// Sections whose raw pointer is not file-aligned
+    ///
+    /// Number of sections whose `PointerToRawData` is not a multiple
+    /// of `FileAlignment`. pefile calls this out as deliberate parser-
+    /// confusion ("trying to confuse tools which parse this incorrectly").
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub misaligned_section_count: u32,
+    /// Names of file-misaligned sections as a carrier field
+    ///
+    /// In-memory carrier — surfaced via kv `pe.misaligned_sections[]`.
+    #[serde(default, skip_serializing)]
+    pub misaligned_sections: Vec<String>,
+    /// COFF symbol table fields are non-zero
+    ///
+    /// (`PointerToSymbolTable != 0` and `NumberOfSymbols != 0`). Modern
+    /// toolchains zero these fields (debug info goes in PDBs, not the COFF
+    /// symbol table); when set, usually a build-pipeline outlier or hand-crafted PE.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub coff_symbol_table_present: bool,
+    /// NumberOfRvaAndSizes from the optional header
+    ///
+    /// pefile flags values > 0x10 as suspicious; values < 0x10 may also indicate
+    /// artificially-reduced directory tables. Raw value kept as a
+    /// metric so trait authors can pick their own thresholds.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub number_of_rva_and_sizes: u32,
+
+    // === Section/header arithmetic anomalies ===
+    /// Parsed section count differs from NumberOfSections
+    ///
+    /// Parsed section count disagrees with FILE_HEADER NumberOfSections.
+    /// Either the header lies about how many sections exist or the
+    /// parser had to truncate — both indicate header tampering.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub section_count_mismatch: bool,
+    /// Number of sections with overlapping virtual address ranges
+    ///
+    /// Number of sections whose virtual address ranges intersect another
+    /// section. Legitimate PEs never overlap; pefile flags this as a
+    /// deliberate parser-confusion / shellcode-hiding technique.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub section_overlap_count: u32,
+    /// Names of sections with overlapping address ranges
+    ///
+    /// Carrier — surfaced via kv `pe.overlapping_sections[]`.
+    #[serde(default, skip_serializing)]
+    pub overlapping_sections: Vec<String>,
+    /// Bytes between SizeOfHeaders and first section raw data
+    ///
+    /// A non-zero gap is a "section cave" — empty
+    /// space available for shellcode insertion that the loader will
+    /// map but tools may skip.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub first_section_gap_bytes: u32,
+    /// Entry point falls inside the last section by file order
+    ///
+    /// Benign on packed UPX-style binaries (the unpacker stub appends
+    /// itself); suspicious for ostensibly-normal vendor binaries where
+    /// EP should be in `.text` near the start.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub entry_in_last_section: bool,
+    /// Sections with no file backing but positive virtual size
+    ///
+    /// Sections with SizeOfRawData == 0 and VirtualSize > 0 — BSS-style
+    /// sections that consume virtual memory without file backing.
+    /// Counterpart to `max_section_inflation_ratio`; high counts (>1)
+    /// indicate runtime-allocated decompression buffers.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub bss_like_section_count: u32,
+    /// .NET assembly carries a native pre-CLR entry point
+    ///
+    /// .NET assembly carries a native entry point in addition to the
+    /// managed CLR header. Stronger signal than `mixed_mode` alone —
+    /// a true native EP means unmanaged code runs before the CLR boots.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub dotnet_has_native_entry: bool,
+
+    // === Data-directory bounds ===
+    /// Import directory RVA falls outside all sections
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub import_directory_outside_section: bool,
+    /// Export directory RVA falls outside all sections
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub export_directory_outside_section: bool,
+    /// Resource directory walker hit an out-of-range offset
+    ///
+    /// Resource directory walker observed an out-of-range read while
+    /// traversing the .rsrc tree. Promoted from the existing internal
+    /// panic-catch into an explicit metric so trait authors can target
+    /// it without scraping log output.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub resource_directory_overruns_section: bool,
+    /// TLS callbacks pointing into non-executable sections
+    ///
+    /// Number of TLS callback RVAs that land in non-executable
+    /// sections. TLS callbacks fire before the entry point; a callback
+    /// in a writable / data section is the textbook anti-debug trick.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub tls_callbacks_outside_code: u32,
+
+    // === x509 / Authenticode enrichment ===
+    /// Leaf cert includes the codeSigning extended key usage
+    ///
+    /// Leaf cert's ExtendedKeyUsage extension includes the codeSigning
+    /// OID 1.3.6.1.5.5.7.3.3. When false on a signed PE, the leaf cert
+    /// is not authorized for code signing — common when a stolen TLS
+    /// server cert (serverAuth EKU) is repurposed as a fake Authenticode
+    /// signature. Catches the Remus botnet sample (May 2026):
+    /// `itunes.apple.com` is a TLS leaf with serverAuth.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub leaf_eku_code_signing: bool,
+    /// Leaf cert signature algorithm friendly name
+    ///
+    /// Leaf cert's signature algorithm OID resolved to a friendly name
+    /// (e.g. `sha256WithRSAEncryption`, `ecdsa-with-SHA256`).
+    /// `sha1WithRSAEncryption` on a recent build is a deprecated-
+    /// algorithm signal — Microsoft removed SHA-1 trust in 2020.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub leaf_signature_algorithm: Option<String>,
+    /// Authenticode SignedData carries a nested signature
+    ///
+    /// Authenticode SignedData carries a NestedSignature attribute
+    /// (Microsoft OID 1.3.6.1.4.1.311.2.4.1). Indicates a dual-signed
+    /// binary — typically SHA-1 + SHA-256 during the SHA-2 transition
+    /// era; sometimes a forged or backdated counter-sig.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_nested_signature: bool,
+    /// Signed with a leaf cert lacking codeSigning EKU
+    ///
+    /// Derived from `has_signature && leaf_subject.is_some() && !leaf_eku_code_signing` —
+    /// the same shape as `cert_chain_truncated`, atomic-trait friendly.
+    /// Catches the Remus pattern (signed PE with a TLS server leaf
+    /// stolen from another vendor).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signed_with_non_code_signing_leaf: bool,
+
+    // === Authentihash + signature padding ===
+    /// SHA-256 Authenticode hash excluding cert table data
+    ///
+    /// SHA-256 Authenticode hash per Microsoft's PE/COFF spec — hash
+    /// of the file with the optional-header checksum, the cert table
+    /// data directory entry, and the cert table data itself excluded.
+    /// Two binaries with identical Authenticode hash are byte-equal in
+    /// their signed regions even if re-signed with different certs;
+    /// useful for detecting "same body, different cert" supply-chain
+    /// swaps. Lowercase hex, no separators.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentihash: Option<String>,
+    /// Padding bytes between last section and cert table
+    ///
+    /// Bytes between the end of the last section's raw data and the
+    /// start of the cert table (the "overlay" excluding the cert
+    /// itself). Legitimate signers leave this at zero; non-zero values
+    /// indicate appended payload that ships under the signature.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub signature_overlay_padding_bytes: u64,
+
+    // === Authenticode signature verification (LIEF-equivalent coverage) ===
+    /// Friendly name of the digest algorithm the SignedData claims the
+    /// file was hashed with (e.g. `"sha256"`). Read from
+    /// SpcIndirectDataContent.messageDigest.digestAlgorithm. None when
+    /// the SPC structure couldn't be parsed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_digest_algorithm: Option<String>,
+    /// Hex string of the file digest the SignedData claims (the value
+    /// the signature was actually made over). Read from
+    /// SpcIndirectDataContent.messageDigest.digest. Compare against
+    /// the matching `authentihash_<alg>` to detect tampering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_digest: Option<String>,
+    /// The digest the SignedData was made over does NOT match the
+    /// recomputed Authentihash. Strong tampering signal — the file
+    /// was modified after signing while the signature blob was kept.
+    /// Catches the "drop a backdoor into a previously-signed binary"
+    /// attack pattern that bare cert-chain validity checks miss.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signature_digest_mismatch: bool,
+    /// Authentihash computed with SHA-1 (legacy Authenticode).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentihash_sha1: Option<String>,
+    /// Authentihash computed with SHA-384.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentihash_sha384: Option<String>,
+    /// Authentihash computed with SHA-512.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authentihash_sha512: Option<String>,
+    /// Common Name from SignerInfo.IssuerAndSerialNumber.issuer — the
+    /// authoritative reference to which cert in the SignedData certs
+    /// SET actually signed the binary. Distinct from `leaf_issuer`
+    /// (which uses cleave's heuristic leaf-finder); when these
+    /// disagree, the heuristic picked the wrong cert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_info_issuer: Option<String>,
+    /// SignerInfo.IssuerAndSerialNumber.serialNumber as lowercase hex.
+    /// Authoritative serial of the cert that actually signed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signer_info_serial: Option<String>,
+    /// SignerInfo's IssuerAndSerialNumber matches the leaf cert that
+    /// `find_leaf_signer` heuristically picked. False when the bag of
+    /// certs in the SignedData doesn't match the SignerInfo reference.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signer_info_matches_leaf: bool,
+    /// Result of cryptographically verifying the SignerInfo signature
+    /// against the leaf cert's public key. None when the signature
+    /// algorithm isn't supported (currently only RSA-PKCS1v15);
+    /// Some(true) when the signature is mathematically valid;
+    /// Some(false) when verification fails (the signature blob was
+    /// not produced by the holder of the leaf cert's private key).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub signature_verified: Option<bool>,
+    /// SignerInfo signature algorithm isn't one cleave can verify.
+    /// Currently true for ECDSA, RSA-PSS, etc. Lets traits distinguish
+    /// "verification failed" from "verification not attempted".
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub signature_algorithm_unsupported: bool,
+    /// Subject CN of the *nested* signature's leaf cert (Microsoft
+    /// NestedSignature attribute, OID 1.3.6.1.4.1.311.2.4.1).
+    /// When `has_nested_signature` is true, these `nested_*` fields
+    /// describe the nested signer separately from the primary one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_leaf_subject: Option<String>,
+    /// Issuer CN of the nested signature's leaf cert.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_leaf_issuer: Option<String>,
+    /// SHA-1 thumbprint of the nested signature's leaf cert DER.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_leaf_thumbprint_sha1: Option<String>,
+    /// Nested signature's leaf cert ExtendedKeyUsage includes
+    /// codeSigning OID. Mirrors `leaf_eku_code_signing`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nested_leaf_eku_code_signing: bool,
+    /// Friendly name of the nested signature's leaf cert signature
+    /// algorithm. Mirrors `leaf_signature_algorithm`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nested_leaf_signature_algorithm: Option<String>,
+    /// The digest the *nested* signature was made over does NOT match
+    /// the recomputed Authentihash with that algorithm.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub nested_signature_digest_mismatch: bool,
+
+    // === Structured kv carriers (kv-only — surfaced via binary_kv.rs) ===
+    /// Per-section header summary as a carrier field
+    ///
+    /// Carrier — surfaced via kv `pe.section_characteristics[]`.
+    #[serde(default, skip_serializing)]
+    pub section_characteristics_entries: Vec<SectionCharacteristics>,
+    /// Count of non-zero data directory slot entries
+    ///
+    /// Per-data-directory summary, only the slots with non-zero RVA.
+    /// Carrier — surfaced via kv `pe.data_directories[]`.
+    #[serde(default, skip_serializing)]
+    pub data_directory_entries: Vec<DataDirectoryEntry>,
+    /// Rich Header CompID tuples as a carrier field
+    ///
+    /// Parsed Rich Header CompID + count + product-name tuples. Build-
+    /// toolchain fingerprint — vendor releases ship with stable Rich
+    /// tuple sets; drift across releases is a build-pipeline change
+    /// signal. Carrier — surfaced via kv `pe.rich_header_compids[]`.
+    #[serde(default, skip_serializing)]
+    pub rich_header_compids: Vec<RichCompId>,
 
     // === Imports ===
-    /// Delay-load imports
+    /// Count of delay-loaded import DLL entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub delay_load_imports: u32,
-    /// Ordinal-only imports
+    /// Number of imports resolved by ordinal only
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ordinal_imports: u32,
-    /// API hashing indicators
+    /// Count of API-hashing obfuscation indicators
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub api_hashing_indicators: u32,
     /// Suspicious import combo (VirtualAlloc+Write+Protect)
@@ -959,23 +1290,28 @@ pub struct PeMetrics {
     pub suspicious_import_combo: bool,
 
     // === Exports ===
-    /// Number of exports that are forwards (the export entry points into the
-    /// export directory and names another `DLL.function` rather than a body
-    /// in this binary). Proxy sideload DLLs approach a 1:1 forward-to-export
-    /// ratio.
+    /// Number of forwarded (re-exported) symbol entries
+    ///
+    /// Export entry points into the export directory and names another
+    /// `DLL.function` rather than a body in this binary. Proxy sideload DLLs
+    /// approach a 1:1 forward-to-export ratio.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub export_forwarders: u32,
-    /// Number of forwarded exports whose target DLL is a well-known
-    /// Microsoft-shipped system library (kernel32, ntdll, user32, etc.).
-    /// A high value combined with a near-unity forward_ratio is the
-    /// archetypal proxy-sideload fingerprint.
+    /// Forwarded exports targeting Microsoft system DLLs
+    ///
+    /// Target DLL is a well-known Microsoft-shipped library (kernel32, ntdll,
+    /// user32, etc.). A high value combined with a near-unity forward_ratio is
+    /// the archetypal proxy-sideload fingerprint.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub forwards_to_system_dll_count: u32,
-    /// Ratio of forwarded exports to total named exports (0.0 — 1.0).
-    /// Values near 1.0 on a non-system DLL indicate a stub binary whose
-    /// public surface is almost entirely re-exports of another DLL.
+    /// Ratio of forwarded exports to total named exports
+    ///
+    /// Range 0.0–1.0. Values near 1.0 on a non-system DLL indicate a stub
+    /// binary whose public surface is almost entirely re-exports of another DLL.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub forward_ratio: f32,
+    /// All exports forward to a version-suffixed sibling DLL
+    ///
     /// All exports forward to a single DLL whose basename is a
     /// version-suffixed variant of this DLL's basename — e.g.
     /// `python3.dll` → `python312.dll`, `msvcp.dll` → `msvcp140.dll`.
@@ -985,24 +1321,24 @@ pub struct PeMetrics {
     pub self_versioned_forwarder: bool,
 
     // === Resources ===
-    /// Resource count
+    /// Total number of resources in .rsrc directory
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub resource_count: u32,
-    /// Version info present
+    /// PE contains VS_VERSIONINFO resource data
     #[serde(default, skip_serializing_if = "is_false")]
     pub version_info_present: bool,
-    /// Manifest present
+    /// PE contains an embedded side-by-side manifest
     #[serde(default, skip_serializing_if = "is_false")]
     pub manifest_present: bool,
-    /// Icon count
+    /// Number of icons in the resource section
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub icon_count: u32,
 
     // === .NET ===
-    /// Is .NET assembly
+    /// PE contains a .NET CLR header
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_dotnet: bool,
-    /// CLR version
+    /// CLR version string from the .NET metadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub clr_version: Option<String>,
     /// Mixed mode (native + .NET)
@@ -1010,9 +1346,11 @@ pub struct PeMetrics {
     pub mixed_mode: bool,
 
     // === TLS ===
-    /// TLS callback count
+    /// Number of TLS callback function pointers
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub tls_callbacks: u32,
+    /// Maximum virtual-to-raw-size ratio across sections
+    ///
     /// Maximum `virtual_size / raw_size` ratio across sections
     /// (excluding rsize=0 / BSS-style). >4 indicates a runtime-
     /// decompressed payload — classic packer fingerprint.
@@ -1020,10 +1358,10 @@ pub struct PeMetrics {
     pub max_section_inflation_ratio: f64,
 
     // === Authenticode ===
-    /// Has digital signature
+    /// Binary carries an Authenticode signature
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_signature: bool,
-    /// Signature valid
+    /// Authenticode signature passed local verification
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_valid: Option<bool>,
     /// Signature type (platform, developer, adhoc)
@@ -1032,6 +1370,8 @@ pub struct PeMetrics {
     /// Common name of the signer certificate
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signer: Option<String>,
+    /// Organization or CN of the actual code signer
+    ///
     /// Leaf-signer organization / CN chosen from the Authenticode chain by
     /// filtering out well-known CA and timestamp authority entries. This is
     /// the "who actually signed this" identity — e.g. `Python Software
@@ -1039,19 +1379,22 @@ pub struct PeMetrics {
     /// intermediate CAs that appear alongside it in the certificate chain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub primary_signer: Option<String>,
-    /// Subject CN of the leaf cert (the one at the bottom of the
-    /// Authenticode chain — the cert that actually signed the binary,
-    /// distinct from issuer CAs above it).
+    /// Subject CN of the leaf Authenticode certificate
+    ///
+    /// The cert at the bottom of the Authenticode chain — the cert that
+    /// actually signed the binary, distinct from issuer CAs above it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leaf_subject: Option<String>,
-    /// Issuer CN of the leaf cert — names the immediate CA above the
-    /// leaf. Stable across a vendor's releases; a sudden change is
-    /// a reliable supply-chain swap signal.
+    /// Issuer CN of the leaf Authenticode certificate
+    ///
+    /// Names the immediate CA above the leaf. Stable across a vendor's releases;
+    /// a sudden change is a reliable supply-chain swap signal.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leaf_issuer: Option<String>,
-    /// SHA-1 thumbprint of the leaf cert DER (lowercase hex, no
-    /// separators). What `certutil -hashfile <pfx>` and Windows'
-    /// "View Certificate" dialog show in the "Thumbprint" field.
+    /// SHA-1 thumbprint of the leaf cert DER bytes
+    ///
+    /// Lowercase hex, no separators. What `certutil -hashfile <pfx>` and
+    /// Windows' "View Certificate" dialog show in the "Thumbprint" field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub leaf_thumbprint_sha1: Option<String>,
     /// Leaf cert serial number (lowercase hex, no separators).
@@ -1063,15 +1406,33 @@ pub struct PeMetrics {
     /// Leaf cert NotAfter as Unix epoch seconds.
     #[serde(default, skip_serializing_if = "is_zero_i64")]
     pub leaf_not_after: i64,
-    /// Total cert count in the Authenticode SignedData certificates SET.
+    /// Total certificate count in the Authenticode chain
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cert_chain_depth: u32,
     /// Leaf cert validity window in days
+    ///
     /// (`leaf_not_after - leaf_not_before` / 86400). Derived count →
     /// metric. Useful for spotting anomalously long-validity code-
     /// signing certs (typical CSR is 1-3 years; >5 years is unusual).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cert_validity_days: u32,
+    /// Leaf cert subject DN equals its issuer DN
+    ///
+    /// Both common names present and equal. Pure naming check — does NOT verify
+    /// the signature against the leaf's own public key, so this is "self-issued"
+    /// in the X.509 sense, not "self-signed". Self-issued leaves are normal for
+    /// root CAs and dev test certs but anomalous for shipping software.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub leaf_self_issued: bool,
+    /// Authenticode chain is truncated; intermediates are missing
+    ///
+    /// Signature is present and `cert_chain_depth == 1` but the leaf is NOT
+    /// self-issued — the intermediate CA(s) above the leaf are missing. Distinct
+    /// from a legitimate self-signed cert (depth 1 + self-issued). The Remus
+    /// botnet sample (May 2026) embedded a stolen `itunes.apple.com`
+    /// TLS leaf with no intermediates, producing this exact shape.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cert_chain_truncated: bool,
 
     // === Load Config Directory ===
     /// Address of the /GS security cookie variable (0 if absent).
@@ -1083,8 +1444,9 @@ pub struct PeMetrics {
     /// CFG (Control Flow Guard) target-function table count.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cfg_func_count: u32,
-    /// CFG GuardFlags raw bitfield. Common bits:
-    /// 0x100 = INSTRUMENTED, 0x200 = WRITE_INSTRUMENTED,
+    /// Raw CFG GuardFlags bitfield from load config
+    ///
+    /// Common bits: 0x100 = INSTRUMENTED, 0x200 = WRITE_INSTRUMENTED,
     /// 0x400 = FUNCTION_TABLE_PRESENT, 0x800 = EXPORT_SUPPRESSION_INFO,
     /// 0x4000 = LONGJUMP_TABLE_PRESENT, 0x10000 = RF_INSTRUMENTED.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -1094,6 +1456,8 @@ pub struct PeMetrics {
     pub cfg_check_func: u64,
 
     // === Resource Directory tree ===
+    /// Sorted list of RT_* resource type names present
+    ///
     /// Sorted, deduplicated list of canonical RT_* resource type
     /// names present in the .rsrc directory. Useful for
     /// visual-identity diffing (icons vs. versioninfo vs. dialogs vs.
@@ -1102,16 +1466,18 @@ pub struct PeMetrics {
     pub resource_types: Vec<String>,
 
     // === Bound Import Directory ===
-    /// Bound-import descriptors: each maps a DLL to the timestamp of
-    /// the DLL file it was bound against on the build host. The
-    /// closest thing to a build-host hardware fingerprint in any
-    /// binary format — pre-resolved against the linker host's
+    /// Bound-import DLL count with host-timestamp bindings
+    ///
+    /// Each entry maps a DLL to the timestamp of the DLL file it was bound
+    /// against on the build host. The closest thing to a build-host hardware
+    /// fingerprint in any binary format — pre-resolved against the linker host's
     /// specific WinSxS state. Rare on modern PE; more common on
     /// legacy MSVC and embedded Windows tools.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bound_imports: Vec<BoundImportDescriptor>,
-    /// CRC-32 of the canonical-serialized bound-import set (sorted
-    /// by DLL name to be order-independent). Single u32 fingerprint
+    /// CRC-32 fingerprint of the bound-import set
+    ///
+    /// Sorted by DLL name to be order-independent. Single u32 fingerprint
     /// for "same build-host WinSxS state" diffing — equality test
     /// across binaries replaces a per-element compare. Non-crypto;
     /// only meant for clustering / equality, not security.
@@ -1132,39 +1498,52 @@ const fn is_zero_i64(v: &i64) -> bool {
 /// uniformly via `type: metrics, field: consistency.<name>, min: 1`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct ConsistencyMetrics {
-    /// Mach-O code-signature CodeDirectory identifier doesn't match
-    /// the embedded `__TEXT,__info_plist` `CFBundleIdentifier`.
+    /// Mach-O re-signed with mismatched bundle identifier
+    ///
+    /// The CodeDirectory identifier doesn't match the embedded
+    /// `__TEXT,__info_plist` `CFBundleIdentifier`.
     /// Indicates the binary was re-signed with a different identity
     /// (replay attack / supply-chain swap).
     #[serde(default, skip_serializing_if = "is_false")]
     pub bundle_identifier_mismatch: bool,
-    /// PE side-by-side manifest assembly version disagrees with the
-    /// VERSIONINFO ProductVersion. Indicates manifest tampering.
+    /// PE manifest version differs from VERSIONINFO ProductVersion
+    ///
+    /// Indicates manifest tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub manifest_product_version_mismatch: bool,
-    /// `build.distro` plus observed `build.toolchain` is a
+    /// Distro and toolchain version never shipped together
+    ///
+    /// The `build.distro` plus observed `build.toolchain` is a
     /// combination that doesn't exist as default in any released
     /// distro version. Strong "the .comment was tampered with"
     /// signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub distro_toolchain_implausible: bool,
+    /// Multiple DW_AT_producer strings; mixed compiler toolchains
+    ///
     /// More than one distinct DW_AT_producer string in the binary —
     /// multiple compilers contributed to a single output. Normal in
     /// some legitimate cases (Rust calling C); suspicious for vendor
     /// release binaries.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dwarf_mixed_producers: bool,
+    /// Multiple DW_AT_comp_dir roots; mixed source directories
+    ///
     /// More than one distinct DW_AT_comp_dir directory in the binary —
     /// CUs were compiled from different source roots. Suspicious in
     /// vendor releases that should have a single canonical build root.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dwarf_mixed_comp_dirs: bool,
+    /// Fat binary slices differ in code-signature presence
+    ///
     /// Mach-O fat binary where some slices carry an LC_CODE_SIGNATURE
     /// blob and others don't. Vendors sign all slices uniformly; a
     /// mixed state almost always means tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub macho_slice_signing_divergence: bool,
-    /// PE Authenticode signing cert was *issued* after the binary's
+    /// Authenticode cert issued after the COFF build timestamp
+    ///
+    /// The PE signing cert was *issued* after the binary's
     /// COFF build timestamp (`leaf_not_before > pe.timestamp`).
     /// Almost always means an older binary was repackaged and re-
     /// signed with a newer cert — supply-chain swap signal. Filtered
@@ -1172,6 +1551,17 @@ pub struct ConsistencyMetrics {
     /// legitimately appear in the future.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cert_issued_after_build: bool,
+    /// Cert signer org absent from PDB path components
+    ///
+    /// No word from the Authenticode `primary_signer` organization
+    /// appears as a path component in the PDB path. For vendor
+    /// binaries the build environment and the signing identity share
+    /// a common brand name; divergence (e.g. "Ubisoft" cert signing
+    /// a binary whose PDB path says "Unity Technologies") is a strong
+    /// supply-chain swap signal.  Only set when both fields are
+    /// present and the signer is non-platform (not Microsoft/Windows).
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cert_org_pdb_mismatch: bool,
 }
 
 /// One PE Bound Import Descriptor — names a linked DLL plus the
@@ -1188,6 +1578,56 @@ pub struct BoundImportDescriptor {
     pub forwarder_ref_count: u32,
 }
 
+/// One PE section header summary — name plus the loader-relevant
+/// fields. Surfaced via kv `pe.section_characteristics[]`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SectionCharacteristics {
+    /// Section name (NUL-trimmed; PE sections are 8 bytes max).
+    pub name: String,
+    /// `Characteristics` bitfield as lowercase hex (e.g. `"60000020"`).
+    pub characteristics_hex: String,
+    /// VirtualAddress (RVA) of the section.
+    pub virtual_address: u32,
+    /// VirtualSize — bytes the section occupies in memory.
+    pub virtual_size: u32,
+    /// SizeOfRawData — bytes the section occupies on disk.
+    pub raw_size: u32,
+}
+
+/// One PE Data Directory slot — the 16-entry table at the end of the
+/// optional header, naming the RVA + size of well-known directories
+/// (Import, Export, Resource, Cert, Debug, TLS, …). Surfaced via kv
+/// `pe.data_directories[]` so trait authors can write proximity
+/// rules across them.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct DataDirectoryEntry {
+    /// Canonical directory name (`"import"`, `"export"`, `"resource"`,
+    /// `"certificate"`, `"debug"`, `"tls"`, …).
+    pub name: String,
+    /// VirtualAddress / file offset of the directory data.
+    pub rva: u32,
+    /// Size in bytes of the directory data.
+    pub size: u32,
+}
+
+/// One Rich Header CompID + occurrence count + resolved product name.
+/// Build-toolchain fingerprint material; vendor releases ship with
+/// stable Rich tuple sets, so drift across releases is a build-pipeline
+/// change signal.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RichCompId {
+    /// Raw 32-bit CompID (high 16 bits = build number, low 16 bits =
+    /// product / tool ID).
+    pub compid: u32,
+    /// Number of object files contributed by this tool to the link.
+    pub count: u32,
+    /// Resolved product name (`"MSVC C++ compiler"`, `"Linker"`,
+    /// `"MASM"`, `"Resource compiler"`, …) when the product ID is
+    /// recognized; `None` otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub product: Option<String>,
+}
+
 /// Mach-O specific metrics
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct MachoMetrics {
@@ -1201,16 +1641,16 @@ pub struct MachoMetrics {
     /// CPU subtype (header.cpusubtype)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cpu_subtype: u32,
-    /// Header flags bitfield
+    /// Raw Mach-O header flags bitfield
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub flags: u32,
     /// Mach-O class in bits (32 or 64)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_bits: u32,
-    /// Little endian encoding
+    /// Binary uses little-endian byte order
     #[serde(default, skip_serializing_if = "is_false")]
     pub little_endian: bool,
-    /// Universal (fat) binary
+    /// Binary is a fat/universal multi-arch file
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_universal: bool,
     /// Slice count (for universal)
@@ -1224,16 +1664,16 @@ pub struct MachoMetrics {
     pub old_style_entry: bool,
 
     // === Load Commands ===
-    /// Load command count
+    /// Number of load commands in the header
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub load_command_count: u32,
-    /// Header sizeofcmds value
+    /// Total byte size of all load commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub load_commands_size: u32,
-    /// Has code signature
+    /// Binary carries an LC_CODE_SIGNATURE blob
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_code_signature: bool,
-    /// Signature valid
+    /// Code signature passed local verification
     #[serde(skip_serializing_if = "Option::is_none")]
     pub signature_valid: Option<bool>,
     /// UUID load command present
@@ -1256,18 +1696,18 @@ pub struct MachoMetrics {
     pub code_signature_size: u32,
 
     // === Segments ===
-    /// __LINKEDIT size
+    /// Size in bytes of the __LINKEDIT segment
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub linkedit_size: u64,
-    /// __TEXT segment entropy
+    /// Shannon entropy of the __TEXT segment
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub text_entropy: f32,
 
     // === Symbols ===
-    /// Symbol count
+    /// Total number of symbols in the symbol table
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub symbol_count: u32,
-    /// Indirect symbol count
+    /// Number of indirect symbol table entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub indirect_symbol_count: u32,
 
@@ -1280,7 +1720,7 @@ pub struct MachoMetrics {
     pub team_identifier: Option<String>,
 
     // === Entitlements ===
-    /// Has entitlements
+    /// Binary carries entitlements in its signature
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_entitlements: bool,
     /// Dangerous entitlement count
@@ -1288,22 +1728,22 @@ pub struct MachoMetrics {
     pub dangerous_entitlements: u32,
 
     // === dyld ===
-    /// dylib dependency count
+    /// Number of dylib dependencies in load commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dylib_count: u32,
-    /// Re-exported dylib count
+    /// Number of LC_REEXPORT_DYLIB load commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub reexport_dylib_count: u32,
-    /// Weak dylib count
+    /// Number of LC_LOAD_WEAK_DYLIB commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub weak_dylib_count: u32,
-    /// Upward dylib count
+    /// Number of LC_LOAD_UPWARD_DYLIB commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub upward_dylib_count: u32,
-    /// Lazy-loaded dylib count
+    /// Number of lazy-loaded dylib load commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub lazy_dylib_count: u32,
-    /// @rpath count
+    /// Number of LC_RPATH run-path entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rpath_count: u32,
     /// Install name present (LC_ID_DYLIB)
@@ -1317,22 +1757,22 @@ pub struct MachoMetrics {
     /// Build platform from LC_BUILD_VERSION
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub build_platform: u32,
-    /// Minimum OS major version
+    /// Minimum required OS major version number
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub min_os_major: u32,
-    /// Minimum OS minor version
+    /// Minimum required OS minor version number
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub min_os_minor: u32,
-    /// Minimum OS patch version
+    /// Minimum required OS patch version number
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub min_os_patch: u32,
-    /// SDK major version
+    /// SDK major version used to build the binary
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub sdk_major: u32,
-    /// SDK minor version
+    /// SDK minor version used to build the binary
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub sdk_minor: u32,
-    /// SDK patch version
+    /// SDK patch version used to build the binary
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub sdk_patch: u32,
     /// Build tool version entry count
@@ -1343,24 +1783,26 @@ pub struct MachoMetrics {
     pub source_version: u64,
 
     // === Hardened Runtime ===
-    /// Hardened runtime enabled
+    /// Hardened runtime entitlement is enabled
     #[serde(default, skip_serializing_if = "is_false")]
     pub hardened_runtime: bool,
     /// Allow unsigned executable memory
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_jit: bool,
-    /// Notarized by Apple — derived as
-    /// `has_entitlements && has_hardened_runtime` (proxy for the
-    /// notarization ticket presence; the ticket itself isn't always
-    /// embedded). Boolean interpretation lives on metrics.
+    /// Notarized proxy: has_entitlements && hardened_runtime
+    ///
+    /// Proxy for the notarization ticket presence; the ticket itself isn't always
+    /// embedded. Boolean interpretation lives on metrics.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_notarized: bool,
-    /// Number of `__TEXT,__swift5_*` sections present. >0 indicates
-    /// Swift code; the specific subset present narrows Swift version.
+    /// Count of __swift5_* sections in __TEXT
+    ///
+    /// >0 indicates Swift code; the specific subset present narrows Swift version.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub swift_section_count: u32,
-    /// Count of LC_FUNCTION_STARTS entries — function entry points
-    /// known to dyld. Independent of disassembled `func_count`;
+    /// LC_FUNCTION_STARTS entry count known to dyld
+    ///
+    /// Independent of disassembled `func_count`;
     /// drift across releases of an otherwise-stable binary is a
     /// linker/build-pipeline change signal.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -1371,58 +1813,58 @@ pub struct MachoMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct JavaClassMetrics {
     // === Version ===
-    /// Major version number
+    /// Class file format major version number
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub major_version: u32,
-    /// Minor version number
+    /// Class file format minor version number
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub minor_version: u32,
-    /// Java version string
+    /// Decoded Java version string from class file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java_version: Option<String>,
 
     // === Constant Pool ===
-    /// Constant pool size
+    /// Number of entries in the constant pool
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub constant_pool_size: u32,
-    /// UTF8 constants
+    /// Number of UTF8 entries in the constant pool
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub utf8_constants: u32,
-    /// Class references
+    /// Number of class references in constant pool
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_refs: u32,
-    /// Method references
+    /// Number of method references in constant pool
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub method_refs: u32,
-    /// String constant entropy
+    /// Mean entropy across string constant pool entries
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub string_constant_entropy: f32,
-    /// Obfuscated string count
+    /// Count of strings with obfuscation characteristics
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub obfuscated_strings: u32,
 
     // === Methods ===
-    /// Method count
+    /// Total number of methods in the class file
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub method_count: u32,
-    /// Native methods
+    /// Number of native-declared method entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub native_methods: u32,
     /// Synthetic (compiler-generated) methods
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub synthetic_methods: u32,
-    /// Average method size
+    /// Mean bytecode size across all class methods
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub avg_method_size: f32,
-    /// Maximum method size
+    /// Largest bytecode size among all class methods
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_method_size: u32,
 
     // === Bytecode ===
-    /// invokedynamic count
+    /// Number of invokedynamic bytecode instructions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub invokedynamic_count: u32,
-    /// Reflection patterns
+    /// Count of reflection API usage patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub reflection_patterns: u32,
 
@@ -1430,13 +1872,13 @@ pub struct JavaClassMetrics {
     /// Has source file attribute
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_source_file: bool,
-    /// Has line numbers
+    /// Class file contains LineNumberTable attributes
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_line_numbers: bool,
-    /// Has local variable info
+    /// Class file contains LocalVariableTable attributes
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_local_vars: bool,
-    /// Inner class count
+    /// Number of inner and anonymous class declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub inner_class_count: u32,
 }
@@ -1801,5 +2243,136 @@ mod tests {
         };
         assert_eq!(metrics.obfuscated_strings, 10);
         assert_eq!(metrics.reflection_patterns, 15);
+    }
+
+    #[test]
+    fn test_pe_metrics_new_anomaly_fields_default_false() {
+        let metrics = PeMetrics::default();
+        assert!(!metrics.dos_stub_zeroed);
+        assert!(!metrics.security_directory_out_of_bounds);
+        assert!(!metrics.leaf_self_issued);
+        assert!(!metrics.cert_chain_truncated);
+        assert!(!metrics.entry_in_writable_section);
+        assert!(!metrics.entry_in_header);
+        assert!(!metrics.entry_outside_sections);
+        assert_eq!(metrics.section_raw_overflow_count, 0);
+        assert!(metrics.overflowing_sections.is_empty());
+        assert_eq!(metrics.misaligned_section_count, 0);
+        assert!(metrics.misaligned_sections.is_empty());
+        assert!(!metrics.coff_symbol_table_present);
+        assert_eq!(metrics.number_of_rva_and_sizes, 0);
+    }
+
+    #[test]
+    fn test_pe_metrics_leaf_self_issued_set() {
+        let metrics = PeMetrics {
+            leaf_self_issued: true,
+            cert_chain_truncated: true,
+            ..Default::default()
+        };
+        assert!(metrics.leaf_self_issued);
+        assert!(metrics.cert_chain_truncated);
+    }
+
+    #[test]
+    fn test_pe_metrics_entry_anomalies_set() {
+        let metrics = PeMetrics {
+            entry_in_writable_section: true,
+            entry_in_header: true,
+            entry_outside_sections: true,
+            ..Default::default()
+        };
+        assert!(metrics.entry_in_writable_section);
+        assert!(metrics.entry_in_header);
+        assert!(metrics.entry_outside_sections);
+    }
+
+    #[test]
+    fn test_pe_metrics_batch_defaults_false_or_zero() {
+        let m = PeMetrics::default();
+        assert!(!m.section_count_mismatch);
+        assert_eq!(m.section_overlap_count, 0);
+        assert!(m.overlapping_sections.is_empty());
+        assert_eq!(m.first_section_gap_bytes, 0);
+        assert!(!m.entry_in_last_section);
+        assert_eq!(m.bss_like_section_count, 0);
+        assert!(!m.dotnet_has_native_entry);
+        assert!(!m.import_directory_outside_section);
+        assert!(!m.export_directory_outside_section);
+        assert!(!m.resource_directory_overruns_section);
+        assert_eq!(m.tls_callbacks_outside_code, 0);
+        assert!(!m.leaf_eku_code_signing);
+        assert!(m.leaf_signature_algorithm.is_none());
+        assert!(!m.has_nested_signature);
+        assert!(m.authentihash.is_none());
+        assert_eq!(m.signature_overlay_padding_bytes, 0);
+        assert!(m.section_characteristics_entries.is_empty());
+        assert!(m.data_directory_entries.is_empty());
+        assert!(m.rich_header_compids.is_empty());
+    }
+
+    #[test]
+    fn test_section_characteristics_carrier() {
+        let s = SectionCharacteristics {
+            name: ".text".into(),
+            characteristics_hex: "60000020".into(),
+            virtual_address: 0x1000,
+            virtual_size: 0x4000,
+            raw_size: 0x4000,
+        };
+        assert_eq!(s.name, ".text");
+        assert_eq!(s.characteristics_hex, "60000020");
+    }
+
+    #[test]
+    fn test_data_directory_entry_carrier() {
+        let d = DataDirectoryEntry {
+            name: "import".into(),
+            rva: 0x5000,
+            size: 200,
+        };
+        assert_eq!(d.name, "import");
+        assert_eq!(d.size, 200);
+    }
+
+    #[test]
+    fn test_rich_compid_carrier() {
+        let r = RichCompId {
+            compid: 0x1A2B_0040,
+            count: 5,
+            product: Some("MSVC 14.0 C compiler".into()),
+        };
+        assert_eq!(r.count, 5);
+        assert_eq!(r.product.as_deref(), Some("MSVC 14.0 C compiler"));
+    }
+
+    #[test]
+    fn test_pe_metrics_section_anomaly_carriers() {
+        let metrics = PeMetrics {
+            section_raw_overflow_count: 2,
+            overflowing_sections: vec![".text".into(), ".data".into()],
+            misaligned_section_count: 1,
+            misaligned_sections: vec![".rsrc".into()],
+            ..Default::default()
+        };
+        assert_eq!(metrics.section_raw_overflow_count, 2);
+        assert_eq!(metrics.overflowing_sections.len(), 2);
+        assert_eq!(metrics.misaligned_section_count, 1);
+        assert_eq!(metrics.misaligned_sections, vec![".rsrc".to_string()]);
+    }
+
+    #[test]
+    fn test_consistency_cert_org_pdb_mismatch_default_false() {
+        let metrics = ConsistencyMetrics::default();
+        assert!(!metrics.cert_org_pdb_mismatch);
+    }
+
+    #[test]
+    fn test_security_directory_out_of_bounds_field() {
+        let metrics = PeMetrics {
+            security_directory_out_of_bounds: true,
+            ..Default::default()
+        };
+        assert!(metrics.security_directory_out_of_bounds);
     }
 }

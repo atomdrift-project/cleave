@@ -376,6 +376,7 @@ const ALLOWED_MB_OS: &[&str] = &[
     "sysinfo",
     "telemetry",
     "user",
+    "virtualization",
     "wmi",
     "wsh",
 ];

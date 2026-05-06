@@ -13,19 +13,19 @@ use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct ArchiveMetrics {
     // === Structure ===
-    /// File count
+    /// Total number of files in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub file_count: u32,
-    /// Directory count
+    /// Total number of directories in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub directory_count: u32,
-    /// Total uncompressed size
+    /// Total uncompressed size of all entries
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub total_uncompressed: u64,
-    /// Total compressed size
+    /// Total compressed size of all entries
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub total_compressed: u64,
-    /// Compression ratio
+    /// Overall compression ratio (compressed/uncompressed)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub compression_ratio: f32,
 
@@ -33,27 +33,27 @@ pub struct ArchiveMetrics {
     /// Path traversal attempts (../)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub path_traversal_count: u32,
-    /// Symlink count
+    /// Number of symbolic links in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub symlink_count: u32,
     /// Symlinks targeting outside archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub symlink_escape_count: u32,
-    /// Hidden files (.dotfiles)
+    /// Number of hidden files (dotfiles) in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub hidden_files: u32,
-    /// Executable files
+    /// Number of executable files in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub executable_count: u32,
-    /// Script files
+    /// Number of script files in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub script_count: u32,
 
     // === Filename Analysis ===
-    /// Maximum filename length
+    /// Longest filename length across all entries
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_filename_length: u32,
-    /// Unicode filenames
+    /// Number of entries with Unicode filenames
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unicode_filenames: u32,
     /// Homoglyph filenames (lookalike chars)
@@ -67,30 +67,30 @@ pub struct ArchiveMetrics {
     pub rtlo_filenames: u32,
 
     // === Content Analysis ===
-    /// Nested archives
+    /// Number of nested archives within the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub nested_archive_count: u32,
     /// Executables in unexpected locations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub misplaced_executables: u32,
-    /// High entropy files
+    /// Number of high-entropy files (possibly encrypted)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub high_entropy_files: u32,
 
     // === ZIP-specific ===
-    /// Encrypted entries
+    /// Number of password-encrypted entries in the archive
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub encrypted_entries: u32,
     /// Zip bomb indicator (extreme ratio)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub zip_bomb_ratio: f32,
-    /// ZIP64 format
+    /// Whether the archive uses ZIP64 extensions
     #[serde(default, skip_serializing_if = "is_false")]
     pub zip64_format: bool,
-    /// Comment present
+    /// Whether the archive has a ZIP comment block
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_comment: bool,
-    /// Extra field total size
+    /// Total size of all extra field data in bytes
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub extra_field_size: u64,
 }
@@ -105,12 +105,14 @@ pub struct ArchiveMetrics {
 pub struct ChmMetrics {
     // === Size/shape ratios ===
     /// LZX compression ratio for `MSCompressed/Content`
+    ///
     /// (uncompressed_size / compressed_size). Below ~1.5 on text-only
     /// CHMs is unusually low (suggests already-encoded / encrypted
     /// payload masquerading as help content).
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub lzx_compression_ratio: f32,
     /// Fraction of total file bytes occupied by user-visible content
+    ///
     /// (HTML topics, images, scripts) — vs. CHM control records,
     /// tables, and trailing slack. Tiny droppers often score very low
     /// because most of the CHM is overhead.
@@ -118,43 +120,53 @@ pub struct ChmMetrics {
     pub user_byte_ratio: f32,
 
     // === Per-entry size aggregates ===
-    /// Largest user-visible entry, in bytes. A 1-entry CHM whose only
-    /// payload is < 4 KB is almost always a hand-rolled dropper.
+    /// Largest user-visible entry size in bytes
+    ///
+    /// A 1-entry CHM whose only payload is < 4 KB is almost always a
+    /// hand-rolled dropper.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub max_user_entry_size: u64,
-    /// Sum of user-visible entry sizes (uncompressed). Compare with the
-    /// total CHM file size and `lzx_uncompressed_size` (kv) for a
-    /// "what's the rest of this file doing here" signal.
+    /// Sum of user-visible entry sizes (uncompressed)
+    ///
+    /// Compare with the total CHM file size and `lzx_uncompressed_size`
+    /// (kv) for a "what's the rest of this file doing here" signal.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub total_user_entry_size: u64,
 
     // === Counts ===
-    /// Number of user-visible directory entries (`help.html`,
-    /// `Topic.htm`, etc.). Use `field: chm.user_entry_count, max: N`
-    /// from a trait to gate on dropper shape.
+    /// Number of user-visible directory entries
+    ///
+    /// (`help.html`, `Topic.htm`, etc.). Use
+    /// `field: chm.user_entry_count, max: N` from a trait to gate on
+    /// dropper shape.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub user_entry_count: u32,
-    /// Number of CHM-internal control entries (`#SYSTEM`, `$OBJINST`,
-    /// `::DataSpace/...`, etc.). Useful as a denominator alongside
-    /// `user_entry_count`.
+    /// Number of CHM-internal control entries
+    ///
+    /// (`#SYSTEM`, `$OBJINST`, `::DataSpace/...`, etc.). Useful as a
+    /// denominator alongside `user_entry_count`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub control_entry_count: u32,
-    /// Number of `InfoType` records in `#SYSTEM` (HHA "subset" /
-    /// information-type tagging). Most attack CHMs have 0; legitimate
-    /// help typically has several.
+    /// Number of `InfoType` records in `#SYSTEM`
+    ///
+    /// HHA "subset" / information-type tagging. Most attack CHMs have 0;
+    /// legitimate help typically has several.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub infotype_count: u32,
-    /// Number of LZX reset points in the MSCompressed stream. 1 means
-    /// the entire content fits in a single 32 KB-or-less frame —
-    /// characteristic of small payload-only CHMs.
+    /// Number of LZX reset points in the MSCompressed stream
+    ///
+    /// A value of 1 means the entire content fits in a single 32 KB-or-less
+    /// frame — characteristic of small payload-only CHMs.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub lzx_reset_count: u32,
-    /// Number of user-visible entries whose name suggests an HTML
-    /// topic (`.html`, `.htm`).
+    /// Number of user-visible HTML topic entries
+    ///
+    /// Entries whose name ends in `.html` or `.htm`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub html_entry_count: u32,
-    /// Number of user-visible entries whose name suggests a script
-    /// (`.js`, `.vbs`, `.wsh`).
+    /// Number of user-visible script entries
+    ///
+    /// Entries whose name ends in `.js`, `.vbs`, or `.wsh`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub script_entry_count: u32,
     /// Number of user-visible entries whose name suggests an image.
@@ -162,20 +174,25 @@ pub struct ChmMetrics {
     pub image_entry_count: u32,
 
     // === Mismatch / consistency flags ===
-    /// True when `#SYSTEM` declares a `default_topic` that does not
+    /// True when the declared default topic is absent
+    ///
+    /// Set when `#SYSTEM` declares a `default_topic` that does not
     /// appear in the directory entries — common in
     /// stripped-down/repackaged CHMs.
     #[serde(default, skip_serializing_if = "is_false")]
     pub default_topic_missing: bool,
-    /// True when `#SYSTEM.title` and `#SYSTEM.default_topic` are both
+    /// True when title and default topic disagree
+    ///
+    /// Set when `#SYSTEM.title` and `#SYSTEM.default_topic` are both
     /// set but disagree about which `*.html`/`*.hhc` the help opens
     /// to. Genuine HHA-Workshop output picks one and reuses it; mixed
     /// values appear in scratch-built droppers.
     #[serde(default, skip_serializing_if = "is_false")]
     pub title_topic_mismatch: bool,
-    /// True when no `HHA Version`/compiler-version `#SYSTEM` record is
-    /// present — most legitimate CHMs carry one, hand-built droppers
-    /// often don't.
+    /// True when no compiler-version record is present
+    ///
+    /// Most legitimate CHMs carry an `HHA Version` `#SYSTEM` record;
+    /// hand-built droppers often don't.
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_compiler_version: bool,
 }
@@ -184,39 +201,39 @@ pub struct ChmMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PackageJsonMetrics {
     // === Dependencies ===
-    /// Dependency count
+    /// Number of runtime dependencies declared
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dependency_count: u32,
-    /// Dev dependency count
+    /// Number of development-only dependencies declared
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dev_dependency_count: u32,
-    /// Peer dependency count
+    /// Number of peer dependencies declared
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub peer_dependency_count: u32,
-    /// Optional dependency count
+    /// Number of optional dependencies declared
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub optional_dependency_count: u32,
 
     // === Lifecycle Scripts (high risk) ===
-    /// Has preinstall script
+    /// Whether a preinstall lifecycle script is present
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_preinstall: bool,
-    /// Has postinstall script
+    /// Whether a postinstall lifecycle script is present
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_postinstall: bool,
-    /// Has preuninstall script
+    /// Whether a preuninstall lifecycle script is present
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_preuninstall: bool,
-    /// Total script count
+    /// Total number of lifecycle scripts defined
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub script_count: u32,
-    /// Scripts with curl/wget
+    /// Number of scripts invoking curl or wget
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub scripts_with_download: u32,
-    /// Scripts with eval
+    /// Number of scripts containing eval expressions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub scripts_with_eval: u32,
-    /// Scripts with base64
+    /// Number of scripts using base64 encoding
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub scripts_with_base64: u32,
     /// Total script character count
@@ -227,16 +244,16 @@ pub struct PackageJsonMetrics {
     pub obfuscated_scripts: u32,
 
     // === Non-Registry Dependencies ===
-    /// Git URL dependencies
+    /// Number of dependencies pointing to a git URL
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub git_dependencies: u32,
     /// GitHub shorthand dependencies
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub github_dependencies: u32,
-    /// HTTP URL dependencies
+    /// Number of dependencies pointing to an HTTP URL
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub url_dependencies: u32,
-    /// Local file dependencies
+    /// Number of dependencies pointing to local file paths
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub local_dependencies: u32,
     /// No semver ("*" or "latest")
@@ -247,19 +264,19 @@ pub struct PackageJsonMetrics {
     /// Typosquat likelihood score (0-1)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub typosquat_score: f32,
-    /// Package name entropy
+    /// Shannon entropy of the package name string
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub name_entropy: f32,
-    /// Missing author
+    /// Whether the author field is absent or empty
     #[serde(default, skip_serializing_if = "is_false")]
     pub missing_author: bool,
-    /// Missing repository
+    /// Whether the repository field is absent or empty
     #[serde(default, skip_serializing_if = "is_false")]
     pub missing_repository: bool,
-    /// Missing license
+    /// Whether the license field is absent or empty
     #[serde(default, skip_serializing_if = "is_false")]
     pub missing_license: bool,
-    /// Suspicious bin names
+    /// Number of bin entries with suspicious names
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub suspicious_bin_names: u32,
 }

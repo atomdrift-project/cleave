@@ -182,7 +182,10 @@ fn try_extract(
                 false
             }
         }
-        SfxKind::PyInstaller => unreachable!("handled above"),
+        SfxKind::PyInstaller => {
+            // Early return above ensures this is unreachable.
+            return None;
+        }
     };
 
     if !extracted {

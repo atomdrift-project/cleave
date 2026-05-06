@@ -13,19 +13,19 @@ use super::{is_false, is_zero_u32, is_zero_u64};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PythonMetrics {
     // === Dynamic Execution ===
-    /// eval() calls
+    /// Number of eval() calls in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_count: u32,
-    /// exec() calls
+    /// Number of exec() calls in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_count: u32,
-    /// compile() calls
+    /// Number of compile() calls in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compile_count: u32,
-    /// __import__() calls
+    /// Number of __import__() dynamic import calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dunder_import_count: u32,
-    /// importlib usage
+    /// Number of importlib module usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub importlib_count: u32,
     /// getattr/setattr/delattr calls
@@ -33,13 +33,13 @@ pub struct PythonMetrics {
     pub attr_manipulation_count: u32,
 
     // === Obfuscation Patterns ===
-    /// chr() calls
+    /// Number of chr() character-code calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub chr_calls: u32,
-    /// ord() calls
+    /// Number of ord() character-code calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ord_calls: u32,
-    /// Lambda expressions
+    /// Number of lambda expressions in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub lambda_count: u32,
     /// Nested lambdas (lambda inside lambda)
@@ -56,38 +56,38 @@ pub struct PythonMetrics {
     /// globals()/locals() access
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub globals_locals_access: u32,
-    /// __builtins__ access
+    /// Number of __builtins__ namespace accesses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub builtins_access: u32,
     /// type() calls (metaclass tricks)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub type_calls: u32,
-    /// __class__ access
+    /// Number of __class__ attribute accesses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_access: u32,
-    /// vars() calls
+    /// Number of vars() introspection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub vars_calls: u32,
-    /// dir() calls
+    /// Number of dir() introspection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dir_calls: u32,
 
     // === Serialization (RCE vectors) ===
-    /// pickle usage
+    /// Number of pickle module usages (RCE vector)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pickle_usage: u32,
-    /// marshal usage
+    /// Number of marshal module usages (RCE vector)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub marshal_usage: u32,
-    /// yaml.load (unsafe)
+    /// Number of unsafe yaml.load() calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub yaml_load_unsafe: u32,
-    /// shelve usage
+    /// Number of shelve module usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub shelve_usage: u32,
 
     // === Decorators ===
-    /// Total decorators
+    /// Total number of decorator applications
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub decorator_count: u32,
     /// Max decorators stacked on one function
@@ -101,7 +101,7 @@ pub struct PythonMetrics {
     /// __getattribute__ override
     #[serde(default, skip_serializing_if = "is_false")]
     pub getattribute_override: bool,
-    /// __new__ override
+    /// Whether __new__ is overridden in the source
     #[serde(default, skip_serializing_if = "is_false")]
     pub new_override: bool,
     /// Descriptor protocol (__get__, __set__)
@@ -109,56 +109,56 @@ pub struct PythonMetrics {
     pub descriptor_protocol: bool,
 
     // === Encoding/Decoding ===
-    /// base64 module calls
+    /// Number of base64 module encode/decode calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub base64_calls: u32,
-    /// codecs module calls
+    /// Number of codecs module encode/decode calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub codecs_calls: u32,
-    /// zlib/gzip calls
+    /// Number of zlib or gzip compression calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compression_calls: u32,
-    /// rot13 usage
+    /// Whether rot13 encoding is used in the source
     #[serde(default, skip_serializing_if = "is_false")]
     pub rot13_usage: bool,
 
     // === Control Flow ===
-    /// try/except blocks
+    /// Number of try/except exception-handling blocks
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub try_except_count: u32,
-    /// Bare except (except:)
+    /// Number of bare except clauses catching everything
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub bare_except_count: u32,
     /// except Exception (too broad)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub broad_except_count: u32,
-    /// Maximum nesting depth
+    /// Maximum control-flow nesting depth
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub max_nesting_depth: u32,
 
     // === Additional Structural Metrics ===
-    /// vars() calls
+    /// Number of vars() calls for locals inspection
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub vars_access: u32,
     /// type() manipulation (3-arg form)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub type_manipulation: u32,
-    /// __code__ object access
+    /// Number of __code__ bytecode object accesses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub code_object_access: u32,
     /// Frame access (sys._getframe, inspect.currentframe)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub frame_access: u32,
-    /// Class definitions
+    /// Number of class definitions in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_count: u32,
-    /// Metaclass usage
+    /// Number of metaclass customizations in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub metaclass_usage: u32,
-    /// with statement count
+    /// Number of with-statement context manager uses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub with_statement_count: u32,
-    /// assert statement count
+    /// Number of assert statements in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub assert_count: u32,
 }
@@ -167,7 +167,7 @@ pub struct PythonMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct JavaScriptMetrics {
     // === Dynamic Execution ===
-    /// eval() calls
+    /// Number of eval() dynamic execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_count: u32,
     /// new Function() constructor
@@ -179,7 +179,7 @@ pub struct JavaScriptMetrics {
     /// setInterval with string argument
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub setinterval_string: u32,
-    /// document.write calls
+    /// Number of document.write injection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub document_write: u32,
 
@@ -187,7 +187,7 @@ pub struct JavaScriptMetrics {
     /// String.fromCharCode calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub from_char_code_count: u32,
-    /// charCodeAt calls
+    /// Number of charCodeAt character access calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub char_code_at_count: u32,
     /// Array.join for string building
@@ -196,7 +196,7 @@ pub struct JavaScriptMetrics {
     /// split().reverse().join() patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub split_reverse_join: u32,
-    /// Chained .replace() calls
+    /// Number of chained .replace() call patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub replace_chain_count: u32,
     /// Computed property access obj[var]
@@ -204,13 +204,13 @@ pub struct JavaScriptMetrics {
     pub computed_property_access: u32,
 
     // === Encoding ===
-    /// atob/btoa calls
+    /// Number of atob and btoa base64 call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub atob_btoa_count: u32,
-    /// escape/unescape calls
+    /// Number of escape and unescape call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub escape_unescape: u32,
-    /// decodeURIComponent calls
+    /// Number of decodeURIComponent call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub decode_uri_component: u32,
 
@@ -218,7 +218,7 @@ pub struct JavaScriptMetrics {
     /// with statements (deprecated)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub with_statement: u32,
-    /// debugger statements
+    /// Number of debugger statements in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debugger_statements: u32,
     /// arguments.caller/callee access
@@ -227,7 +227,7 @@ pub struct JavaScriptMetrics {
     /// Prototype pollution patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub prototype_pollution_patterns: u32,
-    /// __proto__ access
+    /// Number of __proto__ prototype access sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub proto_access: u32,
 
@@ -238,10 +238,10 @@ pub struct JavaScriptMetrics {
     /// Maximum nested IIFE depth
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub nested_iife_depth: u32,
-    /// Arrow function count
+    /// Number of arrow function expressions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub arrow_function_count: u32,
-    /// Maximum closure depth
+    /// Deepest nested closure depth in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub closure_depth_max: u32,
 
@@ -257,16 +257,16 @@ pub struct JavaScriptMetrics {
     pub spread_count: u32,
 
     // === DOM Manipulation ===
-    /// innerHTML assignments
+    /// Number of innerHTML property write sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub innerhtml_writes: u32,
-    /// Script element creation
+    /// Number of dynamic script element creations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub script_element_creation: u32,
     /// Event handler strings (onclick="...")
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub event_handler_strings: u32,
-    /// XHR/fetch usage
+    /// Number of XHR and fetch network request sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub network_requests: u32,
 }
@@ -275,27 +275,27 @@ pub struct JavaScriptMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct ShellMetrics {
     // === Command Execution ===
-    /// eval usage
+    /// Number of eval dynamic execution call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_count: u32,
-    /// source or . command
+    /// Number of source and . file sourcing calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub source_count: u32,
-    /// exec command
+    /// Number of exec process replacement commands
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_count: u32,
-    /// bash -c usage
+    /// Number of bash -c inline script executions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub bash_c_count: u32,
-    /// xargs usage
+    /// Number of xargs argument-expansion usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub xargs_count: u32,
 
     // === Network Operations ===
-    /// curl/wget usage
+    /// Number of curl and wget download command calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub curl_wget_count: u32,
-    /// nc/netcat usage
+    /// Number of nc and netcat network tool uses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub nc_netcat_count: u32,
     /// /dev/tcp or /dev/udp usage
@@ -304,35 +304,35 @@ pub struct ShellMetrics {
     /// DNS exfiltration patterns (dig, nslookup abuse)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dns_exfil_patterns: u32,
-    /// ssh/scp usage
+    /// Number of ssh and scp remote access calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ssh_scp_count: u32,
 
     // === Encoding/Decoding ===
-    /// base64 decode usage
+    /// Number of base64 decode command usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub base64_decode_count: u32,
-    /// xxd usage
+    /// Number of xxd hex dump command usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub xxd_count: u32,
-    /// printf with hex escapes
+    /// Number of printf calls with hex escape codes
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub printf_hex_count: u32,
-    /// openssl encryption usage
+    /// Number of openssl enc encryption calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub openssl_enc_count: u32,
-    /// gzip/gunzip usage
+    /// Number of gzip and gunzip call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub gzip_count: u32,
 
     // === Pipes & Redirection ===
-    /// Pipe count
+    /// Total number of pipe operators in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pipe_count: u32,
-    /// Maximum pipe chain depth
+    /// Deepest nested pipeline chain in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pipe_depth_max: u32,
-    /// Here-doc count
+    /// Number of here-document heredoc blocks
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub here_doc_count: u32,
     /// Process substitution <() >()
@@ -346,19 +346,19 @@ pub struct ShellMetrics {
     /// History manipulation (unset HISTFILE, etc.)
     #[serde(default, skip_serializing_if = "is_false")]
     pub history_manipulation: bool,
-    /// Background job usage (&)
+    /// Number of background job & operators used
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub background_jobs: u32,
-    /// nohup/disown usage
+    /// Number of nohup and disown detach calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub nohup_disown_count: u32,
-    /// cron/at manipulation
+    /// Number of cron and at scheduler manipulations
     #[serde(default, skip_serializing_if = "is_false")]
     pub cron_at_manipulation: bool,
-    /// chmod +x usage
+    /// Number of chmod +x permission set calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub chmod_x_count: u32,
-    /// shred/rm -rf usage
+    /// Number of shred and rm -rf destructive calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub secure_delete_count: u32,
 
@@ -369,18 +369,18 @@ pub struct ShellMetrics {
     /// eval with variable expansion
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_expansion: u32,
-    /// IFS manipulation
+    /// Number of IFS field separator manipulations
     #[serde(default, skip_serializing_if = "is_false")]
     pub ifs_manipulation: bool,
-    /// PATH manipulation
+    /// Number of PATH environment variable changes
     #[serde(default, skip_serializing_if = "is_false")]
     pub path_manipulation: bool,
 
     // === Timing/Evasion ===
-    /// sleep commands
+    /// Number of sleep delay command usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub sleep_count: u32,
-    /// timeout command
+    /// Number of timeout command usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub timeout_count: u32,
     /// trap commands (signal handling)
@@ -388,10 +388,10 @@ pub struct ShellMetrics {
     pub trap_count: u32,
 
     // === System Modification ===
-    /// dd usage
+    /// Number of dd disk dump command usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dd_usage: u32,
-    /// mkfifo/mknod usage
+    /// Number of mkfifo and mknod special file calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub special_file_creation: u32,
     /// iptables/firewall manipulation
@@ -406,33 +406,33 @@ pub struct PowerShellMetrics {
     /// Invoke-Expression (IEX) count
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub invoke_expression_count: u32,
-    /// Invoke-Command count
+    /// Number of Invoke-Command remote call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub invoke_command_count: u32,
-    /// Start-Process count
+    /// Number of Start-Process subprocess launches
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub start_process_count: u32,
-    /// -EncodedCommand usage
+    /// Number of -EncodedCommand parameter usages
     #[serde(default, skip_serializing_if = "is_false")]
     pub encoded_command_usage: bool,
-    /// & call operator abuse
+    /// Number of & call operator invocations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub call_operator_count: u32,
 
     // === Download Cradles ===
-    /// Net.WebClient usage
+    /// Number of Net.WebClient HTTP client usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub webclient_count: u32,
-    /// Invoke-WebRequest
+    /// Number of Invoke-WebRequest HTTP call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub webrequest_count: u32,
-    /// DownloadString calls
+    /// Number of DownloadString method call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub downloadstring_count: u32,
-    /// DownloadFile calls
+    /// Number of DownloadFile method call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub downloadfile_count: u32,
-    /// BitsTransfer usage
+    /// Number of BITS file transfer command uses
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub bitstransfer_count: u32,
 
@@ -449,10 +449,10 @@ pub struct PowerShellMetrics {
     /// Format string obfuscation ("{0}{1}" -f)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub format_obfuscation: u32,
-    /// -replace obfuscation
+    /// Number of -replace operator obfuscation patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub replace_obfuscation: u32,
-    /// [char[]] array usage
+    /// Number of [char[]] character array usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub char_array_count: u32,
     /// Variable substitution tricks
@@ -469,27 +469,27 @@ pub struct PowerShellMetrics {
     /// Type accelerators [type]::method
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub type_accelerators: u32,
-    /// AMSI bypass indicators
+    /// Number of AMSI bypass technique indicators
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub amsi_bypass_indicators: u32,
-    /// ETW bypass indicators
+    /// Number of ETW tracing bypass indicators
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub etw_bypass_indicators: u32,
-    /// Execution policy bypass
+    /// Number of execution policy bypass patterns
     #[serde(default, skip_serializing_if = "is_false")]
     pub execution_policy_bypass: bool,
 
     // === Suspicious Cmdlets ===
-    /// Get-Process usage
+    /// Number of Get-Process cmdlet invocations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub get_process_count: u32,
     /// Get-WmiObject/Get-CimInstance
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub wmi_cim_count: u32,
-    /// New-Object count
+    /// Number of New-Object instantiation calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub new_object_count: u32,
-    /// Registry access
+    /// Number of registry read and write access calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub registry_access: u32,
     /// Credential access patterns
@@ -497,13 +497,13 @@ pub struct PowerShellMetrics {
     pub credential_access: u32,
 
     // === Encoding ===
-    /// Base64 patterns
+    /// Number of base64 encoded string patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub base64_patterns: u32,
-    /// Gzip decompression
+    /// Number of gzip decompression call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub gzip_decompress: u32,
-    /// SecureString usage
+    /// Number of SecureString credential handling calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub securestring_usage: u32,
 }
@@ -512,10 +512,10 @@ pub struct PowerShellMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PhpMetrics {
     // === Dangerous Functions ===
-    /// eval() usage
+    /// Number of eval() dynamic code execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_count: u32,
-    /// assert() with string
+    /// Number of assert() calls with string argument
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub assert_string_count: u32,
     /// create_function() usage (deprecated)
@@ -524,44 +524,44 @@ pub struct PhpMetrics {
     /// preg_replace with /e modifier
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub preg_replace_e_count: u32,
-    /// call_user_func usage
+    /// Number of call_user_func dynamic calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub call_user_func_count: u32,
 
     // === Command Execution ===
-    /// system() calls
+    /// Number of system() command execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub system_count: u32,
-    /// exec() calls
+    /// Number of exec() subprocess execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_count: u32,
-    /// shell_exec() calls
+    /// Number of shell_exec() command calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub shell_exec_count: u32,
-    /// passthru() calls
+    /// Number of passthru() command output calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub passthru_count: u32,
-    /// Backtick execution
+    /// Number of backtick subprocess execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub backtick_count: u32,
-    /// proc_open() calls
+    /// Number of proc_open() subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub proc_open_count: u32,
-    /// popen() calls
+    /// Number of popen() subprocess pipe calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub popen_count: u32,
 
     // === File Operations ===
-    /// Dynamic include/require
+    /// Number of dynamic include and require calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub include_require_dynamic: u32,
-    /// file_get_contents usage
+    /// Number of file_get_contents call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub file_get_contents_count: u32,
-    /// file_put_contents usage
+    /// Number of file_put_contents call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub file_put_contents_count: u32,
-    /// fwrite usage
+    /// Number of fwrite file write call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fwrite_count: u32,
 
@@ -569,47 +569,47 @@ pub struct PhpMetrics {
     /// Variable variables ($$var)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub variable_variables: u32,
-    /// extract() usage
+    /// Number of extract() variable import calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub extract_count: u32,
-    /// chr/pack usage
+    /// Number of chr and pack encoding call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub chr_pack_count: u32,
-    /// base64_decode usage
+    /// Number of base64_decode call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub base64_decode_count: u32,
-    /// gzinflate usage
+    /// Number of gzinflate decompression call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub gzinflate_count: u32,
-    /// gzuncompress usage
+    /// Number of gzuncompress decompression calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub gzuncompress_count: u32,
-    /// str_rot13 usage
+    /// Number of str_rot13 encoding call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub str_rot13_count: u32,
-    /// hex2bin usage
+    /// Number of hex2bin decode call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub hex2bin_count: u32,
 
     // === Network ===
-    /// curl usage
+    /// Number of curl HTTP client call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub curl_count: u32,
-    /// fsockopen usage
+    /// Number of fsockopen socket open calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fsockopen_count: u32,
-    /// stream_socket usage
+    /// Number of stream_socket call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub stream_socket_count: u32,
 
     // === Suspicious Patterns ===
-    /// @ error suppression
+    /// Number of @ error suppression operators
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub error_suppression: u32,
-    /// ini_set calls
+    /// Number of ini_set configuration change calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ini_set_count: u32,
-    /// $GLOBALS access
+    /// Number of $GLOBALS superglobal access sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub globals_access: u32,
     /// $_REQUEST/$_GET/$_POST access
@@ -686,38 +686,38 @@ pub struct RubyMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct PerlMetrics {
     // === Dynamic Execution ===
-    /// eval STRING usage
+    /// Number of eval STRING dynamic execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_string_count: u32,
-    /// eval BLOCK usage
+    /// Number of eval BLOCK exception-catch usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub eval_block_count: u32,
-    /// do FILE usage
+    /// Number of do FILE execution call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub do_count: u32,
-    /// Dynamic require
+    /// Number of dynamic require call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub require_dynamic: u32,
 
     // === Command Execution ===
-    /// system() calls
+    /// Number of system() subprocess execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub system_count: u32,
-    /// exec() calls
+    /// Number of exec() process replacement calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_count: u32,
-    /// Backtick/qx execution
+    /// Number of backtick and qx subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub backtick_qx_count: u32,
-    /// open() with pipe
+    /// Number of open() calls with pipe operator
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub open_pipe_count: u32,
 
     // === Obfuscation ===
-    /// pack/unpack usage
+    /// Number of pack and unpack binary calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pack_unpack_count: u32,
-    /// chr/ord usage
+    /// Number of chr and ord character conversion calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub chr_ord_count: u32,
     /// Symbolic dereferencing ($$var)
@@ -731,10 +731,10 @@ pub struct PerlMetrics {
     /// BEGIN/END/CHECK/INIT blocks
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub special_block_count: u32,
-    /// tie usage
+    /// Number of tie variable-overloading call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub tie_usage: u32,
-    /// AUTOLOAD definitions
+    /// Number of AUTOLOAD method definitions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub autoload_count: u32,
 }
@@ -743,43 +743,43 @@ pub struct PerlMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct GoMetrics {
     // === Dangerous Packages ===
-    /// unsafe package usage
+    /// Number of unsafe package usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unsafe_usage: u32,
-    /// reflect package usage
+    /// Number of reflect package call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub reflect_usage: u32,
-    /// CGo usage (import "C")
+    /// Number of CGo foreign-function interface usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cgo_usage: u32,
-    /// plugin package usage
+    /// Number of plugin package load calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub plugin_usage: u32,
-    /// syscall direct usage
+    /// Number of direct syscall package invocations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub syscall_direct: u32,
 
     // === Execution ===
-    /// exec.Command usage
+    /// Number of exec.Command subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub exec_command_count: u32,
-    /// os.StartProcess usage
+    /// Number of os.StartProcess invocations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub os_startprocess_count: u32,
 
     // === Network ===
-    /// net.Dial usage
+    /// Number of net.Dial network connection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub net_dial_count: u32,
-    /// http client/server usage
+    /// Number of net/http client and server usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub http_usage: u32,
-    /// Raw socket usage
+    /// Number of raw socket creation call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub raw_socket_count: u32,
 
     // === Embedding ===
-    /// //go:embed directives
+    /// Number of //go:embed file-embedding directives
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embed_directive_count: u32,
     /// Embedded binary data size
@@ -787,18 +787,18 @@ pub struct GoMetrics {
     pub embedded_binary_size: u64,
 
     // === Build Configuration ===
-    /// //go:linkname usage
+    /// Number of //go:linkname symbol-aliasing directives
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub linkname_count: u32,
-    /// //go:noescape usage
+    /// Number of //go:noescape compiler directives
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub noescape_count: u32,
-    /// #cgo directives
+    /// Number of #cgo compiler/linker directives
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cgo_directives: u32,
 
     // === Patterns ===
-    /// init() function count
+    /// Number of package-level init() functions
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub init_function_count: u32,
     /// Blank imports (import _ "pkg")
@@ -869,13 +869,13 @@ pub struct RustMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct CMetrics {
     // === Dangerous Constructs ===
-    /// Inline assembly
+    /// Number of inline assembly blocks in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub inline_asm_count: u32,
-    /// goto statements
+    /// Number of goto statements in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub goto_count: u32,
-    /// setjmp/longjmp usage
+    /// Number of setjmp and longjmp call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub setjmp_longjmp_count: u32,
     /// Computed goto (goto *ptr)
@@ -886,7 +886,7 @@ pub struct CMetrics {
     /// Function pointer declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fn_pointer_count: u32,
-    /// Function pointer arrays
+    /// Number of function pointer array declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fn_pointer_array_count: u32,
 
@@ -894,27 +894,27 @@ pub struct CMetrics {
     /// malloc/free calls (for ratio)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub malloc_count: u32,
-    /// free() calls (paired with malloc_count for leak/ratio analysis)
+    /// Number of free() memory deallocation calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub free_count: u32,
-    /// void pointer usage
+    /// Number of void pointer declarations and casts
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub void_pointer_count: u32,
-    /// Type casts
+    /// Number of explicit type cast operations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cast_count: u32,
-    /// memcpy/memmove usage
+    /// Number of memcpy and memmove call sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub memcpy_count: u32,
 
     // === Preprocessor ===
-    /// Macro definitions
+    /// Number of macro definitions in the source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub macro_count: u32,
     /// Conditional compilation (#ifdef)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub conditional_compile_count: u32,
-    /// #pragma directives
+    /// Number of #pragma compiler directives
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub pragma_count: u32,
 
@@ -922,7 +922,7 @@ pub struct CMetrics {
     /// Shellcode-like byte arrays
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub shellcode_arrays: u32,
-    /// XOR operation loops
+    /// Number of loops containing XOR operations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub xor_loops: u32,
     /// VirtualAlloc/mmap with EXEC
@@ -934,13 +934,13 @@ pub struct CMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct JavaSourceMetrics {
     // === Reflection ===
-    /// Class.forName usage
+    /// Number of Class.forName reflection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub class_forname_count: u32,
     /// getMethod/getDeclaredMethod usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub get_method_count: u32,
-    /// invoke() calls
+    /// Number of Method.invoke reflection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub invoke_count: u32,
     /// setAccessible(true) calls
@@ -948,34 +948,34 @@ pub struct JavaSourceMetrics {
     pub set_accessible_count: u32,
 
     // === Execution ===
-    /// Runtime.exec usage
+    /// Number of Runtime.exec subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub runtime_exec_count: u32,
-    /// ProcessBuilder usage
+    /// Number of ProcessBuilder subprocess calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub processbuilder_count: u32,
 
     // === ClassLoading ===
-    /// URLClassLoader usage
+    /// Number of URLClassLoader dynamic load calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub urlclassloader_count: u32,
-    /// defineClass usage
+    /// Number of defineClass bytecode injection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub defineclass_count: u32,
-    /// Custom ClassLoader
+    /// Number of custom ClassLoader definitions
     #[serde(default, skip_serializing_if = "is_false")]
     pub custom_classloader: bool,
 
     // === Serialization ===
-    /// ObjectInputStream usage
+    /// Number of ObjectInputStream deserialization sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub objectinputstream_count: u32,
-    /// readObject override
+    /// Number of readObject deserialization overrides
     #[serde(default, skip_serializing_if = "is_false")]
     pub readobject_override: bool,
 
     // === Scripting ===
-    /// ScriptEngine usage
+    /// Number of ScriptEngine dynamic evaluation calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub scriptengine_count: u32,
 
@@ -983,7 +983,7 @@ pub struct JavaSourceMetrics {
     /// native method declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub native_method_count: u32,
-    /// System.loadLibrary calls
+    /// Number of System.loadLibrary native calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub load_library_count: u32,
 }
@@ -991,28 +991,28 @@ pub struct JavaSourceMetrics {
 /// Lua metrics
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct LuaMetrics {
-    /// loadstring/load usage
+    /// Number of loadstring and load eval calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub loadstring_count: u32,
-    /// dofile usage
+    /// Number of dofile file execution calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dofile_count: u32,
-    /// loadfile usage
+    /// Number of loadfile file loading calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub loadfile_count: u32,
-    /// os.execute usage
+    /// Number of os.execute shell command calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub os_execute_count: u32,
-    /// io.popen usage
+    /// Number of io.popen subprocess pipe calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub io_popen_count: u32,
-    /// debug library usage
+    /// Number of debug library function calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub debug_library_usage: u32,
-    /// setfenv/getfenv usage
+    /// Number of setfenv and getfenv env calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub setfenv_count: u32,
-    /// rawset/rawget usage
+    /// Number of rawset and rawget bypass calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub rawset_rawget_count: u32,
     /// string.dump (bytecode generation)
@@ -1024,26 +1024,26 @@ pub struct LuaMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct CSharpMetrics {
     // === P/Invoke ===
-    /// DllImport declarations
+    /// Number of DllImport P/Invoke declarations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dllimport_count: u32,
-    /// Marshal class usage
+    /// Number of Marshal class method calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub marshal_usage: u32,
 
     // === Reflection ===
-    /// Assembly.Load* usage
+    /// Number of Assembly.Load and related calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub assembly_load_count: u32,
     /// Activator.CreateInstance usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub activator_count: u32,
-    /// Type.GetMethod usage
+    /// Number of Type.GetMethod reflection calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub reflection_invoke: u32,
 
     // === Execution ===
-    /// Process.Start usage
+    /// Number of Process.Start invocations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub process_start_count: u32,
 
@@ -1051,23 +1051,23 @@ pub struct CSharpMetrics {
     /// WebClient/HttpClient usage
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub web_client_count: u32,
-    /// Socket usage
+    /// Number of socket creation or usage sites
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub socket_count: u32,
 
     // === Unsafe ===
-    /// unsafe blocks
+    /// Number of unsafe code blocks in source
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub unsafe_block_count: u32,
-    /// fixed statements
+    /// Number of fixed statements in unsafe contexts
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fixed_statement_count: u32,
 
     // === Suspicious ===
-    /// CryptoStream usage
+    /// Number of CryptoStream and cipher usages
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub crypto_usage: u32,
-    /// Registry access
+    /// Number of Windows Registry access calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub registry_access: u32,
 }

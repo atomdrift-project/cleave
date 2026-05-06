@@ -26,23 +26,22 @@ use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct OfficeMetrics {
     // === Type discrimination ===
-    /// File-extension-derived document type (e.g., `docm`, `xlsb`, `pps`).
-    /// Distinct from `target.file_type`, which collapses macro-enabled
-    /// variants. Empty when the analyzer could not classify the extension.
+    /// File-extension-derived document type string
+    ///
+    /// (e.g., `docm`, `xlsb`, `pps`). Distinct from `target.file_type`, which collapses
+    /// macro-enabled variants. Empty when the analyzer could not classify the extension.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub doc_type: String,
 
-    /// True when the file extension implies macro support (`*m`, `xla`,
-    /// `xll`, `xlsb`). Independent of whether macros are actually present.
+    /// File extension implies macro support (*m, xla, xll)
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_macro_enabled_extension: bool,
 
-    /// True when macros (VBA modules or XLM macrosheets) are present.
+    /// Document contains VBA modules or XLM macrosheets
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_macros: bool,
 
-    /// True when the document is encrypted (OLE EncryptionInfo or OOXML
-    /// /EncryptionInfo).
+    /// Document is encrypted via OLE or OOXML encryption
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_encrypted: bool,
 
@@ -55,21 +54,21 @@ pub struct OfficeMetrics {
     pub vba_source_size: u64,
 
     // === Embedded payloads ===
-    /// Embedded PE/ELF executables found in OLE streams or OOXML entries.
+    /// Count of embedded executables in OLE or OOXML
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embedded_executable_count: u32,
     /// OLE10Native embedded objects (file droppers).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub ole10_native_count: u32,
-    /// Embedded OLE objects (Equation Editor, Packager, Excel workbooks).
+    /// Count of embedded OLE objects in the document
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embedded_ole_count: u32,
 
     // === External references ===
-    /// External relationships of any kind (template, image, OLE, frame…).
+    /// Count of external relationship references
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub external_ref_count: u32,
-    /// External attachedTemplate relationships (template-injection vector).
+    /// Count of external template relationships
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub external_template_count: u32,
     /// External oleObject relationships (remote OLE link).
@@ -113,7 +112,7 @@ pub struct OfficeMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct OleMetrics {
     // === Stream topology ===
-    /// Total OLE stream count.
+    /// Total number of OLE streams in the document
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub stream_count: u32,
     /// Total OLE storage (directory) count.
@@ -122,15 +121,17 @@ pub struct OleMetrics {
     /// Largest stream size in bytes.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub max_stream_size: u64,
-    /// Storages bearing a CLSID matched against the dangerous-CLSID list
+    /// Storages with a dangerous CLSID (e.g. Equation Editor)
+    ///
     /// (Equation Editor 3.0, Package, Forms2, etc.).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dangerous_clsid_count: u32,
 
     // === CompObj (\x01CompObj stream) ===
-    /// `user_type` from CompObj (e.g., `Microsoft Office Excel Worksheet`).
-    /// High-value fake-extension signal when it disagrees with the file
-    /// extension.
+    /// CompObj user_type string from OLE CompObj stream
+    ///
+    /// (e.g., `Microsoft Office Excel Worksheet`). High-value fake-extension signal when
+    /// it disagrees with the file extension.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub compobj_user_type: String,
     /// `clipboard_format` from CompObj (e.g., `Biff8`).
@@ -141,7 +142,7 @@ pub struct OleMetrics {
     pub compobj_app_version: String,
 
     // === SummaryInformation ===
-    /// `PIDSI_PAGECOUNT` — page count. Zero on freshly-built lures.
+    /// Page count from PIDSI_PAGECOUNT summary property
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub page_count: u32,
     /// `PIDSI_WORDCOUNT` — word count. Low values on lures.
@@ -150,21 +151,26 @@ pub struct OleMetrics {
     /// `PIDSI_CHARCOUNT` — character count.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub char_count: u32,
-    /// `PIDSI_REVNUMBER` — revision number (Word stores this as a string;
-    /// we parse the leading integer). Zero when missing or unparseable.
+    /// Revision number from PIDSI_REVNUMBER summary property
+    ///
+    /// (Word stores this as a string; we parse the leading integer). Zero when missing or
+    /// unparseable.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub revision_number: u32,
-    /// `PIDSI_EDITTIME` — total edit time in minutes. Lures often have 0.
+    /// Total edit time in minutes from PIDSI_EDITTIME
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub total_edit_time_minutes: u64,
 
     // === DocumentSummaryInformation ===
-    /// `PIDDSI_SECURITY` — security flag. Bit 0 = password protected, bit 1
-    /// = recommend read-only, bit 2 = enforced read-only, bit 3 = locked.
+    /// PIDDSI_SECURITY protection flag bitfield
+    ///
+    /// Bit 0 = password protected, bit 1 = recommend read-only, bit 2 = enforced
+    /// read-only, bit 3 = locked.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub security_flag: u32,
-    /// Custom property count from DocumentSummaryInformation user-defined
-    /// dictionary (sometimes used as C2 config storage).
+    /// Custom property count from DocumentSummaryInformation
+    ///
+    /// User-defined dictionary (sometimes used as C2 config storage).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub custom_property_count: u32,
     /// Hyperlink count from `OleReservedProperties.pid_hlinks`.
@@ -176,7 +182,7 @@ pub struct OleMetrics {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct OoxmlMetrics {
     // === ZIP topology ===
-    /// Total ZIP entry count.
+    /// Total number of ZIP entries in the OOXML package
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub entry_count: u32,
     /// Maximum uncompressed entry size in bytes.
@@ -188,13 +194,12 @@ pub struct OoxmlMetrics {
     /// Embedded binary part count (`*/embeddings/*.bin`).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub embedded_part_count: u32,
-    /// ZIP entries whose extension is suspicious in an Office document
-    /// (`.exe`, `.dll`, `.hta`, `.lnk`, `.bat`, `.js`, `.scr`, `.vbs`).
+    /// ZIP entries with suspicious extensions in document
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub suspicious_extension_count: u32,
 
     // === Content-Types declarations ===
-    /// `application/vnd.ms-*.macroEnabled.*` declared in `[Content_Types].xml`.
+    /// Content_Types.xml declares macro-enabled content
     #[serde(default, skip_serializing_if = "is_false")]
     pub declares_macro_enabled: bool,
     /// `application/vnd.ms-office.vbaProject` declared.
@@ -203,20 +208,22 @@ pub struct OoxmlMetrics {
     /// `application/vnd.ms-excel.macrosheet+xml` (XLM) declared.
     #[serde(default, skip_serializing_if = "is_false")]
     pub declares_macrosheet: bool,
-    /// Word-document container with macros — `word/vbaProject.bin`
-    /// is present in the package. Distinct from generic
-    /// `office.has_macros` because it's specific to .doc/.docm/.dotm
-    /// (vs Excel/PowerPoint).
+    /// Word document with vbaProject.bin present
+    ///
+    /// `word/vbaProject.bin` is present in the package. Distinct from generic
+    /// `office.has_macros` because it's specific to .doc/.docm/.dotm (vs Excel/PowerPoint).
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_word_vba_document: bool,
-    /// Document references an external template (template-injection
-    /// vector). Distinct from `office.external_template_count > 0`
-    /// because some external-template references are legitimate.
+    /// Document references an external template URL
+    ///
+    /// Distinct from `office.external_template_count > 0` because some external-template
+    /// references are legitimate.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_template_injection: bool,
-    /// Document carries a DDE field that invokes external commands.
-    /// Distinct from generic `office.dde_link_count > 0` because not
-    /// every DDE link is an exec command.
+    /// Document contains a DDE field invoking external commands
+    ///
+    /// Distinct from generic `office.dde_link_count > 0` because not every DDE link is an
+    /// exec command.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dde_execution: bool,
 }
@@ -234,8 +241,10 @@ pub struct VbaMetrics {
     /// Total `Declare [PtrSafe] Function|Sub` count across modules.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub declare_count: u32,
-    /// `Declare` statements whose `Lib` clause is not a string literal
-    /// (string-built at runtime — strong obfuscation signal).
+    /// Declare statements with non-literal Lib clause
+    ///
+    /// `Declare` statements whose `Lib` clause is not a string literal (string-built at
+    /// runtime — strong obfuscation signal).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub declare_non_literal_count: u32,
     /// Distinct DLL names referenced via `Declare ... Lib`.
@@ -261,7 +270,7 @@ pub struct VbaMetrics {
     pub shell32_ref_count: u32,
 
     // === CreateObject / GetObject ===
-    /// Total `CreateObject(...)` invocations (literal or non-literal).
+    /// Count of CreateObject calls in VBA modules
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub createobject_count: u32,
     /// `CreateObject` calls whose argument is not a string literal.
@@ -273,38 +282,37 @@ pub struct VbaMetrics {
     /// `GetObject` calls with non-literal moniker arg.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub getobject_non_literal_count: u32,
-    /// Distinct ProgID strings observed in `CreateObject`/`GetObject`.
+    /// Distinct ProgID strings in CreateObject calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub distinct_progid_count: u32,
 
     // === Trigger handlers (Auto_*, Document_*, Workbook_*, UserForm_*) ===
-    /// Auto-execution trigger sub count (Auto_Open, AutoOpen, Auto_Close,
-    /// Document_Open, Document_New, Document_Close, Workbook_Open,
-    /// Workbook_BeforeClose, Workbook_Activate, UserForm_Activate, etc.).
+    /// Count of auto-execution trigger handler subs
+    ///
+    /// Auto_Open, AutoOpen, Auto_Close, Document_Open, Document_New, Document_Close,
+    /// Workbook_Open, Workbook_BeforeClose, Workbook_Activate, UserForm_Activate, etc.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub trigger_handler_count: u32,
-    /// Distinct trigger event types observed (>=3 mixes lifecycle paths,
-    /// a known dropper pattern).
+    /// Count of distinct auto-exec trigger event types
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub distinct_trigger_count: u32,
 
     // === Module-shape signals ===
-    /// Modules whose names look randomly generated
-    /// (`[A-Za-z][A-Za-z0-9]{7,}` with high digit/case mixing).
+    /// Modules with randomly generated name patterns
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub random_named_module_count: u32,
-    /// Total VBA logical lines (after joining `_` continuations, before
-    /// stripping comments).
+    /// Total VBA logical lines after joining continuations
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total_logical_lines: u32,
     /// Comment lines across all modules.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub comment_lines: u32,
-    /// Mean character count of declared identifiers (Sub/Function/Dim).
+    /// Mean character length of VBA identifier names
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub mean_identifier_length: f32,
-    /// Shannon entropy (bits) of identifier characters across all modules
-    /// — high values indicate randomized renaming.
+    /// Shannon entropy of identifier characters across VBA
+    ///
+    /// High values indicate randomized renaming.
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub identifier_entropy: f32,
 }
@@ -318,7 +326,7 @@ pub struct VbaMetrics {
 /// field: office.xlm.*` instead of hard-coded conditionals.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct XlmMetrics {
-    /// `FORMULA.FILL(` occurrences — runtime cell-write obfuscation.
+    /// Count of FORMULA.FILL cell-write XLM calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub formula_fill_count: u32,
     /// `RUN(` occurrences — XLM dispatch chains.
@@ -327,7 +335,7 @@ pub struct XlmMetrics {
     /// `CHAR(` occurrences — dense character-code obfuscation.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub char_count: u32,
-    /// `GET.CELL(` occurrences — style-keyed branching / sandbox detection.
+    /// Count of GET.CELL style-keyed branching calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub get_cell_count: u32,
     /// `DAY(NOW())` occurrences — date-keyed payload gating.

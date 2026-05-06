@@ -157,6 +157,7 @@ pub(crate) fn metrics(data: &[u8]) -> Option<ChmMetrics> {
     Some(build_metrics(&chm, data.len() as u64))
 }
 
+#[allow(clippy::field_reassign_with_default)]
 fn build_kv(chm: &Chm<'_>) -> ChmKv {
     let mut kv = ChmKv::default();
 
@@ -402,20 +403,16 @@ fn parse_system(bytes: &[u8]) -> ChmSystem {
             0 => sys.default_topic = decode_cstr(payload),
             1 => sys.default_window = decode_cstr(payload),
             2 => sys.title = decode_cstr(payload),
-            3 => {
-                if payload.len() >= 4 {
-                    sys.locale_id = Some(u32::from_le_bytes([
-                        payload[0], payload[1], payload[2], payload[3],
-                    ]));
-                }
+            3 if payload.len() >= 4 => {
+                sys.locale_id = Some(u32::from_le_bytes([
+                    payload[0], payload[1], payload[2], payload[3],
+                ]));
             }
-            4 => {
+            4 if payload.len() >= 8 => {
                 // u32 lcid + u32 timestamp + u32 unknown
-                if payload.len() >= 8 {
-                    sys.timestamp = Some(u32::from_le_bytes([
-                        payload[4], payload[5], payload[6], payload[7],
-                    ]));
-                }
+                sys.timestamp = Some(u32::from_le_bytes([
+                    payload[4], payload[5], payload[6], payload[7],
+                ]));
             }
             5 => {
                 // InfoType record — count occurrences only; payload format

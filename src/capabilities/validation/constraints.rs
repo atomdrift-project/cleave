@@ -4,6 +4,7 @@
 //! or contradictory configurations that would make rules unsatisfiable.
 
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
+use crate::capabilities::validation::shared::is_limited_byte_range;
 use crate::composite_rules::{CompositeTrait, Condition, FileType, TraitDefinition};
 use std::collections::HashMap;
 
@@ -411,8 +412,10 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 readable,
                 writable,
                 executable,
-                ratio_min,
-                ratio_max,
+                size_ratio_min,
+                size_ratio_max,
+                entropy_ratio_min,
+                entropy_ratio_max,
                 ..
             } => {
                 exact.is_some()
@@ -426,8 +429,10 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                     || readable.is_some()
                     || writable.is_some()
                     || executable.is_some()
-                    || ratio_min.is_some()
-                    || ratio_max.is_some()
+                    || size_ratio_min.is_some()
+                    || size_ratio_max.is_some()
+                    || entropy_ratio_min.is_some()
+                    || entropy_ratio_max.is_some()
             }
             // Other condition types (Trait, Yara, Syscall, Metrics, Kv, Ast)
             // have required fields enforced by the type system or deserializer.
@@ -546,10 +551,10 @@ pub(crate) fn find_redundant_needs_one(composite_rules: &[CompositeTrait]) -> Ve
     violations
 }
 
-/// Find traits/rules with excessive unless: and downgrade: clauses combined.
+/// Find traits/rules with excessive unless: and downgrade: suppressions combined.
 ///
 /// A rule with 8 or more combined skip/downgrade conditions likely has poor precision
-/// and should be improved rather than patched with exceptions.
+/// and should be improved rather than patched with suppressions.
 ///
 /// Returns: `Vec<(id, unless_count, downgrade_count, is_composite)>`
 #[must_use]
@@ -598,8 +603,9 @@ const MIN_PATTERN_LENGTH: usize = 3;
 /// Short patterns (1-2 concrete chars/bytes) are only acceptable if the search is
 /// reasonably bounded (~8KB ideal). Acceptable constraint combinations:
 ///
-/// - `offset` or `offset_range` (pinpointed absolute location)
-/// - `section` + one of: `section_offset`, `section_offset_range`, or `size_max`
+/// - `offset` or a small closed `offset_range` (absolute location)
+/// - `section` + `section_offset` or a small closed `section_offset_range`
+/// - `section` + `size_max`
 ///   (section narrows the region, plus a pinpoint or file-size bound)
 ///
 /// Section alone is NOT enough — a `.text` section can be megabytes.
@@ -650,14 +656,17 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
         return true;
     };
 
-    // Absolute offset or offset_range pins to a specific location
-    if offset.is_some() || offset_range.is_some() {
+    // Exact absolute offsets and small closed absolute ranges bound the search.
+    if offset.is_some() || is_limited_byte_range(*offset_range) {
         return true;
     }
 
-    // Section + (section_offset* or size_max) bounds the search region
+    // Section + exact relative offset, small closed relative range, or file-size
+    // cap bounds the search region.
     if section.is_some()
-        && (section_offset.is_some() || section_offset_range.is_some() || t.size_max.is_some())
+        && (section_offset.is_some()
+            || is_limited_byte_range(*section_offset_range)
+            || t.size_max.is_some())
     {
         return true;
     }
@@ -670,7 +679,7 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
 /// Short patterns (1-2 chars for raw substr/exact, 1-2 concrete bytes for hex) are
 /// rejected unless the search space is reasonably bounded (~8KB ideal):
 ///
-/// - `offset` or `offset_range` (pinpointed absolute location)
+/// - `offset` or a small closed `offset_range` (absolute location)
 /// - `section` + (`section_offset*` or `size_max`) — narrows to a bounded region
 ///
 /// For hex patterns, `??` full wildcards and `[N]` gaps don't count toward length,

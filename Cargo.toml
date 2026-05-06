@@ -186,6 +186,10 @@ x509-parser = "0.18"
 # SHA-1 — for PE Authenticode cert thumbprint computation. Already a
 # transitive dep via x509-parser.
 sha1 = "0.10"
+# RSA-PKCS1v15 verification — for cryptographic validation of PE
+# Authenticode SignerInfo signatures against the leaf cert pubkey.
+# Already a transitive dep via yara-x; pinning explicitly here.
+rsa = "0.9"
 # Non-crypto checksum for bound-import / build-host fingerprinting —
 # u32 output fits cleanly into the metric integer model.
 crc32fast = "1.5"

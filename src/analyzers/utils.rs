@@ -19,6 +19,7 @@ use std::sync::Arc;
 /// and return a FileAnalysis suitable for inclusion as a nested child (depth=1).
 ///
 /// Returns `None` if extraction or analysis fails — the parent finding is still emitted.
+#[allow(clippy::needless_pass_by_value)]
 pub(crate) fn analyze_embedded_as_child(
     bytes: &[u8],
     host_name: &str,

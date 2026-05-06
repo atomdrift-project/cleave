@@ -340,6 +340,13 @@ fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
         .any(|w| w == b"This program cannot be run in DOS mode")
 }
 
+fn dos_stub_zeroed(data: &[u8], pe_offset: usize) -> bool {
+    if pe_offset <= 0x40 || pe_offset > data.len() {
+        return false;
+    }
+    data[0x40..pe_offset].iter().all(|&b| b == 0)
+}
+
 fn looks_like_dos_executable(data: &[u8]) -> bool {
     if data.len() < 0x40 || !data.starts_with(b"MZ") {
         return false;
@@ -506,6 +513,41 @@ fn dn_common_name<'a>(name: &'a x509_parser::x509::X509Name<'a>) -> Option<Strin
         .next()
         .and_then(|cn| cn.as_str().ok())
         .map(str::to_string)
+}
+
+/// True if the PKCS#7 SignedData blob contains the Microsoft
+/// NestedSignature attribute (OID `1.3.6.1.4.1.311.2.4.1`). DER
+/// substring scan — same approach as `scan_asn1_attribute` for the
+/// signing-time OID.
+fn pkcs7_has_nested_signature(pkcs7: &[u8]) -> bool {
+    // OID 1.3.6.1.4.1.311.2.4.1 → DER bytes:
+    //   06 0A 2B 06 01 04 01 82 37 02 04 01
+    const NESTED_SIG_OID: &[u8] = &[
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01,
+    ];
+    pkcs7.windows(NESTED_SIG_OID.len()).any(|w| w == NESTED_SIG_OID)
+}
+
+/// Resolve a signature-algorithm OID to a friendly name. Covers the
+/// algorithms commonly seen in Authenticode chains; returns `None`
+/// for unknowns so trait authors can still match the raw value via
+/// the chain itself.
+fn signature_algorithm_name(oid: &x509_parser::der_parser::asn1_rs::Oid<'_>) -> Option<String> {
+    let s = oid.to_id_string();
+    let name = match s.as_str() {
+        "1.2.840.113549.1.1.5" => "sha1WithRSAEncryption",
+        "1.2.840.113549.1.1.11" => "sha256WithRSAEncryption",
+        "1.2.840.113549.1.1.12" => "sha384WithRSAEncryption",
+        "1.2.840.113549.1.1.13" => "sha512WithRSAEncryption",
+        "1.2.840.113549.1.1.10" => "rsassa-pss",
+        "1.2.840.10045.4.1" => "ecdsa-with-SHA1",
+        "1.2.840.10045.4.3.2" => "ecdsa-with-SHA256",
+        "1.2.840.10045.4.3.3" => "ecdsa-with-SHA384",
+        "1.2.840.10045.4.3.4" => "ecdsa-with-SHA512",
+        "1.3.101.112" => "Ed25519",
+        _ => return None,
+    };
+    Some(name.to_string())
 }
 
 fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
@@ -1964,6 +2006,7 @@ impl PEAnalyzer {
 
         let pe_offset = pe.header.dos_header.pe_pointer as usize;
         metrics.dos_stub_modified = dos_stub_modified(data, pe_offset);
+        metrics.dos_stub_zeroed = dos_stub_zeroed(data, pe_offset);
 
         // Check for Rich header (between DOS and PE signature)
         if pe_offset > 0x80 {
@@ -2071,6 +2114,11 @@ impl PEAnalyzer {
                 // Note: virt_addr in security directory is actually a file offset
                 let offset = cert_table.virtual_address as usize;
                 let size = cert_table.size as usize;
+                // The security directory virtual_address is a file offset; if it
+                // points outside the file the header has been tampered with.
+                if offset > 0 && (offset > data.len() || size > data.len() - offset) {
+                    metrics.security_directory_out_of_bounds = true;
+                }
                 if offset > 0 && offset + size <= data.len() {
                     let cert_data = &data[offset..offset + size];
                     // Skip the WIN_CERTIFICATE header (8 bytes)
@@ -2126,10 +2174,34 @@ impl PEAnalyzer {
                             // anchors for cross-release comparison.
                             let certs = parse_pkcs7_certificates(pkcs7_data);
                             metrics.cert_chain_depth = certs.len() as u32;
+                            // NestedSignature attribute (Microsoft OID
+                            // 1.3.6.1.4.1.311.2.4.1) anywhere in the
+                            // PKCS#7 SignedData unauthenticated attrs.
+                            metrics.has_nested_signature =
+                                pkcs7_has_nested_signature(pkcs7_data);
                             if let Some(leaf) = find_leaf_signer(&certs) {
                                 metrics.leaf_subject =
                                     dn_common_name(leaf.tbs_certificate.subject());
                                 metrics.leaf_issuer = dn_common_name(leaf.tbs_certificate.issuer());
+                                if let (Some(s), Some(i)) = (
+                                    metrics.leaf_subject.as_deref(),
+                                    metrics.leaf_issuer.as_deref(),
+                                ) {
+                                    metrics.leaf_self_issued = !s.is_empty() && s == i;
+                                }
+                                // ExtendedKeyUsage codeSigning OID
+                                // (1.3.6.1.5.5.7.3.3). x509-parser
+                                // exposes a typed bool per common OID.
+                                if let Ok(Some(eku_ext)) =
+                                    leaf.tbs_certificate.extended_key_usage()
+                                {
+                                    metrics.leaf_eku_code_signing = eku_ext.value.code_signing;
+                                }
+                                // Friendly-name resolution for the leaf
+                                // cert's signature algorithm OID.
+                                metrics.leaf_signature_algorithm = signature_algorithm_name(
+                                    &leaf.signature_algorithm.algorithm,
+                                );
                                 metrics.leaf_serial =
                                     Some(format!("{:x}", leaf.tbs_certificate.serial));
                                 metrics.leaf_not_before = leaf.validity().not_before.timestamp();
@@ -2167,6 +2239,313 @@ impl PEAnalyzer {
             .entry_section
             .as_deref()
             .is_some_and(|name| !is_standard_entry_section(name));
+
+        // Authenticode chain shape: depth-1 chains are normally self-
+        // signed roots. A non-self-issued leaf at depth 1 means the
+        // intermediate CA(s) were stripped — the Remus botnet sample
+        // (May 2026) embeds a stolen `itunes.apple.com` TLS leaf with
+        // exactly this shape.
+        metrics.cert_chain_truncated =
+            metrics.has_signature && metrics.cert_chain_depth == 1 && !metrics.leaf_self_issued;
+        // "Signed PE with a leaf cert that isn't authorized for code
+        // signing" — collapses the EKU and has_signature checks into
+        // one atomic-trait-friendly bool. Catches the Remus pattern.
+        metrics.signed_with_non_code_signing_leaf = metrics.has_signature
+            && metrics.leaf_subject.is_some()
+            && !metrics.leaf_eku_code_signing;
+
+        // COFF symbol table — modern toolchains zero these fields.
+        let pst = pe.header.coff_header.pointer_to_symbol_table;
+        let nst = pe.header.coff_header.number_of_symbol_table;
+        metrics.coff_symbol_table_present = pst != 0 && nst != 0;
+
+        // Entry-point anomalies. The EP RVA is `pe.entry`. Three
+        // independent checks:
+        //   * EP < SizeOfHeaders (lands in the header region)
+        //   * EP not contained in any section's virtual extent
+        //   * EP's section is writable (self-modifying / unpacker stub)
+        let ep_rva = pe.entry;
+        if metrics.size_of_headers != 0 && ep_rva < metrics.size_of_headers {
+            metrics.entry_in_header = true;
+        }
+        let mut ep_in_section = false;
+        for section in &pe.sections {
+            let start = section.virtual_address;
+            let span = section.virtual_size.max(section.size_of_raw_data);
+            let end = start.saturating_add(span);
+            if ep_rva >= start && ep_rva < end {
+                ep_in_section = true;
+                // IMAGE_SCN_MEM_WRITE = 0x80000000; same literal as the
+                // is_writable check earlier in this file.
+                metrics.entry_in_writable_section = section.characteristics & 0x80000000 != 0;
+                break;
+            }
+        }
+        // EP=0 on a DLL or driver is normal; only call it "outside
+        // sections" when the file is structurally an EXE (`pe.is_lib`
+        // false) and the EP is non-zero. Combining both keeps DLLs
+        // and stub-only resources from tripping the metric.
+        if !ep_in_section && ep_rva != 0 && !pe.is_lib {
+            metrics.entry_outside_sections = true;
+        }
+
+        // Section overflow + alignment audit. pefile flags both as
+        // signs of header tampering / parser-confusion. Counts go on
+        // metrics; section names go on kv-only carriers so trait
+        // authors can match them as `pe.misaligned_sections[*]`.
+        let file_size = data.len() as u64;
+        let file_alignment = pe
+            .header
+            .optional_header
+            .as_ref()
+            .map(|h| h.windows_fields.file_alignment)
+            .unwrap_or(0);
+        for section in &pe.sections {
+            let name = String::from_utf8_lossy(&section.name)
+                .trim_matches(char::from(0))
+                .to_string();
+            let raw_end = (section.pointer_to_raw_data as u64)
+                .saturating_add(section.size_of_raw_data as u64);
+            if section.size_of_raw_data > 0 && raw_end > file_size {
+                metrics.section_raw_overflow_count =
+                    metrics.section_raw_overflow_count.saturating_add(1);
+                metrics.overflowing_sections.push(name.clone());
+            }
+            if file_alignment > 0
+                && section.pointer_to_raw_data != 0
+                && section.pointer_to_raw_data % file_alignment != 0
+            {
+                metrics.misaligned_section_count =
+                    metrics.misaligned_section_count.saturating_add(1);
+                metrics.misaligned_sections.push(name);
+            }
+        }
+
+        if let Some(opt) = pe.header.optional_header.as_ref() {
+            metrics.number_of_rva_and_sizes = opt.windows_fields.number_of_rva_and_sizes;
+        }
+
+        // ──── Batch 1: section/header arithmetic anomalies ────
+        // Section count mismatch: parsed sections vs. COFF header field.
+        metrics.section_count_mismatch =
+            pe.header.coff_header.number_of_sections as usize != pe.sections.len();
+
+        // Section overlap: sort by virtual_address, walk pairs to find
+        // intersecting virtual ranges. O(n log n), n ≤ 96.
+        if pe.sections.len() > 1 {
+            let mut by_va: Vec<(u32, u32, &str)> = pe
+                .sections
+                .iter()
+                .map(|s| {
+                    let span = s.virtual_size.max(s.size_of_raw_data);
+                    let name = std::str::from_utf8(&s.name)
+                        .unwrap_or("")
+                        .trim_matches(char::from(0));
+                    (s.virtual_address, s.virtual_address.saturating_add(span), name)
+                })
+                .collect();
+            by_va.sort_by_key(|t| t.0);
+            let mut overlap_names: HashSet<String> = HashSet::new();
+            for w in by_va.windows(2) {
+                let (a_start, a_end, a_name) = w[0];
+                let (b_start, _, b_name) = w[1];
+                if a_end > b_start && b_start >= a_start {
+                    overlap_names.insert(a_name.to_string());
+                    overlap_names.insert(b_name.to_string());
+                }
+            }
+            metrics.section_overlap_count = overlap_names.len() as u32;
+            metrics.overlapping_sections = overlap_names.into_iter().collect();
+            metrics.overlapping_sections.sort();
+        }
+
+        // First-section gap: bytes between SizeOfHeaders and the first
+        // section's PointerToRawData. Sections are usually emitted in
+        // PointerToRawData order; pick the smallest non-zero pointer.
+        if metrics.size_of_headers != 0 {
+            if let Some(first_raw) = pe
+                .sections
+                .iter()
+                .map(|s| s.pointer_to_raw_data)
+                .filter(|&p| p > 0)
+                .min()
+            {
+                metrics.first_section_gap_bytes =
+                    first_raw.saturating_sub(metrics.size_of_headers);
+            }
+        }
+
+        // Entry-in-last-section: EP RVA falls inside the section with
+        // the highest virtual_address. Reuses the EP-section check.
+        if let Some(last_section) = pe.sections.iter().max_by_key(|s| s.virtual_address) {
+            let start = last_section.virtual_address;
+            let span = last_section.virtual_size.max(last_section.size_of_raw_data);
+            let end = start.saturating_add(span);
+            if pe.entry >= start && pe.entry < end && pe.entry != 0 {
+                metrics.entry_in_last_section = true;
+            }
+        }
+
+        // BSS-like sections: SizeOfRawData == 0, VirtualSize > 0.
+        metrics.bss_like_section_count = pe
+            .sections
+            .iter()
+            .filter(|s| s.size_of_raw_data == 0 && s.virtual_size > 0)
+            .count() as u32;
+
+        // .NET native entry — only meaningful when CLR data is present.
+        if let Some(clr) = &pe.clr_data {
+            metrics.dotnet_has_native_entry = clr.cor20_header.is_native_entrypoint();
+        }
+
+        // ──── Batch 2: data-directory bounds + TLS callback location ────
+        let rva_in_section = |rva: u32| -> bool {
+            if rva == 0 {
+                return false;
+            }
+            pe.sections.iter().any(|s| {
+                let start = s.virtual_address;
+                let span = s.virtual_size.max(s.size_of_raw_data);
+                rva >= start && rva < start.saturating_add(span)
+            })
+        };
+        let rva_in_executable_section = |rva: u32| -> bool {
+            if rva == 0 {
+                return false;
+            }
+            pe.sections.iter().any(|s| {
+                let start = s.virtual_address;
+                let span = s.virtual_size.max(s.size_of_raw_data);
+                rva >= start
+                    && rva < start.saturating_add(span)
+                    && (s.characteristics & 0x20000000) != 0
+            })
+        };
+        if let Some(opt) = pe.header.optional_header.as_ref() {
+            // Data directories: 0=export, 1=import, 2=resource (full
+            // list — see PE/COFF spec). Each entry is `(name, dir)`.
+            for (idx, slot) in opt.data_directories.data_directories.iter().enumerate() {
+                if let Some((_, dir)) = slot.as_ref() {
+                    if dir.virtual_address == 0 || dir.size == 0 {
+                        continue;
+                    }
+                    match idx {
+                        0 => {
+                            metrics.export_directory_outside_section =
+                                !rva_in_section(dir.virtual_address);
+                        }
+                        1 => {
+                            metrics.import_directory_outside_section =
+                                !rva_in_section(dir.virtual_address);
+                        }
+                        2 => {
+                            // Resource directory: check it doesn't
+                            // span past its containing section.
+                            if let Some(s) = pe.sections.iter().find(|s| {
+                                dir.virtual_address >= s.virtual_address
+                                    && dir.virtual_address
+                                        < s.virtual_address.saturating_add(
+                                            s.virtual_size.max(s.size_of_raw_data),
+                                        )
+                            }) {
+                                let section_end = s
+                                    .virtual_address
+                                    .saturating_add(s.virtual_size.max(s.size_of_raw_data));
+                                let dir_end = dir.virtual_address.saturating_add(dir.size);
+                                if dir_end > section_end {
+                                    metrics.resource_directory_overruns_section = true;
+                                }
+                            } else {
+                                metrics.resource_directory_overruns_section = true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        // (lazy_walker_panicked promotion happens at end of function,
+        // after the resource_data block runs and may have set it true.)
+        // TLS callbacks landing in non-executable sections.
+        if let Some(tls_data) = &pe.tls_data {
+            // Callbacks are stored as VAs; subtract image_base to RVA.
+            let image_base = metrics.image_base as u32;
+            for &va in &tls_data.callbacks {
+                let rva = va.saturating_sub(image_base as u64) as u32;
+                if rva != 0 && !rva_in_executable_section(rva) {
+                    metrics.tls_callbacks_outside_code =
+                        metrics.tls_callbacks_outside_code.saturating_add(1);
+                }
+            }
+        }
+
+        // ──── Batch 4: authentihash + signature overlay padding ────
+        if let Some((auth, padding)) = compute_authentihash_and_padding(pe, data) {
+            metrics.authentihash = Some(auth);
+            metrics.signature_overlay_padding_bytes = padding;
+        }
+
+        // ──── Batch 5: structured kv carrier population ────
+        // Per-section header summary.
+        for section in &pe.sections {
+            let name = std::str::from_utf8(&section.name)
+                .unwrap_or("")
+                .trim_matches(char::from(0))
+                .to_string();
+            metrics.section_characteristics_entries.push(
+                crate::types::binary_metrics::SectionCharacteristics {
+                    name,
+                    characteristics_hex: format!("{:08x}", section.characteristics),
+                    virtual_address: section.virtual_address,
+                    virtual_size: section.virtual_size,
+                    raw_size: section.size_of_raw_data,
+                },
+            );
+        }
+        // Non-zero data directory slots, with canonical names.
+        if let Some(opt) = pe.header.optional_header.as_ref() {
+            const DD_NAMES: [&str; 16] = [
+                "export",
+                "import",
+                "resource",
+                "exception",
+                "certificate",
+                "base_relocation",
+                "debug",
+                "architecture",
+                "global_ptr",
+                "tls",
+                "load_config",
+                "bound_import",
+                "iat",
+                "delay_import",
+                "clr_runtime_header",
+                "reserved",
+            ];
+            for (idx, slot) in opt.data_directories.data_directories.iter().enumerate() {
+                if let Some((_, dir)) = slot.as_ref() {
+                    if dir.virtual_address == 0 && dir.size == 0 {
+                        continue;
+                    }
+                    let name = DD_NAMES
+                        .get(idx)
+                        .copied()
+                        .unwrap_or("unknown")
+                        .to_string();
+                    metrics.data_directory_entries.push(
+                        crate::types::binary_metrics::DataDirectoryEntry {
+                            name,
+                            rva: dir.virtual_address,
+                            size: dir.size,
+                        },
+                    );
+                }
+            }
+        }
+        // Rich Header CompID tuples.
+        if metrics.rich_header_present {
+            metrics.rich_header_compids = parse_rich_header(data, pe_offset);
+        }
 
         if let Some(export_data) = &pe.export_data {
             metrics.export_timestamp = export_data.export_directory_table.time_date_stamp;
@@ -2417,6 +2796,13 @@ impl PEAnalyzer {
                     }
                 }
             }
+        }
+
+        // Promote the resource-walker panic into the explicit metric —
+        // both states ("couldn't traverse .rsrc safely") map onto the
+        // same trait-author signal.
+        if lazy_walker_panicked {
+            metrics.resource_directory_overruns_section = true;
         }
 
         (metrics, lazy_walker_panicked)
@@ -2991,6 +3377,626 @@ fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
     None
 }
 
+/// Compute Authenticode SHA-256 hash and the signature overlay-padding
+/// byte count per the Microsoft PE/COFF spec. Returns
+/// `(authentihash_hex, signature_overlay_padding_bytes)`.
+///
+/// Hash regions, in order:
+///   1. file start → checksum field offset
+///   2. (skip 4 byte checksum)
+///   3. post-checksum → cert table data-directory entry offset
+///   4. (skip 8 byte data-directory entry: VA + Size)
+///   5. post-cert-dir-entry → end of headers (SizeOfHeaders)
+///   6. each section's raw data, in PointerToRawData order
+///   7. trailing bytes between (sections-end + cert table size) and EOF
+///
+/// Step 7 covers signed overlay payload — the "appended data that
+/// ships under the signature". Returns `None` only when the optional
+/// header is missing or the file is too short to contain headers.
+fn compute_authentihash_and_padding(
+    pe: &goblin::pe::PE<'_>,
+    data: &[u8],
+) -> Option<(String, u64)> {
+    use sha2::{Digest, Sha256};
+
+    let opt = pe.header.optional_header.as_ref()?;
+    let pe_offset = pe.header.dos_header.pe_pointer as usize;
+    let optional_header_offset = pe_offset + 4 + 20;
+
+    // Checksum field offset (4 bytes).
+    let checksum_offset = match opt.standard_fields.magic {
+        MAGIC_32 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_32
+            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
+        MAGIC_64 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_64
+            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        _ => return None,
+    };
+
+    // Cert-table data-dir entry offset (8 bytes: VA + Size). The
+    // data dirs sit after standard + windows-specific fields; cert
+    // table is index 4 (× 8 = 32 bytes in).
+    use goblin::pe::optional_header::{SIZEOF_WINDOWS_FIELDS_32, SIZEOF_WINDOWS_FIELDS_64};
+    let cert_dir_offset = match opt.standard_fields.magic {
+        MAGIC_32 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + SIZEOF_WINDOWS_FIELDS_32 + 32
+        }
+        MAGIC_64 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + SIZEOF_WINDOWS_FIELDS_64 + 32
+        }
+        _ => return None,
+    };
+
+    let size_of_headers = opt.windows_fields.size_of_headers as usize;
+    if checksum_offset + 4 > data.len()
+        || cert_dir_offset + 8 > data.len()
+        || size_of_headers > data.len()
+    {
+        return None;
+    }
+    // Sanity: regions must be in order checksum < cert_dir < headers_end.
+    if checksum_offset + 4 > cert_dir_offset || cert_dir_offset + 8 > size_of_headers {
+        return None;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(&data[..checksum_offset]);
+    hasher.update(&data[checksum_offset + 4..cert_dir_offset]);
+    hasher.update(&data[cert_dir_offset + 8..size_of_headers]);
+
+    // Sections in PointerToRawData order, skipping rsize=0.
+    let mut sorted: Vec<&goblin::pe::section_table::SectionTable> = pe
+        .sections
+        .iter()
+        .filter(|s| s.size_of_raw_data > 0)
+        .collect();
+    sorted.sort_by_key(|s| s.pointer_to_raw_data);
+    let mut sum_hashed = size_of_headers as u64;
+    for s in &sorted {
+        let start = s.pointer_to_raw_data as usize;
+        let end = start.saturating_add(s.size_of_raw_data as usize);
+        if end > data.len() {
+            return None;
+        }
+        hasher.update(&data[start..end]);
+        sum_hashed = sum_hashed.saturating_add(s.size_of_raw_data as u64);
+    }
+
+    // Cert table size from the data-dir entry, if any.
+    let cert_table_size = pe
+        .header
+        .optional_header
+        .as_ref()
+        .and_then(|o| o.data_directories.data_directories.get(4).cloned())
+        .and_then(|slot| slot)
+        .map(|(_, dd)| dd.size as u64)
+        .unwrap_or(0);
+
+    // Trailing overlay bytes (sections-end → cert-table-start).
+    let file_size = data.len() as u64;
+    let overlay_padding = if file_size > sum_hashed + cert_table_size {
+        let extra_start = sum_hashed as usize;
+        let extra_end = (file_size - cert_table_size) as usize;
+        if extra_start < extra_end && extra_end <= data.len() {
+            hasher.update(&data[extra_start..extra_end]);
+            (extra_end - extra_start) as u64
+        } else {
+            0
+        }
+    } else {
+        0
+    };
+
+    Some((hex::encode(hasher.finalize()), overlay_padding))
+}
+
+/// Authenticode digest algorithms cleave can compute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AuthAlg {
+    Sha1,
+    Sha256,
+    Sha384,
+    Sha512,
+}
+
+impl AuthAlg {
+    /// Friendly name for the metric / kv tree.
+    fn name(self) -> &'static str {
+        match self {
+            AuthAlg::Sha1 => "sha1",
+            AuthAlg::Sha256 => "sha256",
+            AuthAlg::Sha384 => "sha384",
+            AuthAlg::Sha512 => "sha512",
+        }
+    }
+
+    /// Resolve from a digest-algorithm OID dotted-string.
+    fn from_oid(oid: &str) -> Option<Self> {
+        match oid {
+            "1.3.14.3.2.26" => Some(AuthAlg::Sha1),
+            "2.16.840.1.101.3.4.2.1" => Some(AuthAlg::Sha256),
+            "2.16.840.1.101.3.4.2.2" => Some(AuthAlg::Sha384),
+            "2.16.840.1.101.3.4.2.3" => Some(AuthAlg::Sha512),
+            _ => None,
+        }
+    }
+}
+
+/// Compute the Authenticode hash with a specific digest algorithm.
+/// Reuses the same region-walking logic as `compute_authentihash_and_padding`
+/// — only the hasher changes. Returns lowercase hex.
+fn compute_authentihash_alg(
+    pe: &goblin::pe::PE<'_>,
+    data: &[u8],
+    alg: AuthAlg,
+) -> Option<String> {
+    use sha1::Sha1;
+    use sha2::digest::DynDigest;
+    use sha2::{Digest, Sha256, Sha384, Sha512};
+
+    // Inline trait-object dispatch keeps a single region walker.
+    let mut hasher: Box<dyn DynDigest> = match alg {
+        AuthAlg::Sha1 => Box::new(Sha1::new()),
+        AuthAlg::Sha256 => Box::new(Sha256::new()),
+        AuthAlg::Sha384 => Box::new(Sha384::new()),
+        AuthAlg::Sha512 => Box::new(Sha512::new()),
+    };
+    let opt = pe.header.optional_header.as_ref()?;
+    let pe_offset = pe.header.dos_header.pe_pointer as usize;
+    let optional_header_offset = pe_offset + 4 + 20;
+    let checksum_offset = match opt.standard_fields.magic {
+        MAGIC_32 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_32
+            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
+        MAGIC_64 => optional_header_offset
+            + SIZEOF_STANDARD_FIELDS_64
+            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        _ => return None,
+    };
+    use goblin::pe::optional_header::{SIZEOF_WINDOWS_FIELDS_32, SIZEOF_WINDOWS_FIELDS_64};
+    let cert_dir_offset = match opt.standard_fields.magic {
+        MAGIC_32 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + SIZEOF_WINDOWS_FIELDS_32 + 32
+        }
+        MAGIC_64 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + SIZEOF_WINDOWS_FIELDS_64 + 32
+        }
+        _ => return None,
+    };
+    let size_of_headers = opt.windows_fields.size_of_headers as usize;
+    if checksum_offset + 4 > data.len()
+        || cert_dir_offset + 8 > data.len()
+        || size_of_headers > data.len()
+    {
+        return None;
+    }
+    if checksum_offset + 4 > cert_dir_offset || cert_dir_offset + 8 > size_of_headers {
+        return None;
+    }
+    DynDigest::update(hasher.as_mut(), &data[..checksum_offset]);
+    DynDigest::update(hasher.as_mut(), &data[checksum_offset + 4..cert_dir_offset]);
+    DynDigest::update(hasher.as_mut(), &data[cert_dir_offset + 8..size_of_headers]);
+    let mut sorted: Vec<&goblin::pe::section_table::SectionTable> = pe
+        .sections
+        .iter()
+        .filter(|s| s.size_of_raw_data > 0)
+        .collect();
+    sorted.sort_by_key(|s| s.pointer_to_raw_data);
+    let mut sum_hashed = size_of_headers as u64;
+    for s in &sorted {
+        let start = s.pointer_to_raw_data as usize;
+        let end = start.saturating_add(s.size_of_raw_data as usize);
+        if end > data.len() {
+            return None;
+        }
+        DynDigest::update(hasher.as_mut(), &data[start..end]);
+        sum_hashed = sum_hashed.saturating_add(s.size_of_raw_data as u64);
+    }
+    let cert_table_size = pe
+        .header
+        .optional_header
+        .as_ref()
+        .and_then(|o| o.data_directories.data_directories.get(4).cloned())
+        .and_then(|slot| slot)
+        .map(|(_, dd)| dd.size as u64)
+        .unwrap_or(0);
+    let file_size = data.len() as u64;
+    if file_size > sum_hashed + cert_table_size {
+        let extra_start = sum_hashed as usize;
+        let extra_end = (file_size - cert_table_size) as usize;
+        if extra_start < extra_end && extra_end <= data.len() {
+            DynDigest::update(hasher.as_mut(), &data[extra_start..extra_end]);
+        }
+    }
+    Some(hex::encode(hasher.finalize()))
+}
+
+
+/// Parse `SpcIndirectDataContent.messageDigest` from a PKCS#7
+/// SignedData blob and return `(digest_alg_friendly_name, digest_hex)`.
+///
+/// SpcIndirectDataContent ::= SEQUENCE {
+///     data SpcAttributeTypeAndOptionalValue,
+///     messageDigest DigestInfo
+/// }
+/// DigestInfo ::= SEQUENCE { digestAlgorithm, digest OCTET STRING }
+///
+/// We locate the SPC_INDIRECT_DATA_OBJID (`1.3.6.1.4.1.311.2.1.4`)
+/// inside the SignedData encapContentInfo, then walk the immediate
+/// `[0] EXPLICIT OCTET STRING` that wraps the SpcIndirectDataContent.
+fn parse_spc_indirect_data(pkcs7: &[u8]) -> Option<(AuthAlg, String)> {
+    // OID 1.3.6.1.4.1.311.2.1.4 → DER bytes (06 0A prefix + value).
+    const SPC_INDIRECT_DATA_OID: &[u8] = &[
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04,
+    ];
+    let oid_pos = pkcs7
+        .windows(SPC_INDIRECT_DATA_OID.len())
+        .position(|w| w == SPC_INDIRECT_DATA_OID)?;
+    let mut cursor = oid_pos + SPC_INDIRECT_DATA_OID.len();
+
+    // Expect [0] EXPLICIT (tag 0xA0) wrapping the content.
+    let (after_a0, _len) = parse_asn1_tag(pkcs7, cursor, 0xA0)?;
+    cursor = after_a0;
+
+    // Inner: OCTET STRING (tag 0x04) wrapping the SpcIndirectDataContent SEQUENCE,
+    // OR directly the SEQUENCE (depending on encoding variant).
+    if let Some((after, _)) = parse_asn1_tag(pkcs7, cursor, 0x04) {
+        cursor = after;
+    }
+    // SpcIndirectDataContent SEQUENCE.
+    let (after_seq, seq_end) = parse_asn1_tag(pkcs7, cursor, 0x30)?;
+    let seq_slice = &pkcs7[after_seq..seq_end];
+
+    // Inside: SpcAttributeTypeAndOptionalValue (SEQUENCE) then DigestInfo (SEQUENCE).
+    let mut p = 0;
+    let (after1, end1) = parse_asn1_tag_at(seq_slice, p, 0x30)?;
+    p = end1; // skip the SpcAttributeTypeAndOptionalValue
+    let _ = after1;
+
+    // Now DigestInfo SEQUENCE.
+    let (after2, end2) = parse_asn1_tag_at(seq_slice, p, 0x30)?;
+    let di = &seq_slice[after2..end2];
+
+    // DigestInfo: digestAlgorithm SEQUENCE { OID, NULL }, digest OCTET STRING.
+    let mut q = 0;
+    let (alg_seq_after, alg_seq_end) = parse_asn1_tag_at(di, q, 0x30)?;
+    let alg_slice = &di[alg_seq_after..alg_seq_end];
+    q = alg_seq_end;
+
+    // First element of the algorithm SEQUENCE: OID.
+    let (oid_after, oid_end) = parse_asn1_tag_at(alg_slice, 0, 0x06)?;
+    let oid_str = oid_dotted(&alg_slice[oid_after..oid_end]);
+    let alg = AuthAlg::from_oid(&oid_str)?;
+
+    // digest OCTET STRING.
+    let (digest_after, digest_end) = parse_asn1_tag_at(di, q, 0x04)?;
+    let digest_bytes = &di[digest_after..digest_end];
+    Some((alg, hex::encode(digest_bytes)))
+}
+
+/// Parse the first SignerInfo from a PKCS#7 SignedData blob.
+/// Returns the issuer-DN raw bytes plus the serial-number hex.
+///
+/// SignedData ::= SEQUENCE {
+///   version, digestAlgorithms SET, encapContentInfo,
+///   certificates [0] OPTIONAL, crls [1] OPTIONAL,
+///   signerInfos SET OF SignerInfo
+/// }
+/// SignerInfo ::= SEQUENCE { version, sid SignerIdentifier, ... }
+/// SignerIdentifier ::= CHOICE { issuerAndSerialNumber, subjectKeyIdentifier [0] }
+/// IssuerAndSerialNumber ::= SEQUENCE { issuer Name, serialNumber INTEGER }
+///
+/// We locate the SignerInfo SET as the last top-level element of the
+/// SignedData SEQUENCE — it's always the trailing element per spec.
+fn parse_signer_info(pkcs7: &[u8]) -> Option<SignerInfoRef<'_>> {
+    // Outer ContentInfo SEQUENCE.
+    let (after_outer, outer_end) = parse_asn1_tag_at(pkcs7, 0, 0x30)?;
+    let outer = &pkcs7[after_outer..outer_end];
+    // contentType OID (skip), then [0] EXPLICIT wrapping SignedData.
+    let (after_oid, oid_end) = parse_asn1_tag_at(outer, 0, 0x06)?;
+    let _ = (after_oid, oid_end);
+    let (after_a0, a0_end) = parse_asn1_tag_at(outer, oid_end, 0xA0)?;
+    let signed_data_wrapped = &outer[after_a0..a0_end];
+    // Inner SignedData SEQUENCE.
+    let (sd_inner_after, sd_inner_end) = parse_asn1_tag_at(signed_data_wrapped, 0, 0x30)?;
+    let sd = &signed_data_wrapped[sd_inner_after..sd_inner_end];
+
+    // Walk the SignedData elements; the last SET (tag 0x31) is the
+    // signerInfos. Skip optional [0] certificates and [1] crls.
+    let mut p = 0;
+    let mut last_set_range: Option<(usize, usize)> = None;
+    while p < sd.len() {
+        let tag = sd[p];
+        let (val_start, val_end) = parse_asn1_tag_at(sd, p, tag)?;
+        if tag == 0x31 {
+            last_set_range = Some((val_start, val_end));
+        }
+        p = val_end;
+    }
+    let (si_set_start, si_set_end) = last_set_range?;
+    let si_set = &sd[si_set_start..si_set_end];
+
+    // First SignerInfo SEQUENCE.
+    let (si_after, si_end) = parse_asn1_tag_at(si_set, 0, 0x30)?;
+    let si = &si_set[si_after..si_end];
+
+    // SignerInfo: version INTEGER, sid SignerIdentifier, digestAlgorithm,
+    // [0] signedAttrs OPTIONAL, signatureAlgorithm, signature OCTET STRING,
+    // [1] unsignedAttrs OPTIONAL.
+    let mut q = 0;
+    // version
+    let (_, v_end) = parse_asn1_tag_at(si, q, 0x02)?;
+    q = v_end;
+    // sid: typically IssuerAndSerialNumber (SEQUENCE 0x30).
+    let (sid_inner, sid_end) = parse_asn1_tag_at(si, q, 0x30)?;
+    let sid = &si[sid_inner..sid_end];
+    // IssuerAndSerialNumber: issuer Name (SEQUENCE), serialNumber INTEGER.
+    let (issuer_inner, issuer_end) = parse_asn1_tag_at(sid, 0, 0x30)?;
+    let issuer_raw = &sid[issuer_inner..issuer_end];
+    let (serial_inner, serial_end) = parse_asn1_tag_at(sid, issuer_end, 0x02)?;
+    let serial_bytes = &sid[serial_inner..serial_end];
+    Some(SignerInfoRef {
+        issuer_raw,
+        serial_hex: hex::encode(serial_bytes),
+    })
+}
+
+struct SignerInfoRef<'a> {
+    issuer_raw: &'a [u8],
+    serial_hex: String,
+}
+
+/// Find a Microsoft NestedSignature attribute (OID
+/// `1.3.6.1.4.1.311.2.4.1`) in the PKCS#7 unauthenticatedAttributes
+/// and return the inner SignedData blob (full ContentInfo bytes).
+///
+/// Layout of the attribute:
+///   SEQUENCE {
+///     OID 1.3.6.1.4.1.311.2.4.1
+///     SET {
+///       SEQUENCE { contentType OID, [0] EXPLICIT signedData }  -- nested ContentInfo
+///       ...
+///     }
+///   }
+fn extract_nested_signature(pkcs7: &[u8]) -> Option<&[u8]> {
+    const NESTED_SIG_OID: &[u8] = &[
+        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01,
+    ];
+    let oid_pos = pkcs7
+        .windows(NESTED_SIG_OID.len())
+        .position(|w| w == NESTED_SIG_OID)?;
+    let cursor = oid_pos + NESTED_SIG_OID.len();
+    // Expect SET tag 0x31, then SEQUENCE 0x30 (the inner ContentInfo).
+    let (set_inner, set_end) = parse_asn1_tag(pkcs7, cursor, 0x31)?;
+    let set_slice = &pkcs7[set_inner..set_end];
+    let (seq_inner, seq_end) = parse_asn1_tag_at(set_slice, 0, 0x30)?;
+    // The nested SignedData is the full SEQUENCE we just parsed —
+    // hand back the slice starting at the SEQUENCE tag itself so the
+    // returned bytes parse as a top-level ContentInfo.
+    Some(&set_slice[seq_inner.saturating_sub(seq_inner - (seq_inner - 0))..seq_end])
+}
+
+/// Verify a SignerInfo's RSA-PKCS1v15 signature against the leaf
+/// cert's public key. Returns:
+///   * `Some(true)` — signature mathematically valid
+///   * `Some(false)` — signature verification failed
+///   * `None` — couldn't extract the parts needed for verification
+fn verify_rsa_pkcs1v15_signature(
+    leaf_pubkey_der: &[u8],
+    digest_alg: AuthAlg,
+    signed_message: &[u8],
+    signature: &[u8],
+) -> Option<bool> {
+    use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
+    use rsa::signature::Verifier;
+    use rsa::RsaPublicKey;
+    use sha1::Sha1;
+    use sha2::{Sha256, Sha384, Sha512};
+
+    let public_key = RsaPublicKey::from_pkcs1_der(leaf_pubkey_der)
+        .or_else(|_| {
+            // Some certs encode SubjectPublicKeyInfo with RSAES wrapper —
+            // try the SPKI form via x509-parser bytes.
+            use rsa::pkcs8::DecodePublicKey;
+            RsaPublicKey::from_public_key_der(leaf_pubkey_der).map_err(|_| ())
+        })
+        .ok()?;
+    use rsa::pkcs1::DecodeRsaPublicKey;
+
+    let sig = RsaSignature::try_from(signature).ok()?;
+    let verified = match digest_alg {
+        AuthAlg::Sha1 => VerifyingKey::<Sha1>::new(public_key).verify(signed_message, &sig).is_ok(),
+        AuthAlg::Sha256 => VerifyingKey::<Sha256>::new(public_key).verify(signed_message, &sig).is_ok(),
+        AuthAlg::Sha384 => VerifyingKey::<Sha384>::new(public_key).verify(signed_message, &sig).is_ok(),
+        AuthAlg::Sha512 => VerifyingKey::<Sha512>::new(public_key).verify(signed_message, &sig).is_ok(),
+    };
+    Some(verified)
+}
+
+// ──── Minimal ASN.1 helpers (manual length-prefix walker) ────
+
+/// Parse an ASN.1 tag at the given offset; returns
+/// `(value_start, value_end)`. `value_end` is one past the last byte.
+fn parse_asn1_tag(data: &[u8], offset: usize, expected_tag: u8) -> Option<(usize, usize)> {
+    parse_asn1_tag_at(data, offset, expected_tag)
+}
+
+fn parse_asn1_tag_at(data: &[u8], offset: usize, expected_tag: u8) -> Option<(usize, usize)> {
+    if offset >= data.len() || data[offset] != expected_tag {
+        return None;
+    }
+    let len_byte = *data.get(offset + 1)?;
+    let (len, len_size) = if len_byte & 0x80 == 0 {
+        (len_byte as usize, 1usize)
+    } else {
+        let n = (len_byte & 0x7F) as usize;
+        if n == 0 || n > 4 {
+            return None; // indefinite length / oversized
+        }
+        let mut len = 0usize;
+        for i in 0..n {
+            len = (len << 8) | (*data.get(offset + 2 + i)? as usize);
+        }
+        (len, 1 + n)
+    };
+    let value_start = offset + 1 + len_size;
+    let value_end = value_start.checked_add(len)?;
+    if value_end > data.len() {
+        return None;
+    }
+    Some((value_start, value_end))
+}
+
+/// Decode an ASN.1 OID's value bytes into dotted-string form.
+fn oid_dotted(bytes: &[u8]) -> String {
+    if bytes.is_empty() {
+        return String::new();
+    }
+    let mut out = String::new();
+    let first = bytes[0];
+    let arc1 = (first / 40) as u32;
+    let arc2 = (first % 40) as u32;
+    out.push_str(&format!("{arc1}.{arc2}"));
+    let mut value: u64 = 0;
+    for &b in &bytes[1..] {
+        value = (value << 7) | ((b & 0x7F) as u64);
+        if b & 0x80 == 0 {
+            out.push('.');
+            out.push_str(&value.to_string());
+            value = 0;
+        }
+    }
+    out
+}
+
+/// Resolve a Rich Header product ID (low 16 bits of CompID) to a
+/// human-readable toolchain name. Coverage focuses on the products
+/// trait authors care about for build-pipeline fingerprinting:
+/// MSVC compilers, the linker, MASM, the resource compiler, and
+/// import-library entries.
+fn rich_product_name(product_id: u16) -> Option<&'static str> {
+    let name = match product_id {
+        0x0000 => "Unknown",
+        0x0001 => "Import (object from .lib)",
+        0x0002 => "Linker (LINK)",
+        0x0003 => "MASM (object)",
+        0x0004 => "MSVC C compiler (CL)",
+        0x0005 => "MSVC C++ compiler (CL)",
+        0x0006 => "Linker 5.10",
+        0x0007 => "MASM 6.13",
+        0x0008 => "MSVC 6.0 compiler",
+        0x0009 => "MSVC 6.0 C++ compiler",
+        0x000A => "MSVC 6.0 export",
+        0x000B | 0x000C => "Linker 6.0",
+        0x000D => "MSVC 7.0 compiler",
+        0x000E => "MSVC 7.0 C++ compiler",
+        0x000F => "MSVC 7.0 export",
+        0x0010 => "Linker 7.0",
+        0x0019 => "Linker 7.10",
+        0x001C => "MASM 8.0",
+        0x001D => "MSVC 8.0 C compiler",
+        0x001E => "MSVC 8.0 C++ compiler",
+        0x0021 => "Linker 8.0",
+        0x0022 => "Resource compiler (RC)",
+        0x0023 => "MSVC 9.0 C compiler",
+        0x0024 => "MSVC 9.0 C++ compiler",
+        0x0027 => "Linker 9.0",
+        0x0028 => "MASM 9.0",
+        0x0029..=0x002B => "MSVC 10.0 toolchain",
+        0x002C => "Linker 10.0",
+        0x002D => "MASM 10.0",
+        0x0035 => "MSVC 11.0 C compiler",
+        0x0036 => "MSVC 11.0 C++ compiler",
+        0x0038 => "Linker 11.0",
+        0x003A | 0x003B => "MSVC 12.0 toolchain",
+        0x003D => "Linker 12.0",
+        0x0040 => "MSVC 14.0 C compiler",
+        0x0041 => "MSVC 14.0 C++ compiler",
+        0x0043 => "Linker 14.0",
+        0x0078 | 0x007A => "MSVC 14.x C/C++ compiler (VS2017+)",
+        0x007B | 0x007C => "Linker 14.x (VS2017+)",
+        0x009B..=0x009E => "MSVC 14.2x C/C++ compiler (VS2019)",
+        0x009F..=0x00A0 => "Linker 14.2x (VS2019)",
+        0x00FF..=0x0102 => "MSVC 14.3x C/C++ compiler (VS2022)",
+        0x0103 => "Linker 14.3x (VS2022)",
+        _ => return None,
+    };
+    Some(name)
+}
+
+/// Parse the Rich Header — Microsoft's undocumented "what built this
+/// PE" footer between the DOS stub and the PE signature.
+///
+/// Layout: `DanS` marker XOR'd with the 4-byte key (terminator), 12
+/// bytes of XOR'd zero padding, pairs of `(CompID, count)` each XOR'd
+/// with the key, the literal `Rich` marker, and finally the 4-byte
+/// plain-text XOR key.
+///
+/// Walks the region between `0x80` and the PE signature, locates the
+/// `Rich` + key, then walks backwards in 8-byte `(CompID, count)`
+/// tuples to the `DanS` terminator.
+fn parse_rich_header(data: &[u8], pe_offset: usize) -> Vec<crate::types::binary_metrics::RichCompId> {
+    use crate::types::binary_metrics::RichCompId;
+
+    let region_end = pe_offset.min(data.len());
+    if region_end < 0x80 + 8 {
+        return Vec::new();
+    }
+    let region = &data[0x80..region_end];
+
+    // Find "Rich" marker.
+    let Some(rich_pos) = region.windows(4).position(|w| w == b"Rich") else {
+        return Vec::new();
+    };
+    if rich_pos + 8 > region.len() {
+        return Vec::new();
+    }
+    let key = u32::from_le_bytes([
+        region[rich_pos + 4],
+        region[rich_pos + 5],
+        region[rich_pos + 6],
+        region[rich_pos + 7],
+    ]);
+
+    // Walk backward in 4-byte words, looking for the XOR'd "DanS"
+    // terminator (raw word XOR key == "DanS").
+    let dans_marker = u32::from_le_bytes(*b"DanS");
+    let mut dans_offset = None;
+    let mut i = rich_pos;
+    while i >= 4 {
+        i -= 4;
+        let w = u32::from_le_bytes([region[i], region[i + 1], region[i + 2], region[i + 3]]);
+        if w ^ key == dans_marker {
+            dans_offset = Some(i);
+            break;
+        }
+    }
+    let Some(dans_offset) = dans_offset else {
+        return Vec::new();
+    };
+
+    // Tuple zone: from `dans_offset + 16` (DanS + 12 bytes padding) to `rich_pos`.
+    let tuple_start = dans_offset + 16;
+    if tuple_start >= rich_pos {
+        return Vec::new();
+    }
+    let tuple_zone = &region[tuple_start..rich_pos];
+
+    let mut entries = Vec::new();
+    for chunk in tuple_zone.chunks_exact(8) {
+        let compid = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]) ^ key;
+        let count = u32::from_le_bytes([chunk[4], chunk[5], chunk[6], chunk[7]]) ^ key;
+        let product_id = (compid & 0xFFFF) as u16;
+        entries.push(RichCompId {
+            compid,
+            count,
+            product: rich_product_name(product_id).map(str::to_string),
+        });
+    }
+    entries
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -2999,6 +4005,52 @@ mod tests {
 
     fn test_pe_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.exe")
+    }
+
+    #[test]
+    fn test_signature_algorithm_name_known() {
+        let oid =
+            x509_parser::der_parser::asn1_rs::Oid::from(&[1, 2, 840, 113549, 1, 1, 11]).unwrap();
+        assert_eq!(
+            signature_algorithm_name(&oid).as_deref(),
+            Some("sha256WithRSAEncryption")
+        );
+    }
+
+    #[test]
+    fn test_signature_algorithm_name_unknown() {
+        let oid = x509_parser::der_parser::asn1_rs::Oid::from(&[1, 2, 999, 999]).unwrap();
+        assert_eq!(signature_algorithm_name(&oid), None);
+    }
+
+    #[test]
+    fn test_pkcs7_has_nested_signature_detects_oid() {
+        // OID 1.3.6.1.4.1.311.2.4.1 surrounded by junk bytes.
+        let blob: Vec<u8> = [
+            0x00, 0x99, 0xAA, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04,
+            0x01, 0xFF,
+        ]
+        .into();
+        assert!(pkcs7_has_nested_signature(&blob));
+    }
+
+    #[test]
+    fn test_pkcs7_has_nested_signature_negative() {
+        let blob: Vec<u8> = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05].into();
+        assert!(!pkcs7_has_nested_signature(&blob));
+    }
+
+    #[test]
+    fn test_rich_product_name_resolution() {
+        assert_eq!(rich_product_name(0x0002), Some("Linker (LINK)"));
+        assert_eq!(rich_product_name(0x0040), Some("MSVC 14.0 C compiler"));
+        assert_eq!(rich_product_name(0xFFFE), None);
+    }
+
+    #[test]
+    fn test_parse_rich_header_empty_when_no_marker() {
+        let data = vec![0u8; 0x200];
+        assert!(parse_rich_header(&data, 0x100).is_empty());
     }
 
     #[test]
@@ -3427,5 +4479,41 @@ mod tests {
             pe_overlay_bounds_excluding_certificate(&pe, &pe_data),
             Some((0x300, 0x300)).filter(|(start, end)| end > start),
         );
+    }
+
+    #[test]
+    fn test_dos_stub_zeroed_all_zeros() {
+        let pe_offset = 0x80;
+        let mut data = vec![0u8; pe_offset + 4];
+        data[0..2].copy_from_slice(b"MZ");
+        // 0x40..0x80 is already 0x00 from vec initialization
+        assert!(dos_stub_zeroed(&data, pe_offset));
+    }
+
+    #[test]
+    fn test_dos_stub_zeroed_with_content() {
+        let pe_offset = 0x80;
+        let mut data = vec![0u8; pe_offset + 4];
+        data[0..2].copy_from_slice(b"MZ");
+        data[0x40..0x40 + 38].copy_from_slice(b"This program cannot be run in DOS mode");
+        assert!(!dos_stub_zeroed(&data, pe_offset));
+    }
+
+    #[test]
+    fn test_dos_stub_zeroed_partial_nonzero() {
+        let pe_offset = 0x80;
+        let mut data = vec![0u8; pe_offset + 4];
+        data[0..2].copy_from_slice(b"MZ");
+        data[0x60] = 0x01; // one non-zero byte in the stub region
+        assert!(!dos_stub_zeroed(&data, pe_offset));
+    }
+
+    #[test]
+    fn test_dos_stub_zeroed_pe_offset_too_small() {
+        // pe_offset <= 0x40 means there's no stub region
+        let data = vec![0u8; 0x80];
+        assert!(!dos_stub_zeroed(&data, 0x40));
+        assert!(!dos_stub_zeroed(&data, 0x20));
+        assert!(!dos_stub_zeroed(&data, 0));
     }
 }

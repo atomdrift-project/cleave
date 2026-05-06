@@ -3,8 +3,10 @@
 //! This keeps temporary validator disables centralized while validators are
 //! re-enabled one at a time.
 
+use anyhow::{bail, Result};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::{OnceLock, RwLock};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -54,6 +56,7 @@ pub(crate) struct ValidationIssue {
     pub(crate) description: &'static str,
     pub(crate) fix: &'static str,
     pub(crate) message: String,
+    pub(crate) count: usize,
     pub(crate) file: Option<String>,
     pub(crate) line: Option<usize>,
     pub(crate) rule_id: Option<String>,
@@ -77,6 +80,16 @@ impl ValidationIssues {
     pub(crate) fn push_id(&mut self, validator_id: &'static str, message: impl Into<String>) {
         self.issues
             .push(ValidationIssue::new(validator_id, message));
+    }
+
+    pub(crate) fn push_count(
+        &mut self,
+        validator_id: &'static str,
+        count: usize,
+        message: impl Into<String>,
+    ) {
+        self.issues
+            .push(ValidationIssue::new(validator_id, message).with_count(count));
     }
 
     pub(crate) fn push_legacy(&mut self, message: impl Into<String>) {
@@ -138,6 +151,7 @@ impl ValidationIssue {
             description: spec.description,
             fix: spec.fix,
             message: message.into(),
+            count: 1,
             file: None,
             line: None,
             rule_id: None,
@@ -159,6 +173,12 @@ impl ValidationIssue {
     pub(crate) fn with_location(mut self, file: impl Into<String>, line: Option<usize>) -> Self {
         self.file = Some(file.into());
         self.line = line;
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn with_count(mut self, count: usize) -> Self {
+        self.count = count;
         self
     }
 
@@ -225,19 +245,16 @@ const DISABLED_VALIDATOR_IDS: &[&str] = &[
     "regex-contains-literal",
     "regex-alternative-subset",
     "duplicate-patterns",
-    "regex-case-subsumption",
-    "regex-or-literal-overlap",
-    "case-subsumption",
-    "duplicate-case-only",
-    "regex-vs-literal-duplicate",
     "overlapping-regex-patterns",
     "redundant-patterns",
     "cross-type-canonicalization",
-    "full-directory-composite",
-    "regex-performance",
-    "ast-text-call-performance",
-    "excessive-unless-downgrade",
 ];
+
+static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> = OnceLock::new();
+
+fn disabled_validator_override() -> &'static RwLock<Option<BTreeSet<String>>> {
+    DISABLED_VALIDATOR_OVERRIDE.get_or_init(|| RwLock::new(None))
+}
 
 pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
     UNKNOWN_VALIDATOR,
@@ -333,11 +350,18 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Put YAML in leaf directories named for the shared technique; flatten child YAML up when extra depth adds no ML signal.",
     },
     ValidatorSpec {
-        id: "full-directory-composite",
+        id: "many-directory-references",
         category: ValidatorCategory::Reuse,
-        display_id: "full-dir",
-        description: "Composite enumerates every trait in a directory.",
-        fix: "Use directory syntax for any: clauses; for all: clauses, create a meaningful technique composite or split the directory.",
+        display_id: "many-dir-refs",
+        description: "Composite hand-maintains many refs to one directory.",
+        fix: "Use directory syntax for any: clauses; for all: clauses, split only when there are clear sub-techniques.",
+    },
+    ValidatorSpec {
+        id: "directory-alias-composite",
+        category: ValidatorCategory::Reuse,
+        display_id: "dir-alias",
+        description: "Composite is equivalent to a directory reference.",
+        fix: "Delete the composite and reference the directory directly.",
     },
     ValidatorSpec {
         id: "duplicate-patterns",
@@ -448,8 +472,8 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         id: "regex-performance",
         category: ValidatorCategory::Policy,
         display_id: "re-perf",
-        description: "Regex shape is likely slow.",
-        fix: "Simplify without broadening; prefer bounded or structured matchers.",
+        description: "Regex is costly on broad input.",
+        fix: "Add literal focus, split broad scans, or use bounded matchers like kv/symbol.",
     },
     ValidatorSpec {
         id: "ast-text-call-performance",
@@ -501,11 +525,11 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Upgrade cleave or update the trait to a supported file type.",
     },
     ValidatorSpec {
-        id: "excessive-unless-downgrade",
+        id: "excessive-suppression",
         category: ValidatorCategory::Policy,
-        display_id: "exceptions",
-        description: "Rule has too many exception clauses.",
-        fix: "Tighten it, demote it to notable, or remove low-value catch-alls.",
+        display_id: "suppress",
+        description: "Rule relies on too many unless:/downgrade: suppressions.",
+        fix: "Tighten the matcher, split by technique, lower criticality, or delete low-signal catch-alls.",
     },
     ValidatorSpec {
         id: "score-caps",
@@ -521,6 +545,40 @@ pub(crate) fn validator_spec(id: &str) -> Option<&'static ValidatorSpec> {
     VALIDATOR_SPECS.iter().find(|spec| spec.id == id)
 }
 
+fn resolve_validator_id(id: &str) -> Option<&'static str> {
+    if id == "full-directory-composite" || id == "full-dir" || id == "reuse/full-dir" {
+        return Some("many-directory-references");
+    }
+    VALIDATOR_SPECS
+        .iter()
+        .find(|spec| id == spec.id || id == spec.display_id || id == spec.label())
+        .map(|spec| spec.id)
+}
+
+#[allow(clippy::expect_used)]
+pub(crate) fn set_disabled_validators_override(ids: Option<&str>) -> Result<()> {
+    let Some(ids) = ids else {
+        return Ok(());
+    };
+
+    let mut disabled = BTreeSet::new();
+    for raw_id in ids.split(',') {
+        let raw_id = raw_id.trim();
+        if raw_id.is_empty() {
+            continue;
+        }
+        let Some(id) = resolve_validator_id(raw_id) else {
+            bail!("unknown validator in --exclude: {raw_id}");
+        };
+        disabled.insert(id.to_string());
+    }
+
+    *disabled_validator_override()
+        .write()
+        .expect("validator override lock poisoned") = Some(disabled);
+    Ok(())
+}
+
 #[must_use]
 pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
     VALIDATOR_SPECS
@@ -530,7 +588,15 @@ pub(crate) fn disabled_validator_specs() -> Vec<&'static ValidatorSpec> {
 }
 
 #[must_use]
+#[allow(clippy::expect_used)]
 pub(crate) fn is_validator_disabled(id: &str) -> bool {
+    if let Some(disabled) = disabled_validator_override()
+        .read()
+        .expect("validator override lock poisoned")
+        .as_ref()
+    {
+        return disabled.contains(id);
+    }
     DISABLED_VALIDATOR_IDS.contains(&id)
 }
 
@@ -600,6 +666,11 @@ pub(crate) fn format_validation_issues_terminal(issues: &[ValidationIssue]) -> S
         issues.len(),
         grouped.len()
     ));
+    out.push_str("counts\n");
+    for (label, count) in issue_counts(issues) {
+        out.push_str(&format!("  {label:<24} {count}\n"));
+    }
+    out.push('\n');
     for (location, group) in grouped {
         out.push_str(&format!("{location}\n"));
         for issue in group {
@@ -625,6 +696,10 @@ pub(crate) fn format_validation_issues_tiny(issues: &[ValidationIssue]) -> Strin
 
     let mut out = String::new();
     out.push_str(&format!("validation failed issues={}\n", issues.len()));
+    out.push_str("counts\n");
+    for (label, count) in issue_counts(issues) {
+        out.push_str(&format!("{label} {count}\n"));
+    }
     for issue in issues {
         out.push_str(&format!(
             "{} {} {}\n",
@@ -645,16 +720,26 @@ pub(crate) fn format_validation_issues_json(issues: &[ValidationIssue]) -> Strin
     #[derive(Serialize)]
     struct ValidationFailure<'a> {
         ok: bool,
+        counts: BTreeMap<String, usize>,
         issues: &'a [ValidationIssue],
         fixes: Vec<String>,
     }
 
     let failure = ValidationFailure {
         ok: false,
+        counts: issue_counts(issues),
         issues,
         fixes: issue_fix_lines(issues),
     };
     serde_json::to_string_pretty(&failure).unwrap_or_else(|_| "{\"ok\":false}".to_string())
+}
+
+fn issue_counts(issues: &[ValidationIssue]) -> BTreeMap<String, usize> {
+    let mut counts = BTreeMap::new();
+    for issue in issues {
+        *counts.entry(issue.label.clone()).or_insert(0) += issue.count;
+    }
+    counts
 }
 
 fn issue_fix_lines(issues: &[ValidationIssue]) -> Vec<String> {
@@ -696,6 +781,7 @@ mod tests {
         ];
         let out = format_validation_issues_terminal(&issues);
         assert!(out.contains("a.yaml:1"));
+        assert!(out.contains("qual/re-len              2"));
         assert_eq!(out.matches("qual/re-len:").count(), 1);
     }
 }

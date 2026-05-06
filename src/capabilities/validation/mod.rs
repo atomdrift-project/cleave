@@ -42,6 +42,16 @@ mod taxonomy;
 pub(super) mod shared {
     use std::collections::HashSet;
 
+    pub(super) const SHORT_PATTERN_SCOPE_BYTES: i64 = 8 * 1024;
+
+    pub(super) fn is_limited_byte_range(range: Option<(i64, Option<i64>)>) -> bool {
+        let Some((start, Some(end))) = range else {
+            return false;
+        };
+
+        end >= start && end - start <= SHORT_PATTERN_SCOPE_BYTES
+    }
+
     /// Information about where a pattern was found
     #[derive(Debug, Clone)]
     pub(super) struct PatternLocation {
@@ -49,6 +59,7 @@ pub(super) mod shared {
         pub(super) file_path: String,
         pub(super) condition_type: String, // "text", "symbol", "raw"
         pub(super) match_type: String,     // "exact", "substr", "word", "regex"
+        pub(super) encoding: Option<Vec<String>>,
         pub(super) original_value: String, // Original pattern before normalization
         pub(super) for_types: HashSet<String>,
         pub(super) section: Option<String>,
@@ -93,21 +104,22 @@ pub(crate) use precision::{
 
 // Duplicate detection
 pub(crate) use duplicates::{
-    check_basename_pattern_duplicates, check_case_insensitive_overlaps,
-    check_exact_contained_by_substr, check_overlapping_regex_patterns,
-    check_regex_alternative_subsets, check_regex_contains_literal,
+    check_basename_pattern_duplicates, check_exact_contained_by_substr,
+    check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, find_alternation_merge_candidates,
-    find_atomic_logic_duplicates, find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_traits_and_composites, find_for_only_duplicates, find_string_content_collisions,
+    find_atomic_logic_duplicates, find_case_insensitive_overlap_issues,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules,
+    find_duplicate_traits_and_composites, find_for_only_duplicates,
+    find_regex_literal_overlap_issues, find_string_content_collisions,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
 };
 
 // Composite rule validation
 pub(crate) use composite::{
-    autoprefix_trait_refs, collect_trait_refs_from_rule, find_clause_refs_covering_directory,
-    find_overlapping_conditions, find_redundant_any_refs, find_self_referencing_traits,
-    find_single_item_clauses, validate_composite_trait_only,
+    autoprefix_trait_refs, collect_trait_refs_from_rule, find_many_directory_refs,
+    find_overlapping_conditions, find_pure_directory_alias_composites, find_redundant_any_refs,
+    find_self_referencing_traits, find_single_item_clauses, validate_composite_trait_only,
 };
 
 // Pattern quality checks

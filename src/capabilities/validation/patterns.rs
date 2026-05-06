@@ -4,10 +4,7 @@
 //! It identifies patterns that are likely to cause performance issues or false positives due to:
 //!
 //! - **Short patterns**: Patterns with insufficient literal content that match too broadly
-//! - **Regex backtracking**: Patterns with catastrophic backtracking potential, including:
-//!   - Overlapping alternations with wildcard patterns
-//!   - Unbounded quantifiers (e.g., `.{n,}`)
-//!   - Very large range quantifiers
+//! - **Regex cost**: Patterns that force broad raw/text scans or unusually large NFA programs
 //!
 //! Pattern analysis helps maintain rule quality by ensuring patterns have adequate specificity
 //! for their target domain.
@@ -145,19 +142,152 @@ fn overlapping_alternations_regex() -> Option<&'static regex::Regex> {
         .as_ref()
 }
 
-fn unrolled_quantifier_regex() -> Option<&'static regex::Regex> {
+fn broad_counted_repeat_regex() -> Option<&'static regex::Regex> {
     static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
-    // Capture bounded quantifiers on shorthand classes: \s{n,m}, \w{n,m}, etc.
-    // We extract the upper bound to only flag large unrolls (m > 20).
-    // Small bounds like \d{1,3} or \w{5,15} are fine — the unroll cost is negligible.
-    // Large bounds like \s{1,65} compile to 65 distinct NFA states instead of a
-    // 2-state loop (\s+), and explode when nested inside repeated groups.
-    //
-    // Note: open-ended quantifiers {n,} are NOT flagged — Rust's NFA compiles them
-    // to a 2-state loop, same as + or *. Bounding them (e.g. \s{1,65}) is actually
-    // WORSE because it unrolls into N states.
-    RE.get_or_init(|| regex::Regex::new(r"\\[swdSWD]\{([0-9]+),([0-9]+)\}").ok())
+    RE.get_or_init(|| {
+        regex::Regex::new(r"(?:\.|\\[sSwWdD]|\[\^?[^\]]+\])\{([0-9]+),([0-9]+)\}").ok()
+    })
+    .as_ref()
+}
+
+fn unbounded_broad_span_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r"(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])").ok())
         .as_ref()
+}
+
+fn leading_broad_span_regex() -> Option<&'static regex::Regex> {
+    static RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    RE.get_or_init(|| {
+        regex::Regex::new(
+            r"^(?:\^|\(\?[-a-zA-Z:]+\))*(?:\.\*|\.\+|\[\^[^\]]+\][*+]|\[\\s\\S\][*+])",
+        )
+        .ok()
+    })
+    .as_ref()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RegexSearchScope {
+    Broad,
+    Bounded,
+}
+
+#[derive(Debug)]
+struct RegexFacts<'a> {
+    pattern: &'a str,
+    type_label: &'static str,
+    scope: RegexSearchScope,
+    literal_count: usize,
+    alternation_count: usize,
+    largest_broad_repeat: Option<usize>,
+    has_unbounded_broad_span: bool,
+    has_leading_broad_span: bool,
+    has_overlapping_wildcard_alternation: bool,
+}
+
+impl<'a> RegexFacts<'a> {
+    fn analyze(pattern: &'a str, type_label: &'static str) -> Self {
+        Self {
+            pattern,
+            type_label,
+            scope: regex_search_scope(type_label),
+            literal_count: count_regex_min_literals(pattern),
+            alternation_count: count_regex_alternations(pattern),
+            largest_broad_repeat: largest_broad_counted_repeat(pattern),
+            has_unbounded_broad_span: unbounded_broad_span_regex()
+                .is_some_and(|regex| regex.is_match(pattern)),
+            has_leading_broad_span: leading_broad_span_regex()
+                .is_some_and(|regex| regex.is_match(pattern)),
+            has_overlapping_wildcard_alternation: overlapping_alternations_regex()
+                .is_some_and(|regex| regex.is_match(pattern)),
+        }
+    }
+}
+
+fn regex_search_scope(type_label: &str) -> RegexSearchScope {
+    match type_label {
+        "kv" | "symbol" | "string_literal" | "basename" | "ast" | "section" => {
+            RegexSearchScope::Bounded
+        }
+        _ => RegexSearchScope::Broad,
+    }
+}
+
+fn count_regex_alternations(pattern: &str) -> usize {
+    let mut count = 0;
+    let mut escaped = false;
+    let mut in_class = false;
+    for ch in pattern.chars() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '[' if !in_class => in_class = true,
+            ']' if in_class => in_class = false,
+            '|' if !in_class => count += 1,
+            _ => {}
+        }
+    }
+    count
+}
+
+fn largest_broad_counted_repeat(pattern: &str) -> Option<usize> {
+    let mut largest = None;
+    let Some(regex) = broad_counted_repeat_regex() else {
+        return largest;
+    };
+    for caps in regex.captures_iter(pattern) {
+        let Ok(upper) = caps[2].parse::<usize>() else {
+            continue;
+        };
+        largest = Some(largest.map_or(upper, |current: usize| current.max(upper)));
+    }
+    largest
+}
+
+fn regex_performance_issues(facts: &RegexFacts<'_>) -> Vec<String> {
+    let mut issues = Vec::new();
+
+    let repeat_limit = match facts.scope {
+        RegexSearchScope::Broad => 1000,
+        RegexSearchScope::Bounded => 4096,
+    };
+    if let Some(upper) = facts.largest_broad_repeat {
+        if upper > repeat_limit {
+            issues.push(format!(
+                "`{}` regex has a broad counted repeat up to {}; keep broad repeats under {} or use a structured matcher",
+                facts.type_label, upper, repeat_limit
+            ));
+        }
+    }
+
+    if facts.scope == RegexSearchScope::Broad {
+        if facts.has_leading_broad_span && facts.literal_count < 5 {
+            issues.push(
+                "leading broad span on raw/text-like input with little literal content; add a literal prefix or use a narrower matcher"
+                    .to_string(),
+            );
+        }
+
+        if facts.has_overlapping_wildcard_alternation {
+            issues.push(
+                "wildcard-heavy alternation on raw/text-like input; split into focused traits or require a literal prefilter"
+                    .to_string(),
+            );
+        }
+
+        if facts.alternation_count > 40 && facts.has_unbounded_broad_span {
+            issues.push(format!(
+                "large alternation chain ({}) combined with broad spans; split the regex or use shared traits",
+                facts.alternation_count + 1
+            ));
+        }
+    }
+
+    issues
 }
 
 /// Find traits with short patterns that are likely to produce too many false positives.
@@ -295,33 +425,30 @@ pub(crate) fn find_short_pattern_warnings(
                 }
             }
         }
-        match &trait_def.r#if {
-            Condition::Hex { pattern, .. } => {
-                // Count effective hex bytes (excluding ?? wildcards and [N] gaps,
-                // but counting nibble wildcards like 4? or ?F)
-                let effective_bytes = pattern
-                    .split_whitespace()
-                    .filter(|p| {
-                        !p.starts_with('[')
-                            && *p != "??"
-                            && p.len() == 2
-                            && p.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
-                    })
-                    .count();
-                if effective_bytes <= 2 && effective_bytes > 0 {
-                    let source = rule_source_files
-                        .get(&trait_def.id)
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_string());
-                    warnings.push((
-                        trait_def.id.clone(),
-                        pattern.clone(),
-                        "hex pattern".to_string(),
-                        source,
-                    ));
-                }
+        if let Condition::Hex { pattern, .. } = &trait_def.r#if {
+            // Count effective hex bytes (excluding ?? wildcards and [N] gaps,
+            // but counting nibble wildcards like 4? or ?F)
+            let effective_bytes = pattern
+                .split_whitespace()
+                .filter(|p| {
+                    !p.starts_with('[')
+                        && *p != "??"
+                        && p.len() == 2
+                        && p.chars().all(|c| c.is_ascii_hexdigit() || c == '?')
+                })
+                .count();
+            if effective_bytes <= 2 && effective_bytes > 0 {
+                let source = rule_source_files
+                    .get(&trait_def.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                warnings.push((
+                    trait_def.id.clone(),
+                    pattern.clone(),
+                    "hex pattern".to_string(),
+                    source,
+                ));
             }
-            _ => {}
         }
     }
 
@@ -363,39 +490,21 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
     }
 }
 
-/// Detect regex patterns that may cause catastrophic backtracking.
+/// Detect regex patterns that are likely to be expensive with Rust's regex engine.
 ///
-/// Patterns with nested quantifiers or alternations with overlapping prefixes
-/// can cause exponential runtime on certain inputs. This validates patterns
-/// for common backtracking pitfalls.
+/// Rust regex does not suffer catastrophic backtracking, so this policy focuses
+/// on broad raw/text scans and unusually large counted repetitions. Bounded
+/// structured fields such as `kv`, `symbol`, `string_literal`, and `basename`
+/// are intentionally much more permissive.
 pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mut Vec<String>) {
     for trait_def in traits {
         // Extract regex pattern from any regex-bearing condition variant
-        let pattern_opt =
-            substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r.map(str::to_owned));
+        let pattern_opt = substr_regex_fields(&trait_def.r#if)
+            .and_then(|(_, r, type_label)| r.map(|pattern| (pattern, type_label)));
 
-        if let Some(pattern) = pattern_opt {
-            let mut issues = Vec::new();
-
-            // Check for overlapping alternations with wildcards like (a.*|ab.*)
-            if overlapping_alternations_regex().is_some_and(|regex| regex.is_match(&pattern)) {
-                issues.push("alternation with multiple .* patterns may cause backtracking");
-            }
-
-            // Check for unrolled bounded quantifiers like \s{1,65} that should be \s+ or \s*
-            // Only flag when upper bound > 20 — small unrolls like \d{1,3} or \w{5,15} are fine.
-            // Note: open-ended {n,} is NOT flagged — NFA compiles it to a 2-state loop.
-            if let Some(caps) =
-                unrolled_quantifier_regex().and_then(|regex| regex.captures(&pattern))
-            {
-                if let Ok(upper) = caps[2].parse::<usize>() {
-                    if upper > 20 {
-                        issues.push(
-                            "unrolled bounded quantifier (e.g. \\s{1,65}) — use \\s+, \\s*, or \\s? instead (loop vs chain)",
-                        );
-                    }
-                }
-            }
+        if let Some((pattern, type_label)) = pattern_opt {
+            let facts = RegexFacts::analyze(pattern, type_label);
+            let issues = regex_performance_issues(&facts);
 
             if !issues.is_empty() {
                 let source_file = trait_def
@@ -415,7 +524,7 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
                     "Regex performance: trait '{}' in {} has potentially slow pattern '{}': {}",
                     trait_def.id,
                     location,
-                    pattern,
+                    facts.pattern,
                     issues.join(", ")
                 ));
             }
@@ -838,5 +947,45 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
              use `type: symbol` with `exact: {}` instead (faster, no false positives on the name inside comments or string literals)",
             trait_def.id, location, kind, value, name
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{regex_performance_issues, RegexFacts};
+
+    fn issues(pattern: &str, type_label: &'static str) -> Vec<String> {
+        regex_performance_issues(&RegexFacts::analyze(pattern, type_label))
+    }
+
+    #[test]
+    fn regex_perf_allows_moderate_bounded_spans() {
+        assert!(issues(r"\S{1,80}", "text").is_empty());
+        assert!(issues(r"https?://\S{1,200}\.ps1\b", "text").is_empty());
+    }
+
+    #[test]
+    fn regex_perf_flags_large_broad_text_spans() {
+        let warnings = issues(r"^.{0,2000}Invoke-Expression", "text");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("broad counted repeat"));
+    }
+
+    #[test]
+    fn regex_perf_is_lenient_for_bounded_fields() {
+        assert!(issues(r".{0,2000}Invoke-Expression", "kv").is_empty());
+
+        let warnings = issues(r".{0,5000}Invoke-Expression", "kv");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("broad counted repeat"));
+    }
+
+    #[test]
+    fn regex_perf_flags_unanchored_broad_scans_only_when_too_loose() {
+        let warnings = issues(r".*\w+.*", "raw");
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("leading broad span"));
+
+        assert!(issues(r".*BackdoorConfig", "raw").is_empty());
     }
 }

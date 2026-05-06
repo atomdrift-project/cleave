@@ -785,6 +785,7 @@ dependencies = [
  "regex",
  "regex-syntax",
  "roxmltree",
+ "rsa",
  "rusqlite",
  "rustc-hash 2.1.2",
  "scpt",

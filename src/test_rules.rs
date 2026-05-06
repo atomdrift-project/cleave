@@ -1808,7 +1808,9 @@ fn evaluate_condition_simple(
     condition: &Condition,
     ctx: &EvaluationContext<'_>,
 ) -> crate::composite_rules::context::ConditionResult {
-    use crate::composite_rules::evaluators::{eval_basename, eval_section, eval_syscall};
+    use crate::composite_rules::evaluators::{
+        eval_basename, eval_section, eval_syscall, SectionParams,
+    };
 
     // Evaluate conditions that fall through to the _ => case in debug_condition
     match condition {
@@ -1826,24 +1828,30 @@ fn evaluate_condition_simple(
             writable,
             executable,
             compare_to,
-            ratio_min,
-            ratio_max,
+            size_ratio_min,
+            size_ratio_max,
+            entropy_ratio_min,
+            entropy_ratio_max,
         } => eval_section(
-            exact.as_ref(),
-            substr.as_ref(),
-            regex.as_ref(),
-            word.as_ref(),
-            *case_insensitive,
-            *length_min,
-            *length_max,
-            *entropy_min,
-            *entropy_max,
-            *readable,
-            *writable,
-            *executable,
-            compare_to.as_ref(),
-            *ratio_min,
-            *ratio_max,
+            &SectionParams {
+                exact: exact.as_ref(),
+                substr: substr.as_ref(),
+                regex: regex.as_ref(),
+                word: word.as_ref(),
+                case_insensitive: *case_insensitive,
+                length_min: *length_min,
+                length_max: *length_max,
+                entropy_min: *entropy_min,
+                entropy_max: *entropy_max,
+                readable: *readable,
+                writable: *writable,
+                executable: *executable,
+                compare_to: compare_to.as_ref(),
+                size_ratio_min: *size_ratio_min,
+                size_ratio_max: *size_ratio_max,
+                entropy_ratio_min: *entropy_ratio_min,
+                entropy_ratio_max: *entropy_ratio_max,
+            },
             ctx,
         ),
         Condition::Syscall { name, number, arch } => {

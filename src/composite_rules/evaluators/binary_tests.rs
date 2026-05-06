@@ -43,21 +43,25 @@ fn test_eval_section_regex() {
 
     let regex = r"^UPX".to_string();
     let result = eval_section(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: Some(&regex),
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -80,21 +84,25 @@ fn test_eval_section_contains() {
 
     let substr = "packed".to_string();
     let result = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: Some(&substr),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -116,21 +124,25 @@ fn test_eval_section_no_match() {
 
     let substr = "UPX".to_string();
     let result = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: Some(&substr),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(!result.matched);
@@ -160,21 +172,25 @@ fn test_eval_section_multiple_matches() {
 
     let substr = ".text".to_string();
     let result = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: Some(&substr),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -205,21 +221,25 @@ fn test_eval_section_exact() {
 
     let exact = ".text".to_string();
     let result = eval_section(
-        Some(&exact),
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: Some(&exact),
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -242,21 +262,25 @@ fn test_eval_section_case_insensitive() {
 
     let substr = ".text".to_string();
     let result = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        true,
-        None,
-        None,
-        None,
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: Some(&substr),
+            regex: None,
+            word: None,
+            case_insensitive: true,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -430,21 +454,25 @@ fn test_eval_section_entropy_min() {
 
     // Match sections with entropy >= 7.0
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        Some(7.0),
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: Some(7.0),
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -477,21 +505,25 @@ fn test_eval_section_entropy_max() {
 
     // Match sections with entropy <= 4.0
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        Some(4.0),
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: Some(4.0),
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -532,21 +564,25 @@ fn test_eval_section_combined_constraints() {
     // Match UPX sections with high entropy and size > 1000
     let regex = "^UPX".to_string();
     let result = eval_section(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
-        Some(1000),
-        None,
-        Some(7.5),
-        None,
-        None, // readable
-        None, // writable
-        None, // executable
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: Some(&regex),
+            word: None,
+            case_insensitive: false,
+            length_min: Some(1000),
+            length_max: None,
+            entropy_min: Some(7.5),
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -573,24 +609,10 @@ fn test_eval_section_precision_scoring() {
     // Exact match should have highest precision
     let exact = ".text".to_string();
     let result1 = eval_section(
-        Some(&exact),
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
-        // readable
-        None,
-        // writable
-        None,
-        None,
-        None,
-        None,
-        // executable
+        &SectionParams {
+            exact: Some(&exact),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result1.precision, 2.0);
@@ -598,24 +620,10 @@ fn test_eval_section_precision_scoring() {
     // Regex should have lower precision
     let regex = r"\.text".to_string();
     let result2 = eval_section(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
-        // readable
-        None,
-        // writable
-        None,
-        None,
-        None,
-        None,
-        // executable
+        &SectionParams {
+            regex: Some(&regex),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result2.precision, 1.5);
@@ -623,48 +631,22 @@ fn test_eval_section_precision_scoring() {
     // Substr should have even lower precision
     let substr = "text".to_string();
     let result3 = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
-        // readable
-        None,
-        // writable
-        None,
-        None,
-        None,
-        None,
-        // executable
+        &SectionParams {
+            substr: Some(&substr),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result3.precision, 1.0);
 
     // Adding entropy constraints should increase precision
     let result4 = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        Some(6.0),
-        Some(7.0),
-        None,
-        // readable
-        None,
-        // writable
-        None,
-        None,
-        None,
-        None,
-        // executable
+        &SectionParams {
+            substr: Some(&substr),
+            entropy_min: Some(6.0),
+            entropy_max: Some(7.0),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result4.precision, 2.0); // 1.0 (substr) + 0.5 (entropy_min) + 0.5 (entropy_max)
@@ -745,21 +727,25 @@ fn test_eval_section_length_min() {
 
     // length_min: 1000 — only .text (5000) should match
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        Some(1000), // length_min
-        None,       // length_max
-        None,
-        None,
-        None,
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: Some(1000),
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -784,21 +770,25 @@ fn test_eval_section_length_min_no_match() {
 
     // length_min: 1000 — .text (500) too small
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        Some(1000),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: Some(1000),
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(!result.matched);
@@ -828,21 +818,25 @@ fn test_eval_section_length_max() {
 
     // length_max: 1000 — only .data (200) should match
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,       // length_min
-        Some(1000), // length_max
-        None,
-        None,
-        None,
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: Some(1000),
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -883,21 +877,25 @@ fn test_eval_section_length_range() {
 
     // length_min: 100, length_max: 10000 — only .medium (500) should match
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        Some(100),
-        Some(10000),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: Some(100),
+            length_max: Some(10000),
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -930,21 +928,25 @@ fn test_eval_section_length_with_name_pattern() {
     // Match UPX sections with size >= 5000
     let regex = "^UPX".to_string();
     let result = eval_section(
-        None,
-        None,
-        Some(&regex),
-        None,
-        false,
-        Some(5000),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: Some(&regex),
+            word: None,
+            case_insensitive: false,
+            length_min: Some(5000),
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(result.matched);
@@ -969,63 +971,33 @@ fn test_eval_section_length_precision_boost() {
     // Substr alone: precision 1.0
     let substr = "text".to_string();
     let result_base = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        &SectionParams {
+            substr: Some(&substr),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result_base.precision, 1.0);
 
     // Substr + length_min: precision 1.5
     let result_min = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        Some(500),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        &SectionParams {
+            substr: Some(&substr),
+            length_min: Some(500),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result_min.precision, 1.5);
 
     // Substr + length_min + length_max: precision 2.0
     let result_both = eval_section(
-        None,
-        Some(&substr),
-        None,
-        None,
-        false,
-        Some(500),
-        Some(5000),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
+        &SectionParams {
+            substr: Some(&substr),
+            length_min: Some(500),
+            length_max: Some(5000),
+            ..SectionParams::default()
+        },
         &ctx,
     );
     assert_eq!(result_both.precision, 2.0);
@@ -1059,21 +1031,25 @@ fn test_eval_section_executable_flag() {
 
     // Match only executable sections
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,       // readable
-        None,       // writable
-        Some(true), // executable = true
-        None,       // compare_to
-        None,       // ratio_min
-        None,       // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: Some(true),
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(
@@ -1085,21 +1061,25 @@ fn test_eval_section_executable_flag() {
 
     // .data has "rw" — not executable
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        None,       // readable
-        None,       // writable
-        Some(true), // executable = true
-        None,       // compare_to
-        None,       // ratio_min
-        None,       // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: Some(true),
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     // Only .text should match, not .data
@@ -1122,21 +1102,25 @@ fn test_eval_section_permission_no_match() {
 
     // Section without permissions should fail strict permission checks
     let result = eval_section(
-        None,
-        None,
-        None,
-        None,
-        false,
-        None,
-        None,
-        None,
-        None,
-        Some(true), // readable = true
-        None,
-        None,
-        None, // compare_to
-        None, // ratio_min
-        None, // ratio_max
+        &SectionParams {
+            exact: None,
+            substr: None,
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: Some(true),
+            writable: None,
+            executable: None,
+            compare_to: None,
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: None,
+        },
         &ctx,
     );
     assert!(
@@ -1176,5 +1160,203 @@ fn test_eval_syscall_empty_lists_no_match() {
     assert!(
         !result.matched,
         "Empty number list should not match any syscalls"
+    );
+}
+
+// =============================================================================
+// T11: Section entropy ratio
+// =============================================================================
+
+fn make_section(name: &str, entropy: f64) -> Section {
+    Section {
+        name: name.to_string(),
+        address: Some(0x1000),
+        offset: None,
+        size: 0x1000,
+        entropy,
+        permissions: None,
+    }
+}
+
+#[test]
+fn test_eval_section_entropy_ratio_fires_when_rsrc_much_higher_than_text() {
+    // .rsrc entropy 7.5, .text entropy 4.0 → ratio = 7.5/4.0 = 1.875
+    let mut report = create_test_report();
+    report.sections.push(make_section(".rsrc", 7.5));
+    report.sections.push(make_section(".text", 4.0));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let text_pattern = ".text".to_string();
+    let result = eval_section(
+        &SectionParams {
+            exact: None,
+            substr: Some(&".rsrc".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: Some(&text_pattern),
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: Some(1.5),
+            entropy_ratio_max: None,
+        },
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "rsrc entropy 7.5 should be ≥ 1.5x text entropy 4.0"
+    );
+    assert!(
+        result
+            .evidence
+            .iter()
+            .any(|e| e.method == "section_entropy_ratio"),
+        "should produce entropy_ratio evidence"
+    );
+}
+
+#[test]
+fn test_eval_section_entropy_ratio_no_match_when_ratio_too_low() {
+    // .rsrc entropy 5.0, .text entropy 4.5 → ratio ≈ 1.11, below min 1.5
+    let mut report = create_test_report();
+    report.sections.push(make_section(".rsrc", 5.0));
+    report.sections.push(make_section(".text", 4.5));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let text_pattern = ".text".to_string();
+    let result = eval_section(
+        &SectionParams {
+            exact: None,
+            substr: Some(&".rsrc".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: Some(&text_pattern),
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: Some(1.5),
+            entropy_ratio_max: None,
+        },
+        &ctx,
+    );
+    assert!(
+        !result.matched,
+        "ratio 1.11 should not satisfy entropy_ratio_min 1.5"
+    );
+}
+
+#[test]
+fn test_eval_section_entropy_ratio_compares_against_all_other_when_no_pattern() {
+    // .rsrc entropy 7.8; .text 3.5 and .data 4.0 (mean = 3.75) → ratio = 7.8/3.75 ≈ 2.08
+    let mut report = create_test_report();
+    report.sections.push(make_section(".rsrc", 7.8));
+    report.sections.push(make_section(".text", 3.5));
+    report.sections.push(make_section(".data", 4.0));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let rsrc = ".rsrc".to_string();
+    let result = eval_section(
+        &SectionParams {
+            substr: Some(&rsrc),
+            entropy_ratio_min: Some(2.0), // no compare_to → compares against all other sections
+            ..SectionParams::default()
+        },
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "7.8 / mean(3.5,4.0) ≈ 2.08 should exceed entropy_ratio_min 2.0"
+    );
+}
+
+#[test]
+fn test_eval_section_entropy_ratio_no_match_when_denominator_missing() {
+    // Only the matched section exists — no denominator sections → no match
+    let mut report = create_test_report();
+    report.sections.push(make_section(".rsrc", 7.5));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let text_pattern = ".text".to_string();
+    let result = eval_section(
+        &SectionParams {
+            exact: None,
+            substr: Some(&".rsrc".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: Some(&text_pattern),
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: Some(1.5),
+            entropy_ratio_max: None,
+        },
+        &ctx,
+    );
+    assert!(
+        !result.matched,
+        "no denominator sections should produce no match"
+    );
+}
+
+#[test]
+fn test_eval_section_entropy_ratio_max_constraint() {
+    // .text entropy 3.5 / .rsrc entropy 7.0 = 0.5 → must be ≤ 0.7
+    let mut report = create_test_report();
+    report.sections.push(make_section(".text", 3.5));
+    report.sections.push(make_section(".rsrc", 7.0));
+    let data = vec![];
+    let ctx = create_test_context(&report, &data);
+
+    let rsrc_pattern = ".rsrc".to_string();
+    let result = eval_section(
+        &SectionParams {
+            exact: None,
+            substr: Some(&".text".to_string()),
+            regex: None,
+            word: None,
+            case_insensitive: false,
+            length_min: None,
+            length_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            readable: None,
+            writable: None,
+            executable: None,
+            compare_to: Some(&rsrc_pattern),
+            size_ratio_min: None,
+            size_ratio_max: None,
+            entropy_ratio_min: None,
+            entropy_ratio_max: Some(0.7),
+        },
+        &ctx,
+    );
+    assert!(
+        result.matched,
+        "ratio 0.5 should satisfy entropy_ratio_max 0.7"
     );
 }

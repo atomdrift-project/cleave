@@ -69,4 +69,13 @@ mod tests {
             paths.len()
         );
     }
+
+    #[test]
+    fn print_metric_description_violations() {
+        let v = super::super::field_paths::metric_description_violations();
+        eprintln!("\n{} violations (outside 25–60 chars):", v.len());
+        for (path, len, first) in &v {
+            eprintln!("  [{len:>3}] {path}  \"{first}\"");
+        }
+    }
 }

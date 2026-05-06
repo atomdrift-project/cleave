@@ -516,8 +516,10 @@ fn score_condition(condition: &Condition) -> f32 {
             writable,
             executable,
             compare_to,
-            ratio_min,
-            ratio_max,
+            size_ratio_min,
+            size_ratio_max,
+            entropy_ratio_min,
+            entropy_ratio_max,
         } => {
             score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
             score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
@@ -550,10 +552,16 @@ fn score_condition(condition: &Condition) -> f32 {
             if compare_to.is_some() {
                 score += PARAM_UNIT;
             }
-            if ratio_min.is_some() {
+            if size_ratio_min.is_some() {
                 score += PARAM_UNIT;
             }
-            if ratio_max.is_some() {
+            if size_ratio_max.is_some() {
+                score += PARAM_UNIT;
+            }
+            if entropy_ratio_min.is_some() {
+                score += PARAM_UNIT;
+            }
+            if entropy_ratio_max.is_some() {
                 score += PARAM_UNIT;
             }
         }

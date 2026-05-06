@@ -14,7 +14,8 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    evaluators::build_regex, CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition,
+    condition::EncodingSpec, evaluators::build_regex, CompositeTrait, Condition,
+    FileType as RuleFileType, TraitDefinition,
 };
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -403,10 +404,7 @@ fn extract_single_group_alternation(pattern: &str) -> Option<(String, Vec<String
 
     Some((
         prefix,
-        alternatives
-            .into_iter()
-            .map(|alt| decode_hex_escapes(alt))
-            .collect(),
+        alternatives.into_iter().map(decode_hex_escapes).collect(),
         suffix,
     ))
 }
@@ -487,30 +485,34 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
     let file_path = trait_def.defined_in.to_string_lossy().to_string();
 
     // Helper to add a pattern
-    let mut add_pattern =
-        |condition_type: &str, match_type: &str, value: String, section: Option<String>| {
-            let is_regex = match_type == "regex";
-            let normalized = normalize_pattern_for_comparison(&value, is_regex);
+    let mut add_pattern = |condition_type: &str,
+                           match_type: &str,
+                           value: String,
+                           section: Option<String>,
+                           encoding: Option<Vec<String>>| {
+        let is_regex = match_type == "regex";
+        let normalized = normalize_pattern_for_comparison(&value, is_regex);
 
-            patterns.push((
-                normalized,
-                PatternLocation {
-                    trait_id: trait_def.id.clone(),
-                    file_path: file_path.clone(),
-                    condition_type: condition_type.to_string(),
-                    match_type: match_type.to_string(),
-                    original_value: value,
-                    for_types: for_types.clone(),
-                    section,
-                    count_min: trait_def.count_min,
-                    count_max: trait_def.count_max,
-                    per_kb_min: trait_def.per_kb_min,
-                    per_kb_max: trait_def.per_kb_max,
-                    confidence: trait_def.conf,
-                    criticality: trait_def.crit,
-                },
-            ));
-        };
+        patterns.push((
+            normalized,
+            PatternLocation {
+                trait_id: trait_def.id.clone(),
+                file_path: file_path.clone(),
+                condition_type: condition_type.to_string(),
+                match_type: match_type.to_string(),
+                encoding,
+                original_value: value,
+                for_types: for_types.clone(),
+                section,
+                count_min: trait_def.count_min,
+                count_max: trait_def.count_max,
+                per_kb_min: trait_def.per_kb_min,
+                per_kb_max: trait_def.per_kb_max,
+                confidence: trait_def.conf,
+                criticality: trait_def.crit,
+            },
+        ));
+    };
 
     // Extract patterns from all string-pattern condition variants. Callers
     // can filter on `condition_type` after extraction if they need to scope
@@ -523,13 +525,13 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ..
         } => {
             if let Some(v) = exact {
-                add_pattern("symbol", "exact", v.clone(), None);
+                add_pattern("symbol", "exact", v.clone(), None, None);
             }
             if let Some(v) = substr {
-                add_pattern("symbol", "substr", v.clone(), None);
+                add_pattern("symbol", "substr", v.clone(), None, None);
             }
             if let Some(v) = regex {
-                add_pattern("symbol", "regex", v.clone(), None);
+                add_pattern("symbol", "regex", v.clone(), None, None);
             }
         }
         Condition::Raw {
@@ -542,16 +544,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         } => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("raw", "exact", v.clone(), sec.clone());
+                add_pattern("raw", "exact", v.clone(), sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("raw", "substr", v.clone(), sec.clone());
+                add_pattern("raw", "substr", v.clone(), sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("raw", "word", v.clone(), sec.clone());
+                add_pattern("raw", "word", v.clone(), sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("raw", "regex", v.clone(), sec.clone());
+                add_pattern("raw", "regex", v.clone(), sec.clone(), None);
             }
         }
         Condition::Text {
@@ -564,16 +566,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         } => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("text", "exact", v.clone(), sec.clone());
+                add_pattern("text", "exact", v.clone(), sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("text", "substr", v.clone(), sec.clone());
+                add_pattern("text", "substr", v.clone(), sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("text", "word", v.clone(), sec.clone());
+                add_pattern("text", "word", v.clone(), sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("text", "regex", v.clone(), sec.clone());
+                add_pattern("text", "regex", v.clone(), sec.clone(), None);
             }
         }
         Condition::StringLiteral {
@@ -586,16 +588,16 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
         } => {
             let sec = section.clone();
             if let Some(v) = exact {
-                add_pattern("string_literal", "exact", v.clone(), sec.clone());
+                add_pattern("string_literal", "exact", v.clone(), sec.clone(), None);
             }
             if let Some(v) = substr {
-                add_pattern("string_literal", "substr", v.clone(), sec.clone());
+                add_pattern("string_literal", "substr", v.clone(), sec.clone(), None);
             }
             if let Some(v) = word {
-                add_pattern("string_literal", "word", v.clone(), sec.clone());
+                add_pattern("string_literal", "word", v.clone(), sec.clone(), None);
             }
             if let Some(v) = regex {
-                add_pattern("string_literal", "regex", v.clone(), sec.clone());
+                add_pattern("string_literal", "regex", v.clone(), sec.clone(), None);
             }
         }
         Condition::Basename {
@@ -605,13 +607,13 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             ..
         } => {
             if let Some(v) = exact {
-                add_pattern("basename", "exact", v.clone(), None);
+                add_pattern("basename", "exact", v.clone(), None, None);
             }
             if let Some(v) = substr {
-                add_pattern("basename", "substr", v.clone(), None);
+                add_pattern("basename", "substr", v.clone(), None, None);
             }
             if let Some(v) = regex {
-                add_pattern("basename", "regex", v.clone(), None);
+                add_pattern("basename", "regex", v.clone(), None, None);
             }
         }
         Condition::Encoded {
@@ -620,26 +622,94 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             word,
             regex,
             section,
+            encoding,
             ..
         } => {
             let sec = section.clone();
+            let enc = canonical_encoding_scope(encoding);
             if let Some(v) = exact {
-                add_pattern("encoded", "exact", v.clone(), sec.clone());
+                add_pattern("encoded", "exact", v.clone(), sec.clone(), enc.clone());
             }
             if let Some(v) = substr {
-                add_pattern("encoded", "substr", v.clone(), sec.clone());
+                add_pattern("encoded", "substr", v.clone(), sec.clone(), enc.clone());
             }
             if let Some(v) = word {
-                add_pattern("encoded", "word", v.clone(), sec.clone());
+                add_pattern("encoded", "word", v.clone(), sec.clone(), enc.clone());
             }
             if let Some(v) = regex {
-                add_pattern("encoded", "regex", v.clone(), sec.clone());
+                add_pattern("encoded", "regex", v.clone(), sec.clone(), enc.clone());
             }
         }
         _ => {} // Skip Yara, Hex, Trait, Syscall, Metrics, Section, Kv, Ast.
     }
 
     patterns
+}
+
+fn canonical_encoding_scope(encoding: &Option<EncodingSpec>) -> Option<Vec<String>> {
+    match encoding {
+        None => None,
+        Some(EncodingSpec::Single(enc)) => Some(vec![enc.to_ascii_lowercase()]),
+        Some(EncodingSpec::Multiple(encodings)) => {
+            let mut values: Vec<String> =
+                encodings.iter().map(|e| e.to_ascii_lowercase()).collect();
+            values.sort();
+            values.dedup();
+            Some(values)
+        }
+    }
+}
+
+fn matcher_context_overlaps(a: &PatternLocation, b: &PatternLocation) -> bool {
+    if a.condition_type != b.condition_type || a.match_type != b.match_type {
+        return false;
+    }
+    if !section_scope_overlaps(a.section.as_deref(), b.section.as_deref()) {
+        return false;
+    }
+    if a.condition_type != "encoded" {
+        return true;
+    }
+    match (&a.encoding, &b.encoding) {
+        (None, _) | (_, None) => true,
+        (Some(a_enc), Some(b_enc)) => a_enc.iter().any(|enc| b_enc.contains(enc)),
+    }
+}
+
+fn section_scope_overlaps(a: Option<&str>, b: Option<&str>) -> bool {
+    match (a, b) {
+        (None, _) | (_, None) => true,
+        (Some(a), Some(b)) => {
+            let a = canonical_section_scope(a);
+            let b = canonical_section_scope(b);
+            a == b || (is_rodata_scope(&a) && is_rodata_scope(&b))
+        }
+    }
+}
+
+fn canonical_section_scope(section: &str) -> String {
+    let section = section.trim().to_ascii_lowercase();
+    match section.trim_start_matches('.') {
+        "text" | "__text,__text" => "text",
+        "data" | "__data,__data" => "data",
+        "rdata" | "rodata" | "__text,__const" | "__data,__const" => "rdata",
+        "rsrc" => "rsrc",
+        other => other,
+    }
+    .to_string()
+}
+
+fn is_rodata_scope(section: &str) -> bool {
+    section == "rdata"
+}
+
+fn condition_label(location: &PatternLocation) -> String {
+    if location.condition_type == "encoded" {
+        if let Some(encodings) = &location.encoding {
+            return format!("encoded[{}]", encodings.join("|"));
+        }
+    }
+    location.condition_type.clone()
 }
 
 /// Check if two pattern locations have overlapping file type coverage
@@ -714,11 +784,13 @@ pub(crate) fn find_string_pattern_duplicates(
             continue;
         }
 
-        // Check if any pair has overlapping file type coverage
+        // Check if any pair has overlapping file type coverage for the same matcher
+        // kind. Cross-type duplicates are handled by the cross-type validator.
         let mut has_overlap = false;
         'outer: for i in 0..locations.len() {
             for j in (i + 1)..locations.len() {
                 if locations[i].file_path != locations[j].file_path
+                    && matcher_context_overlaps(&locations[i], &locations[j])
                     && has_filetype_overlap(&locations[i], &locations[j])
                 {
                     has_overlap = true;
@@ -741,6 +813,9 @@ pub(crate) fn find_string_pattern_duplicates(
 
                 // Skip same file (already filtered above, but double-check)
                 if loc_a.file_path == loc_b.file_path {
+                    continue;
+                }
+                if !matcher_context_overlaps(loc_a, loc_b) {
                     continue;
                 }
 
@@ -786,7 +861,7 @@ pub(crate) fn find_string_pattern_duplicates(
                         "   {}: {} ({} {}: '{}', for: {}, conf: {:.2}, crit: {:?})",
                         l.file_path,
                         l.trait_id,
-                        l.condition_type,
+                        condition_label(l),
                         l.match_type,
                         l.original_value,
                         for_str,
@@ -807,26 +882,30 @@ pub(crate) fn find_string_pattern_duplicates(
         // Check for tier violations (objectives duplicating micro-behaviors)
         use super::helpers::extract_tier;
 
-        let mut has_micro_behavior = false;
-        let mut has_objective = false;
-        let mut micro_behavior_ids: Vec<String> = Vec::new();
-        let mut objective_ids: Vec<String> = Vec::new();
+        let mut reusable_ids: Vec<String> = Vec::new();
+        let mut higher_tier_ids: Vec<String> = Vec::new();
+        let mut tiers: Vec<&str> = Vec::new();
 
         for loc in &locations {
             if let Some(tier) = extract_tier(&loc.trait_id) {
+                tiers.push(tier);
                 match tier {
-                    "micro-behaviors" => {
-                        has_micro_behavior = true;
-                        micro_behavior_ids.push(loc.trait_id.clone());
+                    "metadata" | "micro-behaviors" => {
+                        reusable_ids.push(loc.trait_id.clone());
                     }
                     "objectives" | "well-known" => {
-                        has_objective = true;
-                        objective_ids.push(loc.trait_id.clone());
+                        higher_tier_ids.push(loc.trait_id.clone());
                     }
                     _ => {}
                 }
             }
         }
+        reusable_ids.sort();
+        reusable_ids.dedup();
+        higher_tier_ids.sort();
+        higher_tier_ids.dedup();
+        tiers.sort();
+        tiers.dedup();
 
         // Format warning message
         let location_details: Vec<String> = locations
@@ -843,7 +922,7 @@ pub(crate) fn find_string_pattern_duplicates(
                     "   {}: {} ({} {}: '{}', for: {})",
                     l.file_path,
                     l.trait_id,
-                    l.condition_type,
+                    condition_label(l),
                     l.match_type,
                     l.original_value,
                     for_str
@@ -851,23 +930,29 @@ pub(crate) fn find_string_pattern_duplicates(
             })
             .collect();
 
-        // Add tier violation note if applicable
-        let tier_note = if has_micro_behavior && has_objective {
+        let action = if !reusable_ids.is_empty() && !higher_tier_ids.is_empty() {
             format!(
-                "\n   ⚠️  TIER VIOLATION: objectives/ should REFERENCE micro-behaviors/, not duplicate patterns\n   → Action: Remove pattern from {} and use 'needs: [{}]' instead",
-                objective_ids.join(", "),
-                micro_behavior_ids.join(", ")
+                "Reference reusable atom(s) [{}] from higher-tier traits [{}] instead of repeating the same atom.",
+                reusable_ids.join(", "),
+                higher_tier_ids.join(", ")
             )
+        } else if reusable_ids.is_empty()
+            && tiers
+                .iter()
+                .any(|tier| matches!(*tier, "objectives" | "well-known"))
+        {
+            "Move the shared atom to the lowest accurate reusable tier (metadata/ or micro-behaviors/) and reference it from each higher-tier trait.".to_string()
         } else {
-            String::new()
+            "Keep one atom in the best taxonomy location and reference it from the other traits."
+                .to_string()
         };
 
         warnings.push(format!(
-            "Duplicate pattern '{}' appears in {} files with overlapping file type coverage:\n{}{}",
+            "Duplicate reusable atom '{}' appears in {} files with overlapping file type coverage:\n{}\n   → Action: {}",
             normalized_pattern,
             by_file.len(),
             location_details.join("\n"),
-            tier_note
+            action
         ));
     }
 
@@ -887,6 +972,10 @@ pub(crate) fn check_regex_or_overlapping_exact(
 ) {
     let start = std::time::Instant::now();
     let initial_warning_count = warnings.len();
+
+    fn trait_dir(id: &str) -> &str {
+        id.split_once("::").map_or(id, |(dir, _)| dir)
+    }
 
     // First pass: collect all regex patterns with | (OR operators)
     let mut regex_patterns: Vec<(String, PatternLocation)> = Vec::new();
@@ -925,14 +1014,21 @@ pub(crate) fn check_regex_or_overlapping_exact(
         for alternative in alternatives {
             // Normalize the alternative (strip anchors)
             let normalized_alt = normalize_regex(alternative);
+            if normalized_alt.len() < 8 {
+                continue;
+            }
 
             // Check if this alternative exists as a literal pattern elsewhere
             if let Some(literal_locs) = literal_patterns.get(&normalized_alt) {
-                // Only report if the literal is in a different file AND has file type overlap
+                // Only report local taxonomy overlap. Cross-directory literal
+                // reuse is handled by broader duplicate-pattern validators; this
+                // check is for alternatives that should be split/reused inside
+                // the same trait directory.
                 let overlapping_files: Vec<String> = literal_locs
                     .iter()
                     .filter(|loc| {
                         loc.file_path != regex_loc.file_path
+                            && trait_dir(&loc.trait_id) == trait_dir(&regex_loc.trait_id)
                             && has_filetype_overlap(loc, &regex_loc)
                     })
                     .map(|loc| format!("{}::{}", loc.file_path, loc.trait_id))
@@ -1376,6 +1472,15 @@ pub(crate) fn check_exact_contained_by_substr(
                         (Some(e), Some(s)) => format!(" (cross-tier: {e} → {s})"),
                         _ => String::new(),
                     };
+                    let action = match (exact_tier, substr_tier) {
+                        (Some(e), Some(s)) if e != s && is_reusable_tier(e) => {
+                            "Remove higher-tier substr pattern and reference the exact reusable atom"
+                        }
+                        (Some(e), Some(s)) if e != s && is_reusable_tier(s) => {
+                            "Remove higher-tier exact pattern and reference the reusable substr atom"
+                        }
+                        _ => "Keep one matcher in the best taxonomy location and reference it",
+                    };
 
                     let for_exact = if exact_loc.for_types.is_empty() {
                         "all".to_string()
@@ -1394,10 +1499,10 @@ pub(crate) fn check_exact_contained_by_substr(
                     };
 
                     warnings.push(format!(
-                        "REDUNDANT: exact pattern '{}' is already matched by substr pattern{}
+                        "Exact pattern '{}' is also matched by substr pattern{}
    Exact:  {}::{} (for: {})
    Substr: {}::{} (for: {})
-   → Action: Remove exact pattern (substr already catches this)",
+   → Action: {}",
                         exact_pattern,
                         tier_note,
                         exact_loc.file_path,
@@ -1406,6 +1511,7 @@ pub(crate) fn check_exact_contained_by_substr(
                         substr_loc.file_path,
                         substr_loc.trait_id,
                         for_substr,
+                        action,
                     ));
                 }
             }
@@ -1432,12 +1538,40 @@ pub(crate) fn check_exact_contained_by_substr(
 ///
 /// Important: Does NOT flag patterns that differ in content:
 ///   - "GetProcAddress" ≠ "GetProcAddressA" (different strings)
+#[cfg(test)]
 pub(crate) fn check_case_insensitive_overlaps(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
+    warnings.extend(
+        find_case_insensitive_overlap_issues(trait_definitions)
+            .into_iter()
+            .map(|(_, message)| message),
+    );
+}
+
+pub(crate) fn find_case_insensitive_overlap_issues(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(&'static str, String)> {
     let start = std::time::Instant::now();
-    let initial_warning_count = warnings.len();
+    let mut issues = Vec::new();
+
+    collect_case_insensitive_overlap_issues(trait_definitions, &mut issues);
+
+    tracing::debug!(
+        "Case-insensitive overlap detection completed in {:?} ({} overlaps found)",
+        start.elapsed(),
+        issues.len()
+    );
+    issues
+}
+
+fn collect_case_insensitive_overlap_issues(
+    trait_definitions: &[TraitDefinition],
+    issues: &mut Vec<(&'static str, String)>,
+) {
+    let start = std::time::Instant::now();
+    let initial_issue_count = issues.len();
 
     // Helper structure to track pattern with case info
     #[derive(Debug)]
@@ -1451,6 +1585,10 @@ pub(crate) fn check_case_insensitive_overlaps(
         trait_id: String,
         file_path: String,
         for_types: HashSet<String>,
+    }
+
+    fn trait_dir(id: &str) -> &str {
+        id.split_once("::").map_or(id, |(dir, _)| dir)
     }
 
     // Extract patterns with case sensitivity info
@@ -1673,6 +1811,13 @@ pub(crate) fn check_case_insensitive_overlaps(
                     continue;
                 }
 
+                // Case-only spelling checks are local hygiene. Cross-directory
+                // reuse is handled by the broader duplicate-pattern validators;
+                // applying this globally produces poor advice for generic atoms.
+                if trait_dir(&p1.trait_id) != trait_dir(&p2.trait_id) {
+                    continue;
+                }
+
                 // Skip different match types (exact vs substr is a different kind of issue)
                 if p1.match_type != p2.match_type {
                     continue;
@@ -1686,7 +1831,12 @@ pub(crate) fn check_case_insensitive_overlaps(
                 // Case 1: case_insensitive=true subsumes case_insensitive=false (when normalized differs)
                 if p1.case_insensitive && !p2.case_insensitive && p1.normalized != p2.normalized {
                     let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
-                    warnings.push(format!(
+                    let validator_id = if p1.match_type == "regex" {
+                        "regex-case-subsumption"
+                    } else {
+                        "case-subsumption"
+                    };
+                    issues.push((validator_id, format!(
                         "CASE SUBSUMPTION{}: case_insensitive pattern subsumes case_sensitive pattern
    Case-insensitive: '{}' ({} {}) in {}::{}
    Subsumes: '{}' ({} {}) in {}::{}
@@ -1702,13 +1852,18 @@ pub(crate) fn check_case_insensitive_overlaps(
                         p2.match_type,
                         p2.file_path,
                         p2.trait_id,
-                    ));
+                    )));
                 } else if !p1.case_insensitive
                     && p2.case_insensitive
                     && p1.normalized != p2.normalized
                 {
                     let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
-                    warnings.push(format!(
+                    let validator_id = if p1.match_type == "regex" {
+                        "regex-case-subsumption"
+                    } else {
+                        "case-subsumption"
+                    };
+                    issues.push((validator_id, format!(
                         "CASE SUBSUMPTION{}: case_insensitive pattern subsumes case_sensitive pattern
    Case-insensitive: '{}' ({} {}) in {}::{}
    Subsumes: '{}' ({} {}) in {}::{}
@@ -1724,7 +1879,7 @@ pub(crate) fn check_case_insensitive_overlaps(
                         p1.match_type,
                         p1.file_path,
                         p1.trait_id,
-                    ));
+                    )));
                 }
                 // Case 2: Both case_insensitive=true, differ only in case (duplicate)
                 else if p1.case_insensitive
@@ -1732,29 +1887,32 @@ pub(crate) fn check_case_insensitive_overlaps(
                     && p1.normalized != p2.normalized
                 {
                     let tier_note = make_tier_note(&p1.trait_id, &p2.trait_id);
-                    warnings.push(format!(
-                        "DUPLICATE (case only){}: Both case_insensitive, differ only in case
+                    issues.push((
+                        "duplicate-case-only",
+                        format!(
+                            "DUPLICATE (case only){}: Both case_insensitive, differ only in case
    Pattern 1: '{}' ({} {}) in {}::{}
    Pattern 2: '{}' ({} {}) in {}::{}
    → Action: Choose one canonical form (they match identically)",
-                        tier_note,
-                        p1.original,
-                        p1.condition_type,
-                        p1.match_type,
-                        p1.file_path,
-                        p1.trait_id,
-                        p2.original,
-                        p2.condition_type,
-                        p2.match_type,
-                        p2.file_path,
-                        p2.trait_id,
+                            tier_note,
+                            p1.original,
+                            p1.condition_type,
+                            p1.match_type,
+                            p1.file_path,
+                            p1.trait_id,
+                            p2.original,
+                            p2.condition_type,
+                            p2.match_type,
+                            p2.file_path,
+                            p2.trait_id,
+                        ),
                     ));
                 }
             }
         }
     }
 
-    let overlaps_found = warnings.len() - initial_warning_count;
+    let overlaps_found = issues.len() - initial_issue_count;
     tracing::debug!(
         "Case-insensitive overlap detection completed in {:?} ({} overlaps found)",
         start.elapsed(),
@@ -1792,6 +1950,10 @@ fn make_tier_note(trait_id_1: &str, trait_id_2: &str) -> String {
     }
 }
 
+fn is_reusable_tier(tier: &str) -> bool {
+    matches!(tier, "metadata" | "micro-behaviors")
+}
+
 /// Check if ANY regex pattern overlaps with exact/substr/word literals
 ///
 /// This catches cases the existing check misses:
@@ -1801,12 +1963,22 @@ fn make_tier_note(trait_id_1: &str, trait_id_2: &str) -> String {
 ///
 /// Existing check_regex_or_overlapping_exact only checks regexes with "|"
 /// This checks ALL regexes for containment/overlap with literals
+#[cfg(test)]
 pub(crate) fn check_regex_contains_literal(
     trait_definitions: &[TraitDefinition],
     warnings: &mut Vec<String>,
 ) {
+    warnings.extend(
+        find_regex_literal_overlap_issues(trait_definitions)
+            .into_iter()
+            .map(|(_, message)| message),
+    );
+}
+
+pub(crate) fn find_regex_literal_overlap_issues(
+    trait_definitions: &[TraitDefinition],
+) -> Vec<(&'static str, String)> {
     let start = std::time::Instant::now();
-    let initial_warning_count = warnings.len();
 
     // Helper structure for regex patterns
     #[derive(Debug)]
@@ -1983,7 +2155,7 @@ pub(crate) fn check_regex_contains_literal(
     // Check each regex against literals (parallelized for performance)
     use rayon::prelude::*;
 
-    let new_warnings: Vec<String> = regex_patterns
+    let new_warnings: Vec<(&'static str, String)> = regex_patterns
         .par_iter()
         .flat_map(|regex_pat| {
             // Try to compile regex to test matches (using cache)
@@ -2077,23 +2249,26 @@ pub(crate) fn check_regex_contains_literal(
                 if is_exact_match {
                     // Exact match: regex pattern is functionally same as literal
                     let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
-                    local_warnings.push(format!(
-                        "REGEX vs LITERAL DUPLICATE{}: Same pattern, different match types{}
+                    local_warnings.push((
+                        "regex-vs-literal-duplicate",
+                        format!(
+                            "Same pattern, different match types{}{}
    Regex: '{}' ({} regex) in {}::{}
    Literal: '{}' ({} {}) in {}::{}
    → Action: Choose one canonical form (prefer {} for simpler pattern)",
-                        tier_note,
-                        if cross_type { " (cross-type)" } else { "" },
-                        regex_pat.pattern,
-                        regex_pat.condition_type,
-                        regex_pat.file_path,
-                        regex_pat.trait_id,
-                        literal_pat.pattern,
-                        literal_pat.condition_type,
-                        literal_pat.match_type,
-                        literal_pat.file_path,
-                        literal_pat.trait_id,
-                        literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
+                            tier_note,
+                            if cross_type { " (cross-type)" } else { "" },
+                            regex_pat.pattern,
+                            regex_pat.condition_type,
+                            regex_pat.file_path,
+                            regex_pat.trait_id,
+                            literal_pat.pattern,
+                            literal_pat.condition_type,
+                            literal_pat.match_type,
+                            literal_pat.file_path,
+                            literal_pat.trait_id,
+                            literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
+                        ),
                     ));
                 } else if !cross_type {
                     // Same condition type — check if cross-tier (intentional layering)
@@ -2104,21 +2279,24 @@ pub(crate) fn check_regex_contains_literal(
                     if !cross_tier {
                         // Same tier, same type: likely redundant
                         let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
-                        local_warnings.push(format!(
-                            "REGEX CONTAINS LITERAL{}: Regex pattern matches literal
+                        local_warnings.push((
+                            "regex-contains-literal",
+                            format!(
+                                "Regex pattern matches literal{}
    Regex: '{}' ({} regex) in {}::{}
    Matches: '{}' ({} {}) in {}::{}
    → Review: Is this intentional layering or redundant detection?",
-                            tier_note,
-                            regex_pat.pattern,
-                            regex_pat.condition_type,
-                            regex_pat.file_path,
-                            regex_pat.trait_id,
-                            literal_pat.pattern,
-                            literal_pat.condition_type,
-                            literal_pat.match_type,
-                            literal_pat.file_path,
-                            literal_pat.trait_id,
+                                tier_note,
+                                regex_pat.pattern,
+                                regex_pat.condition_type,
+                                regex_pat.file_path,
+                                regex_pat.trait_id,
+                                literal_pat.pattern,
+                                literal_pat.condition_type,
+                                literal_pat.match_type,
+                                literal_pat.file_path,
+                                literal_pat.trait_id,
+                            ),
                         ));
                     }
                     // Cross-tier containment (e.g., micro-behaviors regex `.dll\b`
@@ -2132,14 +2310,13 @@ pub(crate) fn check_regex_contains_literal(
         })
         .collect();
 
-    warnings.extend(new_warnings);
-
-    let overlaps_found = warnings.len() - initial_warning_count;
+    let overlaps_found = new_warnings.len();
     tracing::debug!(
         "Regex vs literal overlap detection completed in {:?} ({} overlaps found)",
         start.elapsed(),
         overlaps_found
     );
+    new_warnings
 }
 
 /// Check if regex patterns with alternatives have subset relationships
@@ -2189,7 +2366,7 @@ pub(crate) fn check_regex_alternative_subsets(
                 // Normalize each alternative (decode hex, sort)
                 let normalized_alts: Vec<String> = alternatives
                     .iter()
-                    .map(|alt| decode_hex_escapes(alt))
+                    .map(|alternative| decode_hex_escapes(alternative))
                     .collect();
 
                 regex_patterns.push(RegexWithAlternatives {
@@ -3339,6 +3516,7 @@ pub(crate) fn find_structural_regex_duplicates(
                 file_path: trait_def.defined_in.to_string_lossy().to_string(),
                 condition_type: condition_type.to_string(),
                 match_type: "regex".to_string(),
+                encoding: None,
                 original_value: regex.clone(),
                 for_types,
                 section,

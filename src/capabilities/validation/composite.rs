@@ -235,10 +235,11 @@ pub(crate) fn find_redundant_any_refs(
 ///
 /// Returns `(rule_id, clause, directory, trait_count, trait_ids)` for violations.
 #[must_use]
-pub(crate) fn find_clause_refs_covering_directory(
+pub(crate) fn find_many_directory_refs(
     rule: &CompositeTrait,
     dir_traits: &HashMap<String, HashSet<String>>,
 ) -> Vec<(String, &'static str, String, usize, Vec<String>)> {
+    const MIN_DIRECTORY_REFS: usize = 5;
     let mut violations = Vec::new();
 
     fn collect_clause_refs(conditions: &[Condition]) -> HashMap<String, HashSet<String>> {
@@ -264,7 +265,7 @@ pub(crate) fn find_clause_refs_covering_directory(
             let Some(traits) = dir_traits.get(&dir) else {
                 continue;
             };
-            if traits.len() < 2 || refs.len() != traits.len() {
+            if traits.len() < MIN_DIRECTORY_REFS || refs.len() != traits.len() {
                 continue;
             }
             if refs.is_superset(traits) {
@@ -273,6 +274,84 @@ pub(crate) fn find_clause_refs_covering_directory(
                 violations.push((rule.id.clone(), clause, dir, trait_ids.len(), trait_ids));
             }
         }
+    }
+
+    violations
+}
+
+/// Find composites that add no value beyond a directory reference.
+///
+/// A composite is a pure directory alias when its only logic is:
+///
+/// ```yaml
+/// any:
+///   - id: foo/bar::a
+///   - id: foo/bar::b
+/// ```
+///
+/// and `foo/bar` contains exactly `a` and `b`. Callers should reference
+/// `foo/bar` directly instead of maintaining the extra composite rule.
+#[must_use]
+pub(crate) fn find_pure_directory_alias_composites(
+    rules: &[CompositeTrait],
+    dir_traits: &HashMap<String, HashSet<String>>,
+) -> Vec<(String, String, usize, Vec<String>)> {
+    let mut violations = Vec::new();
+
+    for rule in rules {
+        if rule.all.as_ref().is_some_and(|v| !v.is_empty())
+            || rule.unless.as_ref().is_some_and(|v| !v.is_empty())
+            || rule.not.as_ref().is_some_and(|v| !v.is_empty())
+            || rule.downgrade.is_some()
+            || rule.needs.is_some()
+            || rule.near_lines.is_some()
+            || rule.near_bytes.is_some()
+            || rule.size_min.is_some()
+            || rule.size_max.is_some()
+            || rule.scope.is_some()
+        {
+            continue;
+        }
+
+        let Some(any) = rule.any.as_ref() else {
+            continue;
+        };
+        if any.is_empty() {
+            continue;
+        }
+
+        let mut dirs: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut all_trait_refs = true;
+        for cond in any {
+            let Condition::Trait { id } = cond else {
+                all_trait_refs = false;
+                break;
+            };
+            let Some(idx) = id.find("::") else {
+                all_trait_refs = false;
+                break;
+            };
+            dirs.entry(id[..idx].to_string())
+                .or_default()
+                .insert(id.clone());
+        }
+        if !all_trait_refs || dirs.len() != 1 {
+            continue;
+        }
+
+        let Some((dir, refs)) = dirs.into_iter().next() else {
+            continue;
+        };
+        let Some(traits) = dir_traits.get(&dir) else {
+            continue;
+        };
+        if traits.len() < 2 || refs.len() != traits.len() || !refs.is_superset(traits) {
+            continue;
+        }
+
+        let mut trait_ids: Vec<String> = refs.into_iter().collect();
+        trait_ids.sort();
+        violations.push((rule.id.clone(), dir, trait_ids.len(), trait_ids));
     }
 
     violations

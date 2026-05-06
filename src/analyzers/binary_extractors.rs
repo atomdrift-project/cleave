@@ -2865,6 +2865,12 @@ fn compute_consistency_with_metrics(
         if cert_issued > 0 && build_ts > 0 && !m.is_reproducible_build && cert_issued > build_ts {
             out.cert_issued_after_build = true;
         }
+
+        if let (Some(signer), Some(pdb)) = (m.primary_signer.as_deref(), m.pdb_path.as_deref()) {
+            if !signer.contains("Microsoft") && !signer.contains("Windows") {
+                out.cert_org_pdb_mismatch = cert_org_pdb_mismatch(signer, pdb);
+            }
+        }
     }
 
     // Mach-O code-sig CodeDirectory identifier vs embedded Info.plist
@@ -2973,6 +2979,24 @@ fn consistency_is_default(c: &crate::types::binary_metrics::ConsistencyMetrics) 
         && !c.dwarf_mixed_comp_dirs
         && !c.macho_slice_signing_divergence
         && !c.cert_issued_after_build
+        && !c.cert_org_pdb_mismatch
+}
+
+/// Returns true when no word from `signer_org` appears as a component
+/// in `pdb_path`.  Legitimate vendor binaries share a brand name between
+/// their build environment and their signing identity; divergence (e.g.
+/// the cert says "Ubisoft" but the PDB path says "Unity Technologies")
+/// is a supply-chain swap signal.
+///
+/// Matching is case-insensitive.  Only words longer than 4 characters
+/// are tested to avoid false matches on short common words ("Corp",
+/// "Inc", etc.).
+fn cert_org_pdb_mismatch(signer_org: &str, pdb_path: &str) -> bool {
+    let pdb_lower = pdb_path.to_ascii_lowercase();
+    signer_org
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| w.len() > 4)
+        .all(|word| !pdb_lower.contains(&word.to_ascii_lowercase()))
 }
 
 /// Compare two dotted version strings, treating trailing zeros as
@@ -3745,5 +3769,50 @@ mod tests {
     #[test]
     fn extract_gnu_property_returns_none_for_non_elf() {
         assert!(extract_gnu_property(b"not an elf").is_none());
+    }
+
+    #[test]
+    fn cert_org_pdb_mismatch_matching_vendor() {
+        // "Ubisoft" appears in path → no mismatch
+        assert!(!cert_org_pdb_mismatch(
+            "Ubisoft Entertainment",
+            r"C:\build\Ubisoft\Connect\Connect.pdb"
+        ));
+    }
+
+    #[test]
+    fn cert_org_pdb_mismatch_different_vendor() {
+        // Cert says Ubisoft, path says Unity → mismatch
+        assert!(cert_org_pdb_mismatch(
+            "Ubisoft Entertainment",
+            r"D:\jenkins\workspace\Unity Technologies\Engine.pdb"
+        ));
+    }
+
+    #[test]
+    fn cert_org_pdb_mismatch_case_insensitive() {
+        assert!(!cert_org_pdb_mismatch(
+            "Python Software Foundation",
+            r"C:\projects\python\cpython.pdb"
+        ));
+    }
+
+    #[test]
+    fn cert_org_pdb_mismatch_ignores_short_words() {
+        // "Acme" (4 chars) is filtered; "Corp" (4 chars) too.
+        // No long word matches the unrelated path → mismatch fires.
+        assert!(cert_org_pdb_mismatch(
+            "Acme Corp",
+            r"C:\build\SomeOtherVendor\product.pdb"
+        ));
+    }
+
+    #[test]
+    fn cert_org_pdb_mismatch_long_word_match_in_component() {
+        // "Foundation" (>4 chars) from the signer appears in path
+        assert!(!cert_org_pdb_mismatch(
+            "Acme Foundation",
+            r"C:\Foundation\project\release.pdb"
+        ));
     }
 }

@@ -674,6 +674,23 @@ impl OfficeAnalyzer {
     ) {
         let mut findings = Vec::new();
 
+        // CFB magic. fileid routes by extension, so e.g. Python's Tcl
+        // `_tcl_data/msgs/*.msg` (plain-text message catalogs) lands here. Skip
+        // quietly when the bytes can't be a CFB document at all; only log when
+        // the magic matches but parsing still fails (a real malformed CFB).
+        const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
+        if !data.starts_with(&CFB_MAGIC) {
+            return (
+                "ole".to_string(),
+                findings,
+                Vec::new(),
+                Vec::new(),
+                OleMetrics::default(),
+                OfficeCrossCounts::default(),
+                serde_json::Value::Null,
+            );
+        }
+
         let doc = match ole2::parse_ole2(data) {
             Ok(doc) => doc,
             Err(e) => {

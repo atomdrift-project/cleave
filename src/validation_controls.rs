@@ -241,13 +241,7 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
     fix: "Review the validation message and update the trait.",
 };
 
-const DISABLED_VALIDATOR_IDS: &[&str] = &[
-    "regex-contains-literal",
-    "regex-alternative-subset",
-    "overlapping-regex-patterns",
-    "redundant-patterns",
-    "cross-type-canonicalization",
-];
+const DISABLED_VALIDATOR_IDS: &[&str] = &[];
 
 static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> = OnceLock::new();
 

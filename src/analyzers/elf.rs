@@ -44,7 +44,7 @@ struct ElfNoteSummary {
     gnu_abi_min_kernel: Option<String>,
     /// `GNU_PROPERTY_X86_ISA_1_NEEDED` decoded into a microarch
     /// level string (`"x86-64"`, `"x86-64-v2"`, …).
-    x86_isa_level_required: Option<String>,
+    x86_isa_level: Option<String>,
     /// `GNU_PROPERTY_AARCH64_FEATURE_PAUTH` platform/version string.
     pauth_scheme: Option<String>,
 }
@@ -83,8 +83,7 @@ fn parse_gnu_property_note(desc: &[u8], summary: &mut ElfNoteSummary) {
     let mut p = 0usize;
     while p + 8 <= desc.len() {
         let t = u32::from_le_bytes([desc[p], desc[p + 1], desc[p + 2], desc[p + 3]]);
-        let dsz = u32::from_le_bytes([desc[p + 4], desc[p + 5], desc[p + 6], desc[p + 7]])
-            as usize;
+        let dsz = u32::from_le_bytes([desc[p + 4], desc[p + 5], desc[p + 6], desc[p + 7]]) as usize;
         let data_start = p + 8;
         let Some(data_end) = data_start.checked_add(dsz) else {
             break;
@@ -131,7 +130,7 @@ fn parse_gnu_property_note(desc: &[u8], summary: &mut ElfNoteSummary) {
                         None
                     };
                     if let Some(s) = level {
-                        summary.x86_isa_level_required = Some(s.to_string());
+                        summary.x86_isa_level = Some(s.to_string());
                     }
                 }
                 GNU_PROPERTY_AARCH64_FEATURE_PAUTH if dsz >= 8 => {
@@ -167,6 +166,17 @@ fn parse_gnu_property_note(desc: &[u8], summary: &mut ElfNoteSummary) {
 /// Resolve an ELF program-header `p_type` to its symbolic name.
 /// Covers the standard PT_* values; falls back to `"PT_<hex>"` for
 /// processor- or OS-specific types.
+/// True when `name` resolves to one of the well-known dynamic loader
+/// SO-names (`ld-linux-*`, `ld-musl-*`, `ld.so`, `ld64.so`).
+fn is_dynamic_loader_soname(name: &str) -> bool {
+    let base = name.rsplit('/').next().unwrap_or(name);
+    base.starts_with("ld-linux")
+        || base.starts_with("ld-musl")
+        || base.starts_with("ld.so")
+        || base.starts_with("ld64.so")
+        || base == "ld.so"
+}
+
 fn phdr_type_name(p_type: u32) -> String {
     let name = match p_type {
         0 => "PT_NULL",
@@ -1384,9 +1394,9 @@ impl ElfAnalyzer {
             e_machine: elf.header.e_machine as u32,
             class_bits: if elf.is_64 { 64 } else { 32 },
             little_endian: elf.little_endian,
-            entry_point: elf.entry,
+            entry: elf.entry,
             program_header_count: elf.program_headers.len() as u32,
-            section_header_count: elf.section_headers.len() as u32,
+            section_count: elf.section_headers.len() as u32,
             has_interpreter: elf.interpreter.is_some(),
             has_soname: elf.soname.is_some(),
             soname: elf.soname.map(str::to_string),
@@ -1443,24 +1453,24 @@ impl ElfAnalyzer {
             let mut preinit_arraysz: u64 = 0;
             for dyn_entry in &dynamic.dyns {
                 match dyn_entry.d_tag {
-                    DT_RPATH => metrics.rpath_set = true,
-                    DT_RUNPATH => metrics.runpath_set = true,
-                    DT_TEXTREL => metrics.textrel_present = true,
-                    DT_GNU_HASH => metrics.gnu_hash_present = true,
+                    DT_RPATH => metrics.has_rpath = true,
+                    DT_RUNPATH => metrics.has_runpath = true,
+                    DT_TEXTREL => metrics.has_textrel = true,
+                    DT_GNU_HASH => metrics.has_gnu_hash = true,
                     // DT_BIND_NOW + GNU_RELRO = Full RELRO
                     DT_BIND_NOW if metrics.relro.is_some() => {
                         metrics.relro = Some("full".to_string());
                     }
                     DT_INIT_ARRAYSZ => init_arraysz = dyn_entry.d_val,
                     DT_FINI_ARRAYSZ => fini_arraysz = dyn_entry.d_val,
-                    DT_AUDIT => metrics.dt_audit_present = true,
-                    DT_DEPAUDIT => metrics.dt_depaudit_present = true,
+                    DT_AUDIT => metrics.has_dt_audit = true,
+                    DT_DEPAUDIT => metrics.has_dt_depaudit = true,
                     DT_FLAGS_1 => metrics.dt_flags_1 = dyn_entry.d_val as u32,
                     // Tier A — modern toolchain / hardening signals.
-                    DT_RELR => metrics.dt_relr_present = true,
+                    DT_RELR => metrics.has_dt_relr = true,
                     DT_PREINIT_ARRAYSZ => preinit_arraysz = dyn_entry.d_val,
                     DT_DEBUG if dyn_entry.d_val != 0 => {
-                        metrics.dt_debug_present = true;
+                        metrics.has_dt_debug = true;
                     }
                     DT_VERSYM if metrics.dt_versym_count == 0 => {
                         // DT_VERSYM stores the address of the
@@ -1476,8 +1486,7 @@ impl ElfAnalyzer {
             }
             let ptr_size_for_preinit = if elf.is_64 { 8u64 } else { 4u64 };
             if preinit_arraysz > 0 {
-                metrics.dt_preinit_array_count =
-                    (preinit_arraysz / ptr_size_for_preinit) as u32;
+                metrics.dt_preinit_array_count = (preinit_arraysz / ptr_size_for_preinit) as u32;
             }
 
             // Compute array counts (each entry is pointer size: 8 bytes for 64-bit, 4 for 32-bit)
@@ -1490,19 +1499,23 @@ impl ElfAnalyzer {
             }
         }
 
-        // DT_NEEDED path-shape anomalies + DT_RUNPATH $ORIGIN check.
+        // DT_NEEDED path-shape anomalies + DT_RUNPATH $ORIGIN check
+        // + direct dynamic-loader dependency.
         for needed in &metrics.needed {
             if needed.starts_with('/') {
-                metrics.dt_needed_absolute_paths =
-                    metrics.dt_needed_absolute_paths.saturating_add(1);
+                metrics.dt_needed_abs_path_count =
+                    metrics.dt_needed_abs_path_count.saturating_add(1);
             }
             if needed.split('/').any(|seg| seg == "..") {
                 metrics.dt_needed_traversal_count =
                     metrics.dt_needed_traversal_count.saturating_add(1);
             }
+            if is_dynamic_loader_soname(needed.as_str()) {
+                metrics.has_direct_loader_dep = true;
+            }
         }
         if metrics.runpaths.iter().any(|p| p.contains("$ORIGIN")) {
-            metrics.runpath_uses_origin = true;
+            metrics.dt_runpath_uses_origin = true;
         }
 
         // Program header analysis (security features + Tier A anomalies)
@@ -1597,8 +1610,7 @@ impl ElfAnalyzer {
                     let span = ph.p_memsz.max(ph.p_filesz);
                     let end = ph.p_vaddr.saturating_add(span);
                     if elf.entry >= ph.p_vaddr && elf.entry < end && elf.entry != 0 {
-                        if elf.program_headers.iter().position(|p| std::ptr::eq(p, ph))
-                            == Some(idx)
+                        if elf.program_headers.iter().position(|p| std::ptr::eq(p, ph)) == Some(idx)
                         {
                             metrics.entry_in_last_segment = true;
                         }
@@ -1637,7 +1649,7 @@ impl ElfAnalyzer {
             .saturating_add(elf.header.e_phnum as u64 * elf.header.e_phentsize as u64);
         if let Some(first_off) = min_load_offset {
             if first_off > header_end {
-                metrics.first_segment_gap_bytes = (first_off - header_end) as u32;
+                metrics.first_segment_gap = (first_off - header_end) as u32;
             }
         }
         // Section header count mismatch.
@@ -1676,7 +1688,7 @@ impl ElfAnalyzer {
             }
         }
 
-        metrics.hidden_symbols = hidden_count;
+        metrics.hidden_symbol_count = hidden_count;
         metrics.stack_canary = has_stack_chk;
 
         // Section analysis
@@ -1704,7 +1716,7 @@ impl ElfAnalyzer {
                     ".got" | ".got.plt" => metrics.has_got = true,
                     ".eh_frame" => metrics.has_eh_frame = true,
                     n if n.starts_with(".note") => metrics.has_note = true,
-                    ".gnu_debuglink" => metrics.debuglink_present = true,
+                    ".gnu_debuglink" => metrics.has_debuglink = true,
                     n if n.starts_with(".debug") || n == ".zdebug" || n.starts_with(".zdebug") => {
                         metrics.debug_section_count += 1;
                     }
@@ -1734,7 +1746,7 @@ impl ElfAnalyzer {
         if !has_gnu_stack_section && elf.header.e_type != 1 {
             metrics.gnu_stack_section_absent = true;
         }
-        metrics.both_hash_and_gnu_hash_present = has_dot_hash && has_dot_gnu_hash;
+        metrics.has_both_hash_tables = has_dot_hash && has_dot_gnu_hash;
         metrics.duplicate_section_name_count =
             name_seen_count.values().filter(|&&c| c > 1).count() as u32;
         // Direct writes — the consistency layer used to bridge these
@@ -1789,7 +1801,7 @@ impl ElfAnalyzer {
 
         metrics.note_count = note_summary.note_count;
         if let Some(build_id) = &note_summary.build_id {
-            metrics.build_id_present = true;
+            metrics.has_build_id = true;
             metrics.build_id_length = build_id.len() as u32;
             metrics.build_id = Some(hex::encode(build_id));
         }
@@ -1800,7 +1812,7 @@ impl ElfAnalyzer {
         metrics.has_aarch64_bti = note_summary.has_aarch64_bti;
         metrics.has_aarch64_pac = note_summary.has_aarch64_pac;
         metrics.gnu_abi_min_kernel = note_summary.gnu_abi_min_kernel.clone();
-        metrics.x86_isa_level_required = note_summary.x86_isa_level_required.clone();
+        metrics.x86_isa_level = note_summary.x86_isa_level.clone();
         metrics.pauth_scheme = note_summary.pauth_scheme.clone();
 
         metrics

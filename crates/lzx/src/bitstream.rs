@@ -181,8 +181,11 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::unusual_byte_groupings)]
     fn read_sequential() {
-        // 0..=10 and padding using the least amount of bits possible, read LTR
+        // 0..=10 and padding using the least amount of bits possible, read LTR.
+        // Bit groups intentionally mirror the Huffman code lengths
+        // (1, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4).
         let ns = [0b0_1_10_11_100_101_110_1u16, 0b11_1000_1001_1010_00u16];
         let bit_lengths = [1u8, 1, 2, 2, 3, 3, 3, 3, 4, 4, 4];
 
@@ -317,8 +320,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::unusual_byte_groupings)]
     fn read_equals_peek() {
         for index in 0..20 {
+            // Bit groups encode varying-length runs of 1s separated by 0s.
             let n =
                 (0b11_0_111_0_11111_0_1111111_0_11111111111_0_1111111111111u64).rotate_left(index);
 

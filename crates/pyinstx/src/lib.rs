@@ -176,9 +176,8 @@ pub fn extract_to_memory(data: &[u8]) -> Result<MemoryStats, Error> {
 
     let mut cursor = 0usize;
     while cursor < toc.len() {
-        let entry = match parse_toc_entry(toc, cursor) {
-            Some(e) => e,
-            None => break,
+        let Some(entry) = parse_toc_entry(toc, cursor) else {
+            break;
         };
         cursor = cursor.saturating_add(entry.entry_size);
 
@@ -513,9 +512,8 @@ fn walk_pyz_into(
     if pyc_magic.is_none() {
         *pyc_magic = Some(inner_pyc_magic);
     }
-    let toc_bytes = match pyz.get(8..12) {
-        Some(b) => b,
-        None => return,
+    let Some(toc_bytes) = pyz.get(8..12) else {
+        return;
     };
     let toc_pos = u32::from_be_bytes(match toc_bytes.try_into() {
         Ok(b) => b,
@@ -540,9 +538,8 @@ fn walk_pyz_into(
         } else {
             format!("{prefix}/{safe_key}.pyc")
         };
-        let blob = match pyz.get(entry.pos..entry.pos.saturating_add(entry.length)) {
-            Some(b) => b,
-            None => continue,
+        let Some(blob) = pyz.get(entry.pos..entry.pos.saturating_add(entry.length)) else {
+            continue;
         };
         if entry.length == 0 {
             out.push(MemoryEntry {
@@ -601,7 +598,7 @@ impl Writer {
             let ext = path
                 .extension()
                 .and_then(|s| s.to_str())
-                .map(|s| s.to_string());
+                .map(std::string::ToString::to_string);
             let new_name = match ext {
                 Some(e) => format!("{stem}.{counter}.{e}"),
                 None => format!("{stem}.{counter}"),

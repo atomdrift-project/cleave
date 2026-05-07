@@ -15,6 +15,7 @@ pub trait ValidFieldPaths {
     /// The doc comment is the concatenation of all `///` lines on the field.
     /// Default implementation returns empty — types with manual `ValidFieldPaths`
     /// impls get no descriptions unless they override this.
+    #[must_use]
     fn field_descriptions() -> Vec<(&'static str, &'static str)> {
         Vec::new()
     }

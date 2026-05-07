@@ -114,6 +114,7 @@ mod precision_tests {
 mod duplicate_tests {
     use super::super::duplicates::*;
     use super::super::helpers::extract_tier;
+    use crate::composite_rules::condition::EncodingSpec;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};
     use std::path::PathBuf;
 
@@ -207,6 +208,70 @@ mod duplicate_tests {
         )
     }
 
+    /// Create a text exact trait.
+    fn create_text_exact(
+        id: &str,
+        pattern: &str,
+        case_insensitive: bool,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Text {
+                exact: Some(pattern.to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive,
+                is_check: None,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+                compiled_finder: None,
+            },
+            for_types,
+            file_path,
+        )
+    }
+
+    /// Create a string-literal exact trait.
+    fn create_string_literal_exact(
+        id: &str,
+        pattern: &str,
+        case_insensitive: bool,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::StringLiteral {
+                exact: Some(pattern.to_string()),
+                substr: None,
+                regex: None,
+                word: None,
+                case_insensitive,
+                is_check: None,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
+                compiled_finder: None,
+            },
+            for_types,
+            file_path,
+        )
+    }
+
     /// Create a string substr trait
     fn create_string_substr(
         id: &str,
@@ -232,6 +297,36 @@ mod duplicate_tests {
                 section_offset_range: None,
                 compiled_regex: None,
                 compiled_finder: None,
+            },
+            for_types,
+            file_path,
+        )
+    }
+
+    /// Create an encoded substr trait.
+    fn create_encoded_substr(
+        id: &str,
+        pattern: &str,
+        for_types: Vec<FileType>,
+        file_path: &str,
+    ) -> TraitDefinition {
+        create_test_trait(
+            id,
+            Condition::Encoded {
+                exact: None,
+                substr: Some(pattern.to_string()),
+                regex: None,
+                word: None,
+                case_insensitive: false,
+                encoding: Some(EncodingSpec::Single("base64".to_string())),
+                is_check: None,
+                not: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+                compiled_regex: None,
             },
             for_types,
             file_path,
@@ -484,6 +579,256 @@ mod duplicate_tests {
     }
 
     #[test]
+    fn test_redundant_skips_low_value_same_tier_token_across_dirs() {
+        let exact = create_string_exact(
+            "objectives/a::client",
+            "client",
+            false,
+            vec![FileType::Python],
+            "objectives/a/traits.yaml",
+        );
+        let substr = create_string_substr(
+            "objectives/b::client",
+            "client",
+            false,
+            vec![FileType::Python],
+            "objectives/b/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_redundant_skips_same_tier_across_dirs() {
+        let exact = create_string_exact(
+            "objectives/anti-static/obfuscation/string/runtime-decrypt::ntdll-wide-string",
+            "ntdll.dll",
+            false,
+            vec![FileType::Pe],
+            "objectives/anti-static/obfuscation/string/runtime-decrypt/pe.yaml",
+        );
+        let substr = create_string_substr(
+            "objectives/evasion/anti-av/platform/defender::ntdll-dll-str",
+            "ntdll.dll",
+            false,
+            vec![FileType::Pe],
+            "objectives/evasion/anti-av/platform/defender/windows.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_redundant_keeps_same_dir_duplicate() {
+        let exact = create_string_exact(
+            "objectives/evasion/anti-av/platform/defender::amsi-bypass-init-flag",
+            "amsiInitFailed",
+            false,
+            vec![FileType::PowerShell],
+            "objectives/evasion/anti-av/platform/defender/windows.yaml",
+        );
+        let substr = create_string_substr(
+            "objectives/evasion/anti-av/platform/defender::amsi-init-failed-substr",
+            "amsiInitFailed",
+            false,
+            vec![FileType::PowerShell],
+            "objectives/evasion/anti-av/platform/defender/windows.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+    }
+
+    #[test]
+    fn test_redundant_keeps_reusable_cross_tier_token() {
+        let exact = create_string_exact(
+            "micro-behaviors/data/decode/base64::atob",
+            "atob",
+            false,
+            vec![FileType::JavaScript],
+            "micro-behaviors/data/decode/base64/javascript.yaml",
+        );
+        let substr = create_string_substr(
+            "objectives/anti-static/obfuscation/string::atob",
+            "atob",
+            false,
+            vec![FileType::JavaScript],
+            "objectives/anti-static/obfuscation/string/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("atob"));
+    }
+
+    #[test]
+    fn test_redundant_skips_low_signal_lexicon_token() {
+        let exact = create_string_exact(
+            "objectives/command-and-control/backdoor/tasking/filesystem::task-command-field",
+            "command",
+            false,
+            vec![FileType::Go],
+            "objectives/command-and-control/backdoor/tasking/filesystem/macos-go.yaml",
+        );
+        let substr = create_string_substr(
+            "micro-behaviors/data/text/keywords/lexicon::command-dup",
+            "command",
+            false,
+            vec![FileType::Go],
+            "micro-behaviors/data/text/keywords/lexicon/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, substr], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_redundant_skips_text_vs_encoded_context() {
+        let exact = create_string_exact(
+            "micro-behaviors/process/create/shell/invoke::bin-sh",
+            "/bin/sh",
+            false,
+            vec![FileType::Elf],
+            "micro-behaviors/process/create/shell/invoke/generic.yaml",
+        );
+        let encoded = create_encoded_substr(
+            "objectives/anti-static/obfuscation/encoding/content::encoded-bin-sh",
+            "/bin/sh",
+            vec![FileType::Elf],
+            "objectives/anti-static/obfuscation/encoding/content/malware.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_exact_contained_by_substr(&[exact, encoded], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_cross_type_keeps_same_file_text_string_literal_duplicate() {
+        let text = create_text_exact(
+            "well-known/malware/ransomware/jigsaw::game-message",
+            "I want to play a game with you.",
+            false,
+            vec![FileType::CSharp],
+            "well-known/malware/ransomware/jigsaw/traits.yaml",
+        );
+        let literal = create_string_literal_exact(
+            "well-known/malware/ransomware/jigsaw::game-message-source",
+            "I want to play a game with you.",
+            false,
+            vec![FileType::CSharp],
+            "well-known/malware/ransomware/jigsaw/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[text, literal], &mut warnings);
+
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("I want to play a game"));
+    }
+
+    #[test]
+    fn test_cross_type_skips_symbol_text_api_duplicate() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/fs/memory/mmap::create-file-mapping-w",
+            "CreateFileMappingW",
+            vec![FileType::Pe],
+            "micro-behaviors/fs/memory/mmap/windows.yaml",
+        );
+        let raw = create_string_exact(
+            "micro-behaviors/fs/memory/mmap::create-file-mapping-w-import",
+            "CreateFileMappingW",
+            false,
+            vec![FileType::Pe],
+            "micro-behaviors/fs/memory/mmap/windows.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, raw], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_cross_type_skips_cross_dir_api_duplicate() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/fs/memory/mmap::create-file-mapping-w",
+            "CreateFileMappingW",
+            vec![FileType::Pe],
+            "micro-behaviors/fs/memory/mmap/windows.yaml",
+        );
+        let raw = create_string_exact(
+            "well-known/malware/example::create-file-mapping-w",
+            "CreateFileMappingW",
+            false,
+            vec![FileType::Pe],
+            "well-known/malware/example/traits.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, raw], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_cross_type_skips_same_dir_different_file_duplicate() {
+        let symbol = create_symbol_exact(
+            "micro-behaviors/communications/http/get::internet-open",
+            "InternetOpen",
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/get/wininet.yaml",
+        );
+        let raw = create_string_exact(
+            "micro-behaviors/communications/http/get::internet-open-str",
+            "InternetOpen",
+            false,
+            vec![FileType::Pe],
+            "micro-behaviors/communications/http/get/wininet-dynamic.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[symbol, raw], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
+    fn test_cross_type_skips_encoded_context() {
+        let raw = create_string_exact(
+            "objectives/evasion/indicator-removal/logs::utmp-cleanup-status",
+            "utmp logs cleaned up.",
+            false,
+            vec![FileType::Elf],
+            "objectives/evasion/indicator-removal/logs/unix-accounting.yaml",
+        );
+        let encoded = create_encoded_substr(
+            "objectives/evasion/indicator-removal/logs::utmp-cleanup-status-xor",
+            "utmp logs cleaned up.",
+            vec![FileType::Elf],
+            "objectives/evasion/indicator-removal/logs/unix-accounting.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_same_string_different_types(&[raw, encoded], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
+    }
+
+    #[test]
     fn test_exact_not_contained_different_strings() {
         let exact = create_string_exact(
             "test::exact",
@@ -633,6 +978,29 @@ mod duplicate_tests {
 
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("Regex pattern matches literal"));
+    }
+
+    #[test]
+    fn test_broad_regex_matching_literal_no_warning() {
+        let exact = create_string_exact(
+            "test::exact",
+            "COMPUTERNAME",
+            false,
+            vec![FileType::All],
+            "file1.yaml",
+        );
+        let regex = create_string_regex(
+            "test::regex",
+            "^[A-Z]{8,12}$",
+            false,
+            vec![FileType::All],
+            "file2.yaml",
+        );
+
+        let mut warnings = Vec::new();
+        check_regex_contains_literal(&[exact, regex], &mut warnings);
+
+        assert_eq!(warnings.len(), 0);
     }
 
     #[test]

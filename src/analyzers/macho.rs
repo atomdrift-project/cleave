@@ -238,12 +238,12 @@ impl MachOAnalyzer {
             flags: macho.header.flags,
             class_bits: if macho.is_64 { 64 } else { 32 },
             little_endian: macho.little_endian,
-            entry_point: macho.entry,
+            entry: macho.entry,
             old_style_entry: macho.old_style_entry,
             load_command_count: macho.header.ncmds as u32,
             load_commands_size: macho.header.sizeofcmds,
             rpath_count: macho.rpaths.len() as u32,
-            install_name_present: macho.name.is_some(),
+            has_install_name: macho.name.is_some(),
             // Tier A: decoded MH_* header bits. (PIE is on
             // BinaryMetrics; not duplicated here.)
             allow_stack_execution: (macho.header.flags & 0x0008_0000) != 0,
@@ -266,13 +266,13 @@ impl MachOAnalyzer {
                     macho_metrics.code_signature_size = cs.datasize;
                 }
                 goblin::mach::load_command::CommandVariant::Uuid(_) => {
-                    macho_metrics.uuid_present = true;
+                    macho_metrics.has_uuid = true;
                 }
                 goblin::mach::load_command::CommandVariant::BuildVersion(command) => {
                     let (min_os_major, min_os_minor, min_os_patch) =
                         Self::unpack_macho_version(command.minos);
                     let (sdk_major, sdk_minor, sdk_patch) = Self::unpack_macho_version(command.sdk);
-                    macho_metrics.build_version_present = true;
+                    macho_metrics.has_build_version = true;
                     macho_metrics.build_platform = command.platform;
                     macho_metrics.min_os_major = min_os_major;
                     macho_metrics.min_os_minor = min_os_minor;
@@ -283,65 +283,58 @@ impl MachOAnalyzer {
                     macho_metrics.build_tool_count = command.ntools;
                 }
                 goblin::mach::load_command::CommandVariant::SourceVersion(command) => {
-                    macho_metrics.source_version_present = true;
+                    macho_metrics.has_source_version = true;
                     macho_metrics.source_version = command.version;
                 }
                 goblin::mach::load_command::CommandVariant::Main(_) => {
-                    macho_metrics.main_command_present = true;
+                    macho_metrics.has_main_command = true;
                 }
                 goblin::mach::load_command::CommandVariant::Unixthread(_) => {
-                    macho_metrics.unixthread_command_present = true;
+                    macho_metrics.has_unixthread_command = true;
                 }
                 goblin::mach::load_command::CommandVariant::LoadWeakDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.weak_dylib_count += 1;
-                    if let Some(entry) = mk_dylib_entry(d, "weak") {
-                        dylib_names.push(entry.name.clone());
-                        macho_metrics.dylib_entries.push(entry);
-                    }
+                    let entry = mk_dylib_entry(d, "weak");
+                    dylib_names.push(entry.name.clone());
+                    macho_metrics.dylib_entries.push(entry);
                 }
                 goblin::mach::load_command::CommandVariant::ReexportDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.reexport_dylib_count += 1;
-                    if let Some(entry) = mk_dylib_entry(d, "reexport") {
-                        dylib_names.push(entry.name.clone());
-                        macho_metrics.dylib_entries.push(entry);
-                    }
+                    let entry = mk_dylib_entry(d, "reexport");
+                    dylib_names.push(entry.name.clone());
+                    macho_metrics.dylib_entries.push(entry);
                 }
                 goblin::mach::load_command::CommandVariant::LoadUpwardDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.upward_dylib_count += 1;
-                    if let Some(entry) = mk_dylib_entry(d, "upward") {
-                        dylib_names.push(entry.name.clone());
-                        macho_metrics.dylib_entries.push(entry);
-                    }
+                    let entry = mk_dylib_entry(d, "upward");
+                    dylib_names.push(entry.name.clone());
+                    macho_metrics.dylib_entries.push(entry);
                 }
                 goblin::mach::load_command::CommandVariant::LazyLoadDylib(d) => {
                     macho_metrics.dylib_count += 1;
                     macho_metrics.lazy_dylib_count += 1;
-                    if let Some(entry) = mk_dylib_entry(d, "lazy") {
-                        dylib_names.push(entry.name.clone());
-                        macho_metrics.dylib_entries.push(entry);
-                    }
+                    let entry = mk_dylib_entry(d, "lazy");
+                    dylib_names.push(entry.name.clone());
+                    macho_metrics.dylib_entries.push(entry);
                 }
                 goblin::mach::load_command::CommandVariant::LoadDylib(d) => {
                     macho_metrics.dylib_count += 1;
-                    if let Some(entry) = mk_dylib_entry(d, "regular") {
-                        dylib_names.push(entry.name.clone());
-                        macho_metrics.dylib_entries.push(entry);
-                    }
+                    let entry = mk_dylib_entry(d, "regular");
+                    dylib_names.push(entry.name.clone());
+                    macho_metrics.dylib_entries.push(entry);
                 }
                 goblin::mach::load_command::CommandVariant::LoadDylinker(_)
                 | goblin::mach::load_command::CommandVariant::IdDylinker(_)
                 | goblin::mach::load_command::CommandVariant::DyldEnvironment(_) => {
-                    macho_metrics.dylinker_present = true;
+                    macho_metrics.has_dylinker = true;
                 }
                 goblin::mach::load_command::CommandVariant::Segment32(seg) => {
                     let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry32(seg);
-                    if is_pagezero
-                        && !is_pagezero_size_legitimate(seg.vmsize as u64, macho.is_64)
-                    {
-                        macho_metrics.pagezero_size_anomalous = true;
+                    if is_pagezero {
+                        macho_metrics.pagezero_size = seg.vmsize as u64;
                     }
                     let name = entry.name.clone();
                     if name == "__DATA_CONST" {
@@ -352,10 +345,8 @@ impl MachOAnalyzer {
                 }
                 goblin::mach::load_command::CommandVariant::Segment64(seg) => {
                     let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry64(seg);
-                    if is_pagezero
-                        && !is_pagezero_size_legitimate(seg.vmsize, macho.is_64)
-                    {
-                        macho_metrics.pagezero_size_anomalous = true;
+                    if is_pagezero {
+                        macho_metrics.pagezero_size = seg.vmsize;
                     }
                     let name = entry.name.clone();
                     if name == "__DATA_CONST" {
@@ -367,12 +358,12 @@ impl MachOAnalyzer {
                 goblin::mach::load_command::CommandVariant::EncryptionInfo32(e)
                     if e.cryptid != 0 =>
                 {
-                    macho_metrics.encrypted_section_present = true;
+                    macho_metrics.has_encrypted_section = true;
                 }
                 goblin::mach::load_command::CommandVariant::EncryptionInfo64(e)
                     if e.cryptid != 0 =>
                 {
-                    macho_metrics.encrypted_section_present = true;
+                    macho_metrics.has_encrypted_section = true;
                 }
                 goblin::mach::load_command::CommandVariant::DyldChainedFixups(_) => {
                     macho_metrics.has_chained_fixups = true;
@@ -490,8 +481,11 @@ impl MachOAnalyzer {
                 macho_metrics.loader_path_in_executable = true;
             }
         }
-        macho_metrics.duplicate_dylib_count =
-            name_counts.values().filter(|&&c| c > 1).map(|c| c - 1).sum();
+        macho_metrics.duplicate_dylib_count = name_counts
+            .values()
+            .filter(|&&c| c > 1)
+            .map(|c| c - 1)
+            .sum();
 
         // Tier 1 — supply-chain similarity hashes. Sort + dedupe + join
         // so byte-equal vendor releases produce byte-equal hashes.
@@ -499,15 +493,13 @@ impl MachOAnalyzer {
             macho_metrics.dylib_hash = Some(sha256_of_sorted(&dylib_names));
         }
         if let Ok(imports) = macho.imports() {
-            let import_names: Vec<String> =
-                imports.iter().map(|i| i.name.to_string()).collect();
+            let import_names: Vec<String> = imports.iter().map(|i| i.name.to_string()).collect();
             if !import_names.is_empty() {
                 macho_metrics.symhash = Some(sha256_of_sorted(&import_names));
             }
         }
         if let Ok(exports) = macho.exports() {
-            let export_names: Vec<String> =
-                exports.iter().map(|e| e.name.clone()).collect();
+            let export_names: Vec<String> = exports.iter().map(|e| e.name.clone()).collect();
             if !export_names.is_empty() {
                 macho_metrics.export_hash = Some(sha256_of_sorted(&export_names));
             }
@@ -597,10 +589,11 @@ impl MachOAnalyzer {
 
                         // Also merge section-level metrics from radare2
                         if r2_binary_metrics.section_count > 0 {
-                            binary_metrics.executable_sections =
-                                r2_binary_metrics.executable_sections;
-                            binary_metrics.writable_sections = r2_binary_metrics.writable_sections;
-                            binary_metrics.wx_sections = r2_binary_metrics.wx_sections;
+                            binary_metrics.executable_section_count =
+                                r2_binary_metrics.executable_section_count;
+                            binary_metrics.writable_section_count =
+                                r2_binary_metrics.writable_section_count;
+                            binary_metrics.wx_section_count = r2_binary_metrics.wx_section_count;
                         }
                     } else {
                         // Fallback: set full radare2 metrics if binary metrics somehow missing
@@ -647,22 +640,14 @@ impl MachOAnalyzer {
                             // entitlement keys (values can be paths /
                             // identifiers that drift across releases;
                             // keys are the stable surface).
-                            let keys: Vec<String> =
-                                codesig.entitlements.keys().cloned().collect();
+                            let keys: Vec<String> = codesig.entitlements.keys().cloned().collect();
                             if !keys.is_empty() {
-                                macho_metrics.entitlement_hash =
-                                    Some(sha256_of_sorted(&keys));
+                                macho_metrics.entitlement_hash = Some(sha256_of_sorted(&keys));
                             }
-                            // Tier A — CodeDirectory flag bits +
-                            // runtime version. Bit values from Apple's
-                            // <Security/CSCommon.h> / cs_blobs.h.
-                            let f = codesig.cs_flags;
-                            macho_metrics.cs_runtime_flag = (f & 0x00010000) != 0;
-                            macho_metrics.cs_library_validation = (f & 0x00002000) != 0;
-                            macho_metrics.cs_linker_signed = (f & 0x00020000) != 0;
-                            macho_metrics.cs_force_kill = (f & 0x00000020) != 0;
-                            macho_metrics.cs_runtime_version =
-                                codesig.cs_runtime_version.clone();
+                            // Raw CodeDirectory flags; decoded named
+                            // bits surface via kv `macho.cs_flags.*`.
+                            macho_metrics.cs_flags = codesig.cs_flags;
+                            macho_metrics.cs_runtime_version = codesig.cs_runtime_version.clone();
                         }
                     }
                 }
@@ -1163,28 +1148,18 @@ impl MachOAnalyzer {
     // AMOS cipher detection/decryption removed - now handled by stng library internally
 }
 
-/// Construct a `MachoDylibEntry` from a goblin DylibCommand.
-/// Returns None if the dylib name is missing/empty.
+/// Construct a baseline `MachoDylibEntry` from a goblin DylibCommand.
+/// Name is left empty for the caller to fill from macho.libs/imports.
 fn mk_dylib_entry(
     cmd: &goblin::mach::load_command::DylibCommand,
     kind: &str,
-) -> Option<crate::types::binary_metrics::MachoDylibEntry> {
-    // goblin keeps DylibCommand with the name offset; the actual
-    // string lives in the load command bytes after the struct.
-    // We need the LoadCommand wrapper to access bytes — but for
-    // common cases, current_version + compat are usable directly,
-    // and the name is normally exposed via macho.libs[].
-    // We accept the name being filled in by the caller from
-    // macho.libs/imports; for now return a baseline entry so
-    // metric counts still roll up.
-    let _ = cmd;
-    let entry = crate::types::binary_metrics::MachoDylibEntry {
+) -> crate::types::binary_metrics::MachoDylibEntry {
+    crate::types::binary_metrics::MachoDylibEntry {
         name: String::new(),
         current_version: cmd.dylib.current_version,
         compatibility_version: cmd.dylib.compatibility_version,
         kind: kind.to_string(),
-    };
-    Some(entry)
+    }
 }
 
 /// Build a Mach-O segment carrier entry from a 32-bit segment cmd.
@@ -1192,7 +1167,13 @@ fn mk_dylib_entry(
 /// writable, executable)` for Tier A processing.
 fn mk_macho_seg_entry32(
     seg: &goblin::mach::load_command::SegmentCommand32,
-) -> (crate::types::binary_metrics::MachoSegmentEntry, bool, u64, bool, bool) {
+) -> (
+    crate::types::binary_metrics::MachoSegmentEntry,
+    bool,
+    u64,
+    bool,
+    bool,
+) {
     let name = std::str::from_utf8(&seg.segname)
         .unwrap_or("")
         .trim_end_matches('\0')
@@ -1202,9 +1183,21 @@ fn mk_macho_seg_entry32(
     const VM_PROT_EXECUTE: u32 = 0x04;
     let perms = format!(
         "{}{}{}",
-        if seg.initprot & VM_PROT_READ != 0 { "r" } else { "-" },
-        if seg.initprot & VM_PROT_WRITE != 0 { "w" } else { "-" },
-        if seg.initprot & VM_PROT_EXECUTE != 0 { "x" } else { "-" },
+        if seg.initprot & VM_PROT_READ != 0 {
+            "r"
+        } else {
+            "-"
+        },
+        if seg.initprot & VM_PROT_WRITE != 0 {
+            "w"
+        } else {
+            "-"
+        },
+        if seg.initprot & VM_PROT_EXECUTE != 0 {
+            "x"
+        } else {
+            "-"
+        },
     );
     let entry = crate::types::binary_metrics::MachoSegmentEntry {
         name: name.clone(),
@@ -1217,8 +1210,7 @@ fn mk_macho_seg_entry32(
         perms,
     };
     let vm_end = (seg.vmaddr as u64).saturating_add(seg.vmsize as u64);
-    let writable = (seg.initprot & VM_PROT_WRITE) != 0
-        || (seg.maxprot & VM_PROT_WRITE) != 0;
+    let writable = (seg.initprot & VM_PROT_WRITE) != 0 || (seg.maxprot & VM_PROT_WRITE) != 0;
     let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
     (entry, name == "__PAGEZERO", vm_end, writable, executable)
 }
@@ -1226,7 +1218,13 @@ fn mk_macho_seg_entry32(
 /// 64-bit variant. Same shape as `mk_macho_seg_entry32`.
 fn mk_macho_seg_entry64(
     seg: &goblin::mach::load_command::SegmentCommand64,
-) -> (crate::types::binary_metrics::MachoSegmentEntry, bool, u64, bool, bool) {
+) -> (
+    crate::types::binary_metrics::MachoSegmentEntry,
+    bool,
+    u64,
+    bool,
+    bool,
+) {
     let name = std::str::from_utf8(&seg.segname)
         .unwrap_or("")
         .trim_end_matches('\0')
@@ -1236,9 +1234,21 @@ fn mk_macho_seg_entry64(
     const VM_PROT_EXECUTE: u32 = 0x04;
     let perms = format!(
         "{}{}{}",
-        if seg.initprot & VM_PROT_READ != 0 { "r" } else { "-" },
-        if seg.initprot & VM_PROT_WRITE != 0 { "w" } else { "-" },
-        if seg.initprot & VM_PROT_EXECUTE != 0 { "x" } else { "-" },
+        if seg.initprot & VM_PROT_READ != 0 {
+            "r"
+        } else {
+            "-"
+        },
+        if seg.initprot & VM_PROT_WRITE != 0 {
+            "w"
+        } else {
+            "-"
+        },
+        if seg.initprot & VM_PROT_EXECUTE != 0 {
+            "x"
+        } else {
+            "-"
+        },
     );
     let entry = crate::types::binary_metrics::MachoSegmentEntry {
         name: name.clone(),
@@ -1251,8 +1261,7 @@ fn mk_macho_seg_entry64(
         perms,
     };
     let vm_end = seg.vmaddr.saturating_add(seg.vmsize);
-    let writable = (seg.initprot & VM_PROT_WRITE) != 0
-        || (seg.maxprot & VM_PROT_WRITE) != 0;
+    let writable = (seg.initprot & VM_PROT_WRITE) != 0 || (seg.maxprot & VM_PROT_WRITE) != 0;
     let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
     (entry, name == "__PAGEZERO", vm_end, writable, executable)
 }
@@ -1276,16 +1285,6 @@ fn sha256_of_sorted(items: &[String]) -> String {
     let mut h = Sha256::new();
     h.update(joined.as_bytes());
     hex::encode(h.finalize())
-}
-
-/// True if a `__PAGEZERO` segment size matches the architecture
-/// default (4 GB on 64-bit, 4 KB on 32-bit). Wrong size = tampered.
-fn is_pagezero_size_legitimate(vmsize: u64, is_64: bool) -> bool {
-    if is_64 {
-        vmsize == 0x1_0000_0000
-    } else {
-        vmsize == 0x1000
-    }
 }
 
 /// Determine criticality of an entitlement based on its key
@@ -1935,20 +1934,6 @@ mod tests {
         let h = sha256_of_sorted(&["libfoo.dylib".into()]);
         assert_eq!(h.len(), 64);
         assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
-    }
-
-    #[test]
-    fn test_is_pagezero_size_legitimate_64bit() {
-        assert!(is_pagezero_size_legitimate(0x1_0000_0000, true));
-        assert!(!is_pagezero_size_legitimate(0x1000, true));
-        assert!(!is_pagezero_size_legitimate(0, true));
-    }
-
-    #[test]
-    fn test_is_pagezero_size_legitimate_32bit() {
-        assert!(is_pagezero_size_legitimate(0x1000, false));
-        assert!(!is_pagezero_size_legitimate(0x1_0000_0000, false));
-        assert!(!is_pagezero_size_legitimate(0, false));
     }
 
     #[test]

@@ -327,19 +327,10 @@ fn is_unusual_bss_like(name: &str, raw_size: u32, virtual_size: u32) -> bool {
     if raw_size != 0 || virtual_size == 0 {
         return false;
     }
-    !matches!(name.to_ascii_lowercase().as_str(), ".bss" | "bss" | ".tls" | "tls")
-}
-
-fn fill_timestamp_parts_u32(timestamp: u32, year: &mut u32, month: &mut u32, day: &mut u32) {
-    if timestamp == 0 {
-        return;
-    }
-    if let Some(dt) = chrono::DateTime::<chrono::Utc>::from_timestamp(timestamp as i64, 0) {
-        use chrono::Datelike;
-        *year = dt.year().max(0) as u32;
-        *month = dt.month();
-        *day = dt.day();
-    }
+    !matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".bss" | "bss" | ".tls" | "tls"
+    )
 }
 
 fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
@@ -574,7 +565,9 @@ fn pkcs7_has_nested_signature(pkcs7: &[u8]) -> bool {
     const NESTED_SIG_OID: &[u8] = &[
         0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01,
     ];
-    pkcs7.windows(NESTED_SIG_OID.len()).any(|w| w == NESTED_SIG_OID)
+    pkcs7
+        .windows(NESTED_SIG_OID.len())
+        .any(|w| w == NESTED_SIG_OID)
 }
 
 /// Resolve a signature-algorithm OID to a friendly name. Covers the
@@ -1372,9 +1365,9 @@ impl PEAnalyzer {
 
                 // Prefer goblin section-header flags over r2 segment perms
                 let (exec, write, wx) = self.compute_section_permission_counts(pe);
-                binary_metrics.executable_sections = exec;
-                binary_metrics.writable_sections = write;
-                binary_metrics.wx_sections = wx;
+                binary_metrics.executable_section_count = exec;
+                binary_metrics.writable_section_count = write;
+                binary_metrics.wx_section_count = wx;
 
                 // Recalculate ratios with correct code_size
                 if file_size > 0 {
@@ -2034,16 +2027,12 @@ impl PEAnalyzer {
 
         let timestamp = pe.header.coff_header.time_date_stamp;
         metrics.timestamp = timestamp;
-        fill_timestamp_parts_u32(
-            timestamp,
-            &mut metrics.timestamp_year,
-            &mut metrics.timestamp_month,
-            &mut metrics.timestamp_day,
-        );
         metrics.machine = pe.header.coff_header.machine as u32;
         metrics.characteristics = pe.header.coff_header.characteristics as u32;
-        metrics.number_of_sections = pe.header.coff_header.number_of_sections as u32;
-        metrics.entry_point_rva = pe.entry;
+        // (raw COFF NumberOfSections dropped from the metric surface;
+        // pe.sections.len() flows into binary.section_count, and the
+        // mismatch case is exposed via pe.section_count_mismatch.)
+        metrics.entry = pe.entry;
         metrics.entry_section = entry_section_name(pe);
 
         // Timestamp anomaly check
@@ -2062,7 +2051,7 @@ impl PEAnalyzer {
             // Rich header typically found here
             for i in (0x80..pe_offset.min(0x200)).step_by(4) {
                 if i + 4 <= data.len() && &data[i..i + 4] == b"Rich" {
-                    metrics.rich_header_present = true;
+                    metrics.has_rich_header = true;
                     break;
                 }
             }
@@ -2088,8 +2077,7 @@ impl PEAnalyzer {
 
         if let Some(opt) = &pe.header.optional_header {
             metrics.checksum = opt.windows_fields.check_sum;
-            metrics.checksum_present = metrics.checksum != 0;
-            metrics.checksum_missing = metrics.checksum == 0;
+            metrics.has_checksum = metrics.checksum != 0;
             metrics.file_alignment = opt.windows_fields.file_alignment;
             metrics.section_alignment = opt.windows_fields.section_alignment;
             metrics.subsystem = opt.windows_fields.subsystem as u32;
@@ -2104,8 +2092,6 @@ impl PEAnalyzer {
                 metrics.computed_checksum = compute_pe_checksum(data, checksum_offset);
                 if metrics.checksum != 0 {
                     metrics.checksum_valid = metrics.checksum == metrics.computed_checksum;
-                    metrics.checksum_matches = metrics.checksum_valid;
-                    metrics.checksum_mismatch = !metrics.checksum_valid;
                 }
             }
 
@@ -2177,11 +2163,7 @@ impl PEAnalyzer {
                             metrics.has_signature = true;
 
                             if let Some(dt) = parse_asn1_signing_time(pkcs7_data) {
-                                use chrono::Datelike;
                                 metrics.signing_time = dt.timestamp() as u64;
-                                metrics.signing_time_year = dt.year().max(0) as u32;
-                                metrics.signing_time_month = dt.month();
-                                metrics.signing_time_day = dt.day();
                                 metrics.signing_time_before_timestamp =
                                     dt.timestamp() < metrics.timestamp as i64;
                             }
@@ -2226,8 +2208,7 @@ impl PEAnalyzer {
                             // NestedSignature attribute (Microsoft OID
                             // 1.3.6.1.4.1.311.2.4.1) anywhere in the
                             // PKCS#7 SignedData unauthenticated attrs.
-                            metrics.has_nested_signature =
-                                pkcs7_has_nested_signature(pkcs7_data);
+                            metrics.has_nested_signature = pkcs7_has_nested_signature(pkcs7_data);
                             // Parse SignerInfo FIRST — its
                             // IssuerAndSerialNumber is the authoritative
                             // pointer to the actual signing cert. We
@@ -2258,8 +2239,7 @@ impl PEAnalyzer {
                             // present but no matching cert in the bag.
                             if let (Some(si), Some(leaf)) = (&si_opt, leaf_opt) {
                                 let normalized = normalize_serial_hex(&si.serial_hex);
-                                let leaf_serial =
-                                    format!("{:x}", leaf.tbs_certificate.serial);
+                                let leaf_serial = format!("{:x}", leaf.tbs_certificate.serial);
                                 let resolved_via_si = leaf.tbs_certificate.issuer().as_raw()
                                     == si.issuer_raw
                                     && normalize_serial_hex(&leaf_serial) == normalized;
@@ -2282,16 +2262,14 @@ impl PEAnalyzer {
                                 // ExtendedKeyUsage codeSigning OID
                                 // (1.3.6.1.5.5.7.3.3). x509-parser
                                 // exposes a typed bool per common OID.
-                                if let Ok(Some(eku_ext)) =
-                                    leaf.tbs_certificate.extended_key_usage()
+                                if let Ok(Some(eku_ext)) = leaf.tbs_certificate.extended_key_usage()
                                 {
                                     metrics.leaf_eku_code_signing = eku_ext.value.code_signing;
                                 }
                                 // Friendly-name resolution for the leaf
                                 // cert's signature algorithm OID.
-                                metrics.leaf_signature_algorithm = signature_algorithm_name(
-                                    &leaf.signature_algorithm.algorithm,
-                                );
+                                metrics.leaf_signature_algorithm =
+                                    signature_algorithm_name(&leaf.signature_algorithm.algorithm);
                                 metrics.leaf_serial =
                                     Some(format!("{:x}", leaf.tbs_certificate.serial));
                                 metrics.leaf_not_before = leaf.validity().not_before.timestamp();
@@ -2320,10 +2298,7 @@ impl PEAnalyzer {
                                         if let (Some(alg), Some(signed_bytes)) =
                                             (si.digest_alg, si.signed_attrs_der.as_deref())
                                         {
-                                            let pubkey_der = leaf
-                                                .tbs_certificate
-                                                .subject_pki
-                                                .raw;
+                                            let pubkey_der = leaf.tbs_certificate.subject_pki.raw;
                                             metrics.signature_verified =
                                                 verify_rsa_pkcs1v15_signature(
                                                     pubkey_der,
@@ -2345,12 +2320,9 @@ impl PEAnalyzer {
                                                 .algorithm
                                                 .parameters
                                                 .as_ref()
-                                                .and_then(|p| {
-                                                    extract_ec_curve_oid(p.data)
-                                                });
-                                            let curve = curve_oid
-                                                .as_deref()
-                                                .and_then(NamedCurve::from_oid);
+                                                .and_then(|p| extract_ec_curve_oid(p.data));
+                                            let curve =
+                                                curve_oid.as_deref().and_then(NamedCurve::from_oid);
                                             let pubkey_sec1 = leaf
                                                 .tbs_certificate
                                                 .subject_pki
@@ -2369,16 +2341,15 @@ impl PEAnalyzer {
                                                     metrics.signature_verified = result;
                                                 } else {
                                                     // Off-pair (e.g. P-256+SHA-384).
-                                                    metrics.signature_algorithm_unsupported =
-                                                        true;
+                                                    metrics.sig_algorithm_unsupported = true;
                                                 }
                                             } else {
                                                 // ECDSA but curve not P-256/P-384.
-                                                metrics.signature_algorithm_unsupported = true;
+                                                metrics.sig_algorithm_unsupported = true;
                                             }
                                         }
                                     } else {
-                                        metrics.signature_algorithm_unsupported = true;
+                                        metrics.sig_algorithm_unsupported = true;
                                     }
                                 }
                             }
@@ -2408,7 +2379,7 @@ impl PEAnalyzer {
                 .get_delay_import_descriptor()
                 .is_some_and(|dir| dir.size > 0)
             {
-                metrics.delay_load_imports = 1;
+                metrics.delay_load_import_count = 1;
             }
         }
 
@@ -2429,7 +2400,7 @@ impl PEAnalyzer {
         // "Signed PE with a leaf cert that isn't authorized for code
         // signing" — collapses the EKU and has_signature checks into
         // one atomic-trait-friendly bool. Catches the Remus pattern.
-        metrics.signed_with_non_code_signing_leaf = metrics.has_signature
+        metrics.non_codesign_leaf = metrics.has_signature
             && metrics.leaf_subject.is_some()
             && !metrics.leaf_eku_code_signing;
         // Derived sibling booleans — atomic-trait friendly so authors
@@ -2442,14 +2413,14 @@ impl PEAnalyzer {
         // the bag — no derivation here. The legacy "heuristic
         // disagrees with SI" semantics no longer apply because we
         // now use SI as the authoritative leaf source.
-        metrics.nested_leaf_lacks_code_signing_eku = metrics.has_nested_signature
+        metrics.nested_leaf_no_codesign_eku = metrics.has_nested_signature
             && metrics.nested_leaf_subject.is_some()
             && !metrics.nested_leaf_eku_code_signing;
 
         // COFF symbol table — modern toolchains zero these fields.
         let pst = pe.header.coff_header.pointer_to_symbol_table;
         let nst = pe.header.coff_header.number_of_symbol_table;
-        metrics.coff_symbol_table_present = pst != 0 && nst != 0;
+        metrics.has_coff_symbols = pst != 0 && nst != 0;
 
         // Entry-point anomalies. The EP RVA is `pe.entry`. Three
         // independent checks:
@@ -2533,7 +2504,11 @@ impl PEAnalyzer {
                     let name = std::str::from_utf8(&s.name)
                         .unwrap_or("")
                         .trim_matches(char::from(0));
-                    (s.virtual_address, s.virtual_address.saturating_add(span), name)
+                    (
+                        s.virtual_address,
+                        s.virtual_address.saturating_add(span),
+                        name,
+                    )
                 })
                 .collect();
             by_va.sort_by_key(|t| t.0);
@@ -2562,8 +2537,7 @@ impl PEAnalyzer {
                 .filter(|&p| p > 0)
                 .min()
             {
-                metrics.first_section_gap_bytes =
-                    first_raw.saturating_sub(metrics.size_of_headers);
+                metrics.first_section_gap = first_raw.saturating_sub(metrics.size_of_headers);
             }
         }
 
@@ -2632,11 +2606,11 @@ impl PEAnalyzer {
                     }
                     match idx {
                         0 => {
-                            metrics.export_directory_outside_section =
+                            metrics.export_dir_outside_section =
                                 !rva_in_section(dir.virtual_address);
                         }
                         1 => {
-                            metrics.import_directory_outside_section =
+                            metrics.import_dir_outside_section =
                                 !rva_in_section(dir.virtual_address);
                         }
                         2 => {
@@ -2645,19 +2619,18 @@ impl PEAnalyzer {
                             if let Some(s) = pe.sections.iter().find(|s| {
                                 dir.virtual_address >= s.virtual_address
                                     && dir.virtual_address
-                                        < s.virtual_address.saturating_add(
-                                            s.virtual_size.max(s.size_of_raw_data),
-                                        )
+                                        < s.virtual_address
+                                            .saturating_add(s.virtual_size.max(s.size_of_raw_data))
                             }) {
                                 let section_end = s
                                     .virtual_address
                                     .saturating_add(s.virtual_size.max(s.size_of_raw_data));
                                 let dir_end = dir.virtual_address.saturating_add(dir.size);
                                 if dir_end > section_end {
-                                    metrics.resource_directory_overruns_section = true;
+                                    metrics.rsrc_dir_overruns_section = true;
                                 }
                             } else {
-                                metrics.resource_directory_overruns_section = true;
+                                metrics.rsrc_dir_overruns_section = true;
                             }
                         }
                         _ => {}
@@ -2683,7 +2656,7 @@ impl PEAnalyzer {
         // ──── Batch 4: authentihash + signature overlay padding ────
         if let Some((auth, padding)) = compute_authentihash_and_padding(pe, data) {
             metrics.authentihash = Some(auth);
-            metrics.signature_overlay_padding_bytes = padding;
+            metrics.overlay_padding = padding;
         }
 
         // Compute the matching authentihash for whatever digest the
@@ -2755,11 +2728,7 @@ impl PEAnalyzer {
                     if dir.virtual_address == 0 && dir.size == 0 {
                         continue;
                     }
-                    let name = DD_NAMES
-                        .get(idx)
-                        .copied()
-                        .unwrap_or("unknown")
-                        .to_string();
+                    let name = DD_NAMES.get(idx).copied().unwrap_or("unknown").to_string();
                     metrics.data_directory_entries.push(
                         crate::types::binary_metrics::DataDirectoryEntry {
                             name,
@@ -2771,19 +2740,13 @@ impl PEAnalyzer {
             }
         }
         // Rich Header CompID tuples.
-        if metrics.rich_header_present {
+        if metrics.has_rich_header {
             metrics.rich_header_compids = parse_rich_header(data, pe_offset);
         }
 
         if let Some(export_data) = &pe.export_data {
             metrics.export_timestamp = export_data.export_directory_table.time_date_stamp;
-            metrics.export_timestamp_present = metrics.export_timestamp != 0;
-            fill_timestamp_parts_u32(
-                metrics.export_timestamp,
-                &mut metrics.export_timestamp_year,
-                &mut metrics.export_timestamp_month,
-                &mut metrics.export_timestamp_day,
-            );
+            metrics.has_export_timestamp = metrics.export_timestamp != 0;
         }
 
         // Check for overlay data (appended after PE image, excluding signature)
@@ -2817,7 +2780,7 @@ impl PEAnalyzer {
         // Ordinal-only imports
         for import in &pe.imports {
             if import.name.is_empty() {
-                metrics.ordinal_imports += 1;
+                metrics.ordinal_import_count += 1;
             }
         }
 
@@ -2832,16 +2795,11 @@ impl PEAnalyzer {
             || import_names.contains("ldrloaddll")
             || import_names.contains("ldrgetprocedureaddress")
         {
-            metrics.api_hashing_indicators += 1;
+            metrics.api_hashing_indicator_count += 1;
         }
-        metrics.suspicious_import_combo = (import_names.contains("virtualalloc")
-            || import_names.contains("virtualallocex"))
-            && (import_names.contains("writeprocessmemory")
-                || import_names.contains("ntwritevirtualmemory")
-                || import_names.contains("rtlmovememory"))
-            && (import_names.contains("virtualprotect")
-                || import_names.contains("virtualprotectex")
-                || import_names.contains("ntprotectvirtualmemory"));
+        // (suspicious_import_combo metric removed; the VirtualAlloc +
+        // WriteProcessMemory + VirtualProtect cluster is a TRAIT
+        // composite, not a metric.)
 
         // Export forwarders — use goblin's parsed `reexport` field so the count
         // reflects real PE forward entries (RVA into the export directory)
@@ -2867,8 +2825,8 @@ impl PEAnalyzer {
                 None => {}
             }
         }
-        metrics.export_forwarders = forwarded;
-        metrics.forwards_to_system_dll_count = forwards_to_system;
+        metrics.export_forwarder_count = forwarded;
+        metrics.system_dll_forward_count = forwards_to_system;
         metrics.forward_ratio = if total_exports > 0 {
             forwarded as f32 / total_exports as f32
         } else {
@@ -2886,20 +2844,8 @@ impl PEAnalyzer {
                     .unwrap_or(""),
             );
 
-        // Section alignment check
-        if let Some(opt_header) = &pe.header.optional_header {
-            let file_alignment = opt_header.windows_fields.file_alignment;
-            let section_alignment = opt_header.windows_fields.section_alignment;
-
-            // Typical alignments: 0x200 (512) for file, 0x1000 (4096) for section
-            // Unusual if they're equal, very small, or very large
-            if file_alignment == section_alignment
-                || !(0x200..=0x10000).contains(&file_alignment)
-                || !(0x1000..=0x100000).contains(&section_alignment)
-            {
-                metrics.unusual_alignment = true;
-            }
-        }
+        // (unusual_alignment metric removed; trait authors compare
+        // pe.file_alignment / pe.section_alignment directly.)
 
         if let Some(resource_data) = &pe.resource_data {
             // goblin's PE resource directory walker is *lazy*: PE::parse() does
@@ -2913,8 +2859,8 @@ impl PEAnalyzer {
             // their defaults instead of aborting the whole analysis.
             let resource_outcome = goblin_safe::catch_infallible(|| {
                 let count = resource_data.count() as u32;
-                let version_info_present = resource_data.version_info.is_some();
-                let manifest_present = resource_data.manifest_data.is_some();
+                let has_version_info = resource_data.version_info.is_some();
+                let has_manifest = resource_data.manifest_data.is_some();
                 let resource_timestamp = resource_data.image_resource_directory.time_date_stamp;
                 let icon_count = resource_data
                     .entries()
@@ -2933,33 +2879,21 @@ impl PEAnalyzer {
                 let resource_types: Vec<String> = type_ids.iter().map(|&id| rt_name(id)).collect();
                 (
                     count,
-                    version_info_present,
-                    manifest_present,
+                    has_version_info,
+                    has_manifest,
                     resource_timestamp,
                     icon_count,
                     resource_types,
                 )
             });
-            if let Some((
-                count,
-                version_info_present,
-                manifest_present,
-                ts,
-                icon_count,
-                resource_types,
-            )) = resource_outcome.ok()
+            if let Some((count, has_version_info, has_manifest, ts, icon_count, resource_types)) =
+                resource_outcome.ok()
             {
                 metrics.resource_count = count;
-                metrics.version_info_present = version_info_present;
-                metrics.manifest_present = manifest_present;
+                metrics.has_version_info = has_version_info;
+                metrics.has_manifest = has_manifest;
                 metrics.resource_timestamp = ts;
-                metrics.resource_timestamp_present = ts != 0;
-                fill_timestamp_parts_u32(
-                    ts,
-                    &mut metrics.resource_timestamp_year,
-                    &mut metrics.resource_timestamp_month,
-                    &mut metrics.resource_timestamp_day,
-                );
+                metrics.has_resource_timestamp = ts != 0;
                 metrics.icon_count = icon_count;
                 metrics.resource_types = resource_types;
             } else {
@@ -2980,7 +2914,7 @@ impl PEAnalyzer {
         }
 
         if let Some(tls_data) = &pe.tls_data {
-            metrics.tls_callbacks = tls_data.callbacks.len() as u32;
+            metrics.tls_callback_count = tls_data.callbacks.len() as u32;
             // Tier A — surface individual callback RVAs (image-base
             // subtracted) so trait authors can match by location.
             let image_base = metrics.image_base;
@@ -3038,16 +2972,16 @@ impl PEAnalyzer {
         // both states ("couldn't traverse .rsrc safely") map onto the
         // same trait-author signal.
         if lazy_walker_panicked {
-            metrics.resource_directory_overruns_section = true;
+            metrics.rsrc_dir_overruns_section = true;
         }
 
         (metrics, lazy_walker_panicked)
     }
 
     fn compute_section_permission_counts<'a>(&self, pe: &PE<'a>) -> (u32, u32, u32) {
-        let mut executable_sections = 0;
-        let mut writable_sections = 0;
-        let mut wx_sections = 0;
+        let mut executable_section_count = 0;
+        let mut writable_section_count = 0;
+        let mut wx_section_count = 0;
 
         for section in &pe.sections {
             let characteristics = section.characteristics;
@@ -3055,17 +2989,21 @@ impl PEAnalyzer {
             let is_writable = (characteristics & 0x80000000) != 0;
 
             if is_executable {
-                executable_sections += 1;
+                executable_section_count += 1;
             }
             if is_writable {
-                writable_sections += 1;
+                writable_section_count += 1;
             }
             if is_executable && is_writable {
-                wx_sections += 1;
+                wx_section_count += 1;
             }
         }
 
-        (executable_sections, writable_sections, wx_sections)
+        (
+            executable_section_count,
+            writable_section_count,
+            wx_section_count,
+        )
     }
 
     /// Calculate code size from PE section headers using IMAGE_SCN_MEM_EXECUTE characteristic
@@ -3548,17 +3486,15 @@ fn parse_load_config(
         // Tier A — Load Config v2 (Win10+) fields. Field offsets per
         // IMAGE_LOAD_CONFIG_DIRECTORY64 winnt.h definition.
         if body.len() >= 0xB8 {
-            metrics.guard_long_jump_target_count =
-                read_u64(body, 0xB0).unwrap_or(0) as u32;
+            metrics.guard_long_jump_target_count = read_u64(body, 0xB0).unwrap_or(0) as u32;
         }
         // DynamicValueRelocTable (RVA at 0xB8) — presence-only
         // signal for the modern dynamic-relocation feature.
         if body.len() >= 0xC0 && read_u64(body, 0xB8).unwrap_or(0) != 0 {
-            metrics.dynamic_value_reloc_table_present = true;
+            metrics.has_dynamic_value_reloc_table = true;
         }
         if body.len() >= 0xD8 {
-            metrics.guard_eh_continuation_table_count =
-                read_u64(body, 0xD0).unwrap_or(0) as u32;
+            metrics.guard_eh_cont_count = read_u64(body, 0xD0).unwrap_or(0) as u32;
         }
     } else {
         if body.len() >= 0x44 {
@@ -3581,10 +3517,10 @@ fn parse_load_config(
             metrics.guard_long_jump_target_count = read_u32(body, 0x70).unwrap_or(0);
         }
         if body.len() >= 0x78 && read_u32(body, 0x74).unwrap_or(0) != 0 {
-            metrics.dynamic_value_reloc_table_present = true;
+            metrics.has_dynamic_value_reloc_table = true;
         }
         if body.len() >= 0x88 {
-            metrics.guard_eh_continuation_table_count = read_u32(body, 0x84).unwrap_or(0);
+            metrics.guard_eh_cont_count = read_u32(body, 0x84).unwrap_or(0);
         }
     }
 }
@@ -3640,7 +3576,7 @@ fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
 
 /// Compute Authenticode SHA-256 hash and the signature overlay-padding
 /// byte count per the Microsoft PE/COFF spec. Returns
-/// `(authentihash_hex, signature_overlay_padding_bytes)`.
+/// `(authentihash_hex, overlay_padding)`.
 ///
 /// Hash regions, in order:
 ///   1. file start → checksum field offset
@@ -3654,10 +3590,7 @@ fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
 /// Step 7 covers signed overlay payload — the "appended data that
 /// ships under the signature". Returns `None` only when the optional
 /// header is missing or the file is too short to contain headers.
-fn compute_authentihash_and_padding(
-    pe: &goblin::pe::PE<'_>,
-    data: &[u8],
-) -> Option<(String, u64)> {
+fn compute_authentihash_and_padding(pe: &goblin::pe::PE<'_>, data: &[u8]) -> Option<(String, u64)> {
     use sha2::{Digest, Sha256};
 
     let opt = pe.header.optional_header.as_ref()?;
@@ -3666,12 +3599,12 @@ fn compute_authentihash_and_padding(
 
     // Checksum field offset (4 bytes).
     let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_32
-            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
-        MAGIC_64 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_64
-            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        MAGIC_32 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
+        }
+        MAGIC_64 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
+        }
         _ => return None,
     };
 
@@ -3787,11 +3720,7 @@ impl AuthAlg {
 /// Compute the Authenticode hash with a specific digest algorithm.
 /// Reuses the same region-walking logic as `compute_authentihash_and_padding`
 /// — only the hasher changes. Returns lowercase hex.
-fn compute_authentihash_alg(
-    pe: &goblin::pe::PE<'_>,
-    data: &[u8],
-    alg: AuthAlg,
-) -> Option<String> {
+fn compute_authentihash_alg(pe: &goblin::pe::PE<'_>, data: &[u8], alg: AuthAlg) -> Option<String> {
     use sha1::Sha1;
     use sha2::digest::DynDigest;
     use sha2::{Digest, Sha256, Sha384, Sha512};
@@ -3807,12 +3736,12 @@ fn compute_authentihash_alg(
     let pe_offset = pe.header.dos_header.pe_pointer as usize;
     let optional_header_offset = pe_offset + 4 + 20;
     let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_32
-            + OFFSET_WINDOWS_FIELDS_32_CHECKSUM,
-        MAGIC_64 => optional_header_offset
-            + SIZEOF_STANDARD_FIELDS_64
-            + OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
+        MAGIC_32 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
+        }
+        MAGIC_64 => {
+            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
+        }
         _ => return None,
     };
     use goblin::pe::optional_header::{SIZEOF_WINDOWS_FIELDS_32, SIZEOF_WINDOWS_FIELDS_64};
@@ -3872,7 +3801,6 @@ fn compute_authentihash_alg(
     }
     Some(hex::encode(hasher.finalize()))
 }
-
 
 /// Parse `SpcIndirectDataContent.messageDigest` from a PKCS#7
 /// SignedData blob and return `(digest_alg_friendly_name, digest_hex)`.
@@ -4278,10 +4206,18 @@ fn verify_rsa_pkcs1v15_signature(
 
     let sig = RsaSignature::try_from(signature).ok()?;
     let verified = match digest_alg {
-        AuthAlg::Sha1 => VerifyingKey::<Sha1>::new(public_key).verify(signed_message, &sig).is_ok(),
-        AuthAlg::Sha256 => VerifyingKey::<Sha256>::new(public_key).verify(signed_message, &sig).is_ok(),
-        AuthAlg::Sha384 => VerifyingKey::<Sha384>::new(public_key).verify(signed_message, &sig).is_ok(),
-        AuthAlg::Sha512 => VerifyingKey::<Sha512>::new(public_key).verify(signed_message, &sig).is_ok(),
+        AuthAlg::Sha1 => VerifyingKey::<Sha1>::new(public_key)
+            .verify(signed_message, &sig)
+            .is_ok(),
+        AuthAlg::Sha256 => VerifyingKey::<Sha256>::new(public_key)
+            .verify(signed_message, &sig)
+            .is_ok(),
+        AuthAlg::Sha384 => VerifyingKey::<Sha384>::new(public_key)
+            .verify(signed_message, &sig)
+            .is_ok(),
+        AuthAlg::Sha512 => VerifyingKey::<Sha512>::new(public_key)
+            .verify(signed_message, &sig)
+            .is_ok(),
     };
     Some(verified)
 }
@@ -4408,7 +4344,10 @@ fn rich_product_name(product_id: u16) -> Option<&'static str> {
 /// Walks the region between `0x80` and the PE signature, locates the
 /// `Rich` + key, then walks backwards in 8-byte `(CompID, count)`
 /// tuples to the `DanS` terminator.
-fn parse_rich_header(data: &[u8], pe_offset: usize) -> Vec<crate::types::binary_metrics::RichCompId> {
+fn parse_rich_header(
+    data: &[u8],
+    pe_offset: usize,
+) -> Vec<crate::types::binary_metrics::RichCompId> {
     use crate::types::binary_metrics::RichCompId;
 
     let region_end = pe_offset.min(data.len());
@@ -4549,10 +4488,19 @@ mod tests {
 
     #[test]
     fn test_auth_alg_from_oid() {
-        assert_eq!(AuthAlg::from_oid("2.16.840.1.101.3.4.2.1"), Some(AuthAlg::Sha256));
+        assert_eq!(
+            AuthAlg::from_oid("2.16.840.1.101.3.4.2.1"),
+            Some(AuthAlg::Sha256)
+        );
         assert_eq!(AuthAlg::from_oid("1.3.14.3.2.26"), Some(AuthAlg::Sha1));
-        assert_eq!(AuthAlg::from_oid("2.16.840.1.101.3.4.2.2"), Some(AuthAlg::Sha384));
-        assert_eq!(AuthAlg::from_oid("2.16.840.1.101.3.4.2.3"), Some(AuthAlg::Sha512));
+        assert_eq!(
+            AuthAlg::from_oid("2.16.840.1.101.3.4.2.2"),
+            Some(AuthAlg::Sha384)
+        );
+        assert_eq!(
+            AuthAlg::from_oid("2.16.840.1.101.3.4.2.3"),
+            Some(AuthAlg::Sha512)
+        );
         assert_eq!(AuthAlg::from_oid("9.9.9.9"), None);
     }
 
@@ -4636,7 +4584,8 @@ mod tests {
         const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
         let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
         let certs = vec![a];
-        let bogus_issuer = b"\x30\x10\x31\x0e\x30\x0c\x06\x03\x55\x04\x03\x0c\x05\x4f\x74\x68\x65\x72";
+        let bogus_issuer =
+            b"\x30\x10\x31\x0e\x30\x0c\x06\x03\x55\x04\x03\x0c\x05\x4f\x74\x68\x65\x72";
         let result = find_cert_by_issuer_and_serial(&certs, bogus_issuer, "deadbeef");
         assert!(result.is_none());
     }
@@ -4698,7 +4647,10 @@ mod tests {
 
     #[test]
     fn test_named_curve_from_oid() {
-        assert_eq!(NamedCurve::from_oid("1.2.840.10045.3.1.7"), Some(NamedCurve::P256));
+        assert_eq!(
+            NamedCurve::from_oid("1.2.840.10045.3.1.7"),
+            Some(NamedCurve::P256)
+        );
         assert_eq!(NamedCurve::from_oid("1.3.132.0.34"), Some(NamedCurve::P384));
         assert_eq!(NamedCurve::from_oid("1.3.132.0.35"), None); // P-521 unsupported
         assert_eq!(NamedCurve::from_oid("9.9.9.9"), None);
@@ -4751,7 +4703,7 @@ mod tests {
     fn test_parse_asn1_tag_long_form_length() {
         // SEQUENCE with length 0x0102 (long form: 0x82 0x01 0x02).
         let mut data = vec![0x30, 0x82, 0x01, 0x02];
-        data.extend(std::iter::repeat(0xAA).take(0x102));
+        data.extend(std::iter::repeat_n(0xAA, 0x102));
         let (start, end) = parse_asn1_tag_at(&data, 0, 0x30).unwrap();
         assert_eq!(end - start, 0x102);
     }

@@ -343,7 +343,7 @@ mod tests {
     fn check_past_view_too_long() {
         let mut window = WindowSize::KB32.create_buffer();
         assert_eq!(
-            window.past_view(1 << 15 + 1),
+            window.past_view(1 << (15 + 1)),
             Err(DecodeFailed::ChunkTooLong)
         );
     }

@@ -21,7 +21,7 @@ mod tests {
         assert!(fields.contains(&"sentence_string_ratio"));
         assert!(fields.contains(&"string_length_stddev"));
         assert!(fields.contains(&"behavioral_import_ratio"));
-        assert!(fields.contains(&"nonstandard_section_name_count"));
+        assert!(fields.contains(&"nonstandard_section_count"));
         assert!(fields.contains(&"import_count"));
         assert!(fields.contains(&"func_count"));
 

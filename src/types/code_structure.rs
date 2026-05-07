@@ -204,7 +204,7 @@ pub struct SourceCodeMetrics {
     pub obfuscation_indicators: u32,
     /// High-entropy strings (entropy > 5.0)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub high_entropy_strings: u32,
+    pub high_entropy_string_count: u32,
 
     // Code structure (Phase 2)
     /// Code structure metrics

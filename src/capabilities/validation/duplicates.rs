@@ -257,57 +257,61 @@ pub(crate) fn find_duplicate_composite_rules(
 fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
     // Check if the entire pattern is wrapped in a single group like (a|b|c)
     // If so, unwrap it first
-    let unwrapped = if pattern.starts_with('(') && pattern.ends_with(')') {
-        // Check if the opening paren matches the closing paren
-        let mut depth = 0;
-        let mut in_char_class = false;
-        let bytes = pattern.as_bytes();
-        let mut matches_at_end = false;
+    let unwrapped =
+        if pattern.starts_with('(') && pattern.ends_with(')') && !pattern.starts_with("(?") {
+            // Check if the opening paren matches the closing paren
+            let mut depth = 0;
+            let mut in_char_class = false;
+            let bytes = pattern.as_bytes();
+            let mut matches_at_end = false;
+            let mut closes_before_end = false;
 
-        for (i, &byte) in bytes.iter().enumerate() {
-            // Count consecutive preceding backslashes; odd count means escaped
-            let mut backslash_count = 0;
-            let mut j = i;
-            while j > 0 && bytes[j - 1] == b'\\' {
-                backslash_count += 1;
-                j -= 1;
-            }
-            if backslash_count % 2 != 0 {
-                continue; // escaped character
-            }
-            match byte {
-                b'[' if !in_char_class => in_char_class = true,
-                b']' if in_char_class => in_char_class = false,
-                b'(' if !in_char_class => {
-                    depth += 1;
-                    if i == 0 {
-                        // This is the opening paren
-                        continue;
-                    }
+            for (i, &byte) in bytes.iter().enumerate() {
+                // Count consecutive preceding backslashes; odd count means escaped
+                let mut backslash_count = 0;
+                let mut j = i;
+                while j > 0 && bytes[j - 1] == b'\\' {
+                    backslash_count += 1;
+                    j -= 1;
                 }
-                b')' if !in_char_class => {
-                    depth -= 1;
-                    if depth == 0 && i == bytes.len() - 1 {
-                        matches_at_end = true;
-                    }
+                if backslash_count % 2 != 0 {
+                    continue; // escaped character
                 }
-                _ => {}
+                match byte {
+                    b'[' if !in_char_class => in_char_class = true,
+                    b']' if in_char_class => in_char_class = false,
+                    b'(' if !in_char_class => {
+                        depth += 1;
+                        if i == 0 {
+                            // This is the opening paren
+                            continue;
+                        }
+                    }
+                    b')' if !in_char_class => {
+                        depth -= 1;
+                        if depth == 0 && i == bytes.len() - 1 {
+                            matches_at_end = true;
+                        } else if depth == 0 {
+                            closes_before_end = true;
+                        }
+                    }
+                    _ => {}
+                }
             }
-        }
 
-        if matches_at_end {
-            let mut start = 1;
-            // Also skip non-capturing group prefix (?:)
-            if pattern[start..].starts_with("?:") {
-                start += 2;
+            if matches_at_end && !closes_before_end {
+                let mut start = 1;
+                // Also skip non-capturing group prefix (?:)
+                if pattern[start..].starts_with("?:") {
+                    start += 2;
+                }
+                &pattern[start..pattern.len() - 1]
+            } else {
+                pattern
             }
-            &pattern[start..pattern.len() - 1]
         } else {
             pattern
-        }
-    } else {
-        pattern
-    };
+        };
 
     let mut depth = 0i32;
     let mut in_char_class = false;
@@ -343,6 +347,24 @@ fn split_top_level_alternation(pattern: &str) -> Vec<&str> {
     }
     result.push(&unwrapped[last..]);
     result
+}
+
+fn meaningful_regex_alternative(alternative: &str) -> bool {
+    let alt = alternative.trim();
+    if alt.len() < 4 {
+        return false;
+    }
+
+    // Pure regex framing is not a semantic overlap. These pieces occur in many
+    // unrelated patterns and should not create reuse pressure by themselves.
+    let mut semantic_chars = 0usize;
+    for ch in alt.chars() {
+        if ch.is_alphanumeric() || ch == '_' || ch == '-' || ch == '/' || ch == '\\' || ch == '.' {
+            semantic_chars += 1;
+        }
+    }
+
+    semantic_chars >= 3
 }
 
 fn extract_single_group_alternation(pattern: &str) -> Option<(String, Vec<String>, String)> {
@@ -1107,13 +1129,13 @@ pub(crate) fn check_overlapping_regex_patterns(
                 let alts: FxHashSet<String> = split_top_level_alternation(&location.original_value)
                     .into_iter()
                     .map(|s| normalize_regex(s.trim()))
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| meaningful_regex_alternative(s))
                     .collect();
 
                 // If no alternatives, use the whole normalized pattern
                 let alternatives = if alts.is_empty() {
                     let normalized = normalize_regex(location.original_value.trim());
-                    if normalized.is_empty() {
+                    if !meaningful_regex_alternative(&normalized) {
                         FxHashSet::default()
                     } else {
                         let mut set = FxHashSet::default();
@@ -1186,6 +1208,20 @@ pub(crate) fn check_overlapping_regex_patterns(
         if a.location.section.is_some()
             && b.location.section.is_some()
             && a.location.section != b.location.section
+        {
+            continue;
+        }
+
+        // Regex overlap is only actionable when both patterns search the same
+        // extractor surface. A decoded `encoded` regex and a `text` regex can
+        // share syntax without being duplicate work.
+        if a.location.condition_type != b.location.condition_type {
+            continue;
+        }
+
+        if a.location.encoding.is_some()
+            && b.location.encoding.is_some()
+            && a.location.encoding != b.location.encoding
         {
             continue;
         }
@@ -1350,13 +1386,10 @@ pub(crate) fn check_same_string_different_types(
         let patterns = extract_patterns(trait_def);
 
         for (normalized, location) in patterns {
-            // Check all string-pattern types — the entire point of this validator
-            // is to catch the same literal expressed under different condition
-            // types in overlapping file-type scopes.
-            if !matches!(
-                location.condition_type.as_str(),
-                "text" | "symbol" | "raw" | "string_literal" | "basename" | "encoded"
-            ) {
+            // Only compare matcher families that can reasonably be canonicalized
+            // as alternate spellings of the same search surface. `encoded` and
+            // `basename` are intentionally different scopes.
+            if !is_cross_type_canonicalization_candidate(location.condition_type.as_str()) {
                 continue;
             }
 
@@ -1383,6 +1416,10 @@ pub(crate) fn check_same_string_different_types(
             for j in (i + 1)..all_locations.len() {
                 // Only check if they have different condition types
                 if all_locations[i].condition_type != all_locations[j].condition_type
+                    && all_locations[i].match_type == all_locations[j].match_type
+                    && trait_dir(&all_locations[i].trait_id)
+                        == trait_dir(&all_locations[j].trait_id)
+                    && all_locations[i].file_path == all_locations[j].file_path
                     && has_filetype_overlap(all_locations[i], all_locations[j])
                 {
                     has_overlap = true;
@@ -1431,6 +1468,10 @@ pub(crate) fn check_same_string_different_types(
     );
 }
 
+fn is_cross_type_canonicalization_candidate(condition_type: &str) -> bool {
+    matches!(condition_type, "text" | "string_literal")
+}
+
 /// Detect exact patterns that are redundant because a substr pattern with the SAME string exists
 ///
 /// Examples:
@@ -1474,10 +1515,37 @@ pub(crate) fn check_exact_contained_by_substr(
                     if !has_filetype_overlap(exact_loc, substr_loc) {
                         continue;
                     }
+                    if !exact_substr_context_reusable_as_is(exact_loc, substr_loc) {
+                        continue;
+                    }
 
                     // Check tier
                     let exact_tier = extract_tier(&exact_loc.trait_id);
                     let substr_tier = extract_tier(&substr_loc.trait_id);
+                    let cross_tier = exact_tier != substr_tier;
+                    let reusable_cross_tier = match (exact_tier, substr_tier) {
+                        (Some(e), Some(s)) if e != s => is_reusable_tier(e) || is_reusable_tier(s),
+                        _ => false,
+                    };
+                    if cross_tier && !reusable_cross_tier {
+                        continue;
+                    }
+                    if !cross_tier
+                        && trait_dir(&exact_loc.trait_id) != trait_dir(&substr_loc.trait_id)
+                    {
+                        continue;
+                    }
+                    if is_low_signal_lexicon_atom(&exact_pattern, exact_loc)
+                        || is_low_signal_lexicon_atom(&exact_pattern, substr_loc)
+                    {
+                        continue;
+                    }
+                    if !cross_tier
+                        && trait_dir(&exact_loc.trait_id) != trait_dir(&substr_loc.trait_id)
+                        && is_low_value_exact_substr_atom(&exact_pattern)
+                    {
+                        continue;
+                    }
 
                     let tier_note = match (exact_tier, substr_tier) {
                         (Some(e), Some(s)) if e == s => format!(" (same tier: {e})"),
@@ -1536,6 +1604,36 @@ pub(crate) fn check_exact_contained_by_substr(
         start.elapsed(),
         redundancies_found
     );
+}
+
+fn trait_dir(id: &str) -> &str {
+    id.split_once("::").map_or(id, |(dir, _)| dir)
+}
+
+fn is_low_value_exact_substr_atom(pattern: &str) -> bool {
+    let len = pattern.chars().count();
+    len <= 8
+        && pattern
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn is_low_signal_lexicon_atom(pattern: &str, location: &PatternLocation) -> bool {
+    is_low_value_exact_substr_atom(pattern)
+        && trait_dir(&location.trait_id) == "micro-behaviors/data/text/keywords/lexicon"
+}
+
+fn exact_substr_context_reusable_as_is(a: &PatternLocation, b: &PatternLocation) -> bool {
+    if a.condition_type != b.condition_type {
+        return false;
+    }
+    if !section_scope_equivalent(a.section.as_deref(), b.section.as_deref()) {
+        return false;
+    }
+    if a.condition_type != "encoded" {
+        return true;
+    }
+    a.encoding == b.encoding
 }
 
 /// Detect patterns where case_insensitive=true subsumes case_insensitive=false
@@ -2193,7 +2291,10 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     continue;
                 }
 
-                // Check if regex matches the literal
+                // Check if regex matches the literal. A match alone is not
+                // enough to give useful reuse advice: broad regexes such as
+                // `\b(foo|bar)\b` or `[A-Z]{8,12}` naturally match many
+                // literals that should remain separate traits.
                 if !re.is_match(&literal_pat.normalized) {
                     continue;
                 }
@@ -2282,7 +2383,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                             literal_pat.match_type, // Prefer exact/substr over regex for simple patterns
                         ),
                     ));
-                } else if !cross_type {
+                } else if !cross_type && is_trivial_extension {
                     // Same condition type — check if cross-tier (intentional layering)
                     let regex_tier = super::helpers::extract_tier(&regex_pat.trait_id);
                     let literal_tier = super::helpers::extract_tier(&literal_pat.trait_id);
@@ -2456,6 +2557,14 @@ pub(crate) fn check_regex_alternative_subsets(
                 continue;
             }
 
+            // Alternative-subset reuse only makes sense for the same matcher
+            // surface. Cross-type cases such as decoded `encoded` strings vs
+            // source `text`, or `symbol` vs decoded content, are intentionally
+            // separate extractor semantics.
+            if p1.condition_type != p2.condition_type {
+                continue;
+            }
+
             // Convert to sets for subset comparison
             let set1: HashSet<&String> = p1.alternatives.iter().collect();
             let set2: HashSet<&String> = p2.alternatives.iter().collect();
@@ -2518,13 +2627,31 @@ pub(crate) fn check_regex_alternative_subsets(
             // Check for case-insensitive subsumption
             // If patterns have same alternatives but different case_insensitive flags
             if p1.case_insensitive != p2.case_insensitive {
-                // Normalize both to lowercase for comparison
-                let set1_lower: HashSet<String> =
-                    p1.alternatives.iter().map(|a| a.to_lowercase()).collect();
-                let set2_lower: HashSet<String> =
-                    p2.alternatives.iter().map(|a| a.to_lowercase()).collect();
+                let alternatives_same_ignoring_case = if !p1.alternatives.is_empty()
+                    && !p2.alternatives.is_empty()
+                {
+                    let set1_lower: HashSet<String> =
+                        p1.alternatives.iter().map(|a| a.to_lowercase()).collect();
+                    let set2_lower: HashSet<String> =
+                        p2.alternatives.iter().map(|a| a.to_lowercase()).collect();
+                    set1_lower == set2_lower
+                } else if let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
+                    (&p1.grouped_alternatives, &p2.grouped_alternatives)
+                {
+                    prefix1.eq_ignore_ascii_case(prefix2)
+                        && suffix1.eq_ignore_ascii_case(suffix2)
+                        && {
+                            let set1_lower: HashSet<String> =
+                                alts1.iter().map(|a| a.to_lowercase()).collect();
+                            let set2_lower: HashSet<String> =
+                                alts2.iter().map(|a| a.to_lowercase()).collect();
+                            !set1_lower.is_empty() && set1_lower == set2_lower
+                        }
+                } else {
+                    false
+                };
 
-                if set1_lower == set2_lower {
+                if alternatives_same_ignoring_case {
                     let (case_insensitive_pat, case_sensitive_pat) = if p1.case_insensitive {
                         (p1, p2)
                     } else {

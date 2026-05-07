@@ -65,9 +65,9 @@ pub(crate) struct CodeSignature {
     pub is_notarized: bool,
     /// Whether the code directory enables hardened runtime.
     pub has_hardened_runtime: bool,
-    /// CodeDirectory flags field (u32 BE). Decoded bits are
-    /// surfaced as cs_runtime_flag, cs_library_validation,
-    /// cs_linker_signed, cs_force_kill on MachoMetrics.
+    /// CodeDirectory flags field (u32 BE). Surfaced raw on
+    /// MachoMetrics.cs_flags; decoded bits emitted under kv
+    /// `macho.cs_flags.*`.
     pub cs_flags: u32,
     /// Minimum OS version embedded in CodeDirectory's `runtime` field
     /// (CodeDirectory version ≥ 0x20500). `major.minor.patch` string.
@@ -154,11 +154,7 @@ pub(crate) fn parse_code_signature(
     let (has_hardened_runtime, cs_flags, cs_runtime_version) =
         if let Some(cd_data) = blobs.get(&CODE_DIRECTORY_MAGIC) {
             let (flags, runtime) = extract_codedir_flags_and_runtime(cd_data);
-            (
-                check_hardened_runtime_flag(cd_data),
-                flags,
-                runtime,
-            )
+            (check_hardened_runtime_flag(cd_data), flags, runtime)
         } else {
             (false, 0u32, None)
         };

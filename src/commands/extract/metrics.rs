@@ -99,45 +99,45 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
 /// Human-readable section label for a metric field prefix.
 fn section_label(prefix: &str) -> &str {
     match prefix {
-        "binary"       => "BINARY",
-        "pe"           => "PE",
-        "macho"        => "MACHO",
-        "elf"          => "ELF",
-        "consistency"  => "CONSISTENCY",
-        "text"         => "TEXT",
-        "identifiers"  => "IDENTIFIERS",
-        "strings"      => "STRINGS",
-        "comments"     => "COMMENTS",
-        "functions"    => "FUNCTIONS",
-        "statements"   => "STATEMENTS",
-        "imports"      => "IMPORTS",
-        "encoded"      => "ENCODED",
-        "python"       => "PYTHON",
-        "javascript"   => "JAVASCRIPT",
-        "powershell"   => "POWERSHELL",
-        "shell"        => "SHELL",
-        "php"          => "PHP",
-        "ruby"         => "RUBY",
-        "perl"         => "PERL",
-        "go_metrics"   => "GO",
+        "binary" => "BINARY",
+        "pe" => "PE",
+        "macho" => "MACHO",
+        "elf" => "ELF",
+        "consistency" => "CONSISTENCY",
+        "text" => "TEXT",
+        "identifiers" => "IDENTIFIERS",
+        "strings" => "STRINGS",
+        "comments" => "COMMENTS",
+        "functions" => "FUNCTIONS",
+        "statements" => "STATEMENTS",
+        "imports" => "IMPORTS",
+        "encoded" => "ENCODED",
+        "python" => "PYTHON",
+        "javascript" => "JAVASCRIPT",
+        "powershell" => "POWERSHELL",
+        "shell" => "SHELL",
+        "php" => "PHP",
+        "ruby" => "RUBY",
+        "perl" => "PERL",
+        "go_metrics" => "GO",
         "rust_metrics" => "RUST",
-        "c_metrics"    => "C",
-        "java"         => "JAVA",
-        "java_class"   => "JAVA CLASS",
-        "lua"          => "LUA",
-        "csharp"       => "C#",
-        "archive"      => "ARCHIVE",
+        "c_metrics" => "C",
+        "java" => "JAVA",
+        "java_class" => "JAVA CLASS",
+        "lua" => "LUA",
+        "csharp" => "C#",
+        "archive" => "ARCHIVE",
         "package_json" => "PACKAGE JSON",
-        "chm"          => "CHM",
-        "image"        => "IMAGE",
-        "png"          => "PNG",
-        "jpeg"         => "JPEG",
-        "lnk"          => "LNK",
-        "office"       => "OFFICE",
-        "obfuscation"  => "OBFUSCATION",
-        "packing"      => "PACKING",
+        "chm" => "CHM",
+        "image" => "IMAGE",
+        "png" => "PNG",
+        "jpeg" => "JPEG",
+        "lnk" => "LNK",
+        "office" => "OFFICE",
+        "obfuscation" => "OBFUSCATION",
+        "packing" => "PACKING",
         "supply_chain" => "SUPPLY CHAIN",
-        _              => prefix,
+        _ => prefix,
     }
 }
 
@@ -211,14 +211,17 @@ fn format_metrics_output(
             for (prefix, fields) in &groups {
                 // Section pill — dark gray, bold white, same style as analyze metadata pill.
                 let label = section_label(prefix);
-                let pill = format!(" {} ", label).bold().white().on_truecolor(48, 48, 48);
+                let pill = format!(" {} ", label)
+                    .bold()
+                    .white()
+                    .on_truecolor(48, 48, 48);
                 output.push('\n');
                 output.push_str(&pill.to_string());
                 output.push('\n');
 
                 // Column widths for this section.
                 let path_w = fields.iter().map(|(p, _)| p.len()).max().unwrap_or(0);
-                let val_w  = fields.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
+                let val_w = fields.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
                 // Description gets whatever remains after indent(2) + path + gap(2) + value + gap(2)
                 let overhead = 2 + path_w + 2 + val_w + 2;
                 let desc_w = term_width.saturating_sub(overhead);
@@ -228,9 +231,9 @@ fn format_metrics_output(
 
                     // Color booleans: true → azure, false → dimmed.
                     let colored_val = match val.as_str() {
-                        "true"  => cleave::theme::paint_notable(val).to_string(),
+                        "true" => cleave::theme::paint_notable(val).to_string(),
                         "false" => val.dimmed().to_string(),
-                        _       => val.clone(),
+                        _ => val.clone(),
                     };
 
                     let truncated_desc = if desc.len() > desc_w && desc_w > 1 {
@@ -247,9 +250,11 @@ fn format_metrics_output(
 
                     output.push_str(&format!(
                         "  {:<path_w$}  {:<val_w$}  {}\n",
-                        path, colored_val, colored_desc,
+                        path,
+                        colored_val,
+                        colored_desc,
                         path_w = path_w,
-                        val_w  = val_w,
+                        val_w = val_w,
                     ));
                 }
             }
@@ -261,7 +266,13 @@ fn format_metrics_output(
                     " ⚠  {} description(s) outside 25–60 char target ",
                     violations.len()
                 );
-                output.push_str(&warn_header.bold().black().on_truecolor(180, 120, 0).to_string());
+                output.push_str(
+                    &warn_header
+                        .bold()
+                        .black()
+                        .on_truecolor(180, 120, 0)
+                        .to_string(),
+                );
                 output.push('\n');
                 for (path, len, first) in &violations {
                     let row = format!("  {path}  ({len} chars)  \"{first}\"");

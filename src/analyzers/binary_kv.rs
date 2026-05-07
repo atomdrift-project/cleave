@@ -1,215 +1,217 @@
 //! Binary-metadata kv-tree synthesis.
 //!
-//! Cross-format string-typed binary metadata (compiler versions,
-//! build-id strings, PE VERSIONINFO fields, Go buildinfo, ELF
-//! interpreter / rpath / .comment strings, Mach-O LC_UUID, etc.)
-//! — the binary-side equivalent of what `office_kv`/`rtf_kv`/
-//! `pdf_kv` do for documents.
+//! The kv tree is the **values** half of cleave's binary surface:
+//! strings, paths, identifiers, hex digests, structured trees, and
+//! decoded named bit-flags lifted directly from the binary. Trait
+//! authors target it with `type: kv, path: ..., regex:/exists:`.
 //!
-//! Numeric metrics keep living on `BinaryMetrics`/`PeMetrics`/
-//! `ElfMetrics`/`MachoMetrics`; the kv tree is for strings, paths,
-//! and small structured values that benefit from `path:`/`regex:`/
-//! `substr:` traits.
+//! The other half — booleans, counts, derived numerics, cross-format
+//! comparisons — lives on metrics structs (`BinaryMetrics`,
+//! `PeMetrics`, `ElfMetrics`, `MachoMetrics`) and is the ML feature
+//! surface. Trait authors target it with `type: metrics, field: ...`.
 //!
-//! # Schema (stable trait-base API — Pike-pass naming)
+//! # Disjoint by data kind
 //!
-//! Each field appears in exactly one place.  When a value could be
-//! grouped under `build.*` or under a format-specific section, it
-//! lives under the format-specific section ONLY when it has no
-//! cross-format analogue.  Booleans use the `is_*`/`has_*` prefix
-//! conventional in EMBER/lief/pefile.  Hashes group under
-//! `hashes.*`; provenance under `<field>_from`.
+//! Every fact lives in exactly one tree. There are no metric→kv
+//! mirrors. A field is in kv iff it's a value; in metrics iff it's a
+//! bool, count, or computed scalar. The one carve-out: decoded
+//! named-bit subtrees in kv (`pe.dll_characteristics.*`,
+//! `elf.dt_flags.*`, `macho.cs_flags.*`, `macho.header_flags.*`) are
+//! a labeling convenience over a single raw `u32` bitfield that lives
+//! on metrics — same source, two access modes (numeric thresholds vs
+//! `exists:` per-bit traits).
+//!
+//! # Naming rules
+//!
+//! - `_` separates words inside one identifier; `.` traverses into a
+//!   sub-object. Never create a one-child subtree.
+//! - Promote atomic→subtree only when ≥2 sibling fields share a
+//!   meaningful conceptual prefix (`pe.codeview.{guid, age}` not
+//!   `pe.codeview_guid`).
+//! - Industry-canonical names preserved verbatim
+//!   (`imphash`, `dll_characteristics`, `package.type` per FDO,
+//!   `bundle_identifier`).
+//! - Booleans live on metrics — kv carries only values. Where a value
+//!   exists, traits test presence via `exists: true|false`.
+//!
+//! # Schema
 //!
 //! ```text
 //! build:                    cross-format toolchain / build environment
 //!   target_arch             "x86_64" | "aarch64" | "x86" | ...
 //!   toolchain               "go1.26.2" | "gcc 13.2.0" | "MSVC 19.29" | ...
 //!   toolchain_family        "go" | "gcc" | "clang" | "msvc" | "rustc" | ...
-//!   distro                  "ubuntu" | "debian" | "alpine" | ...   (B0.5)
-//!   command_line            "-O2 -fstack-protector-strong ..."     (B0.5)
-//!   sanitizers[]            ["asan", "ubsan", "pgo", ...]          (B0.5)
-//!   fortified[]             ["sprintf", "strcpy", "memcpy", ...]   (B3.5 — FORTIFY_SOURCE _chk imports)
-//!   username                "alice"        (single canonical, present when unambiguous)
-//!   usernames[]             ["alice", "bob"]   (only when multiple — exclusive with `username`)
-//!   user_home               "/Users/alice"   (single, when `username` is set and prefix known)
+//!   linker                  "gold" | "lld" | "mold" | "bfd"
+//!   distro                  "ubuntu" | "debian" | "alpine" | ...
+//!   command_line            "-O2 -fstack-protector-strong ..."
+//!   sanitizers[]            ["asan", "ubsan", "pgo", ...]
+//!   fortified[]             ["sprintf", "strcpy", "memcpy", ...]
+//!   username                "alice"   (canonical, when unambiguous)
+//!   usernames[]             ["alice", "bob"]   (only when multiple)
+//!   user_home               "/Users/alice"
 //!   username_from           "pdb_path" | "byte_scan"
-//!   source_paths[]          ["/Users/.../main.go", ...]  (capped, in scan order)
-//!   build_root              "/Users/alice/projects/sample"  (longest common ancestor)
-//!   is_pie                  bool   (mirrors `binary.is_pie` metric)
-//!   is_stripped             bool   (mirrors `binary.is_stripped` metric)
-//!   has_debug_info          bool   (mirrors `binary.has_debug_info` metric)
-//!   ci_environment          "github-actions" | "gitlab-ci" | ...   (planned)
-//!   linker                  "gold" | "lld" | "mold" | "bfd"        (B7 — ELF only)
-//!   rust_runtime_symbols[]  ["rust_alloc", "rust_panic", ...]      (B7.5 — Rust ABI markers)
-//!   rust_mangling           "v0" | "legacy"                        (B7.5 — Rust symbol mangling style)
-//!   has_rustc_section       bool — `.rustc` ELF section present    (B7.5 — Rust crate metadata)
+//!   source_paths[]          ["/Users/.../main.go", ...]  (capped)
+//!   build_root              "/Users/alice/projects/sample"
+//!   rust_runtime_symbols[]  ["rust_alloc", "rust_panic", ...]
+//!   rust_mangling           "v0" | "legacy"
 //!
 //! signing:                  cross-format signing metadata
-//!   is_signed               bool   (mirrors `binary.has_signature` metric)
-//!   signature_valid         bool
-//!   hardened_runtime        bool   (Mach-O — mirrors `macho.hardened_runtime`)
-//!   allow_jit               bool   (Mach-O — mirrors `macho.allow_jit`)
-//!   notarized               bool   (Mach-O — mirrors `macho.is_notarized`)
 //!   catalog                 "authenticode" | "apple_codesign"
-//!   type                    "adhoc" | "developer-id" | "platform"       (Mach-O)
-//!   subject                 leaf cert Subject CN                        (PE+Mach-O)
-//!   issuer                  leaf cert Issuer CN (immediate CA above leaf)  (PE)
-//!   thumbprint_sha1         SHA-1 of leaf cert DER (lowercase hex)      (PE)
-//!   serial                  leaf cert serial number (lowercase hex)     (PE)
-//!   not_before              Unix epoch seconds — cert validity start    (PE)
-//!   not_after               Unix epoch seconds — cert validity end      (PE)
+//!   format                  "adhoc" | "developer-id" | "platform" | "app-store"  (Mach-O)
+//!   time                    Unix epoch seconds                          (PE Authenticode / Mach-O)
+//!   countersigner           timestamping authority CN                   (PE)
+//!   team_id                 "9XQGPJ8B7K"                                (Mach-O)
+//!   bundle_identifier       "com.example.app"                           (Mach-O)
 //!   authorities[]           ["Apple Root CA", ...]                      (Mach-O cert chain)
-//!   signing_time            Unix epoch seconds                          (PE Authenticode)
-//!   countersign_time        "<ISO 8601>"                                (planned)
-//!   team_id                 "9XQGPJ8B7K"                                (B4 — Mach-O)
-//!   bundle_identifier       "com.example.app"                           (B4)
-//!   cs_flags[]              ["host", "runtime", "library_validation"]   (planned)
 //!   requirements_sha256     SHA-256 of the embedded Requirements blob   (Mach-O)
 //!   requirements_slot_count u32 — count of designated/host/guest slots  (Mach-O)
-//!   entitlements            { entitlement_key: bool|string|[string] }   (B4)
+//!   entitlements            { key: bool|string|[string] }               (Mach-O)
+//!   cert.subject            leaf cert Subject CN                        (PE+Mach-O)
+//!   cert.issuer             leaf cert Issuer CN                         (PE)
+//!   cert.serial             leaf cert serial (lowercase hex)            (PE)
+//!   cert.thumbprint_sha1    SHA-1 of leaf cert DER (lowercase hex)      (PE)
+//!   validity.not_before     Unix epoch — cert validity start            (PE)
+//!   validity.not_after      Unix epoch — cert validity end              (PE)
+//!
+//! hash:                     similarity / cluster digests (industry-canonical names)
+//!   imp                     PE imphash (md5)
+//!   rich_header             PE Rich-header hash (sha256)
+//!   authenti                PE Authentihash (sha256, signed-region digest)
+//!   cd                      Mach-O CDHash (sha256)
+//!   dylib                   Mach-O dylib-name similarity (sha256)
+//!   sym                     Mach-O imported-symbol similarity (sha256)
+//!   export                  Mach-O exported-symbol similarity (sha256)
+//!   entitlement             Mach-O entitlement-key similarity (sha256)
+//!   gimp                    Go-binary similarity                        (planned)
+//!   tlsh, ssdeep            cross-format fuzzy hashes                   (planned)
 //!
 //! debug:                    cross-format debug metadata
 //!   pdb_path                "C:\\Users\\dev\\projects\\sample.pdb"
-//!   has_build_id            bool   (single source of truth)
-//!   has_debuglink           bool
-//!   producer                "GNU C++23 13.2.0 ..."                      (B3)
-//!   comp_dir                "/home/dev/proj/build"                      (B3)
+//!   build_id                "<hex>" — GNU build-id / Mach-O LC_UUID
+//!   producer                "GNU C++23 13.2.0 ..."
+//!   comp_dir                "/home/dev/proj/build"
 //!
 //! pe:                       PE-specific
-//!   timestamp               COFF TimeDateStamp (Unix epoch seconds; 0 = deterministic)
-//!   timestamp_is_zero       bool — explicit deterministic-build flag
-//!   checksum                "0x........" — populated only when set
+//!   timestamp               COFF TimeDateStamp (epoch; 0 = deterministic)
+//!   checksum                "0x........" (when set)
 //!   linker_version          "14.39"
-//!   dll_characteristics:    decoded named flags (only true ones present)
-//!     high_entropy_va, dynamic_base (ASLR), force_integrity,
-//!     nx_compat (DEP), no_isolation, no_seh, no_bind, appcontainer,
-//!     wdm_driver, guard_cf (Control Flow Guard), terminal_server_aware
+//!   dll_characteristics.{...}  decoded named flags (only true ones present)
+//!                              high_entropy_va, dynamic_base (ASLR), force_integrity,
+//!                              nx_compat (DEP), no_isolation, no_seh, no_bind,
+//!                              appcontainer, wdm_driver, guard_cf (CFG),
+//!                              terminal_server_aware
 //!   debug_directory_types[] [16, 13, ...] — sorted IMAGE_DEBUG_TYPE_* values
-//!   is_reproducible_build   bool — IMAGE_DEBUG_TYPE_REPRO (16) present
-//!   has_pogo                bool — IMAGE_DEBUG_TYPE_POGO (13) present (PGO data)
-//!   has_iltcg               bool — IMAGE_DEBUG_TYPE_ILTCG (14) present
-//!   has_vc_feature          bool — IMAGE_DEBUG_TYPE_VC_FEATURE (12) present
-//!   codeview_guid           "XXXX-XXXX-..." — RSDS PDB age GUID
-//!   codeview_age            integer — PDB age counter
+//!   codeview.guid           RSDS PDB age GUID
+//!   codeview.age            PDB age counter
 //!   rich_header.entries[]   [{ product_id, product_name, build_number, use_count }, ...]
 //!   rich_header.xor_key     "0x..."
-//!   version_info.{...}      snake_case'd VS_VERSIONINFO StringTable
-//!                           keys: company_name, file_description, file_version,
-//!                                 internal_name, original_filename, product_name,
-//!                                 product_version, legal_copyright,
-//!                                 legal_trademarks, comments, private_build,
-//!                                 special_build
+//!   version_info.{...}      snake_cased VS_VERSIONINFO keys
+//!                           (company_name, file_description, file_version,
+//!                            internal_name, original_filename, product_name,
+//!                            product_version, legal_copyright,
+//!                            legal_trademarks, comments, private_build,
+//!                            special_build)
 //!   manifest.assembly_identity.{name, version, processor_architecture, type, public_key_token, language}
-//!   manifest.description
-//!   manifest.requested_execution_level   "asInvoker" | "requireAdministrator" | "highestAvailable"
-//!   manifest.ui_access                   bool
-//!   manifest.auto_elevate                bool — UAC-bypass tooling marker
-//!   manifest.dpi_aware / dpi_awareness   bool | string
-//!   manifest.long_path_aware             bool
-//!   manifest.supported_os[]              [{ guid, name }]   names: vista|win7|win8|win8.1|win10
-//!   manifest.dependencies[]              [{ name, version, processor_architecture, public_key_token, ... }]
-//!   manifest.windows_settings.{...}      remaining settings not hoisted above
-//!   resource_types[]                     ["RT_ICON", "RT_VERSION", "RT_MANIFEST", ...]
-//!   bound_imports[]                      [{ name, time_date_stamp, forwarder_ref_count }]
-//!                                        — build-host WinSxS state fingerprint
-//!   load_config.security_cookie          "0x140295040" — /GS cookie address
-//!   load_config.cfg_check_func       "0x140287418" — CFG check fn pointer
-//!   load_config.cfg_guard_flags          "0x10500" — raw CFG guard-flags bitfield
-//!   load_config.cfg_flags.{...}          decoded named CFG flags
+//!   manifest.requested_execution_level
+//!   manifest.{ui_access, auto_elevate, long_path_aware, ...}  raw XML values
+//!   manifest.supported_os[]   [{ guid, name }]
+//!   manifest.dependencies[]
+//!   resource_types[]        ["RT_ICON", "RT_VERSION", "RT_MANIFEST", ...]
+//!   bound_imports[]         [{ name, time_date_stamp, forwarder_ref_count }]
+//!   load_config.security_cookie    "/GS cookie address"
+//!   load_config.cfg_check_func     CFG check fn pointer
+//!   load_config.cfg_guard_flags    raw CFG guard-flags bitfield
+//!   load_config.cfg_flags.{...}    decoded named CFG flags
 //!
 //! elf:                      ELF-specific
 //!   entry_section           ".text" | ".init" | ".init_array" | ...
-//!   has_interpreter         bool
-//!   has_soname              bool
-//!   has_canary              bool
-//!   has_textrel             bool
-//!   nx_stack                bool
 //!   relro                   "full" | "partial" | "none"
-//!   interpreter             "/lib64/ld-linux-x86-64.so.2"        (B0.5)
-//!   comment                 "GCC: (Ubuntu 13.2.0-23ubuntu4) ..."  (B0.5)
-//!   soname                  "libfoo.so.1"                         (B3)
-//!   rpath[]                 ["/opt/local/lib"]                    (B3)
-//!   runpath[]                                                     (B3)
-//!   needed[]                ["libc.so.6", ...]                    (B3)
-//!   gnu_property.{ibt,shstk,pac,bti,x86_isa_level}                (B3)
+//!   interpreter             "/lib64/ld-linux-x86-64.so.2"
+//!   comment                 ".comment" section text
+//!   soname                  "libfoo.so.1"
+//!   rpath[]                 ["/opt/local/lib"]
+//!   runpath[]
+//!   needed[]                ["libc.so.6", ...]   (DT_NEEDED entries)
+//!   linker_family           "gold" | "lld" | "mold" | "bfd"
+//!   pauth_scheme            ARM PAuth ABI scheme
+//!   x86_isa_level           "x86-64" | "x86-64-v2" | "x86-64-v3" | "x86-64-v4"
+//!   gnu_abi_min_kernel      "<major>.<minor>.<patch>" from NT_GNU_ABI_TAG
+//!   gnu_property.{ibt,shstk,pac,bti,x86_isa_level}
 //!   dt_flags.{raw, raw_1, bind_now, textrel, symbolic, static_tls,
 //!             now, nodelete, initfirst, noopen, nodeflib, nodump,
-//!             pie, global, group, interpose, direct}              (B7)
-//!   needed_versions[]       [{ lib: "libc.so.6", versions: ["GLIBC_2.34", ...] }]  (B7)
-//!   provided_versions[]     versions this .so itself defines               (B7)
+//!             pie, global, group, interpose, direct}
+//!   needed_versions[]       [{ lib: "libc.so.6", versions: ["GLIBC_2.34", ...] }]
+//!   provided_versions[]     versions this .so itself defines
 //!
 //! dwarf:                    DWARF debug-info attribution (unstripped ELF only)
 //!   producers[]             ["GNU C17 13.2.0 -O2 -mtune=generic ...", ...]
 //!   comp_dirs[]             ["/builddir/build/BUILD/glibc-2.34/...", ...]
 //!   languages[]             ["c", "cpp", "rust", ...]
 //!   source_files[]          ["/build/glibc/elf/dl-init.c", ...] (capped at 32)
-//!   cu_count                u32 — total compilation units (also on `elf.dwarf_cu_count` metric)
 //!
-//! package:                  FDO `.note.package` self-attestation (ELF; opt-in)
-//!   type                    "rpm" | "deb" | "apk" | "pacman" | ...
-//!   name                    "<package-name>"
-//!   version                 "<package-version>"
-//!   architecture            "<arch>"
-//!   os, osVersion           "<distro>" / "<release>"
-//!   license                 "<spdx>"
+//! package:                  FDO `.note.package` self-attestation (ELF)
+//!   type                    "rpm" | "deb" | "apk" | "pacman" | ...   (FDO-canonical)
+//!   name, version, architecture, os, osVersion, license
 //!   buildId, url, vcs, cpe  attestation provenance fields
 //!
 //! macho:                    Mach-O specific
-//!   uuid                    "<hex>"                               (B4)
-//!   filetype                "executable" | "dylib" | "bundle" | ... (B4)
-//!   platform                "macOS" | "iOS" | "tvOS" | ...        (B4 — from LC_BUILD_VERSION)
+//!   uuid                    "<hex>"
+//!   filetype                "executable" | "dylib" | "bundle" | ...
+//!   platform                "macOS" | "iOS" | "tvOS" | ...
 //!   min_os_version          "10.13.0"
 //!   sdk_version             "11.0.0"
-//!   tools[]                 [{ tool, version }]                   (B4 — clang / swiftc / ld)
-//!   source_version          "1.2.3"                               (B4 — LC_SOURCE_VERSION)
-//!   id_dylib                "@rpath/MyFramework"                  (B4 — dylibs only)
+//!   tools[]                 [{ tool, version }]
+//!   source_version          "1.2.3"  (LC_SOURCE_VERSION)
+//!   install_name            "@rpath/MyFramework"  (dylibs; LC_ID_DYLIB)
+//!   install_name_kind       "absolute" | "rpath" | "executable_path" | ...
 //!   load_dylibs[]           [{ path, kind, current_version, compatibility_version }]
-//!   rpath[]                                                       (B4)
-//!   linker_options[]                                              (B4)
-//!   info_plist              { Info.plist tree, PascalCase keys }  (B4.5 — __TEXT,__info_plist)
-//!   launchd_plist           { launchd plist tree, PascalCase keys}(B4.5 — __TEXT,__launchd_plist)
-//!   is_fat                  bool — multi-arch universal binary
-//!   slice_count             u32 — number of slices when fat (also on `macho.slice_count` metric)
+//!   rpath[]
+//!   linker_options[]
+//!   info_plist              { Info.plist tree, PascalCase keys }
+//!   launchd_plist           { launchd plist tree, PascalCase keys }
 //!   slices[]                [{ arch, uuid, file_offset, has_code_signature }]
-//!   swift_sections[]        ["__swift5_proto", "__swift5_types", ...]   (B7.5 — Swift code marker)
+//!   segments[]              [{ name, vmaddr, vmsize, fileoff, perms, flags_hex }]
+//!   dylibs[]                [{ kind, name }]
+//!   header_flags.{...}      decoded MH_* named flags
+//!   cs_flags.{...}          decoded CodeDirectory named flags
+//!                           (runtime, library_validation, linker_signed,
+//!                            adhoc, kill, hard, restrict, enforcement, …)
+//!   cs_runtime_version      "<major>.<minor>.<patch>"
+//!   pauth_scheme            ARM PAuth scheme
+//!   swift_sections[]        ["__swift5_proto", "__swift5_types", ...]
+//!   objc.{swift_version, is_simulated, optimized_by_dyld, has_category_class_properties}
 //!
 //! go:                       Go-specific (cross-binary)
 //!   version                 "go1.26.2"
 //!   main_path               "github.com/attacker/sample"
 //!   main_module.{path, version, sum}
 //!   dependencies[]          [{ path, version, sum, replaced_by }]
-//!   build:                  flat dict; original Go-spec keys snake-cased
-//!     mode                  "exe" | "c-archive" | "plugin" | ...     (was -buildmode)
-//!     compiler              "gc" | "gccgo"                           (was -compiler)
-//!     goos, goarch, goamd64, goarm                                   (env-style)
-//!     cgo                   bool                                     (parsed from CGO_ENABLED)
-//!     trimpath              bool                                     (was -trimpath)
-//!     ldflags               "..."
-//!     asmflags, gcflags     "..."
-//!   vcs.{type, revision, time, modified}                             (was vcs.* keys)
-//!
-//! Note: derived booleans (cross-format consistency flags, "is_zero"
-//! checks, "mismatch" comparisons) and derived counts (chain_depth,
-//! number-of-mixed-producers) live on metrics structs, not in the kv
-//! tree. Trait authors target them via
-//! `type: metrics, field: <path>, min:/max:`. Examples:
-//!   - `consistency.{bundle_identifier_mismatch, dwarf_mixed_producers, ...}` (boolean)
-//!   - `pe.cert_chain_depth` (u32)
-//!   - `pe.signing_time_before_timestamp` (boolean — signed-before-built)
-//!
-//! The kv tree carries only raw structural reads: strings, names,
-//! identities, hex digests, raw bit-flag values lifted directly from
-//! the binary.
-//!
-//! hashes:                   fuzzy / similarity / cluster hashes
-//!   imphash                 "<md5>"                                  (PE)
-//!   rich_header_hash        "<sha256>"                               (PE — single canonical location)
-//!   ssdeep, tlsh            "..."                                    (cross-format)  (planned)
-//!   authentihash            "..."                                    (PE)            (planned)
-//!   cdhash                  "..."                                    (Mach-O)        (planned)
-//!   cdhash_sha256           "<sha256-hex>"                                            (Mach-O)
-//!   gimphash                "..."                                    (Go)            (planned)
+//!   build:                  flat dict; Go-spec keys snake-cased
+//!     mode                  "exe" | "c-archive" | "plugin" | ...
+//!     compiler              "gc" | "gccgo"
+//!     goos, goarch, goamd64, goarm
+//!     cgo, trimpath         bool (raw values from buildinfo)
+//!     ldflags, asmflags, gcflags
+//!   vcs.system              "git" | "hg" | "svn"
+//!   vcs.{revision, time, modified}
 //! ```
+//!
+//! # Where derived data lives (not in kv)
+//!
+//! Booleans, counts, and computed scalars live on metrics structs.
+//! Trait authors target them with `type: metrics, field: <path>, min:/max:`:
+//!
+//!   - `binary.{is_pie, is_stripped, has_signature, has_debug_info}`
+//!   - `pe.{has_checksum, checksum_valid, signature_digest_mismatch,
+//!          cert_chain_depth, signing_time_before_timestamp,
+//!          is_reproducible_build, has_pogo, has_iltcg, ...}`
+//!   - `elf.{stack_canary, nx_enabled, has_textrel, has_interpreter,
+//!          has_soname, has_rpath, has_runpath, has_direct_loader_dep,
+//!          has_rustc_section, has_build_id, has_debuglink,
+//!          dt_flags_1 (raw u32), ...}`
+//!   - `macho.{is_notarized, hardened_runtime, allow_jit, is_universal,
+//!            slice_count, has_chained_fixups, has_dyld_info_legacy,
+//!            has_data_const_segment, cs_flags (raw u32), flags (raw MH_*), ...}`
 
 use crate::types::AnalysisReport;
 use serde_json::{json, Map, Value};
@@ -254,7 +256,44 @@ pub(crate) fn build_binary_kv(report: &AnalysisReport) -> Value {
         root.insert("macho".into(), Value::Object(macho));
     }
 
+    // hash.* — unified similarity / digest hashes. Industry-canonical
+    // names preserved as terse stems under the namespace
+    // (imp, sym, gimp, tlsh, ssdeep, cd, authenti, rich_header).
+    let hash = hash_section(report);
+    if !hash.is_empty() {
+        root.insert("hash".into(), Value::Object(hash));
+    }
+
     Value::Object(root)
+}
+
+fn hash_section(report: &AnalysisReport) -> Map<String, Value> {
+    let mut out = Map::new();
+    let Some(metrics) = report.metrics.as_ref() else {
+        return out;
+    };
+    if let Some(pe) = metrics.pe.as_ref() {
+        if let Some(h) = pe.authentihash.as_deref() {
+            if !h.is_empty() {
+                out.insert("authenti".into(), json!(h));
+            }
+        }
+    }
+    if let Some(macho) = metrics.macho.as_ref() {
+        if let Some(h) = macho.dylib_hash.as_deref() {
+            out.insert("dylib".into(), json!(h));
+        }
+        if let Some(h) = macho.symhash.as_deref() {
+            out.insert("sym".into(), json!(h));
+        }
+        if let Some(h) = macho.export_hash.as_deref() {
+            out.insert("export".into(), json!(h));
+        }
+        if let Some(h) = macho.entitlement_hash.as_deref() {
+            out.insert("entitlement".into(), json!(h));
+        }
+    }
+    out
 }
 
 fn build_section(report: &AnalysisReport) -> Map<String, Value> {
@@ -267,20 +306,6 @@ fn build_section(report: &AnalysisReport) -> Map<String, Value> {
         }
     }
 
-    // Mirror raw structural bools from `binary.*` metrics into kv so
-    // ML pipelines and trait authors can read either path freely.
-    if let Some(bin) = report.metrics.as_ref().and_then(|m| m.binary.as_ref()) {
-        if bin.is_pie {
-            out.insert("is_pie".into(), json!(true));
-        }
-        if bin.is_stripped {
-            out.insert("is_stripped".into(), json!(true));
-        }
-        if bin.has_debug_info {
-            out.insert("has_debug_info".into(), json!(true));
-        }
-    }
-
     out
 }
 
@@ -290,29 +315,13 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
         return out;
     };
 
-    // Mirror cross-format signing bools from metrics for ML
-    // pipelines and trait ergonomics.
-    if let Some(bin) = metrics.binary.as_ref() {
-        if bin.has_signature {
-            out.insert("is_signed".into(), json!(true));
-            // signature_valid lives on the format-specific struct; pull
-            // from whichever format is present.
-            let valid = metrics
-                .pe
-                .as_ref()
-                .and_then(|p| p.signature_valid)
-                .or_else(|| metrics.macho.as_ref().and_then(|m| m.signature_valid));
-            if let Some(v) = valid {
-                out.insert("signature_valid".into(), json!(v));
-            }
-        }
-    }
-    // Cross-format signer identity. PE side prefers the leaf cert's
-    // own CN (most accurate); falls back to primary_signer (org name
-    // with CA filtering) then signer (raw Authenticode CN list).
-    // Mach-O side is populated separately in `binary_extractors`;
-    // deep_merge there gives macho the final say.
     if let Some(pe) = metrics.pe.as_ref() {
+        // Leaf cert details under `signing.cert.*` subtree. Subject
+        // prefers the leaf cert's own CN (most accurate), falling
+        // back to primary_signer (CA-filtered org name) then signer
+        // (raw Authenticode CN list). Mach-O side adds `signing.cert.subject`
+        // separately in `binary_extractors`.
+        let mut cert = Map::new();
         let subject = pe
             .leaf_subject
             .as_deref()
@@ -320,80 +329,52 @@ fn signing_section(report: &AnalysisReport) -> Map<String, Value> {
             .or(pe.signer.as_deref())
             .filter(|s| !s.is_empty());
         if let Some(s) = subject {
-            out.insert("subject".into(), json!(s));
+            cert.insert("subject".into(), json!(s));
         }
-    }
-
-    // PE-specific signing fields: timestamp + before-build sanity flag.
-    if let Some(pe) = metrics.pe.as_ref() {
+        if let Some(s) = pe.leaf_issuer.as_deref().filter(|s| !s.is_empty()) {
+            cert.insert("issuer".into(), json!(s));
+        }
+        if let Some(s) = pe.leaf_thumbprint_sha1.as_deref().filter(|s| !s.is_empty()) {
+            cert.insert("thumbprint_sha1".into(), json!(s));
+        }
+        if let Some(s) = pe.leaf_serial.as_deref().filter(|s| !s.is_empty()) {
+            cert.insert("serial".into(), json!(s));
+        }
+        if !cert.is_empty() {
+            out.insert("cert".into(), Value::Object(cert));
+        }
+        // Cert validity window — `signing.validity.{not_before, not_after}`.
+        if pe.leaf_not_before != 0 || pe.leaf_not_after != 0 {
+            let mut validity = Map::new();
+            if pe.leaf_not_before != 0 {
+                validity.insert("not_before".into(), json!(pe.leaf_not_before));
+            }
+            if pe.leaf_not_after != 0 {
+                validity.insert("not_after".into(), json!(pe.leaf_not_after));
+            }
+            out.insert("validity".into(), Value::Object(validity));
+        }
+        // PE-specific signing fields: signing time + countersigner.
         if pe.signing_time != 0 {
-            out.insert("signing_time".into(), json!(pe.signing_time));
+            out.insert("time".into(), json!(pe.signing_time));
         }
         // Identify the timestamping authority CN from the chain.
         // Heuristic: chain CN containing a time-stamping marker.
-        // Trojanized installers sometimes use a *different* TSA than the
-        // legitimate vendor's normal pipeline.
+        // Trojanized installers sometimes use a *different* TSA than
+        // the legitimate vendor's normal pipeline.
         if let Some(signer_chain) = pe.signer.as_deref() {
             if let Some(ts) = identify_timestamping_authority(signer_chain) {
                 out.insert("countersigner".into(), json!(ts));
             }
         }
-        // `signed_before_built` is a derived comparison (signing_time
-        // < timestamp), not a raw structural read — lives on the
-        // metric `pe.signing_time_before_timestamp`, not in kv.
         // Cross-format catalog identifier so trait authors can
         // disambiguate Mach-O vs PE Authenticode without checking
-        // file_type.  PE-side signature presence comes from the
-        // shared `binary.has_signature` flag set above.
+        // file_type. `chain_depth` is a derived count — lives on
+        // `pe.cert_chain_depth` metric. Authentihash and other digests
+        // live under `hash.*`.
         if metrics.binary.as_ref().is_some_and(|b| b.has_signature) {
             out.entry("catalog".to_string())
                 .or_insert_with(|| json!("authenticode"));
-        }
-        // Leaf cert details (PE Authenticode). `subject` is set above
-        // by the cross-format identity path.
-        if let Some(s) = pe.leaf_issuer.as_deref() {
-            if !s.is_empty() {
-                out.insert("issuer".into(), json!(s));
-            }
-        }
-        if let Some(s) = pe.leaf_thumbprint_sha1.as_deref() {
-            if !s.is_empty() {
-                out.insert("thumbprint_sha1".into(), json!(s));
-            }
-        }
-        if let Some(s) = pe.leaf_serial.as_deref() {
-            if !s.is_empty() {
-                out.insert("serial".into(), json!(s));
-            }
-        }
-        if pe.leaf_not_before != 0 {
-            out.insert("not_before".into(), json!(pe.leaf_not_before));
-        }
-        if pe.leaf_not_after != 0 {
-            out.insert("not_after".into(), json!(pe.leaf_not_after));
-        }
-        // Authentihash mirror — Authenticode-canonical SHA-256, useful
-        // for "same body, different cert" detection across releases.
-        if let Some(h) = pe.authentihash.as_deref() {
-            if !h.is_empty() {
-                out.insert("authentihash".into(), json!(h));
-            }
-        }
-        // `chain_depth` is a derived count — lives on
-        // `pe.cert_chain_depth` metric, not in kv.
-    }
-
-    // Mirror Mach-O hardened_runtime / allow_jit from
-    // `macho.*` metrics for ML pipelines and trait ergonomics.
-    if let Some(macho) = metrics.macho.as_ref() {
-        if macho.hardened_runtime {
-            out.insert("hardened_runtime".into(), json!(true));
-        }
-        if macho.allow_jit {
-            out.insert("allow_jit".into(), json!(true));
-        }
-        if macho.is_notarized {
-            out.insert("notarized".into(), json!(true));
         }
     }
 
@@ -416,12 +397,6 @@ fn debug_section(report: &AnalysisReport) -> Map<String, Value> {
     }
 
     if let Some(elf) = metrics.elf.as_ref() {
-        if elf.debuglink_present {
-            out.insert("has_debuglink".into(), json!(true));
-        }
-        if elf.build_id_present {
-            out.insert("has_build_id".into(), json!(true));
-        }
         if let Some(bid) = elf.build_id.as_deref() {
             if !bid.is_empty() {
                 out.insert("build_id".into(), json!(bid));
@@ -491,25 +466,13 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             json!(pe.debug_directory_types.clone()),
         );
     }
-    if pe.is_reproducible_build {
-        out.insert("is_reproducible_build".into(), json!(true));
-    }
-    if pe.has_pogo {
-        out.insert("has_pogo".into(), json!(true));
-    }
-    if pe.has_iltcg {
-        out.insert("has_iltcg".into(), json!(true));
-    }
-    if pe.has_vc_feature {
-        out.insert("has_vc_feature".into(), json!(true));
-    }
-    if let Some(guid) = pe.codeview_guid.as_deref() {
-        if !guid.is_empty() {
-            out.insert("codeview_guid".into(), json!(guid));
-            if pe.codeview_age > 0 {
-                out.insert("codeview_age".into(), json!(pe.codeview_age));
-            }
+    if let Some(guid) = pe.codeview_guid.as_deref().filter(|s| !s.is_empty()) {
+        let mut cv = Map::new();
+        cv.insert("guid".into(), json!(guid));
+        if pe.codeview_age > 0 {
+            cv.insert("age".into(), json!(pe.codeview_age));
         }
+        out.insert("codeview".into(), Value::Object(cv));
     }
     if pe.linker_major_version > 0 || pe.linker_minor_version > 0 {
         out.insert(
@@ -523,10 +486,7 @@ fn pe_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     if pe.timestamp != 0 {
         out.insert("timestamp".into(), json!(pe.timestamp));
     }
-    if pe.timestamp_is_zero {
-        out.insert("timestamp_is_zero".into(), json!(true));
-    }
-    if pe.checksum_present {
+    if pe.has_checksum {
         out.insert("checksum".into(), json!(format!("0x{:08x}", pe.checksum)));
     }
     // Resource types present (sorted, distinct RT_* names).
@@ -695,21 +655,6 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             out.insert("entry_section".into(), json!(entry));
         }
     }
-    if elf.has_interpreter {
-        out.insert("has_interpreter".into(), json!(true));
-    }
-    if elf.has_soname {
-        out.insert("has_soname".into(), json!(true));
-    }
-    if elf.stack_canary {
-        out.insert("has_canary".into(), json!(true));
-    }
-    if elf.nx_enabled {
-        out.insert("nx_stack".into(), json!(true));
-    }
-    if elf.textrel_present {
-        out.insert("has_textrel".into(), json!(true));
-    }
     if let Some(relro) = elf.relro.as_deref() {
         if !relro.is_empty() {
             out.insert("relro".into(), json!(relro));
@@ -725,18 +670,6 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     }
     if !elf.needed.is_empty() {
         out.insert("needed".into(), json!(elf.needed.clone()));
-        // Library declaring a direct dependency on the dynamic linker
-        // (`ld-linux-*`, `ld-musl-*`) is a topology anomaly. Loader
-        // libs are normally pulled in transitively by libc; an
-        // explicit DT_NEEDED is rare outside of statically-linked
-        // glibc internals and the xz 5.6.0 backdoor.
-        if elf
-            .needed
-            .iter()
-            .any(|n| is_dynamic_loader_soname(n.as_str()))
-        {
-            out.insert("has_direct_interp_dep".into(), json!(true));
-        }
     }
     if !elf.rpaths.is_empty() {
         out.insert("rpath".into(), json!(elf.rpaths.clone()));
@@ -813,8 +746,8 @@ fn elf_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
     // Tier A — modern toolchain / hardening surface for trait
     // authors. These are raw enough to live in kv (they're either
     // version strings or linker family names, no interpretation).
-    if let Some(s) = elf.x86_isa_level_required.as_deref() {
-        out.insert("x86_isa_level_required".into(), json!(s));
+    if let Some(s) = elf.x86_isa_level.as_deref() {
+        out.insert("x86_isa_level".into(), json!(s));
     }
     if let Some(s) = elf.pauth_scheme.as_deref() {
         out.insert("pauth_scheme".into(), json!(s));
@@ -889,14 +822,6 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             .collect();
         out.insert("dylibs".into(), Value::Array(arr));
     }
-    // Modern-vs-legacy markers (mirror cleave's existing
-    // `pe.is_reproducible_build`-style booleans).
-    if macho.has_chained_fixups {
-        out.insert("has_chained_fixups".into(), json!(true));
-    }
-    if macho.has_dyld_info_legacy {
-        out.insert("has_dyld_info_legacy".into(), json!(true));
-    }
     // Decoded MH_* header flags subtree — mirrors PE's
     // `pe.dll_characteristics.*` decoded named-bit pattern.
     if macho.flags != 0 {
@@ -932,31 +857,41 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             out.insert("header_flags".into(), Value::Object(hf));
         }
     }
-    // Decoded CodeDirectory flag bits when signed — mirrors the
-    // header_flags pattern but for the codesign side. Sourced from
-    // the per-bit booleans on MachoMetrics (raw flags live on
-    // CodeSignature, not exposed at the metric level).
-    let mut cs = Map::new();
-    if macho.cs_runtime_flag {
-        cs.insert("runtime".into(), json!(true));
-    }
-    if macho.cs_library_validation {
-        cs.insert("library_validation".into(), json!(true));
-    }
-    if macho.cs_linker_signed {
-        cs.insert("linker_signed".into(), json!(true));
-    }
-    if macho.cs_force_kill {
-        cs.insert("force_kill".into(), json!(true));
-    }
-    if !cs.is_empty() {
-        out.insert("cs_flags".into(), Value::Object(cs));
+    // Decoded CodeDirectory flag bits — mirrors header_flags /
+    // dt_flags_1. Bit values from Apple's <Security/CSCommon.h> /
+    // XNU cs_blobs.h.
+    if macho.cs_flags != 0 {
+        let mut cs = Map::new();
+        let f = macho.cs_flags;
+        let pairs: &[(u32, &str)] = &[
+            (0x0000_0001, "valid"),
+            (0x0000_0002, "adhoc"),
+            (0x0000_0004, "get_task_allow"),
+            (0x0000_0008, "installer"),
+            (0x0000_0010, "forced_lv"),
+            (0x0000_0020, "invalid_allowed"),
+            (0x0000_0100, "hard"),
+            (0x0000_0200, "kill"),
+            (0x0000_0400, "check_expiration"),
+            (0x0000_0800, "restrict"),
+            (0x0000_1000, "enforcement"),
+            (0x0000_2000, "library_validation"),
+            (0x0000_4000, "entitlements_validated"),
+            (0x0000_8000, "nvram_unrestricted"),
+            (0x0001_0000, "runtime"),
+            (0x0002_0000, "linker_signed"),
+        ];
+        for (bit, name) in pairs {
+            if f & bit != 0 {
+                cs.insert((*name).to_string(), json!(true));
+            }
+        }
+        if !cs.is_empty() {
+            out.insert("cs_flags".into(), Value::Object(cs));
+        }
     }
     if let Some(rv) = macho.cs_runtime_version.as_deref() {
         out.insert("cs_runtime_version".into(), json!(rv));
-    }
-    if macho.has_data_const_segment {
-        out.insert("has_data_const_segment".into(), json!(true));
     }
     if !macho.overlapping_segments.is_empty() {
         out.insert(
@@ -964,19 +899,7 @@ fn macho_section(report: &AnalysisReport) -> Option<Map<String, Value>> {
             json!(macho.overlapping_segments.clone()),
         );
     }
-    // Tier 1 — supply-chain similarity hashes (machofile-inspired).
-    if let Some(h) = macho.dylib_hash.as_deref() {
-        out.insert("dylib_hash".into(), json!(h));
-    }
-    if let Some(h) = macho.symhash.as_deref() {
-        out.insert("symhash".into(), json!(h));
-    }
-    if let Some(h) = macho.export_hash.as_deref() {
-        out.insert("export_hash".into(), json!(h));
-    }
-    if let Some(h) = macho.entitlement_hash.as_deref() {
-        out.insert("entitlement_hash".into(), json!(h));
-    }
+    // Mach-O similarity hashes live under unified `hash.*` namespace.
 
     if out.is_empty() {
         return None;
@@ -1014,15 +937,6 @@ fn identify_timestamping_authority(chain: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-fn is_dynamic_loader_soname(name: &str) -> bool {
-    let base = name.rsplit('/').next().unwrap_or(name);
-    base.starts_with("ld-linux")
-        || base.starts_with("ld-musl")
-        || base.starts_with("ld.so")
-        || base.starts_with("ld64.so")
-        || base == "ld.so"
-}
-
 /// Stash the synthesized binary kv tree on `report.kv_tree`.  Drops
 /// when the tree comes back empty so non-binary file types and
 /// minimal stub binaries don't carry an empty `kv_tree` field.
@@ -1056,7 +970,7 @@ mod tests {
     }
 
     #[test]
-    fn build_section_includes_arch_and_pie() {
+    fn build_section_surfaces_target_arch() {
         let m = Metrics {
             binary: Some(BinaryMetrics {
                 is_pie: true,
@@ -1068,8 +982,10 @@ mod tests {
         let r = report_with_metrics(m, "elf");
         let kv = build_binary_kv(&r);
         assert_eq!(kv["build"]["target_arch"], "x86_64");
-        assert_eq!(kv["build"]["is_pie"], true);
-        assert_eq!(kv["build"]["is_stripped"], true);
+        // Boolean predicates (is_pie, is_stripped, has_signature, ...)
+        // live exclusively on metrics — kv carries values, not bools.
+        assert!(kv["build"].get("is_pie").is_none());
+        assert!(kv["build"].get("is_stripped").is_none());
     }
 
     #[test]
@@ -1090,13 +1006,14 @@ mod tests {
     }
 
     #[test]
-    fn elf_section_surfaces_canary_and_relro() {
+    fn elf_section_surfaces_entry_and_relro() {
         let m = Metrics {
             elf: Some(ElfMetrics {
                 stack_canary: true,
                 nx_enabled: true,
                 relro: Some("full".into()),
-                build_id_present: true,
+                has_build_id: true,
+                build_id: Some("abcd1234".into()),
                 entry_section: Some(".text".into()),
                 ..Default::default()
             }),
@@ -1105,13 +1022,14 @@ mod tests {
         let r = report_with_metrics(m, "elf");
         let kv = build_binary_kv(&r);
         assert_eq!(kv["elf"]["entry_section"], ".text");
-        assert_eq!(kv["elf"]["has_canary"], true);
-        assert_eq!(kv["elf"]["nx_stack"], true);
         assert_eq!(kv["elf"]["relro"], "full");
-        // build-id flag exposed once under `debug.*`, not duplicated
-        // under format-specific subtrees.
-        assert!(kv["elf"].get("has_build_id").is_none());
-        assert_eq!(kv["debug"]["has_build_id"], true);
+        // Boolean hardening flags (stack_canary, nx_enabled, has_textrel,
+        // has_interpreter, …) live on `elf.*` metrics only.
+        assert!(kv["elf"].get("has_canary").is_none());
+        assert!(kv["elf"].get("nx_stack").is_none());
+        // Build-id surfaces as a value in kv; the boolean lives on metrics.
+        assert!(kv["debug"].get("has_build_id").is_none());
+        assert_eq!(kv["debug"]["build_id"], "abcd1234");
     }
 
     #[test]
@@ -1155,11 +1073,12 @@ mod tests {
         let kv = build_binary_kv(&r);
         assert_eq!(kv["macho"]["min_os_version"], "10.13.0");
         assert_eq!(kv["macho"]["sdk_version"], "11.0.0");
-        assert_eq!(kv["signing"]["hardened_runtime"], true);
+        // hardened_runtime is a metric-only bool; not surfaced in kv.
+        assert!(kv["signing"].get("hardened_runtime").is_none());
     }
 
     #[test]
-    fn signing_signed_with_valid_signature() {
+    fn signing_subject_surfaces_for_signed_pe() {
         let m = Metrics {
             binary: Some(BinaryMetrics {
                 has_signature: true,
@@ -1167,16 +1086,19 @@ mod tests {
             }),
             pe: Some(crate::types::binary_metrics::PeMetrics {
                 signature_valid: Some(true),
+                leaf_subject: Some("Acme Corp".into()),
                 ..Default::default()
             }),
             ..Default::default()
         };
         let r = report_with_metrics(m, "pe");
         let kv = build_binary_kv(&r);
-        assert_eq!(kv["signing"]["is_signed"], true);
-        assert_eq!(kv["signing"]["signature_valid"], true);
-        // is_signed lives on `signing.*` only (no `build.is_signed`
-        // duplicate); the build section omits the flag entirely.
+        assert_eq!(kv["signing"]["cert"]["subject"], "Acme Corp");
+        // is_signed and signature_valid live on metrics
+        // (binary.has_signature, pe.signature_valid) — kv carries
+        // signer identity strings, not predicates.
+        assert!(kv["signing"].get("is_signed").is_none());
+        assert!(kv["signing"].get("signature_valid").is_none());
         assert!(kv["build"].get("is_signed").is_none());
     }
 

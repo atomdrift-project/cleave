@@ -256,7 +256,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         }
 
         binary.avg_string_entropy = (total_entropy / report.strings.len() as f64) as f32;
-        binary.high_entropy_strings = high_entropy_count;
+        binary.high_entropy_string_count = high_entropy_count;
         binary.avg_string_length = total_length as f32 / report.strings.len() as f32;
         binary.max_string_length = max_length;
         binary.wide_string_count = wide_count;
@@ -371,7 +371,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         // Reset before counting — this pass is authoritative over any
         // earlier increments (e.g. from the radare2 path) so the count
         // reflects exactly the sections in `report.sections`.
-        binary.nonstandard_section_name_count = 0;
+        binary.nonstandard_section_count = 0;
         for section in &report.sections {
             total_size += section.size;
             if section.size > max_section_size {
@@ -379,7 +379,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
             }
 
             if is_nonstandard_section_name(&file_type, &section.name) {
-                binary.nonstandard_section_name_count += 1;
+                binary.nonstandard_section_count += 1;
             }
 
             // Reuse logic from entropy section
@@ -451,7 +451,7 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         }
 
         // Count high complexity functions (threshold: 50+ matches BinaryMetrics definition)
-        binary.high_complexity_funcs = report
+        binary.high_complexity_func_count = report
             .functions
             .iter()
             .filter(|f| {
@@ -507,8 +507,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
 
             binary.dependency_count = macho.dylib_count;
             binary.runtime_search_path_count = macho.rpath_count;
-            binary.provenance_id_present = macho.uuid_present;
-            binary.provenance_id_length = if macho.uuid_present { 16 } else { 0 };
+            binary.has_provenance_id = macho.has_uuid;
+            binary.provenance_id_length = if macho.has_uuid { 16 } else { 0 };
             binary.has_signature = macho.has_code_signature;
             // Cross-format executable-stack signal — bridge from Mach-O.
             // Mirrors the ELF bridge below.
@@ -524,9 +524,8 @@ pub(crate) fn populate_binary_metrics(report: &mut AnalysisReport, data: &[u8]) 
         if let Some(ref elf) = metrics.elf {
             binary.dependency_count = elf.needed_libs;
             binary.runtime_search_path_count = elf.rpath_count + elf.runpath_count;
-            binary.debug_reference_count =
-                elf.debug_section_count + u32::from(elf.debuglink_present);
-            binary.provenance_id_present = elf.build_id_present;
+            binary.debug_reference_count = elf.debug_section_count + u32::from(elf.has_debuglink);
+            binary.has_provenance_id = elf.has_build_id;
             binary.provenance_id_length = elf.build_id_length;
             // Cross-format executable-stack signal — bridge from ELF.
             binary.has_executable_stack = elf.executable_stack;
@@ -577,10 +576,31 @@ fn looks_like_personal_name(cn: &str) -> bool {
     }
     let lower = trimmed.to_ascii_lowercase();
     let org_markers = [
-        " inc", " inc.", " llc", " ltd", " ltd.", " corp", " corporation",
-        "foundation", "software", "technolog", " ou", " gmbh", " ag",
-        "company", "limited", "co.,", "labs", "systems", "studio", "solutions",
-        "group", "industries", "international", " sa", "research",
+        " inc",
+        " inc.",
+        " llc",
+        " ltd",
+        " ltd.",
+        " corp",
+        " corporation",
+        "foundation",
+        "software",
+        "technolog",
+        " ou",
+        " gmbh",
+        " ag",
+        "company",
+        "limited",
+        "co.,",
+        "labs",
+        "systems",
+        "studio",
+        "solutions",
+        "group",
+        "industries",
+        "international",
+        " sa",
+        "research",
     ];
     if org_markers.iter().any(|m| lower.contains(m)) {
         return false;
@@ -598,8 +618,14 @@ fn looks_like_personal_name(cn: &str) -> bool {
     tokens.iter().all(|t| {
         let bare = t.trim_end_matches('.');
         !bare.is_empty()
-            && bare.chars().all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
-            && bare.chars().next().map(|c| c.is_ascii_uppercase()).unwrap_or(false)
+            && bare
+                .chars()
+                .all(|c| c.is_ascii_alphabetic() || c == '\'' || c == '-')
+            && bare
+                .chars()
+                .next()
+                .map(|c| c.is_ascii_uppercase())
+                .unwrap_or(false)
     })
 }
 

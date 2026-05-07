@@ -1178,7 +1178,7 @@ impl Radare2Analyzer {
                 largest_size = section_size;
             }
 
-            // Note: `nonstandard_section_name_count` is computed
+            // Note: `nonstandard_section_count` is computed
             // authoritatively from `report.sections` in
             // `metrics_utils::populate_binary_metrics` — don't
             // increment here or the count gets doubled when both
@@ -1207,14 +1207,14 @@ impl Radare2Analyzer {
                     || section_name == "__rodata";
 
                 if perm.contains('x') && !is_data_only {
-                    metrics.executable_sections += 1;
+                    metrics.executable_section_count += 1;
                     code_size += section_size;
                 }
                 if perm.contains('w') {
-                    metrics.writable_sections += 1;
+                    metrics.writable_section_count += 1;
                 }
                 if perm.contains('x') && perm.contains('w') {
-                    metrics.wx_sections += 1;
+                    metrics.wx_section_count += 1;
                 }
             }
 
@@ -1406,7 +1406,7 @@ impl Radare2Analyzer {
         // Code section ratio
         if metrics.section_count > 0 {
             metrics.code_section_ratio =
-                metrics.executable_sections as f32 / metrics.section_count as f32;
+                metrics.executable_section_count as f32 / metrics.section_count as f32;
         }
     }
 }

@@ -340,7 +340,7 @@ impl Lzxd {
                 // Related: https://github.com/GNOME/gcab/blob/master/libgcab/decomp.c#L883.
                 // Related: https://github.com/kyz/libmspack/blob/master/libmspack/mspack/lzxd.c#L469
                 if matches!(self.current_block.kind, BlockKind::Uncompressed { .. })
-                    && self.current_block.size % 2 != 0
+                    && !self.current_block.size.is_multiple_of(2)
                 {
                     bitstream.read_byte();
                 }

@@ -1799,15 +1799,15 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             let mut rh = serde_json::Map::new();
             rh.insert("entries".into(), Value::Array(entries));
             rh.insert("xor_key".into(), json!(format!("0x{:08x}", rich.xor_key)));
-            // The Rich-header hash lives at `hashes.rich_header_hash`
-            // alongside imphash and other cross-binary hashes — one
+            // The Rich-header hash lives at `hash.rich_header`
+            // alongside imp and other cross-binary hashes — one
             // canonical location, no duplicate under `pe.*`.
             pe_extra.insert("rich_header".into(), Value::Object(rh));
-            hashes_extra.insert("rich_header_hash".into(), json!(rich.hash));
+            hashes_extra.insert("rich_header".into(), json!(rich.hash));
         }
 
         if let Some(imphash) = super::pe_extractors::compute_imphash(&report.imports) {
-            hashes_extra.insert("imphash".into(), json!(imphash));
+            hashes_extra.insert("imp".into(), json!(imphash));
         }
 
         let vi = super::pe_extractors::extract_version_info(raw_data);
@@ -1904,14 +1904,14 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                     Value::Object(node)
                 })
                 .collect();
-            pe_extra.insert("tls_callbacks".into(), Value::Array(arr));
+            pe_extra.insert("tls_callback_count".into(), Value::Array(arr));
         }
 
         if !pe_extra.is_empty() {
             augment.insert("pe".into(), Value::Object(pe_extra));
         }
         if !hashes_extra.is_empty() {
-            augment.insert("hashes".into(), Value::Object(hashes_extra));
+            augment.insert("hash".into(), Value::Object(hashes_extra));
         }
     }
 
@@ -2242,8 +2242,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         if let Some(lc) = super::macho_extractors::extract(raw_data) {
             let mut macho_extra = serde_json::Map::new();
             if slices.len() > 1 {
-                macho_extra.insert("is_fat".into(), json!(true));
-                macho_extra.insert("slice_count".into(), json!(slices.len()));
                 let arr: Vec<Value> = slices
                     .iter()
                     .map(|s| {
@@ -2320,7 +2318,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 }
             }
             if let Some(id) = lc.id_dylib.as_deref() {
-                macho_extra.insert("id_dylib".into(), json!(id));
+                macho_extra.insert("install_name".into(), json!(id));
             }
             if let Some(kind) = lc.install_name_kind.as_deref() {
                 macho_extra.insert("install_name_kind".into(), json!(kind));
@@ -2405,7 +2403,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                     if let Some(obj) = signing_extra.as_object_mut() {
                         obj.entry("catalog".to_string())
                             .or_insert_with(|| json!("apple_codesign"));
-                        obj.entry("type".to_string())
+                        obj.entry("format".to_string())
                             .or_insert_with(|| json!(cs.signature_type.as_str()));
                         if let Some(team) = cs.team_id.as_deref() {
                             obj.insert("team_id".into(), json!(team));
@@ -2414,23 +2412,20 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                             obj.insert("bundle_identifier".into(), json!(ident));
                         }
                         if let Some(signer) = cs.signer.as_deref() {
-                            obj.insert("signer_subject".into(), json!(signer));
+                            // Subject lives under `signing.cert.*` subtree
+                            // alongside PE leaf cert fields.
+                            let cert = obj
+                                .entry("cert".to_string())
+                                .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                            if let Some(cert_obj) = cert.as_object_mut() {
+                                cert_obj.insert("subject".into(), json!(signer));
+                            }
                         }
                         if !cs.authorities.is_empty() {
                             obj.insert("authorities".into(), json!(cs.authorities.clone()));
                         }
-                        if cs.is_notarized {
-                            obj.insert("notarized".into(), json!(true));
-                        }
                         if let Some(ts) = cs.signing_time {
-                            obj.insert("signing_time".into(), json!(ts));
-                        }
-                        if cs.has_hardened_runtime {
-                            obj.entry("hardened_runtime".to_string())
-                                .or_insert_with(|| json!(true));
-                        }
-                        if let Some(cdh) = cs.cdhash_sha256.as_deref() {
-                            obj.insert("cdhash_sha256".into(), json!(cdh));
+                            obj.insert("time".into(), json!(ts));
                         }
                         if let Some(req) = cs.requirements_sha256.as_deref() {
                             obj.insert("requirements_sha256".into(), json!(req));
@@ -2544,9 +2539,16 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 macho_metrics.is_notarized = true;
             }
 
-            // CDHash lives at `signing.cdhash_sha256` (set above);
-            // not mirrored to `hashes.*` per the no-mirror principle.
-            let _ = cdhash_for_hashes;
+            // CDHash is sha256 by spec; surfaced under the unified
+            // `hash.*` namespace as `hash.cd`.
+            if let Some(cdh) = cdhash_for_hashes {
+                let hash_extra = augment
+                    .entry(String::from("hash"))
+                    .or_insert_with(|| Value::Object(serde_json::Map::new()));
+                if let Some(obj) = hash_extra.as_object_mut() {
+                    obj.insert("cd".into(), json!(cdh));
+                }
+            }
         }
     }
 
@@ -2587,7 +2589,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     if !unnamed.is_empty() {
         // Single-number trait targets: count of unnamed funcs whose
         // cyclomatic complexity clears the "interesting" bar (>50,
-        // matching `binary.high_complexity_funcs`). Drift in
+        // matching `binary.high_complexity_func_count`). Drift in
         // this number between releases is the cleanest one-shot
         // signal that hidden complexity grew (xz 5.4.5: 6, xz 5.6.0: 13).
         let complex_unnamed = unnamed
@@ -2659,10 +2661,15 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             if let Some(m) = rust_mangling {
                 obj.insert("rust_mangling".into(), json!(m));
             }
-            if rust_section {
-                obj.insert("has_rustc_section".into(), json!(true));
-            }
         }
+    }
+    if rust_section {
+        let elf_metrics = report
+            .metrics
+            .get_or_insert_with(crate::types::scores::Metrics::default)
+            .elf
+            .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
+        elf_metrics.has_rustc_section = true;
     }
 
     // FORTIFY_SOURCE — same import-scan pattern.
@@ -2900,21 +2907,18 @@ fn apply_consistency_checks(
         }
         // Dylib install-name mismatch — only meaningful for MH_DYLIB.
         const MH_DYLIB: u32 = 0x6;
-        if macho.file_type == MH_DYLIB && macho.install_name_present {
+        if macho.file_type == MH_DYLIB && macho.has_install_name {
             if let (Some(install_name), Some(target_path)) = (
                 augment
                     .get("macho")
                     .and_then(|v| v.get("install_name"))
                     .and_then(|v| v.as_str()),
-                augment
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .or_else(|| {
-                        augment
-                            .get("file")
-                            .and_then(|v| v.get("path"))
-                            .and_then(|v| v.as_str())
-                    }),
+                augment.get("path").and_then(|v| v.as_str()).or_else(|| {
+                    augment
+                        .get("file")
+                        .and_then(|v| v.get("path"))
+                        .and_then(|v| v.as_str())
+                }),
             ) {
                 let install_basename = std::path::Path::new(install_name)
                     .file_name()
@@ -2981,7 +2985,7 @@ fn apply_consistency_checks(
     if let (Some(a), Some(b)) = (manifest_ver, info_ver) {
         if !versions_equivalent(a, b) {
             if let Some(pe) = metrics.pe.as_mut() {
-                pe.manifest_product_version_mismatch = true;
+                pe.manifest_version_mismatch = true;
             }
         }
     }
@@ -3191,7 +3195,7 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
             continue;
         }
         if key == "vcs" {
-            vcs.insert("type".into(), json!(raw_val));
+            vcs.insert("system".into(), json!(raw_val));
             continue;
         }
         // Build flags — strip leading `-` and snake-case.
@@ -3615,23 +3619,26 @@ mod tests {
     }
     fn report_with_macho() -> AnalysisReport {
         let mut report = empty_report();
-        let mut metrics = crate::types::scores::Metrics::default();
-        metrics.macho = Some(crate::types::binary_metrics::MachoMetrics::default());
-        report.metrics = Some(metrics);
+        report.metrics = Some(crate::types::scores::Metrics {
+            macho: Some(crate::types::binary_metrics::MachoMetrics::default()),
+            ..Default::default()
+        });
         report
     }
     fn report_with_pe() -> AnalysisReport {
         let mut report = empty_report();
-        let mut metrics = crate::types::scores::Metrics::default();
-        metrics.pe = Some(crate::types::binary_metrics::PeMetrics::default());
-        report.metrics = Some(metrics);
+        report.metrics = Some(crate::types::scores::Metrics {
+            pe: Some(crate::types::binary_metrics::PeMetrics::default()),
+            ..Default::default()
+        });
         report
     }
     fn report_with_elf() -> AnalysisReport {
         let mut report = empty_report();
-        let mut metrics = crate::types::scores::Metrics::default();
-        metrics.elf = Some(crate::types::binary_metrics::ElfMetrics::default());
-        report.metrics = Some(metrics);
+        report.metrics = Some(crate::types::scores::Metrics {
+            elf: Some(crate::types::binary_metrics::ElfMetrics::default()),
+            ..Default::default()
+        });
         report
     }
 
@@ -3639,7 +3646,10 @@ mod tests {
     fn consistency_bundle_identifier_mismatch() {
         use serde_json::json;
         let mut aug = serde_json::Map::new();
-        aug.insert("signing".into(), json!({"bundle_identifier": "com.apple.ls"}));
+        aug.insert(
+            "signing".into(),
+            json!({"bundle_identifier": "com.apple.ls"}),
+        );
         aug.insert(
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.attacker.payload"}}),
@@ -3654,7 +3664,10 @@ mod tests {
     fn consistency_no_false_positive_when_matching() {
         use serde_json::json;
         let mut aug = serde_json::Map::new();
-        aug.insert("signing".into(), json!({"bundle_identifier": "com.apple.ls"}));
+        aug.insert(
+            "signing".into(),
+            json!({"bundle_identifier": "com.apple.ls"}),
+        );
         aug.insert(
             "macho".into(),
             json!({"info_plist": {"CFBundleIdentifier": "com.apple.ls"}}),
@@ -3679,7 +3692,7 @@ mod tests {
         let mut report = report_with_pe();
         apply_consistency_checks(&mut report, &aug);
         let pe = report.metrics.unwrap().pe.unwrap();
-        assert!(pe.manifest_product_version_mismatch);
+        assert!(pe.manifest_version_mismatch);
     }
 
     #[test]
@@ -3696,7 +3709,7 @@ mod tests {
         let mut report = report_with_pe();
         apply_consistency_checks(&mut report, &aug);
         let pe = report.metrics.unwrap().pe.unwrap();
-        assert!(!pe.manifest_product_version_mismatch);
+        assert!(!pe.manifest_version_mismatch);
     }
 
     #[test]

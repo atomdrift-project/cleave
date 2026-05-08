@@ -639,6 +639,12 @@ const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
     ("artifacts/sample.ipa", 9),
     ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 9),
     ("artifacts/sample.mk", 1),
+    // Shell/perl scripts: their shebang traits fire at notable since
+    // a shebang declares interpreter execution per TAXONOMY.md. The
+    // does-nothing samples are otherwise empty.
+    ("artifacts/sample.bash", 2),
+    ("artifacts/sample.sh", 2),
+    ("artifacts/sample.pl", 2),
     ("artifacts/sample.zsh", 3),
     ("main.go", 3),
     ("out/does-nothing-darwin-arm64.xz", 9),
@@ -660,8 +666,11 @@ const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
     ),
     ("scripts/make_crate.py", 3),
     ("scripts/make_crx.py", 3),
+    ("scripts/make_docx.py", 2),
     ("scripts/make_gem.py", 3),
     ("scripts/make_jpg.py", 4),
+    ("scripts/make_lnk.py", 2),
+    ("scripts/make_odf.py", 2),
     ("scripts/make_pdf.py", 3),
     ("scripts/make_pickle.py", 3),
     ("scripts/make_png.py", 3),

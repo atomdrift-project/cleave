@@ -2,68 +2,48 @@
   <img src="media/logo.svg" alt="cleave" width="240">
 </p>
 
-cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[50,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Built for supply-chain and malware triage — useful standalone, and designed to be embedded in other open-source or commercial software via JSON. cleave is designed to be the kind of feature extractor you'd want to plug into an ML pipeline *wink wink*.
+cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[60,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
 
-Apache-2.0, no telemetry.
+- **Manual supply-chain & malware triage.** Run on a release, a suspicious sample, or a directory of dropped files. `cleave diff old/ new/` highlights new capabilities, tampered headers, and provenance anomalies between versions.
+- **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [litmus](https://codeberg.org/atomdrift/litmus) is the reference downstream classifier.
 
-![screenshot](media/screenshot.png)
+![cleave analyze — capabilities of a single sample](media/screenshot.png)
+![cleave diff — what changed between two releases](media/diff.png)
 
 ## What It Analyzes
 
-- **Binaries**: Mach-O, ELF, PE, MSI, Java `.class`, Python `.pyc`, Python pickle, compiled AppleScript
-- **Source** (~22 languages via tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, Kotlin, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir, Batch, VBScript, Makefile
+- **Binaries**: Mach-O, ELF, PE, MSI, CHM, PyInstaller, Java `.class`, Python `.pyc`, Python pickle, compiled AppleScript
+- **Source** (~22 langs, tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, Kotlin, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir, Batch, VBScript, Makefile
 - **Archives** (recursive): zip, tar (gz/bz2/xz/zst), 7z, rar, cab, jar/war, deb, rpm, pkg, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
-- **Documents & data**: PDF, RTF, LNK, Office (OLE2 + OOXML), OpenDocument, plist, HTML, XML, Markdown, PNG/JPEG (steganography & EXIF), package manifests, GitHub Actions workflows, systemd units, XDG `.desktop` entries
+- **Documents & data**: PDF, RTF, LNK, Office (OLE2 + OOXML), OpenDocument, plist, HTML, XML, Markdown, PNG/JPEG, package manifests, GitHub Actions, systemd units, XDG `.desktop`
 
-See [FILE_FORMATS.md](FILE_FORMATS.md) for the full table with extensions and descriptions.
+See [FILE_FORMATS.md](FILE_FORMATS.md) for extensions.
 
 ## Quick Start
 
-Install via make (requires rust):
-
 ```bash
-make install
+make install                                  # via cargo
+brew install atomdrift/tap/cleave             # macOS / Linux
 ```
-
-Install via Homebrew:
-
-```bash
-brew tap atomdrift/tap https://codeberg.org/atomdrift/homebrew-tap.git
-brew install atomdrift/tap/cleave
-```
-
-Usage:
 
 ```bash
 cleave suspect.bin                            # single sample
 cleave /tmp/box-o-malware                     # recursive, unpacks archives
-cleave --format jsonl --min-crit suspicious   # JSON output
+cleave diff v1.2.0/ v1.3.0/                   # release-to-release diff
+cleave --format jsonl --min-crit suspicious   # streaming JSON for pipelines
 ```
 
 Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](https://github.com/upx/upx) for runtime unpacking.
 
 ## Design
 
-- **Capabilities, not verdicts.** Findings ranked from `baseline` to `hostile`. Downstream classifiers (e.g. [litmus](https://codeberg.org/atomdrift/litmus)) consume the JSONL directly.
+- **Capabilities, not verdicts.** Findings ranked `baseline` → `hostile`. Order of magnitude faster than capa.
 - **No skips.** Every archive member is analyzed regardless of size or filename.
-- **Layered unpacking.** UPX, embedded binaries, and base64/hex/AES/XOR payloads via [stng](https://codeberg.org/atomdrift/stng).
-- **Automated reverse engineering.** [rizin](https://github.com/rizinorg/rizin) drives disassembly, function discovery, and cross-references on ELF / Mach-O / PE binaries to surface behaviors that strings and headers miss.
-- **Deterministic output.** JSONL streaming, SHA256-keyed cache, same input → same output.
-- **AST matching** via tree-sitter; YARA-X for signatures; [Goblin](https://github.com/m4b/goblin) for headers.
+- **Layered unpacking.** UPX, embedded binaries, base64/hex/AES/XOR via [stng](https://codeberg.org/atomdrift/stng).
+- **Deep header inspection.** PE manifests/signing, Mach-O codesign/entitlements, DWARF, Go build info, embedded plists.
+- **Automated RE.** [rizin](https://github.com/rizinorg/rizin)-driven disassembly and xrefs on ELF/Mach-O/PE.
+- **Deterministic.** JSONL streaming, SHA256-keyed cache, AST via tree-sitter, YARA-X for signatures.
 
-## Rules & Taxonomy
+## Rules & Related
 
-Behavior rules live in the [cleave-traits](https://codeberg.org/atomdrift/cleave-traits) repository:
-
-- [RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md) — rule language reference (matchers, combinators, scoring).
-- [TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md) — capability taxonomy aligned to MBC and ATT&CK.
-
-## Related
-
-- [malcontent](https://github.com/chainguard-dev/malcontent) — cleave's predecessor; cleave significantly improves upon its accuracy with 3X the rule coverage, AST, and automated reverse-engineering.
-
-- [capa](https://github.com/mandiant/capa) — original inspiration; cleave has 20× the rule coverage, broader format support, and is an order of magnitude faster. capa does integrate better with reverse engineering tools.
-
-## License
-
-Apache-2.0
+[cleave-traits](https://codeberg.org/atomdrift/cleave-traits) — rules ([RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md), [TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md)). Related: [malcontent](https://github.com/chainguard-dev/malcontent) (predecessor, 3× less coverage), [capa](https://github.com/mandiant/capa) (original inspiration, broader format support, much faster).

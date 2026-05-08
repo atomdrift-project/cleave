@@ -263,6 +263,44 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     tracing::trace!("Logging initialized (verbose={})", verbose);
 }
 
+/// Preferred default rayon worker count when the user hasn't set
+/// `CLEAVE_RAYON_THREADS`. On Apple Silicon, returns the performance-core
+/// count from `sysctl hw.perflevel0.physicalcpu` so we don't spin up workers
+/// on the slower efficiency cores — each extra worker adds a per-thread
+/// jemalloc arena worth of dirty-page retention, which dominates peak RSS on
+/// archive-heavy workloads. Returns `None` to mean "let rayon's default
+/// (`num_cpus`) stand" everywhere else.
+#[cfg(target_os = "macos")]
+fn preferred_default_thread_count() -> Option<usize> {
+    use std::process::Command;
+    let out = Command::new("sysctl")
+        .args(["-n", "hw.perflevel0.physicalcpu"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let p = String::from_utf8(out.stdout)
+        .ok()?
+        .trim()
+        .parse::<usize>()
+        .ok()?;
+    // Only override when there's an asymmetric layout worth avoiding;
+    // a uniform-core Mac (Intel, or future symmetric Apple Silicon) gets
+    // rayon's default and we don't second-guess it.
+    let total = std::thread::available_parallelism().ok()?.get();
+    if p > 0 && p < total {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn preferred_default_thread_count() -> Option<usize> {
+    None
+}
+
 pub(crate) fn configure_rayon_thread_pool() {
     // Archive analysis nests `par_iter` up to 2 levels deep (outer member
     // walk + JAR class-file YARA scan). With fewer than ~4 workers the
@@ -273,10 +311,10 @@ pub(crate) fn configure_rayon_thread_pool() {
     // loudly so the failure mode is discoverable.
     const MIN_SAFE_THREADS: usize = 4;
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
-    if let Some(threads) = std::env::var("CLEAVE_RAYON_THREADS")
+    let explicit = std::env::var("CLEAVE_RAYON_THREADS")
         .ok()
-        .and_then(|s| s.parse().ok())
-    {
+        .and_then(|s| s.parse().ok());
+    if let Some(threads) = explicit {
         if threads < MIN_SAFE_THREADS {
             tracing::warn!(
                 threads,
@@ -288,6 +326,8 @@ pub(crate) fn configure_rayon_thread_pool() {
             );
         }
         builder = builder.num_threads(threads);
+    } else if let Some(p_cores) = preferred_default_thread_count() {
+        builder = builder.num_threads(p_cores);
     }
     // build_global fails if a pool is already installed (e.g. by a parent
     // binary like litmus). That's the desired behaviour — we only configure

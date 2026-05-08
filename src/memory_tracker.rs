@@ -123,6 +123,7 @@ impl MemoryTracker {
         let large_files = self.large_files_processed.load(Ordering::Relaxed);
         let elapsed = self.start_time.elapsed();
 
+        let jemalloc = jemalloc_stats();
         info!(
             elapsed_secs = elapsed.as_secs(),
             files_processed = files,
@@ -130,6 +131,9 @@ impl MemoryTracker {
             total_read_mb = total_read / 1024 / 1024,
             current_rss_mb = current_rss.map(|r| r / 1024 / 1024),
             peak_rss_mb = peak_rss / 1024 / 1024,
+            jemalloc_allocated_mb = jemalloc.as_ref().map(|s| s.allocated / 1024 / 1024),
+            jemalloc_active_mb = jemalloc.as_ref().map(|s| s.active / 1024 / 1024),
+            jemalloc_resident_mb = jemalloc.as_ref().map(|s| s.resident / 1024 / 1024),
             avg_file_size_mb = if files > 0 {
                 (total_read / files as u64) / 1024 / 1024
             } else {

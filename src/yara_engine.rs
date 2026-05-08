@@ -30,8 +30,15 @@ fn rule_start_re() -> Option<&'static regex::Regex> {
 }
 
 /// Maximum pattern match ranges to collect per pattern.
-/// Patterns matching more than this are truncated to prevent memory exhaustion.
-const MAX_PATTERN_MATCHES: usize = 100_000;
+///
+/// Both consumers of these ranges (`build_yara_match` and the inline-trait
+/// evidence builder) cap their output at `MAX_EVIDENCE_PER_TRAIT` (=16). The
+/// total match count is captured separately via `pat.matches().count()`, so
+/// density information is preserved regardless of this cap. Keeping the Vec
+/// itself small avoids holding 100k × 16-byte tuples per high-match pattern
+/// when only the first ~16 are ever read; on 16 rayon workers the savings
+/// add up to GBs of in-flight memory during heavy YARA-density runs.
+const MAX_PATTERN_MATCHES: usize = 8;
 
 /// Maximum scanners to cache per thread in the engine tier cache.
 /// Typically 1-3 tiers are scanned per file (cross-format + file-type family), so 4 is generous.

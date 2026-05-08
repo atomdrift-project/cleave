@@ -238,7 +238,7 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
     let (appended_bytes, comment_bytes, exif_size) = scan_jpeg_markers(data);
 
     let mut decoder = Decoder::new(Cursor::new(data));
-    let pixels = decoder.decode().ok()?;
+    decoder.read_info().ok()?;
     let info = decoder.info()?;
 
     let width = info.width as u32;
@@ -248,6 +248,45 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
         jpeg_decoder::PixelFormat::RGB24 => 3,
         jpeg_decoder::PixelFormat::CMYK32 => 4,
     };
+
+    // Skip pixel decode for outsized images: a malicious or merely huge JPEG
+    // (decompression bomb, 16K photo) shouldn't get to allocate hundreds of
+    // megabytes per worker just so we can compute entropy on it. Structural
+    // metadata is preserved; only the per-channel entropy/edge density is
+    // skipped.
+    const MAX_DECODE_BYTES: usize = 32 * 1024 * 1024;
+    let predicted = (width as usize)
+        .saturating_mul(height as usize)
+        .saturating_mul(channels as usize);
+    if predicted > MAX_DECODE_BYTES {
+        tracing::debug!(
+            width,
+            height,
+            channels,
+            predicted_mb = predicted / 1024 / 1024,
+            "Skipping JPEG pixel-entropy analysis: decoded buffer exceeds cap"
+        );
+        return Some((
+            ImageMetrics {
+                width,
+                height,
+                channels,
+                pixel_entropy: 0.0,
+                histogram_flatness: 0.0,
+                edge_density: 0.0,
+                r_entropy: 0.0,
+                g_entropy: 0.0,
+                b_entropy: 0.0,
+            },
+            JpegMetrics {
+                appended_bytes,
+                comment_bytes,
+                exif_size,
+                ..Default::default()
+            },
+        ));
+    }
+    let pixels = decoder.decode().ok()?;
 
     let pixel_entropy = calculate_entropy(&pixels) as f32;
     let histogram_flatness = {
@@ -287,24 +326,37 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
 
 /// Calculate entropy for each color channel separately
 fn calculate_channel_entropy(pixels: &[u8], channels: usize) -> (f32, f32, f32) {
-    let pixel_count = pixels.len() / channels;
-    let mut r_data = Vec::with_capacity(pixel_count);
-    let mut g_data = Vec::with_capacity(pixel_count);
-    let mut b_data = Vec::with_capacity(pixel_count);
-
-    for chunk in pixels.chunks(channels) {
-        if chunk.len() >= 3 {
-            r_data.push(chunk[0]);
-            g_data.push(chunk[1]);
-            b_data.push(chunk[2]);
-        }
+    if channels < 3 {
+        return (0.0, 0.0, 0.0);
     }
-
+    let mut hr = [0u32; 256];
+    let mut hg = [0u32; 256];
+    let mut hb = [0u32; 256];
+    let mut count: u32 = 0;
+    for chunk in pixels.chunks_exact(channels) {
+        hr[chunk[0] as usize] += 1;
+        hg[chunk[1] as usize] += 1;
+        hb[chunk[2] as usize] += 1;
+        count += 1;
+    }
     (
-        calculate_entropy(&r_data) as f32,
-        calculate_entropy(&g_data) as f32,
-        calculate_entropy(&b_data) as f32,
+        entropy_from_histogram(&hr, count),
+        entropy_from_histogram(&hg, count),
+        entropy_from_histogram(&hb, count),
     )
+}
+
+/// Shannon entropy directly from a 256-bin byte histogram. Avoids the per-channel
+/// `Vec<u8>` materialization that the simple per-byte path would do.
+fn entropy_from_histogram(freq: &[u32; 256], total: u32) -> f32 {
+    if total == 0 {
+        return 0.0;
+    }
+    let total = total as f32;
+    freq.iter().filter(|&&c| c > 0).fold(0.0f32, |e, &c| {
+        let p = c as f32 / total;
+        e - p * p.log2()
+    })
 }
 
 /// Calculate edge density using simple gradient detection (mirrors PNG analyzer)

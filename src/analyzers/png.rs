@@ -177,8 +177,45 @@ fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
         png::ColorType::Rgba => 4,
     };
 
-    // Decode pixel data
-    let mut pixels = vec![0u8; reader.output_buffer_size()];
+    // Decode pixel data. Skip the entropy/edge analysis when the decoded
+    // buffer would exceed `MAX_DECODE_BYTES`: a malicious or merely huge
+    // PNG (e.g. decompression bomb, 16K screenshot) shouldn't get to allocate
+    // hundreds of megabytes per worker just so we can compute entropy on it.
+    // The structural metadata (`width`, `height`, `bit_depth`, file SHA, etc.)
+    // is captured before this point and is what the threat-detection rules
+    // actually key on; the per-channel entropy is a coarse signal that loses
+    // little fidelity from skipping outsized images.
+    const MAX_DECODE_BYTES: usize = 32 * 1024 * 1024;
+    let buf_size = reader.output_buffer_size();
+    if buf_size > MAX_DECODE_BYTES {
+        tracing::debug!(
+            width,
+            height,
+            channels,
+            buf_size_mb = buf_size / 1024 / 1024,
+            "Skipping PNG pixel-entropy analysis: decoded buffer exceeds cap"
+        );
+        return Some((
+            ImageMetrics {
+                width,
+                height,
+                channels,
+                pixel_entropy: 0.0,
+                histogram_flatness: 0.0,
+                edge_density: 0.0,
+                r_entropy: 0.0,
+                g_entropy: 0.0,
+                b_entropy: 0.0,
+            },
+            PngMetrics {
+                bit_depth,
+                compression_ratio: 0.0,
+                a_entropy: 0.0,
+                ..Default::default()
+            },
+        ));
+    }
+    let mut pixels = vec![0u8; buf_size];
     let output_info = reader.next_frame(&mut pixels).ok()?;
     let pixels = &pixels[..output_info.buffer_size()];
 
@@ -237,33 +274,46 @@ fn calculate_channel_entropy(pixels: &[u8], channels: usize) -> (f32, f32, f32, 
         return (0.0, 0.0, 0.0, 0.0);
     }
 
-    let pixel_count = pixels.len() / channels;
-    let mut r_data = Vec::with_capacity(pixel_count);
-    let mut g_data = Vec::with_capacity(pixel_count);
-    let mut b_data = Vec::with_capacity(pixel_count);
-    let mut a_data = Vec::with_capacity(pixel_count);
+    let mut hr = [0u32; 256];
+    let mut hg = [0u32; 256];
+    let mut hb = [0u32; 256];
+    let mut ha = [0u32; 256];
+    let mut rgb_count: u32 = 0;
+    let mut a_count: u32 = 0;
 
-    for chunk in pixels.chunks(channels) {
-        if chunk.len() >= 3 {
-            r_data.push(chunk[0]);
-            g_data.push(chunk[1]);
-            b_data.push(chunk[2]);
-            if channels >= 4 && chunk.len() >= 4 {
-                a_data.push(chunk[3]);
-            }
+    for chunk in pixels.chunks_exact(channels) {
+        hr[chunk[0] as usize] += 1;
+        hg[chunk[1] as usize] += 1;
+        hb[chunk[2] as usize] += 1;
+        rgb_count += 1;
+        if channels >= 4 {
+            ha[chunk[3] as usize] += 1;
+            a_count += 1;
         }
     }
 
-    let r_entropy = calculate_entropy(&r_data) as f32;
-    let g_entropy = calculate_entropy(&g_data) as f32;
-    let b_entropy = calculate_entropy(&b_data) as f32;
-    let a_entropy = if !a_data.is_empty() {
-        calculate_entropy(&a_data) as f32
+    let r = entropy_from_histogram(&hr, rgb_count);
+    let g = entropy_from_histogram(&hg, rgb_count);
+    let b = entropy_from_histogram(&hb, rgb_count);
+    let a = if a_count > 0 {
+        entropy_from_histogram(&ha, a_count)
     } else {
         0.0
     };
+    (r, g, b, a)
+}
 
-    (r_entropy, g_entropy, b_entropy, a_entropy)
+/// Shannon entropy directly from a 256-bin byte histogram. Equivalent to
+/// `calculate_entropy(data)` but avoids materializing the per-channel slices.
+fn entropy_from_histogram(freq: &[u32; 256], total: u32) -> f32 {
+    if total == 0 {
+        return 0.0;
+    }
+    let total = total as f32;
+    freq.iter().filter(|&&c| c > 0).fold(0.0f32, |e, &c| {
+        let p = c as f32 / total;
+        e - p * p.log2()
+    })
 }
 
 /// Calculate histogram flatness (0.0 = peaked, 1.0 = perfectly uniform)

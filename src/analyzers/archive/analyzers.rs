@@ -606,7 +606,25 @@ impl ArchiveAnalyzer {
         }
 
         let fake_root = Path::new("/__cleave_archive__");
-        let mut members = Vec::with_capacity(archive.len().min(10_000));
+
+        // When we're already inside a rayon worker, the per-member work runs
+        // sequentially anyway (`par_filter_map_if_outermost` skips the inner
+        // par_iter to avoid contention). In that case we can stream: read one
+        // member, analyze it, drop the buffer, before reading the next.
+        // Caps in-flight decompressed-bytes per worker to a single member
+        // instead of the whole archive.
+        let stream_members = rayon::current_thread_index().is_some();
+        let mut members = if stream_members {
+            Vec::new()
+        } else {
+            Vec::with_capacity(archive.len().min(10_000))
+        };
+        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
+            Vec::with_capacity(archive.len().min(10_000))
+        } else {
+            Vec::new()
+        };
+        let mut total_streamed: usize = 0;
 
         for i in 0..archive.len() {
             if self.is_cancelled() {
@@ -709,23 +727,44 @@ impl ArchiveAnalyzer {
             let logical_path = Path::new(&relative_path);
             let file_type = crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
             let sha256 = calculate_sha256(&file_data);
-            members.push(MemoryArchiveMember {
+            let member = MemoryArchiveMember {
                 relative_path,
                 data: file_data,
                 file_type,
                 sha256,
-            });
+            };
+            if stream_members {
+                if let Some(result) = self.analyze_one_member(&member, "memory ZIP") {
+                    streamed_results.push(result);
+                }
+                total_streamed += 1;
+                // `member` (with its decompressed `data: Vec<u8>`) drops here;
+                // next loop iteration starts with a fresh allocation.
+            } else {
+                members.push(member);
+            }
         }
 
-        self.analyze_in_memory_members(
-            &members,
-            archive_path,
-            report,
-            start,
-            "ZIP archive",
-            "memory ZIP",
-            vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
-        );
+        if stream_members {
+            self.aggregate_member_results(
+                streamed_results,
+                report,
+                start,
+                "ZIP archive",
+                vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
+                total_streamed,
+            );
+        } else {
+            self.analyze_in_memory_members(
+                &members,
+                archive_path,
+                report,
+                start,
+                "ZIP archive",
+                "memory ZIP",
+                vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
+            );
+        }
         Ok(())
     }
 
@@ -835,78 +874,109 @@ impl ArchiveAnalyzer {
         );
 
         let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {
-            let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
-            if self.is_cancelled() {
-                return None;
-            }
-
-            let entry_path = self.format_entry_path(&member.relative_path);
-            let archive_location = self.format_evidence_location(&member.relative_path);
-            let entry_metadata = ArchiveEntry {
-                path: entry_path.clone(),
-                file_type: member.file_type.report_file_type(),
-                sha256: member.sha256.clone(),
-                size_bytes: member.data.len() as u64,
-            };
-            let member_start = std::time::Instant::now();
-            let logical_path = Path::new(&member.relative_path);
-
-            let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                self.analyze_extracted_member(
-                    logical_path,
-                    &member.relative_path,
-                    &member.data,
-                    &member.file_type,
-                    &member.sha256,
-                )
-            })) {
-                Ok(Ok(Some(r))) => Some(r),
-                Ok(Ok(None)) => None,
-                Ok(Err(e)) => {
-                    debug!("Failed to analyze archive member {}: {}", entry_path, e);
-                    None
-                }
-                Err(_) => {
-                    tracing::error!(path = %entry_path, "panic during archive member analysis (caught)");
-                    FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
-                    None
-                }
-            };
-
-            let elapsed = member_start.elapsed();
-            if elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
-                tracing::warn!(
-                    relative_path = %member.relative_path,
-                    file_type = %member.file_type.report_file_type(),
-                    size_bytes = member.data.len(),
-                    elapsed_ms = elapsed.as_millis() as u64,
-                    rayon_thread = ?rayon::current_thread_index(),
-                    "Slow archive member analysis ({})",
-                    slow_log_label,
-                );
-            }
-
-            let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
-                let extract_relative_path = match &self.archive_path_prefix {
-                    Some(prefix) => {
-                        format!("{}/{}", prefix.replace('!', "/"), member.relative_path)
-                    }
-                    None => member.relative_path.clone(),
-                };
-                config
-                    .extract(&member.sha256, &extract_relative_path, &member.data)
-                    .map(|path| path.display().to_string())
-            });
-
-            Some(MemberAnalysisResult {
-                entry_path,
-                archive_location,
-                entry_metadata,
-                extracted_path,
-                report: member_report,
-            })
+            self.analyze_one_member(member, slow_log_label)
         });
 
+        self.aggregate_member_results(
+            results,
+            report,
+            start,
+            archive_label,
+            tools_used,
+            total_files,
+        );
+    }
+
+    /// Analyze a single decompressed archive member. Pure per-member work —
+    /// no aggregation. Safe to call from `par_iter` or sequentially as
+    /// members stream in.
+    fn analyze_one_member(
+        &self,
+        member: &MemoryArchiveMember,
+        slow_log_label: &'static str,
+    ) -> Option<MemberAnalysisResult> {
+        let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
+        if self.is_cancelled() {
+            return None;
+        }
+
+        let entry_path = self.format_entry_path(&member.relative_path);
+        let archive_location = self.format_evidence_location(&member.relative_path);
+        let entry_metadata = ArchiveEntry {
+            path: entry_path.clone(),
+            file_type: member.file_type.report_file_type(),
+            sha256: member.sha256.clone(),
+            size_bytes: member.data.len() as u64,
+        };
+        let member_start = std::time::Instant::now();
+        let logical_path = Path::new(&member.relative_path);
+
+        let member_report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.analyze_extracted_member(
+                logical_path,
+                &member.relative_path,
+                &member.data,
+                &member.file_type,
+                &member.sha256,
+            )
+        })) {
+            Ok(Ok(Some(r))) => Some(r),
+            Ok(Ok(None)) => None,
+            Ok(Err(e)) => {
+                debug!("Failed to analyze archive member {}: {}", entry_path, e);
+                None
+            }
+            Err(_) => {
+                tracing::error!(path = %entry_path, "panic during archive member analysis (caught)");
+                FAILED_ANALYSES.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        };
+
+        let elapsed = member_start.elapsed();
+        if elapsed.as_millis() > SLOW_ARCHIVE_MEMBER_ANALYSIS_MS {
+            tracing::warn!(
+                relative_path = %member.relative_path,
+                file_type = %member.file_type.report_file_type(),
+                size_bytes = member.data.len(),
+                elapsed_ms = elapsed.as_millis() as u64,
+                rayon_thread = ?rayon::current_thread_index(),
+                "Slow archive member analysis ({})",
+                slow_log_label,
+            );
+        }
+
+        let extracted_path = self.sample_extraction.as_ref().and_then(|config| {
+            let extract_relative_path = match &self.archive_path_prefix {
+                Some(prefix) => format!("{}/{}", prefix.replace('!', "/"), member.relative_path),
+                None => member.relative_path.clone(),
+            };
+            config
+                .extract(&member.sha256, &extract_relative_path, &member.data)
+                .map(|path| path.display().to_string())
+        });
+
+        Some(MemberAnalysisResult {
+            entry_path,
+            archive_location,
+            entry_metadata,
+            extracted_path,
+            report: member_report,
+        })
+    }
+
+    /// Aggregate per-member analysis results into the parent archive report.
+    /// Splits findings, yara matches, strings, and nested archive entries
+    /// across the appropriate top-level fields.
+    fn aggregate_member_results(
+        &self,
+        results: Vec<MemberAnalysisResult>,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        tools_used: Vec<String>,
+        total_files: usize,
+    ) {
         let mut total_capabilities = HashSet::new();
         let mut total_traits = HashSet::new();
         let mut collected_traits = HashMap::<String, Finding>::with_capacity(total_files.min(500));

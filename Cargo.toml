@@ -106,7 +106,7 @@ pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
-yara-x = { version = "1.15", features = ["rules-profiling"] }
+yara-x = { version = "1.16", features = ["rules-profiling"] }
 
 # Tree-sitter parsers
 tree-sitter = "0.26"

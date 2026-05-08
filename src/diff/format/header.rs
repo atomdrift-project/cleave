@@ -1,9 +1,9 @@
-//! Header line: `diff <old> → <new>   ROC <pct>   <count phrase>`.
+//! Header line: `diff <old> → <new>   <pct> changed   <count phrase>`.
 //!
 //! The header collapses a common path prefix between old and new so
 //! version-stamped roots (`/foo/v1` vs `/foo/v2`) read as `v1 → v2`.
-//! Per-scope ROCs are *not* on this line — they sit in the ledger
-//! column headers below where they have context.
+//! Per-scope change percentages sit on each scope heading in the
+//! per-file pane, where they have context.
 
 use std::fmt::Write as _;
 
@@ -40,11 +40,10 @@ pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
         old_label.bold(),
         "→".dimmed(),
         new_label.bold(),
-        "ROC".dimmed(),
         paint_roc(s.overall_roc).bold(),
+        "changed".dimmed(),
         count_phrase.dimmed(),
     );
-    out.push('\n');
 }
 
 /// Drop a common path prefix that ends at the last shared `/`. Returns

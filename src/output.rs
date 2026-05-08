@@ -287,13 +287,26 @@ fn terse_description(desc: &str) -> String {
 
 #[allow(dead_code)] // Used by binary target
 fn format_evidence(finding: &Finding) -> String {
+    // Dedupe values, drop blank/whitespace-only lines from each. If any
+    // value spans multiple lines after cleaning, return the full set as a
+    // newline-separated block (the renderer indents continuation lines to
+    // the evidence column). Otherwise comma-join for compactness.
     let mut seen = std::collections::HashSet::new();
     let values: Vec<String> = finding
         .evidence
         .iter()
         .filter_map(|e| {
-            if seen.insert(e.value.clone()) {
-                Some(e.value.clone())
+            let cleaned: String = e
+                .value
+                .lines()
+                .filter(|l| !l.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            if cleaned.is_empty() {
+                return None;
+            }
+            if seen.insert(cleaned.clone()) {
+                Some(cleaned)
             } else {
                 None
             }
@@ -305,17 +318,10 @@ fn format_evidence(finding: &Finding) -> String {
         return String::new();
     }
 
-    let joined = values.join(", ");
-
-    // Truncate if too long for display
-    if joined.len() > EVIDENCE_MAX_WIDTH {
-        let mut end = EVIDENCE_MAX_WIDTH - 3;
-        while !joined.is_char_boundary(end) && end > 0 {
-            end -= 1;
-        }
-        format!("{}...", &joined[..end])
+    if values.iter().any(|v| v.contains('\n')) {
+        values.join("\n")
     } else {
-        joined
+        values.join(", ")
     }
 }
 
@@ -991,6 +997,15 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
             output.push_str(&format!("{}\n", section_pill(&ns)));
 
+            // Bullet (3) + space (1) + trait + 2 spaces + desc + 2 spaces.
+            // Continuation lines for multi-line evidence start at this column.
+            let evidence_col = 3 + 1 + trait_width + 2 + desc_width + 2;
+            let evidence_indent = " ".repeat(evidence_col);
+            // Cap multi-line evidence so a single huge match doesn't drown
+            // the rest of the output. Beyond the cap, the last visible line
+            // gets a trailing ellipsis.
+            const MAX_EVIDENCE_LINES: usize = 4;
+
             // Render each finding
             for finding in findings {
                 let trait_id = short_trait_id(&finding.id);
@@ -1003,13 +1018,48 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
                 let padded_trait = format!("{:width$}", trait_id, width = trait_width);
                 let truncated_desc = truncate_with_ellipsis(&desc, desc_width);
                 let padded_desc = format!("{:width$}", truncated_desc, width = desc_width);
-                let truncated_evidence = truncate_with_ellipsis(&evidence, evidence_width);
-                let colored_evidence = colorize_by_crit(&truncated_evidence, &finding.crit);
 
-                output.push_str(&format!(
-                    "{} {}  {}  {}\n",
-                    bullet, padded_trait, padded_desc, colored_evidence
-                ));
+                let raw_lines: Vec<&str> = evidence.lines().collect();
+                let (visible_lines, overflow) = if raw_lines.len() > MAX_EVIDENCE_LINES {
+                    (&raw_lines[..MAX_EVIDENCE_LINES], true)
+                } else {
+                    (&raw_lines[..], false)
+                };
+
+                if visible_lines.is_empty() {
+                    output.push_str(&format!(
+                        "{} {}  {}\n",
+                        bullet,
+                        padded_trait,
+                        colorize_by_crit("", &finding.crit)
+                    ));
+                    continue;
+                }
+
+                for (i, line) in visible_lines.iter().enumerate() {
+                    let truncated = truncate_with_ellipsis(line, evidence_width);
+                    let colored = colorize_by_crit(&truncated, &finding.crit);
+
+                    if i == 0 {
+                        output.push_str(&format!(
+                            "{} {}  {}  {}\n",
+                            bullet, padded_trait, padded_desc, colored
+                        ));
+                    } else {
+                        output.push_str(&format!("{}{}\n", evidence_indent, colored));
+                    }
+                }
+                // Overflow indicator on its own line: dimmed `…` at the
+                // evidence column. Unambiguous "more lines below were
+                // dropped" without doubling up with per-line truncation
+                // ellipses.
+                if overflow {
+                    output.push_str(&format!(
+                        "{}{}\n",
+                        evidence_indent,
+                        colorize_by_crit("…", &finding.crit)
+                    ));
+                }
             }
         }
 

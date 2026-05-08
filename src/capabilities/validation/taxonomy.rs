@@ -455,16 +455,21 @@ pub(crate) fn find_cap_wellknown_violations(
     )
 }
 
-/// Reason an `objectives/` → `well-known/` reference is rejected.
+/// Reason a tier → `well-known/` reference is rejected. Both
+/// `objectives/` and `micro-behaviors/` use this enum; the policies
+/// diverge inside `find_tier_wellknown_violations`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ObjectivesWellknownViolation {
-    /// objectives/ may never reference well-known/malware/, in any clause. Malware-family
-    /// IDs are not prerequisites for generic objectives — composing them belongs in
-    /// well-known/ correlation rules, not in objective definitions.
+    /// `well-known/malware/` may never appear in either tier, in any clause.
+    /// Malware-family IDs are not prerequisites for generic objectives or
+    /// capabilities — pinning them belongs in `well-known/` correlation rules.
     MalwareRef,
-    /// well-known/{tool,app,lib,game}/ refs are only allowed as benign-context
-    /// suppressions (`unless:` / `downgrade:`), not as positive evidence for hostile
-    /// intent (`all:` / `any:` / atomic `if:`).
+    /// `micro-behaviors/` rules at `crit: suspicious` may not pin to
+    /// `well-known/{tool,app,lib,game}/` in positive-evidence clauses
+    /// (`all:` / `any:` / atomic `if:`). Capabilities should detect via
+    /// mechanical evidence, not piggyback on named-entity identification.
+    /// Objectives are allowed to use these refs freely — see the policy
+    /// comment in `find_tier_wellknown_violations`.
     PositiveWellknownRef,
 }
 
@@ -473,7 +478,7 @@ impl ObjectivesWellknownViolation {
         match self {
             Self::MalwareRef => "may not reference well-known/malware/",
             Self::PositiveWellknownRef => {
-                "may reference well-known/{tool,app,lib,game}/ only inside `unless:` or `downgrade:` (benign-context), not as positive evidence"
+                "capabilities at suspicious+ may reference well-known/{tool,app,lib,game}/ only inside `unless:` or `downgrade:` (benign-context), not as positive evidence"
             }
         }
     }
@@ -496,14 +501,20 @@ pub(crate) fn find_objectives_wellknown_violations(
 }
 
 /// Shared implementation for `find_cap_wellknown_violations` and
-/// `find_objectives_wellknown_violations`. Both apply the same policy:
-/// - `well-known/malware/*` forbidden in any clause.
-/// - `well-known/{tool,app,lib,game}/*` allowed in benign-context clauses
-///   (`unless:` / `downgrade:`); allowed in positive-evidence clauses
-///   (`all:`, `any:`, atomic `if:`) only when the *containing* rule does not
-///   itself claim hostile intent (i.e., its `crit` is below `suspicious`).
-///   Rules at `suspicious` / `hostile` cannot pin their classification to a
-///   named-entity fingerprint.
+/// `find_objectives_wellknown_violations`. The policies diverge by tier:
+/// - `well-known/malware/*` is forbidden in any clause for both tiers.
+/// - `well-known/{tool,app,lib,game}/*` rules:
+///   - `objectives/`: allowed freely as positive evidence at any criticality.
+///     The original ban existed to prevent malware-family attribution from
+///     driving objective scoring, but legitimate-software identifiers (open
+///     source libraries, sysinternals tools, dual-use tooling fingerprints
+///     used as ONE piece of evidence in a multi-evidence composite) are not
+///     malware-family attribution. The relationship runs the other way:
+///     `well-known/malware/` rules build on `objectives/`.
+///   - `micro-behaviors/`: allowed only inside `unless:` / `downgrade:`
+///     (benign-context suppression) for rules at `crit: suspicious`+. Lower-
+///     crit capabilities can use them freely. Capabilities should detect via
+///     mechanical evidence, not piggyback on named-entity identification.
 fn find_tier_wellknown_violations(
     tier: &str,
     trait_definitions: &[TraitDefinition],
@@ -539,10 +550,12 @@ fn find_tier_wellknown_violations(
         if in_benign_clause {
             return None;
         }
-        // Positive-evidence ref to well-known/{tool,app,lib,game} is only a
-        // violation when the rule itself claims hostile intent. Rules whose
-        // own crit stays below `suspicious` (baseline / notable / lower)
-        // are informational and may use named-entity refs freely.
+        // Objectives may freely use well-known/{tool,app,lib,game} as
+        // positive evidence — see the function-level policy comment.
+        if tier == "objectives" {
+            return None;
+        }
+        // Capabilities at suspicious+ cannot pin to named-entity refs.
         if claims_hostile_intent(rule_crit) {
             Some(ObjectivesWellknownViolation::PositiveWellknownRef)
         } else {

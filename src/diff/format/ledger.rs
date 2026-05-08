@@ -2,12 +2,12 @@
 //!
 //! `write_jitter` emits a single dimmed footer noting how many files
 //! were collapsed for being below the noise floor; `sort_in_place`
-//! orders panes by max trait criticality then ROC.
+//! orders panes by max trait criticality then change-%.
 //!
 //! The old per-file ledger table (column headers + one row per file)
-//! was removed — per-scope ROCs now ride on each scope heading inside
-//! the per-file pane (`traits  [ROC: 98.9%]  +10 -1`), which is denser
-//! and renders cleanly under 80 columns.
+//! was removed — per-scope change-% now rides on each scope heading
+//! inside the per-file pane (`traits  98% changed  +10 -1`), which
+//! is denser and renders cleanly under 80 columns.
 
 use std::fmt::Write as _;
 

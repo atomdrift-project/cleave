@@ -32,41 +32,31 @@ pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
     }
 }
 
-/// Per-file detail pane. Heading line carries the file-level
-/// criticality dot, max-ROC across scopes, and the file path; then
-/// each scope follows as a sub-block with a `name  [ROC: N%]  +A -R ~C`
-/// heading and its entries indented. No left rail; the next file's
-/// heading separates them.
+/// Per-file detail pane. Multi-file mode prints a heading line with
+/// the file-level criticality dot, max change-% across scopes, and
+/// the file path, followed by a hairline rule. Single-file mode
+/// (`<root>` placeholder) skips the heading entirely — the diff
+/// header already names both versions and the per-scope lines carry
+/// their own change-%, so the file-pane heading would just duplicate
+/// what's right next to it.
 fn write_pane(out: &mut String, file: &FileDiffEntry) {
-    let max_roc = file_max_roc(&file.scopes);
-    let max_crit = max_added_crit(file);
-
-    // Single-file diffs use the `<root>` placeholder for the file
-    // path because the diff header already names both versions
-    // (`a → b`).  Suppress the placeholder text but keep the
-    // criticality+ROC marker line — it's the visual anchor between
-    // the diff header and the per-scope content.
-    if file.path == "<root>" {
+    if file.path != "<root>" {
+        let max_roc = file_max_roc(&file.scopes);
+        let max_crit = max_added_crit(file);
         let _ = writeln!(
             out,
-            "{}  {}",
+            "{}  {} {}  {}",
             crit_dots(max_crit),
             paint_roc(max_roc).bold(),
-        );
-    } else {
-        let _ = writeln!(
-            out,
-            "{}  {}  {}",
-            crit_dots(max_crit),
-            paint_roc(max_roc).bold(),
+            "changed".dimmed(),
             file.path.bold(),
         );
+        let _ = writeln!(
+            out,
+            "{}",
+            crate::theme::paint_rule(crate::theme::RULE_CHAR.to_string().repeat(WIDTH))
+        );
     }
-    let _ = writeln!(
-        out,
-        "{}",
-        crate::theme::paint_rule(crate::theme::RULE_CHAR.to_string().repeat(WIDTH))
-    );
 
     if let Some(t) = file.scopes.traits.as_ref().filter(|s| s.has_changes()) {
         write_traits(out, t);
@@ -88,19 +78,20 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     }
 }
 
-/// ` traits   [ROC: 98.9%]  +10 -1` heading: scope name as a colored
+/// ` traits   98% changed  +10 -1` heading: scope name as a colored
 /// pill (cool hue family, mirrors analyze's namespace pills), per-scope
-/// ROC tinted by intensity, then add/remove/change badges. Caller has
-/// already gated on `has_changes`, so at least one count will be present.
+/// change-% tinted by intensity with a dimmed `changed` label, then
+/// add/remove/change badges. Caller has already gated on `has_changes`,
+/// so at least one count will be present.
 fn scope_heading<T>(scope_name: &str, scope_kind: ScopePill, scope: &ScopeDiff<T>) -> String {
     let view: crate::types::ScopeView<'_> = Some(scope).into();
     let bits = count_badges(view);
     let pill = pill_scope(scope_name, scope_kind);
-    let roc_label = format!("[ROC: {}]", paint_roc(scope.roc));
+    let roc_label = format!("{} {}", paint_roc(scope.roc), "changed".dimmed());
     if bits.is_empty() {
-        format!("\n  {}  {}", pill, roc_label.dimmed())
+        format!("\n  {}  {}", pill, roc_label)
     } else {
-        format!("\n  {}  {}  {}", pill, roc_label.dimmed(), bits.join(" "))
+        format!("\n  {}  {}  {}", pill, roc_label, bits.join(" "))
     }
 }
 
@@ -141,12 +132,6 @@ fn write_traits(out: &mut String, scope: &ScopeDiff<TraitChange>) {
             paint_sign(sign),
             paint_crit(short_id(&t.id), t.crit),
         );
-        if !t.desc.is_empty() {
-            // Continuation line under the id (4 indent + 3 dots + 1 + 1
-            // sign + 1 = 10 cols). Description is always dimmed so the
-            // id stays the primary visual hook.
-            let _ = writeln!(out, "          {}", truncate(&t.desc, 70).dimmed());
-        }
     }
 }
 

@@ -3468,7 +3468,10 @@ mod taxonomy_tests {
     }
 
     #[test]
-    fn test_objectives_positive_wellknown_tool_is_violation() {
+    fn test_objectives_positive_wellknown_tool_is_ok() {
+        // Objectives may freely reference well-known/{tool,app,lib,game}/
+        // as positive evidence at any criticality — these are
+        // legitimate-software identifiers, not malware-family attribution.
         let composites = vec![make_composite_suspicious(
             "objectives/credential-access/dump",
             &[
@@ -3478,12 +3481,10 @@ mod taxonomy_tests {
         )];
         let sources = HashMap::new();
         let v = find_objectives_wellknown_violations(&[], &composites, &sources);
-        assert_eq!(
-            v.len(),
-            1,
-            "well-known/tool ref in `all:` is positive evidence"
+        assert!(
+            v.is_empty(),
+            "objectives/ may reference well-known/{{tool,app,lib,game}}/ as positive evidence"
         );
-        assert_eq!(v[0].3, ObjectivesWellknownViolation::PositiveWellknownRef);
     }
 
     #[test]

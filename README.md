@@ -11,11 +11,11 @@ cleave answers one question — *what can this program do?* It extracts capabili
 
 analyze (recent ELF malware sample, but cleave also supports source code)
 
-![cleave analyze — capabilities of a single sample](media/analyze.png)
+<img src="media/analyze.png" alt="cleave analyze — capabilities of a single sample" width="50%">
 
 diff (the infamous xzutils case)
 
-![cleave diff — what changed between two releases](media/diff.png)
+<img src="media/diff.png" alt="cleave diff — what changed between two releases" width="50%">
 
 ## What cleave analyzes
 

@@ -4,20 +4,27 @@
 
 cleave answers one question — *what can this program do?* It extracts capabilities from binaries, source, and archives, scoring each against **[60,000+ behavior rules](https://codeberg.org/atomdrift/cleave-traits)** aligned to [MBC](https://github.com/MBCProject/mbc-markdown) and [ATT&CK](https://attack.mitre.org/). Apache-2.0, no telemetry.
 
-- **Manual supply-chain & malware triage.** Run on a release, a suspicious sample, or a directory of dropped files. `cleave diff old/ new/` highlights new capabilities, tampered headers, and provenance anomalies between versions.
+- **Interactive supply-chain & malware triage.** Run on a release, a suspicious sample, or a directory of dropped files. `cleave diff old/ new/` highlights new capabilities, tampered headers, and provenance anomalies between versions.
 - **Feature extraction for ML/AI pipelines.** Stable JSON schema, deterministic output, SHA256-keyed cache. [litmus](https://codeberg.org/atomdrift/litmus) is the reference downstream classifier.
 
-![cleave analyze — capabilities of a single sample](media/screenshot.png)
+## Screenshots
+
+analyze (recent ELF malware sample, but cleave also supports source code)
+
+![cleave analyze — capabilities of a single sample](media/analyze.png)
+
+diff (the infamous xzutils case)
+
 ![cleave diff — what changed between two releases](media/diff.png)
 
-## What It Analyzes
+## What cleave analyzes
 
 - **Binaries**: Mach-O, ELF, PE, MSI, CHM, PyInstaller, Java `.class`, Python `.pyc`, Python pickle, compiled AppleScript
 - **Source** (~22 langs, tree-sitter): Python, JS/TS, Go, Rust, C/C++, Java, Kotlin, C#, Swift, ObjC, Ruby, PHP, Perl, Lua, Shell, PowerShell, Groovy, Scala, Zig, Elixir, Batch, VBScript, Makefile
 - **Archives** (recursive): zip, tar (gz/bz2/xz/zst), 7z, rar, cab, jar/war, deb, rpm, pkg, apk, gem, crate, whl, nupkg, phar, vsix, xpi, crx, ipa, epub
 - **Documents & data**: PDF, RTF, LNK, Office (OLE2 + OOXML), OpenDocument, plist, HTML, XML, Markdown, PNG/JPEG, package manifests, GitHub Actions, systemd units, XDG `.desktop`
 
-See [FILE_FORMATS.md](FILE_FORMATS.md) for extensions.
+See [FILE_FORMATS.md](FILE_FORMATS.md) for more info.
 
 ## Quick Start
 
@@ -37,13 +44,19 @@ Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](http
 
 ## Design
 
-- **Capabilities, not verdicts.** Findings ranked `baseline` → `hostile`. Order of magnitude faster than capa.
-- **No skips.** Every archive member is analyzed regardless of size or filename.
+- **Capabilities, not verdicts.** Findings ranked `baseline` → `hostile`, organized roughly based on [MalwareBehaviorCatalog](https://github.com/MBCProject/mbc-markdown
 - **Layered unpacking.** UPX, embedded binaries, base64/hex/AES/XOR via [stng](https://codeberg.org/atomdrift/stng).
 - **Deep header inspection.** PE manifests/signing, Mach-O codesign/entitlements, DWARF, Go build info, embedded plists.
 - **Automated RE.** [rizin](https://github.com/rizinorg/rizin)-driven disassembly and xrefs on ELF/Mach-O/PE.
-- **Deterministic.** JSONL streaming, SHA256-keyed cache, AST via tree-sitter, YARA-X for signatures.
+- **Deterministic.** JSONL streaming, SHA256-keyed cache, AST via tree-sitter, YAML & YARA-X for signatures.
 
-## Rules & Related
+## Rules
 
-[cleave-traits](https://codeberg.org/atomdrift/cleave-traits) — rules ([RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md), [TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md)). Related: [malcontent](https://github.com/chainguard-dev/malcontent) (predecessor, 3× less coverage), [capa](https://github.com/mandiant/capa) (original inspiration, broader format support, much faster).
+- [cleave-traits](https://codeberg.org/atomdrift/cleave-traits)
+- ([RULES.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/RULES.md)
+- ([TAXONOMY.md](https://codeberg.org/atomdrift/cleave-traits/src/branch/main/TAXONOMY.md))
+
+## Related Projects
+
+- [malcontent](https://github.com/chainguard-dev/malcontent) (predecessor, 3× less coverage)
+- [capa](https://github.com/mandiant/capa) (original inspiration, slow, limited filetypes, but thorough)

@@ -12,12 +12,13 @@
 //!   P(ersistence) Pr(ivilege) S(upply-chain) Xe(xecution)
 //!
 //! Micro-behaviors: Cm(comms) Cr(ypto) Db(data) Ds(dylib/shared) F(ilesystem)
-//!   Hf(hardware) Ho(st) Mg(memory) N(etwork) Os(operating-system) Po(process)
-//!   Ti(me) U(I)
+//!   Hf(hardware) Mg(memory) Os(operating-system) Po(process) Ti(me) U(I)
 //!
 //! Metadata: Ar(ch) Bi(nary) Bk(build) Cf(config) He(hardening) In(import)
 //!   Li(brary) Pa(ckage) Pd(ocument) Pt(lang) Rh(ights/entitlements) Si(gned)
-//!   V(endor) + deeper: Ag(format) Au(quality) B(undle) Ce(compiler) Ne(archive)
+//!   + deeper: Ag(format) Au(quality) B(undle) Ce(compiler) Ne(archive)
+//!
+//! Well-known: Am(pp) Ga(me) Li(b — shared with metadata/library) Mc(malware-code) Te(ool)
 
 use rustc_hash::FxHashMap;
 
@@ -100,12 +101,8 @@ pub const DARMSTADTIUM: Element = Element::new(110, "Ds", "Darmstadtium");
 pub const FLUORINE: Element = Element::new(9, "F", "Fluorine");
 /// Hf for HardFare → Hardware.
 pub const HAFNIUM: Element = Element::new(72, "Hf", "Hafnium");
-/// Ho for HOst.
-pub const HOLMIUM: Element = Element::new(67, "Ho", "Holmium");
 /// Mg for MeMory.
 pub const MAGNESIUM: Element = Element::new(12, "Mg", "Magnesium");
-/// N for Network.
-pub const NITROGEN: Element = Element::new(7, "N", "Nitrogen");
 /// Os for Operating System.
 pub const OSMIUM: Element = Element::new(76, "Os", "Osmium");
 /// Po for PrOcess.
@@ -141,8 +138,6 @@ pub const LITHIUM: Element = Element::new(3, "Li", "Lithium");
 pub const PROTACTINIUM: Element = Element::new(91, "Pa", "Protactinium");
 /// Si for SIgned.
 pub const SILICON: Element = Element::new(14, "Si", "Silicon");
-/// V for Vendor.
-pub const VANADIUM: Element = Element::new(23, "V", "Vanadium");
 
 // Deeper-segment metadata matches (3rd+ level, not in formulas but used by
 // finding_to_element for atom labeling):
@@ -160,8 +155,17 @@ pub const NEON: Element = Element::new(10, "Ne", "Neon");
 
 // ── Well-known subcategories ────────────────────────────────────────────────
 
-/// Te for Tools.
+/// Am for APplication (Americium).
+pub const AMERICIUM: Element = Element::new(95, "Am", "Americium");
+/// Ga for GAme.
+pub const GALLIUM: Element = Element::new(31, "Ga", "Gallium");
+/// Mc for Malicious-Code → malware (synthetic transuranic, fits the
+/// engineered-toxin theme).
+pub const MOSCOVIUM: Element = Element::new(115, "Mc", "Moscovium");
+/// Te for Tool (Tellurium retained from the prior `tools` mapping).
 pub const TELLURIUM: Element = Element::new(52, "Te", "Tellurium");
+// Note: well-known/lib reuses LITHIUM (Li) — same concept as metadata/library,
+// disambiguated by parent (K vs Md) in the formula.
 
 // ── Decoration ──────────────────────────────────────────────────────────────
 
@@ -207,9 +211,7 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("dylib", DARMSTADTIUM);
         m.insert("fs", FLUORINE);
         m.insert("hardware", HAFNIUM);
-        m.insert("host", HOLMIUM);
         m.insert("mem", MAGNESIUM);
-        m.insert("network", NITROGEN);
         m.insert("os", OSMIUM);
         m.insert("process", POLONIUM);
         m.insert("time", TITANIUM);
@@ -228,7 +230,6 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("library", LITHIUM);
         m.insert("package", PROTACTINIUM);
         m.insert("signed", SILICON);
-        m.insert("vendor", VANADIUM);
 
         // Metadata deeper-segment matches (3rd+ level, for finding_to_element)
         m.insert("archive", NEON);
@@ -240,8 +241,11 @@ pub fn category_to_element(category: &str) -> Option<Element> {
         m.insert("quality", GOLD);
 
         // Well-known subcategories
-        m.insert("malware", POTASSIUM);
-        m.insert("tools", TELLURIUM);
+        m.insert("malware", MOSCOVIUM);
+        m.insert("app", AMERICIUM);
+        m.insert("game", GALLIUM);
+        m.insert("lib", LITHIUM);
+        m.insert("tool", TELLURIUM);
 
         m
     });
@@ -270,18 +274,18 @@ pub fn parent_element(category: &str) -> Option<Element> {
         | "supply-chain" => Some(OXYGEN),
 
         // Micro-behavior subcategories -> H
-        "communications" | "crypto" | "data" | "dylib" | "fs" | "hardware" | "host" | "mem"
-        | "network" | "os" | "process" | "time" | "ui" => Some(HYDROGEN_MICRO),
+        "communications" | "crypto" | "data" | "dylib" | "fs" | "hardware" | "mem"
+        | "os" | "process" | "time" | "ui" => Some(HYDROGEN_MICRO),
 
         // Metadata subcategories -> Md
         "arch" | "binary" | "build" | "document" | "file" | "hardening" | "import" | "lang"
-        | "library" | "package" | "signed" | "vendor"
+        | "library" | "package" | "signed"
         // deeper metadata segments
         | "archive" | "bundle" | "compiler" | "config" | "entitlements" | "format"
         | "quality" => Some(MENDELEVIUM),
 
         // Well-known
-        "malware" | "tools" => Some(POTASSIUM),
+        "malware" | "app" | "game" | "lib" | "tool" => Some(POTASSIUM),
 
         _ => None,
     }
@@ -303,9 +307,22 @@ mod tests {
     fn test_new_mappings() {
         assert_eq!(category_to_element("document"), Some(PALLADIUM));
         assert_eq!(category_to_element("build"), Some(BERKELIUM));
-        assert_eq!(category_to_element("network"), Some(NITROGEN));
         assert_eq!(category_to_element("arch"), Some(ARGON));
         assert_eq!(category_to_element("third-party"), Some(THORIUM));
+    }
+
+    #[test]
+    fn test_well_known_subcategories() {
+        // well-known/{app,game,lib,tool,malware} must each map to a distinct
+        // element so a formula can distinguish e.g. an app finding from a
+        // malware finding under the K (well-known) parent.
+        assert_eq!(category_to_element("app"), Some(AMERICIUM));
+        assert_eq!(category_to_element("game"), Some(GALLIUM));
+        assert_eq!(category_to_element("lib"), Some(LITHIUM));
+        assert_eq!(category_to_element("malware"), Some(MOSCOVIUM));
+        assert_eq!(category_to_element("tool"), Some(TELLURIUM));
+        // Formerly mapped under the typoed `tools` key.
+        assert_eq!(category_to_element("tools"), None);
     }
 
     #[test]
@@ -316,6 +333,11 @@ mod tests {
         assert_eq!(category_to_element("analytics"), None);
         assert_eq!(category_to_element("encoded-payload"), None);
         assert_eq!(category_to_element("builder"), None);
+        // Removed during the 2026-05 trait-hierarchy resync — no findings
+        // reference these paths anymore.
+        assert_eq!(category_to_element("host"), None);
+        assert_eq!(category_to_element("network"), None);
+        assert_eq!(category_to_element("vendor"), None);
     }
 
     #[test]
@@ -325,5 +347,12 @@ mod tests {
         assert_eq!(parent_element("quality"), Some(MENDELEVIUM));
         assert_eq!(parent_element("document"), Some(MENDELEVIUM));
         assert_eq!(parent_element("build"), Some(MENDELEVIUM));
+        assert_eq!(parent_element("app"), Some(POTASSIUM));
+        assert_eq!(parent_element("lib"), Some(POTASSIUM));
+        assert_eq!(parent_element("malware"), Some(POTASSIUM));
+        // Removed categories must no longer claim a parent.
+        assert_eq!(parent_element("host"), None);
+        assert_eq!(parent_element("network"), None);
+        assert_eq!(parent_element("vendor"), None);
     }
 }

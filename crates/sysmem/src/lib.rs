@@ -1,8 +1,8 @@
 //! Lightweight system memory queries with zero dependencies.
 //!
 //! Provides [`total_memory`] (effective available memory) and [`current_rss`]
-//! (resident set size) on macOS, Linux, FreeBSD, OpenBSD, NetBSD, and Windows.
-//! Returns `None` on unsupported platforms.
+//! (resident set size) on macOS, Linux, FreeBSD, OpenBSD, NetBSD, illumos,
+//! Solaris, and Windows. Returns `None` on unsupported platforms.
 
 #![forbid(unsafe_op_in_unsafe_fn)]
 
@@ -335,6 +335,69 @@ fn current_rss_impl() -> Option<u64> {
     }
 }
 
+// ── illumos / Solaris ───────────────────────────────────────────────────
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn total_memory_impl() -> Option<u64> {
+    // sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE) is POSIX and works on
+    // illumos/Solaris with no extra dependencies. In zones this returns the
+    // zone's rcap-capped memory when set, else the host RAM.
+    extern "C" {
+        fn sysconf(name: i32) -> i64;
+    }
+    // From <unistd.h> on illumos: _SC_PAGESIZE=11, _SC_PHYS_PAGES=500.
+    const SC_PAGESIZE: i32 = 11;
+    const SC_PHYS_PAGES: i32 = 500;
+
+    // SAFETY: sysconf is a pure C function; both names are well-defined POSIX
+    // selectors and return -1 on error which we check for.
+    let pages = unsafe { sysconf(SC_PHYS_PAGES) };
+    let page_size = unsafe { sysconf(SC_PAGESIZE) };
+    if pages > 0 && page_size > 0 {
+        Some(pages as u64 * page_size as u64)
+    } else {
+        None
+    }
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn current_rss_impl() -> Option<u64> {
+    // getrusage(RUSAGE_SELF).ru_maxrss is in kilobytes on illumos/Solaris
+    // (high-water mark, not instantaneous — same caveat as the BSDs). True
+    // instantaneous RSS would require parsing /proc/self/psinfo as a binary
+    // struct; getrusage is enough for throttling-style monitoring.
+    extern "C" {
+        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
+    }
+
+    #[repr(C)]
+    struct Timeval {
+        tv_sec: i64,
+        tv_usec: i64,
+    }
+
+    // Minimal rusage — we only need ru_maxrss. The full struct is larger;
+    // we pad to be safe. On illumos ru_maxrss is `long` (i64 on amd64).
+    #[repr(C)]
+    struct Rusage {
+        ru_utime: Timeval,
+        ru_stime: Timeval,
+        ru_maxrss: i64,
+        _pad: [i64; 13],
+    }
+
+    const RUSAGE_SELF: i32 = 0;
+
+    // SAFETY: getrusage fills the Rusage struct; we pass a zeroed buffer.
+    let mut usage: Rusage = unsafe { std::mem::zeroed() };
+    let ret = unsafe { getrusage(RUSAGE_SELF, &raw mut usage) };
+    if ret == 0 && usage.ru_maxrss > 0 {
+        Some(usage.ru_maxrss as u64 * 1024)
+    } else {
+        None
+    }
+}
+
 // ── Windows ─────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "windows")]
@@ -409,6 +472,8 @@ fn current_rss_impl() -> Option<u64> {
     target_os = "freebsd",
     target_os = "openbsd",
     target_os = "netbsd",
+    target_os = "illumos",
+    target_os = "solaris",
     target_os = "windows",
 )))]
 fn total_memory_impl() -> Option<u64> {
@@ -421,6 +486,8 @@ fn total_memory_impl() -> Option<u64> {
     target_os = "freebsd",
     target_os = "openbsd",
     target_os = "netbsd",
+    target_os = "illumos",
+    target_os = "solaris",
     target_os = "windows",
 )))]
 fn current_rss_impl() -> Option<u64> {
@@ -442,6 +509,8 @@ mod tests {
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd",
+            target_os = "illumos",
+            target_os = "solaris",
             target_os = "windows",
         ))]
         {
@@ -460,6 +529,8 @@ mod tests {
             target_os = "freebsd",
             target_os = "openbsd",
             target_os = "netbsd",
+            target_os = "illumos",
+            target_os = "solaris",
             target_os = "windows",
         ))]
         {

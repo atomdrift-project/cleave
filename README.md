@@ -42,6 +42,10 @@ cleave --format jsonl --min-crit suspicious   # streaming JSON for pipelines
 
 Optional: [rizin](https://github.com/rizinorg/rizin) for disassembly, [upx](https://github.com/upx/upx) for runtime unpacking.
 
+## Platforms
+
+Known to run awesomely on illumos, OpenBSD, FreeBSD, Linux, and macOS.
+
 ## Design
 
 - **Capabilities, not verdicts.** Findings ranked `baseline` → `hostile`, organized roughly based on [MalwareBehaviorCatalog](https://github.com/MBCProject/mbc-markdown

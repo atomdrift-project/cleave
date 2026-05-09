@@ -2338,12 +2338,7 @@ pub fn formula_from_report(report: &AnalysisReport) -> String {
         return String::new();
     };
 
-    let aggregated = output::aggregate_findings_by_directory(findings);
-    let filtered: Vec<_> = aggregated
-        .into_iter()
-        .filter(|f| f.crit != types::Criticality::Baseline && f.conf >= 0.5)
-        .collect();
-
+    let filtered = output::filter_findings_for_formula(findings);
     malecule_bridge::formula_from_findings(&filtered)
 }
 

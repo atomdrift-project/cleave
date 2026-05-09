@@ -13,6 +13,10 @@ use crate::types::{DiffReportV1, FileStatus};
 
 use super::{is_significant_file, paint_roc};
 
+/// Indent that matches the column of `old_label` in the header line —
+/// exactly the visible width of `"diff  "`.
+const DIFF_PREFIX_WIDTH: usize = 6;
+
 pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
     let (old_label, new_label) = compact_pair(&diff.old_root, &diff.new_root);
     let s = &diff.summary;
@@ -33,16 +37,93 @@ pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
         (t, n) => format!("{n} of {t} files changed"),
     };
 
+    // Single-file formula info, if any. Captured up-front so we can pad
+    // both labels to leave room for the formula line's `old → new`:
+    //   * `old_label` is right-padded to the wider of label / old formula
+    //     so the formula's `→` lands directly under the header's `→`.
+    //   * `new_label` is right-padded to the wider of label / new formula
+    //     so `35.2% changed   1 file changed` always starts past the
+    //     formula end — no visual overlap with the line below.
+    let formula_pair = single_file_formula(diff);
+    let label_width = old_label.chars().count();
+    let new_label_width = new_label.chars().count();
+    let (old_formula_width, new_formula_width) = formula_pair
+        .as_ref()
+        .map(|(o, n)| {
+            (
+                o.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+                n.as_deref().map(|s| s.chars().count()).unwrap_or(0),
+            )
+        })
+        .unwrap_or((0, 0));
+    let arrow_col = label_width.max(old_formula_width);
+    let new_col = new_label_width.max(new_formula_width);
+    let label_pad = " ".repeat(arrow_col - label_width);
+    let new_label_pad = " ".repeat(new_col - new_label_width);
+
     let _ = writeln!(
         out,
-        "{}  {} {} {}    {} {}    {}",
+        "{}  {}{} {} {}{}    {} {}    {}",
         "diff".bold().bright_cyan(),
         old_label.bold(),
+        label_pad,
         "→".dimmed(),
         new_label.bold(),
+        new_label_pad,
         paint_roc(s.overall_roc).bold(),
         "changed".dimmed(),
         count_phrase.dimmed(),
+    );
+
+    if let Some((old, new)) = formula_pair {
+        write_formula_line(out, arrow_col, old.as_deref(), new.as_deref());
+    }
+}
+
+/// Pull the root file's formulas if this is single-file mode.
+fn single_file_formula(diff: &DiffReportV1) -> Option<(Option<String>, Option<String>)> {
+    if diff.files.len() != 1 || diff.files[0].path != "<root>" {
+        return None;
+    }
+    let f = &diff.files[0];
+    if f.old_formula.is_none() && f.new_formula.is_none() {
+        return None;
+    }
+    Some((f.old_formula.clone(), f.new_formula.clone()))
+}
+
+/// Render the `{old_formula} → {new_formula}` line under the header.
+/// `old_label_width` is the visible-column width the old formula must
+/// occupy (right-padded with spaces) so the formula's `→` lands at the
+/// same column as the header's `→`. Skipped silently when both sides
+/// are empty.
+fn write_formula_line(
+    out: &mut String,
+    old_label_width: usize,
+    old: Option<&str>,
+    new: Option<&str>,
+) {
+    if old.is_none() && new.is_none() {
+        return;
+    }
+    let pad = " ".repeat(DIFF_PREFIX_WIDTH);
+    let arrow = "→".dimmed();
+    let blank = String::new();
+    let old_text = old.unwrap_or(&blank);
+    let new_text = new.unwrap_or(&blank);
+    // Right-pad the old formula to the exact visible width of the old
+    // label so the formula's arrow aligns under the header's arrow. The
+    // padding spaces are emitted *outside* the colored-string so the
+    // dimmed coloring doesn't trail invisible escapes past the arrow.
+    let old_visible = old_text.chars().count();
+    let extra = old_label_width.saturating_sub(old_visible);
+    let _ = writeln!(
+        out,
+        "{pad}{} {}{} {}",
+        old_text.dimmed(),
+        " ".repeat(extra),
+        arrow,
+        new_text.dimmed(),
     );
 }
 

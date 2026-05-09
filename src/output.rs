@@ -356,14 +356,24 @@ struct JsonlSummary {
     tools: Vec<String>,
 }
 
-/// Filter findings for formula generation.
-/// Aggregates by directory and removes baseline/low-confidence findings.
-#[allow(dead_code)] // Used by binary target
-fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> {
+/// Minimum confidence required for a finding to contribute to the formula.
+/// Higher than the display threshold (0.5) on purpose: the formula is a
+/// fingerprint, not an enumeration, so we want only findings the analyzer
+/// is confident about.
+pub(crate) const FORMULA_MIN_CONF: f32 = 0.65;
+
+/// Canonical filter for formula generation: aggregate by directory, keep
+/// notable-or-higher findings with confidence ≥ FORMULA_MIN_CONF.
+///
+/// Component- and baseline-criticality findings are intentionally dropped:
+/// the formula is meant to mirror the CLI's notable-or-higher display, so
+/// the JSON `f` field, JSONL `f` field, library `formula_from_report`, and
+/// terminal header all share this single source of truth.
+pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> {
     let aggregated = aggregate_findings_by_directory(findings);
     aggregated
         .into_iter()
-        .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
+        .filter(|f| f.crit >= Criticality::Notable && f.conf >= FORMULA_MIN_CONF)
         .collect()
 }
 
@@ -843,6 +853,7 @@ fn short_trait_id(id: &str) -> String {
         if first == "well-known"
             || first == "objectives"
             || first == "micro-behaviors"
+            || first == "metadata"
             || first == "third_party"
             || first == "third-party"
         {
@@ -938,8 +949,11 @@ pub(crate) fn format_terminal(report: &AnalysisReport) -> String {
 
         let evidence_width = term_width.saturating_sub(overhead + desc_width);
 
-        // Generate formula from filtered findings
-        let formula = malecule_bridge::formula_from_findings(&filtered);
+        // Generate formula from the canonical formula filter (not the
+        // display-aggregated `filtered` set above, which includes referenced
+        // components). Keeps the header formula identical to the JSON `f`.
+        let formula_findings = filter_findings_for_formula(&file.findings);
+        let formula = malecule_bridge::formula_from_findings(&formula_findings);
 
         let file_type_display = display_file_type(&file.file_type);
 

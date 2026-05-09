@@ -226,11 +226,7 @@ impl AnalysisReport {
     }
 
     fn refresh_formula(file: &mut FileAnalysis) {
-        let aggregated = crate::output::aggregate_findings_by_directory(&file.findings);
-        let filtered: Vec<_> = aggregated
-            .into_iter()
-            .filter(|f| f.crit != Criticality::Baseline && f.conf >= 0.5)
-            .collect();
+        let filtered = crate::output::filter_findings_for_formula(&file.findings);
         let formula = malecule_bridge::formula_from_findings(&filtered);
         file.formula = (!formula.is_empty()).then_some(formula);
     }

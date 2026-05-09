@@ -43,6 +43,11 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     if file.path != "<root>" {
         let max_roc = file_max_roc(&file.scopes);
         let max_crit = max_added_crit(file);
+        // Header layout: "{dots(3)}  {roc} changed  {path}". Compute the
+        // visible-column offset of `path` so the formula line below can
+        // hang under it without ANSI-stripping math at render time.
+        let roc_str = format!("{:.1}%", max_roc * 100.0);
+        let path_indent = 3 + 2 + roc_str.len() + 1 + "changed".len() + 2;
         let _ = writeln!(
             out,
             "{}  {} {}  {}",
@@ -51,12 +56,21 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
             "changed".dimmed(),
             file.path.bold(),
         );
+        write_formula_line(
+            out,
+            path_indent,
+            file.old_formula.as_deref(),
+            file.new_formula.as_deref(),
+        );
         let _ = writeln!(
             out,
             "{}",
             crate::theme::paint_rule(crate::theme::RULE_CHAR.to_string().repeat(WIDTH))
         );
     }
+    // Single-file mode (`<root>` placeholder) renders the formulas as part
+    // of the header so they can align under the `old → new` filenames; see
+    // `header::write`.
 
     if let Some(t) = file.scopes.traits.as_ref().filter(|s| s.has_changes()) {
         write_traits(out, t);
@@ -76,6 +90,25 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     if let Some(e) = file.scopes.sections.as_ref().filter(|s| s.has_changes()) {
         write_sections(out, e);
     }
+}
+
+/// Hang the old/new behavioral fingerprints under the file path. Output is
+/// suppressed when both sides are absent (added/removed pure-no-formula
+/// case). Layout: `<indent>{old} → {new}` for changed files, or just one
+/// side for added/removed.
+fn write_formula_line(out: &mut String, indent: usize, old: Option<&str>, new: Option<&str>) {
+    if old.is_none() && new.is_none() {
+        return;
+    }
+    let pad = " ".repeat(indent);
+    let arrow = "→".dimmed();
+    let body = match (old, new) {
+        (Some(o), Some(n)) => format!("{}  {}  {}", o.dimmed(), arrow, n.dimmed()),
+        (Some(o), None) => format!("{}  {}", o.dimmed(), "(removed)".dimmed()),
+        (None, Some(n)) => format!("{}  {}", "(added)".dimmed(), n.dimmed()),
+        (None, None) => unreachable!("guarded above"),
+    };
+    let _ = writeln!(out, "{pad}{body}");
 }
 
 /// ` traits   98% changed  +10 -1` heading: scope name as a colored

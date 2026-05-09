@@ -454,11 +454,34 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
         _ => FileStatus::Unchanged,
     };
 
+    // Snapshot each side's formula. Computing here keeps the formula in the
+    // same canonical form as the analyze CLI/JSON output (see
+    // `output::filter_findings_for_formula`) and the renderer doesn't need
+    // access to the raw findings.
+    let old_formula = side_formula(&old.findings);
+    let new_formula = match resolved {
+        FileStatus::Added | FileStatus::Changed => side_formula(&new.findings),
+        // Removed/Unchanged carry no "new side" worth showing.
+        _ => None,
+    };
+    let old_formula = match resolved {
+        FileStatus::Removed | FileStatus::Changed => old_formula,
+        _ => None,
+    };
+
     FileDiffEntry {
         path,
         status: resolved,
         scopes,
+        old_formula,
+        new_formula,
     }
+}
+
+fn side_formula(findings: &[Finding]) -> Option<String> {
+    let filtered = crate::output::filter_findings_for_formula(findings);
+    let f = crate::malecule_bridge::formula_from_findings(&filtered);
+    (!f.is_empty()).then_some(f)
 }
 
 fn any_scope_changed(s: &ScopeDiffs) -> bool {

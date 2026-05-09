@@ -271,6 +271,14 @@ pub struct FileDiffEntry {
     pub status: FileStatus,
     /// Per-scope diffs for this file. Scopes with no changes are `None`.
     pub scopes: ScopeDiffs,
+    /// Behavioral fingerprint of the old side (notable-or-higher findings).
+    /// `None` when the file is purely added or its old findings produced no formula.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_formula: Option<String>,
+    /// Behavioral fingerprint of the new side. `None` when the file is purely
+    /// removed or its new findings produced no formula.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_formula: Option<String>,
 }
 
 /// Status of a file in the diff.
@@ -550,6 +558,8 @@ mod tests {
                     }),
                     ..Default::default()
                 },
+                old_formula: None,
+                new_formula: None,
             }],
         };
         let s = serde_json::to_string(&report).unwrap();

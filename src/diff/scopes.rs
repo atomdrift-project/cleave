@@ -167,7 +167,22 @@ fn flatten_metrics(m: Option<&crate::types::scores::Metrics>) -> Vec<(String, Va
     let Ok(value) = serde_json::to_value(m) else {
         return Vec::new();
     };
-    flatten_dotted(&value)
+    let mut flat = flatten_dotted(&value);
+    // The metrics scope is for *digits*: counters, totals, ratios, bools.
+    // Raw data (strings, arrays of strings, objects) belongs in the kv
+    // scope, where the same fields are already carried via
+    // `flatten_kv_for_diff`. Drop non-scalar leaves so the metrics pane
+    // doesn't double-list values like `elf.needed[]=ld-linux-x86-64.so.2`
+    // or `elf.soname="libfoo.so.1"`.
+    flat.retain(|(_, v)| is_metric_scalar(v));
+    flat
+}
+
+/// `true` for value kinds that belong in the metrics scope: numbers and
+/// booleans (counters, totals, ratios, flags). Strings, arrays, and
+/// objects are routed through the kv scope instead.
+fn is_metric_scalar(v: &Value) -> bool {
+    matches!(v, Value::Number(_) | Value::Bool(_))
 }
 
 /// Flatten a JSON value into `parent.child` paths for metrics. For arrays,
@@ -794,6 +809,79 @@ mod tests {
         assert!(d.old_count > 0);
         assert!(d.new_count > 0);
         assert!(d.changed.iter().any(|c| c.new.path == "text.total_lines"));
+    }
+
+    /// Contract: the metrics scope carries digits only — counters,
+    /// totals, ratios, bools. Strings, arrays of strings, and nested
+    /// objects are kv content; the `flatten_metrics` filter must drop
+    /// them so they don't double-list under metrics (kv carries the
+    /// same data via `flatten_kv_for_diff`).
+    #[test]
+    fn metrics_filter_drops_non_scalar_leaves() {
+        use crate::types::binary_metrics::ElfMetrics;
+        use crate::types::scores::Metrics;
+
+        let mut old = unit();
+        let mut new = unit();
+        let elf_old = ElfMetrics {
+            // Scalar fields that should survive the filter.
+            ifunc_count: 1,
+            has_direct_loader_dep: false,
+            // Non-scalar fields that must be dropped — they belong in kv.
+            needed: vec!["libc.so.6".into()],
+            soname: Some("libfoo.so.1".into()),
+            ..Default::default()
+        };
+        let elf_new = ElfMetrics {
+            ifunc_count: 2,
+            has_direct_loader_dep: true,
+            needed: vec!["libc.so.6".into(), "ld-linux.so.2".into()],
+            soname: Some("libfoo.so.2".into()),
+            ..Default::default()
+        };
+        old.metrics = Some(Metrics {
+            elf: Some(elf_old),
+            ..Default::default()
+        });
+        new.metrics = Some(Metrics {
+            elf: Some(elf_new),
+            ..Default::default()
+        });
+
+        let d = diff_metrics(&old, &new, 0);
+
+        // Scalars survive across all buckets. The bool flip is an *added*
+        // entry (not changed) because `has_direct_loader_dep: false` is
+        // skipped during serialization, so the old side never carried it.
+        // `elf.ifunc_count` 1 → 2 is a real change above the trivial-floor.
+        let metrics_paths: Vec<String> = d
+            .added
+            .iter()
+            .map(|c| c.path.clone())
+            .chain(d.removed.iter().map(|c| c.path.clone()))
+            .chain(d.changed.iter().map(|c| c.new.path.clone()))
+            .collect();
+        assert!(
+            metrics_paths.iter().any(|p| p == "elf.has_direct_loader_dep"),
+            "expected bool flip to surface as a metric, got {metrics_paths:?}",
+        );
+        assert!(
+            metrics_paths.iter().any(|p| p == "elf.ifunc_count"),
+            "expected counter delta to surface as a metric, got {metrics_paths:?}",
+        );
+
+        // Non-scalars must NOT appear in any metrics bucket — they belong
+        // in kv, where `flatten_kv_for_diff` already carries them.
+        for p in &metrics_paths {
+            assert!(
+                !p.starts_with("elf.needed"),
+                "elf.needed[] must route through kv, not metrics; saw {p}",
+            );
+            assert!(
+                !p.starts_with("elf.soname"),
+                "elf.soname must route through kv, not metrics; saw {p}",
+            );
+        }
     }
 
     #[test]

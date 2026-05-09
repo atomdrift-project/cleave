@@ -67,6 +67,8 @@ fn renders_ledger_row_for_added_file() {
                 }),
                 ..Default::default()
             },
+            old_formula: None,
+            new_formula: None,
         }],
     });
     let out = format_terminal(&r);
@@ -113,6 +115,8 @@ fn renders_changed_file_in_ledger_no_zero_filler() {
                 }),
                 ..Default::default()
             },
+            old_formula: None,
+            new_formula: None,
         }],
     });
     let out = format_terminal(&r);
@@ -124,6 +128,154 @@ fn renders_changed_file_in_ledger_no_zero_filler() {
     assert!(!out.contains("~0"));
     assert!(!out.contains("-0"));
     assert!(out.contains("needle"));
+}
+
+#[test]
+fn header_aligns_formula_arrow_under_label_arrow_single_file() {
+    // Single-file mode: the formula line lives in the header and its `→`
+    // must land directly under the header's `→` regardless of whether
+    // the filename or the formula is wider.
+    colored::control::set_override(false);
+    let r = report_with_diff(DiffReportV1 {
+        old_root: "liblzma.so.5.4.5".into(),
+        new_root: "liblzma.so.5.6.0".into(),
+        summary: DiffSummary {
+            files_changed: 1,
+            overall_roc: 0.35,
+            ..Default::default()
+        },
+        scopes: ScopeDiffs::default(),
+        files: vec![FileDiffEntry {
+            path: "<root>".into(),
+            status: FileStatus::Changed,
+            scopes: ScopeDiffs::default(),
+            // Mirror the real liblzma case the user reported: new formula
+            // is wider than `new_label`, which used to cause `35.2% changed
+            // 1 file changed` to overlap the formula on the line below.
+            old_formula: Some("H(Db)Md(Bk)".into()),
+            new_formula: Some("O\u{2082}(ErS)H(Db)Md\u{2082}(BiBk)Th\u{2082}".into()),
+        }],
+    });
+    let out = format_terminal(&r);
+    colored::control::unset_override();
+
+    let lines: Vec<&str> = out.lines().collect();
+    let header = lines
+        .iter()
+        .find(|l| l.starts_with("diff "))
+        .copied()
+        .expect("header line missing");
+    let formula = lines
+        .iter()
+        .find(|l| l.contains("H(Db)Md(Bk)"))
+        .copied()
+        .expect("formula line missing");
+    // Compare *codepoint* offsets, not byte offsets — `→` is multibyte.
+    let codepoint_col = |s: &str, c: char| s.chars().position(|x| x == c);
+    assert_eq!(
+        codepoint_col(header, '→'),
+        codepoint_col(formula, '→'),
+        "arrows must align in:\n{header}\n{formula}",
+    );
+
+    // `35.2% changed` MUST start past the formula's last codepoint so the
+    // header text doesn't visually overlap the formula line below.
+    let pct_col = codepoint_col(header, '%').expect("header missing '%'");
+    let formula_end = formula.chars().count();
+    assert!(
+        pct_col >= formula_end,
+        "header `% changed` (col {pct_col}) must not overlap formula \
+         (ends at col {formula_end})\nheader:  {header}\nformula: {formula}",
+    );
+}
+
+#[test]
+fn pane_renders_old_and_new_formula_under_path() {
+    // Changed file with both formulas populated should hang both
+    // fingerprints under the file path, joined by an arrow.
+    let r = report_with_diff(DiffReportV1 {
+        old_root: "a".into(),
+        new_root: "b".into(),
+        summary: DiffSummary {
+            files_changed: 1,
+            overall_roc: 0.5,
+            scope_roc: ScopeRocs {
+                strings: 0.5,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        scopes: ScopeDiffs::default(),
+        files: vec![FileDiffEntry {
+            path: "lib/foo.so".into(),
+            status: FileStatus::Changed,
+            scopes: ScopeDiffs {
+                strings: Some(ScopeDiff {
+                    added: vec![StringChange {
+                        value: "needle".into(),
+                    }],
+                    old_count: 1,
+                    new_count: 2,
+                    roc: 0.5,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            old_formula: Some("Md(Pt)".into()),
+            new_formula: Some("KO(C)Md(Pt)".into()),
+        }],
+    });
+    let out = format_terminal(&r);
+    assert!(out.contains("Md(Pt)"), "expected old formula in:\n{out}");
+    assert!(
+        out.contains("KO(C)Md(Pt)"),
+        "expected new formula in:\n{out}"
+    );
+    assert!(
+        out.contains("→"),
+        "expected formula arrow joiner in:\n{out}"
+    );
+}
+
+#[test]
+fn pane_renders_added_file_formula_only() {
+    // Added file: only the new-side formula should show, prefixed with
+    // an "(added)" marker so the missing left side reads correctly.
+    let r = report_with_diff(DiffReportV1 {
+        old_root: "a".into(),
+        new_root: "b".into(),
+        summary: DiffSummary {
+            files_changed: 1,
+            overall_roc: 1.0,
+            ..Default::default()
+        },
+        scopes: ScopeDiffs::default(),
+        files: vec![FileDiffEntry {
+            path: "new_only.py".into(),
+            status: FileStatus::Added,
+            scopes: ScopeDiffs {
+                traits: Some(ScopeDiff {
+                    added: vec![TraitChange {
+                        id: "objectives/c2/http/beacon".into(),
+                        trait_section: "objectives".into(),
+                        crit: Criticality::Suspicious,
+                        desc: "x".into(),
+                        count: 1,
+                    }],
+                    old_count: 0,
+                    new_count: 1,
+                    roc: 1.0,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            old_formula: None,
+            new_formula: Some("O(C)".into()),
+        }],
+    });
+    let out = format_terminal(&r);
+    assert!(out.contains("(added)"), "expected (added) marker in:\n{out}");
+    assert!(out.contains("O(C)"), "expected new formula in:\n{out}");
 }
 
 #[test]
@@ -163,6 +315,8 @@ fn sort_files_by_max_crit_then_roc() {
             }),
             ..Default::default()
         },
+        old_formula: None,
+        new_formula: None,
     };
     let files = [
         mk("low.py", Criticality::Notable, 0.9),

@@ -307,14 +307,13 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
             .map(RoundedMetrics)
     });
 
-    // Compute formula if not already present
+    // Compute formula if not already present. Use the canonical filter so the
+    // JSON `f` field stays in lockstep with the CLI header — both must reflect
+    // notable-or-higher findings only.
     let formula = file.formula.clone().or_else(|| {
-        let f = crate::malecule_bridge::formula_from_findings(&file.findings);
-        if f.is_empty() {
-            None
-        } else {
-            Some(f)
-        }
+        let filtered = crate::output::filter_findings_for_formula(&file.findings);
+        let f = crate::malecule_bridge::formula_from_findings(&filtered);
+        (!f.is_empty()).then_some(f)
     });
 
     CompactFile {
@@ -370,5 +369,113 @@ impl AnalysisReport {
         }
 
         compact_from_files(&all_files)
+    }
+}
+
+#[cfg(test)]
+mod formula_tests {
+    use super::super::file_analysis::FileAnalysis;
+    use super::super::traits_findings::Finding;
+    use super::super::{Criticality, Evidence, FindingKind};
+    use super::compact_from_files;
+
+    fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
+        Finding {
+            id: id.to_string(),
+            kind: FindingKind::Capability,
+            desc: "test".to_string(),
+            conf,
+            crit,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![Evidence {
+                method: "test".to_string(),
+                source: "test".to_string(),
+                value: "v".to_string(),
+                location: None,
+                ..Default::default()
+            }],
+            match_count: 1,
+            source_file: None,
+        }
+    }
+
+    fn file_with(findings: Vec<Finding>) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(0, "t.py".into(), "python".into(), "sha".into(), 1);
+        fa.findings = findings;
+        fa
+    }
+
+    /// JSON `f` formula must mirror the CLI: only notable-or-higher findings
+    /// with confidence ≥ 0.65. Component- and baseline-criticality findings
+    /// must not contribute, even when they would survive the lib-side
+    /// component-reference filter.
+    #[test]
+    fn json_formula_excludes_component_and_baseline() {
+        let files = vec![file_with(vec![
+            finding(
+                "objectives/c2/http/beacon",
+                Criticality::Notable,
+                0.9,
+            ),
+            finding(
+                "micro-behaviors/fs/file/read",
+                Criticality::Component,
+                0.95,
+            ),
+            finding(
+                "metadata/lang/source",
+                Criticality::Baseline,
+                0.95,
+            ),
+        ])];
+
+        let compact = compact_from_files(&files);
+        let formula = compact.fs[0].f.as_deref().unwrap_or("");
+        assert!(
+            formula.contains('O'),
+            "expected O (objectives/Notable) in `{formula}`",
+        );
+        assert!(
+            !formula.contains('H'),
+            "did not expect H (micro-behaviors/Component) in `{formula}`",
+        );
+        assert!(
+            !formula.contains("Md"),
+            "did not expect Md (metadata/Baseline) in `{formula}`",
+        );
+    }
+
+    /// Findings below the 0.65 confidence floor must not contribute, even
+    /// when their criticality is otherwise eligible.
+    #[test]
+    fn json_formula_drops_low_confidence() {
+        let files = vec![file_with(vec![finding(
+            "objectives/c2/http/beacon",
+            Criticality::Notable,
+            0.6,
+        )])];
+        let compact = compact_from_files(&files);
+        assert!(
+            compact.fs[0].f.is_none(),
+            "expected no formula when sole finding is below 0.65 conf, got {:?}",
+            compact.fs[0].f,
+        );
+    }
+
+    /// JSON output must reuse a pre-populated `file.formula` rather than
+    /// recomputing from raw findings. This is the path that fires after
+    /// `AnalysisReport::finalize()` calls `refresh_formula`.
+    #[test]
+    fn json_formula_prefers_prepopulated_value() {
+        let mut fa = file_with(vec![finding(
+            "objectives/c2/http/beacon",
+            Criticality::Notable,
+            0.9,
+        )]);
+        fa.formula = Some("PRECOMPUTED".to_string());
+        let compact = compact_from_files(&[fa]);
+        assert_eq!(compact.fs[0].f.as_deref(), Some("PRECOMPUTED"));
     }
 }

@@ -255,11 +255,13 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
 # Run with: MALLOC_CONF="prof:true,prof_active:true,lg_prof_interval:30,prof_prefix:out/heap/jeprof"
 jemalloc-prof = ["jemalloc", "tikv-jemallocator/profiling"]
 
-# jemalloc for unix-like systems (Linux, macOS, illumos, etc.)
+# jemalloc for unix-like systems (Linux, macOS).
 # Excluded on FreeBSD/DragonFlyBSD where jemalloc is already the system allocator;
 # bundling a second copy causes TSD assertion failures in jails. Excluded on
 # OpenBSD whose jemalloc version string is incompatible with tikv-jemalloc-sys.
-[target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))))'.dependencies]
+# Excluded on illumos/Solaris which ship libumem (a comparable arena allocator)
+# and where tikv-jemalloc-sys's bundled config.sub doesn't recognize the host triple.
+[target.'cfg(all(unix, not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd", target_os = "illumos", target_os = "solaris"))))'.dependencies]
 tikv-jemallocator = { version = "0.6", optional = true }
 tikv-jemalloc-ctl = { version = "0.6", optional = true, features = ["stats"] }
 

@@ -586,6 +586,12 @@ fn parse_lnk(content: &[u8]) -> Option<Value> {
     if let Some(ref path) = lnk_data.target_path {
         map.insert("target_path".to_string(), Value::String(path.clone()));
     }
+    if let Some(ref name) = lnk_data.name_string {
+        map.insert("name_string".to_string(), Value::String(name.clone()));
+    }
+    if let Some(ref path) = lnk_data.relative_path {
+        map.insert("relative_path".to_string(), Value::String(path.clone()));
+    }
     if let Some(ref args) = lnk_data.arguments {
         map.insert("arguments".to_string(), Value::String(args.clone()));
     }
@@ -595,12 +601,108 @@ fn parse_lnk(content: &[u8]) -> Option<Value> {
     if let Some(ref icon) = lnk_data.icon_location {
         map.insert("icon_location".to_string(), Value::String(icon.clone()));
     }
+    if let Some(ref volume_type) = lnk_data.target_volume_type {
+        map.insert(
+            "target_volume_type".to_string(),
+            Value::String(volume_type.clone()),
+        );
+    }
+    if let Some(volume_serial) = lnk_data.target_volume_serial {
+        map.insert(
+            "target_volume_serial".to_string(),
+            Value::Number(volume_serial.into()),
+        );
+    }
+    if let Some(ref volume_name) = lnk_data.target_volume_name {
+        map.insert(
+            "target_volume_name".to_string(),
+            Value::String(volume_name.clone()),
+        );
+    }
+    if let Some(ref network_name) = lnk_data.network_name {
+        map.insert(
+            "network_name".to_string(),
+            Value::String(network_name.clone()),
+        );
+    }
+    if let Some(ref environment_target) = lnk_data.environment_target {
+        map.insert(
+            "environment_target".to_string(),
+            Value::String(environment_target.clone()),
+        );
+    }
+    if let Some(ref icon_environment_target) = lnk_data.icon_environment_target {
+        map.insert(
+            "icon_environment_target".to_string(),
+            Value::String(icon_environment_target.clone()),
+        );
+    }
+    if let Some(ref darwin_data) = lnk_data.darwin_data {
+        map.insert(
+            "darwin_data".to_string(),
+            Value::String(darwin_data.clone()),
+        );
+    }
+    if let Some(ref shim_layer_name) = lnk_data.shim_layer_name {
+        map.insert(
+            "shim_layer_name".to_string(),
+            Value::String(shim_layer_name.clone()),
+        );
+    }
+    if let Some(ref known_folder_id) = lnk_data.known_folder_id {
+        map.insert(
+            "known_folder_id".to_string(),
+            Value::String(known_folder_id.clone()),
+        );
+    }
+    if let Some(special_folder_id) = lnk_data.special_folder_id {
+        map.insert(
+            "special_folder_id".to_string(),
+            Value::Number(special_folder_id.into()),
+        );
+    }
+    if let Some(ref tracker_machine_id) = lnk_data.tracker_machine_id {
+        map.insert(
+            "tracker_machine_id".to_string(),
+            Value::String(tracker_machine_id.clone()),
+        );
+    }
+    if let Some(ref tracker_mac_address) = lnk_data.tracker_mac_address {
+        map.insert(
+            "tracker_mac_address".to_string(),
+            Value::String(tracker_mac_address.clone()),
+        );
+    }
+    if let Some(ref tracker_volume_droid) = lnk_data.tracker_volume_droid {
+        map.insert(
+            "tracker_volume_droid".to_string(),
+            Value::String(tracker_volume_droid.clone()),
+        );
+    }
+    if let Some(ref tracker_file_droid) = lnk_data.tracker_file_droid {
+        map.insert(
+            "tracker_file_droid".to_string(),
+            Value::String(tracker_file_droid.clone()),
+        );
+    }
 
     map.insert(
         "show_command".to_string(),
         Value::Number(lnk_data.show_command.into()),
     );
     map.insert("hotkey".to_string(), Value::Number(lnk_data.hotkey.into()));
+    map.insert(
+        "icon_index".to_string(),
+        Value::Number(i64::from(lnk_data.icon_index).into()),
+    );
+    map.insert(
+        "target_size".to_string(),
+        Value::Number(lnk_data.target_size.into()),
+    );
+    map.insert(
+        "target_attributes".to_string(),
+        Value::Number(lnk_data.target_attributes.into()),
+    );
 
     Some(Value::Object(map))
 }

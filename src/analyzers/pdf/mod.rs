@@ -19,7 +19,7 @@ pub(crate) mod types;
 use crate::analyzers::input::AnalysisInput;
 use crate::analyzers::Analyzer;
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, TargetInfo};
+use crate::types::{AnalysisReport, Metrics, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -74,6 +74,8 @@ impl PdfAnalyzer {
             if kv.as_object().is_some_and(|m| !m.is_empty()) {
                 report.kv_tree = Some(Box::new(kv));
             }
+            let metrics = report.metrics.get_or_insert_with(Metrics::default);
+            metrics.pdf = Some(pdf_kv::build_pdf_metrics(&parsed));
         }
 
         self.capability_mapper

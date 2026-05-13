@@ -97,16 +97,13 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
 /// case). Layout: `<indent>{old} → {new}` for changed files, or just one
 /// side for added/removed.
 fn write_formula_line(out: &mut String, indent: usize, old: Option<&str>, new: Option<&str>) {
-    if old.is_none() && new.is_none() {
-        return;
-    }
     let pad = " ".repeat(indent);
     let arrow = "→".dimmed();
     let body = match (old, new) {
         (Some(o), Some(n)) => format!("{}  {}  {}", o.dimmed(), arrow, n.dimmed()),
         (Some(o), None) => format!("{}  {}", o.dimmed(), "(removed)".dimmed()),
         (None, Some(n)) => format!("{}  {}", "(added)".dimmed(), n.dimmed()),
-        (None, None) => unreachable!("guarded above"),
+        (None, None) => return,
     };
     let _ = writeln!(out, "{pad}{body}");
 }

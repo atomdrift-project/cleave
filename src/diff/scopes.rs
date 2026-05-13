@@ -862,7 +862,9 @@ mod tests {
             .chain(d.changed.iter().map(|c| c.new.path.clone()))
             .collect();
         assert!(
-            metrics_paths.iter().any(|p| p == "elf.has_direct_loader_dep"),
+            metrics_paths
+                .iter()
+                .any(|p| p == "elf.has_direct_loader_dep"),
             "expected bool flip to surface as a metric, got {metrics_paths:?}",
         );
         assert!(

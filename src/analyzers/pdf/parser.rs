@@ -7,7 +7,7 @@
 //!
 //! - Cross-reference table reconstruction (xref / xref-stream).
 //! - Decryption, even for known-empty passwords.
-//! - Full stream filter resolution (we only record the filter list).
+//! - Complete PDF stream filter coverage (we decode common JS/ObjStm cases).
 //! - Object-graph traversal (refs are recorded as text, not chased).
 //!
 //! What we DO recover, robustly, against adversarial input:
@@ -15,7 +15,8 @@
 //! - Every `%PDF-1.x` header occurrence.
 //! - Every `<id> <gen> obj … endobj` body, with top-level dict keys.
 //! - The most recent `trailer << … >>` dict.
-//! - `%%EOF` count.
+//! - `%%EOF`, `trailer`, and `startxref` counts.
+//! - Stream filter chains and malformed stream-length/delimiter facts.
 //! - Action dicts (`/S /JavaScript`, `/S /Launch`, …) and their
 //!   targets / snippets.
 //! - Embedded-file records via `/Type /Filespec` and `/Names
@@ -23,10 +24,10 @@
 //! - `/Info` dict string values when reachable from the trailer.
 
 use super::types::{
-    PdfAction, PdfActionKind, PdfDocument, PdfEmbeddedFile, PdfHeader, PdfObject, PdfStructural,
-    PdfTrailer,
+    PdfAction, PdfActionKind, PdfDocument, PdfEmbeddedFile, PdfFormField, PdfHeader, PdfObject,
+    PdfStreamAnomalies, PdfStreamRecord, PdfStructural, PdfTrailer,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Maximum object body byte length captured per object. Keeps memory
 /// bounded for adversarial inputs that pile huge streams into a
@@ -53,6 +54,15 @@ const MAX_STREAM_BYTES: usize = 256 * 1024;
 /// unbounded zip-bomb risk.
 const MAX_DECODED_BYTES: usize = 1 << 20;
 
+/// Maximum decoded form-field value exposed to kv. This catches staged
+/// JavaScript in hidden fields without letting unbounded form values bloat
+/// reports.
+const MAX_FORM_FIELD_DECODED_VALUE: usize = 128 * 1024;
+
+/// Maximum decoded stream text exposed to kv. This is enough for exploit API
+/// strings and small scripts while keeping reports bounded.
+const MAX_DECODED_STREAM_TEXT: usize = 4096;
+
 /// Run the lenient extractor over PDF bytes. Always returns a
 /// document — empty when the file isn't a PDF or recovery fails
 /// completely. Callers should check `headers.is_empty()` to detect
@@ -66,11 +76,23 @@ pub(crate) fn parse(data: &[u8]) -> PdfDocument {
             ..Default::default()
         };
     }
-    let objects = scan_objects(data);
+    let mut objects = scan_objects(data);
+    let visible_object_count = objects.len();
+    let object_stream_objects = scan_object_stream_objects(&objects);
+    let object_stream_inner_object_count = object_stream_objects.len();
+    objects.extend(object_stream_objects);
     let trailer = scan_trailer(data);
-    let structural = compute_structural(data, &objects, &trailer);
+    let structural = compute_structural(
+        data,
+        &objects,
+        &trailer,
+        visible_object_count,
+        object_stream_inner_object_count,
+    );
     let actions = collect_actions(&objects, &trailer);
     let embedded_files = collect_embedded_files(&objects);
+    let streams = collect_stream_records(&objects);
+    let form_fields = collect_form_fields(&objects);
     let info = collect_info_dict(&objects, &trailer);
     let eof_count = scan_eof_count(data);
     PdfDocument {
@@ -80,6 +102,8 @@ pub(crate) fn parse(data: &[u8]) -> PdfDocument {
         structural,
         actions,
         embedded_files,
+        streams,
+        form_fields,
         info,
     }
 }
@@ -159,19 +183,23 @@ fn scan_objects(data: &[u8]) -> Vec<PdfObject> {
         let body_len = (body_end - body_start).min(MAX_OBJECT_BODY);
         let body = &data[body_start..body_start + body_len];
 
-        let dict = parse_top_level_dict(body);
-        let (has_stream, stream_filters) = parse_stream_meta(body);
-        let stream_bytes = if has_stream {
+        let (dict, dict_raw) = parse_top_level_dict_with_raw(body);
+        let stream_meta = parse_stream_meta(body, &dict);
+        let stream_bytes = if stream_meta.has_stream && !stream_meta.anomalies.missing_endstream {
             extract_stream_bytes(body)
         } else {
             Vec::new()
         };
+        let raw_value = parse_direct_object_value(body, stream_meta.has_stream, !dict.is_empty());
 
         out.push(PdfObject {
             id,
             dict,
-            stream_filters,
+            dict_raw,
+            raw_value,
+            stream_filters: stream_meta.filters,
             stream_bytes,
+            stream_anomalies: stream_meta.anomalies,
         });
         start = if endobj_rel.is_some() {
             body_end + b"endobj".len()
@@ -213,22 +241,128 @@ fn parse_object_header(prefix: &[u8]) -> Option<u32> {
         .ok()
 }
 
+fn parse_direct_object_value(body: &[u8], has_stream: bool, has_dict: bool) -> String {
+    if has_stream || has_dict {
+        return String::new();
+    }
+    let trimmed = trim_bytes(body);
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        truncate(&String::from_utf8_lossy(trimmed), MAX_SNIPPET)
+    }
+}
+
+fn scan_object_stream_objects(objects: &[PdfObject]) -> Vec<PdfObject> {
+    let mut out = Vec::new();
+    let mut existing_ids: BTreeSet<u32> = objects.iter().map(|o| o.id).collect();
+
+    for obj in objects {
+        if obj.dict.get("Type").map(|v| v.trim()) != Some("/ObjStm") {
+            continue;
+        }
+        let Some(decoded) = decoded_stream_bytes(obj) else {
+            continue;
+        };
+        let n = obj
+            .dict
+            .get("N")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        let first = obj
+            .dict
+            .get("First")
+            .and_then(|v| v.trim().parse::<usize>().ok())
+            .unwrap_or(0);
+        if n == 0 || first >= decoded.len() {
+            continue;
+        }
+        let index = parse_object_stream_index(&decoded[..first], n);
+        let object_area = &decoded[first..];
+        for (idx, (id, offset)) in index.iter().copied().enumerate() {
+            if out.len() + objects.len() >= MAX_OBJECTS || existing_ids.contains(&id) {
+                continue;
+            }
+            if offset >= object_area.len() {
+                continue;
+            }
+            let end = index
+                .get(idx + 1)
+                .map(|(_, next)| (*next).min(object_area.len()))
+                .unwrap_or(object_area.len());
+            if end <= offset {
+                continue;
+            }
+            let body = &object_area[offset..end];
+            let (dict, dict_raw) = parse_top_level_dict_with_raw(body);
+            let raw_value = parse_direct_object_value(body, false, !dict.is_empty());
+            out.push(PdfObject {
+                id,
+                dict,
+                dict_raw,
+                raw_value,
+                stream_filters: Vec::new(),
+                stream_bytes: Vec::new(),
+                stream_anomalies: PdfStreamAnomalies::default(),
+            });
+            existing_ids.insert(id);
+        }
+    }
+
+    out
+}
+
+fn parse_object_stream_index(header: &[u8], max_objects: usize) -> Vec<(u32, usize)> {
+    let mut nums = header
+        .split(|b| is_ws(*b))
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| std::str::from_utf8(s).ok()?.parse::<usize>().ok());
+    let mut out = Vec::new();
+    while out.len() < max_objects {
+        let Some(id) = nums.next() else {
+            break;
+        };
+        let Some(offset) = nums.next() else {
+            break;
+        };
+        if let Ok(id) = u32::try_from(id) {
+            out.push((id, offset));
+        }
+    }
+    out.sort_by_key(|(_, offset)| *offset);
+    out
+}
+
+fn decoded_stream_bytes(obj: &PdfObject) -> Option<Vec<u8>> {
+    if obj.stream_bytes.is_empty() {
+        return None;
+    }
+    if obj.stream_filters.is_empty() {
+        Some(obj.stream_bytes.clone())
+    } else {
+        decode_filters(&obj.stream_bytes, &obj.stream_filters)
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Top-level dict parsing: capture `/Name <value>` pairs at depth 1
 // ---------------------------------------------------------------------------
 
-fn parse_top_level_dict(body: &[u8]) -> BTreeMap<String, String> {
+fn parse_top_level_dict_with_raw(
+    body: &[u8],
+) -> (BTreeMap<String, String>, BTreeMap<String, Vec<u8>>) {
     let mut out = BTreeMap::new();
+    let mut raw_out = BTreeMap::new();
     // Find the outermost `<<` … `>>` pair in the body.
     let Some(open) = find_subslice(body, b"<<") else {
-        return out;
+        return (out, raw_out);
     };
     let Some(close) = find_matching_dict_close(&body[open..]) else {
-        return out;
+        return (out, raw_out);
     };
     let dict_bytes = &body[open + 2..open + close];
-    walk_top_level_pairs(dict_bytes, &mut out);
-    out
+    walk_top_level_pairs(dict_bytes, &mut out, &mut raw_out);
+    (out, raw_out)
 }
 
 /// Find the matching `>>` for an opening `<<` at byte 0 of slice.
@@ -286,7 +420,11 @@ fn skip_paren_string(slice: &[u8], start: usize) -> usize {
 
 /// Walk a dict body capturing top-level `/Name <value>` pairs. Values
 /// span until the next `/Name` at the same depth, or end of slice.
-fn walk_top_level_pairs(body: &[u8], out: &mut BTreeMap<String, String>) {
+fn walk_top_level_pairs(
+    body: &[u8],
+    out: &mut BTreeMap<String, String>,
+    raw_out: &mut BTreeMap<String, Vec<u8>>,
+) {
     let mut i = 0;
     while i < body.len() {
         if body[i] != b'/' {
@@ -312,8 +450,9 @@ fn walk_top_level_pairs(body: &[u8], out: &mut BTreeMap<String, String>) {
         // Value runs until the next top-level `/Name` boundary or end.
         // We need to track nesting: `<< >>`, `[ ]`, `( )`.
         let value_end = scan_value_end(body, value_start);
-        let raw = body[value_start..value_end].to_vec();
+        let raw = trim_bytes(&body[value_start..value_end]).to_vec();
         let value_text = String::from_utf8_lossy(&raw).trim().to_string();
+        raw_out.insert(name.clone(), raw);
         out.insert(name, value_text);
         i = value_end;
     }
@@ -386,15 +525,61 @@ fn skip_array(body: &[u8], start: usize) -> usize {
 // Stream metadata
 // ---------------------------------------------------------------------------
 
-fn parse_stream_meta(body: &[u8]) -> (bool, Vec<String>) {
-    let has_stream =
-        find_subslice(body, b"stream").is_some() && find_subslice(body, b"endstream").is_some();
-    let dict = parse_top_level_dict(body);
+#[derive(Debug, Clone)]
+struct StreamMeta {
+    has_stream: bool,
+    filters: Vec<String>,
+    anomalies: PdfStreamAnomalies,
+}
+
+fn parse_stream_meta(body: &[u8], dict: &BTreeMap<String, String>) -> StreamMeta {
+    let stream_pos = find_subslice(body, b"stream");
+    let has_stream = stream_pos.is_some();
+    let mut anomalies = PdfStreamAnomalies {
+        has_stream,
+        ..Default::default()
+    };
+
     let mut filters = Vec::new();
     if let Some(filter_value) = dict.get("Filter") {
         filters = parse_filter_list(filter_value);
     }
-    (has_stream, filters)
+
+    if let Some(s_pos) = stream_pos {
+        let stream_data_start = stream_data_start(body, s_pos);
+        anomalies.bad_delimiter = stream_keyword_has_bad_delimiter(body, s_pos);
+        match find_subslice(&body[stream_data_start..], b"endstream") {
+            Some(e_rel) => {
+                let observed =
+                    stream_observed_len(body, stream_data_start, stream_data_start + e_rel);
+                anomalies.observed_length = Some(observed as u64);
+            }
+            None => anomalies.missing_endstream = true,
+        }
+
+        match dict.get("Length").map(|v| v.trim()) {
+            None => anomalies.missing_length = true,
+            Some(value) => {
+                if is_indirect_ref_text(value) {
+                    // Indirect /Length is legal; this lenient scanner does
+                    // not resolve it for stream-boundary telemetry.
+                } else if let Some(length) = parse_direct_length(value) {
+                    anomalies.declared_length = Some(length);
+                    if let Some(observed) = anomalies.observed_length {
+                        anomalies.length_mismatch = length != observed;
+                    }
+                } else {
+                    anomalies.invalid_length = true;
+                }
+            }
+        }
+    }
+
+    StreamMeta {
+        has_stream,
+        filters,
+        anomalies,
+    }
 }
 
 /// Pull the raw byte slice between `stream\n` (or `stream\r\n`) and
@@ -404,28 +589,78 @@ fn extract_stream_bytes(body: &[u8]) -> Vec<u8> {
     let Some(s_pos) = find_subslice(body, b"stream") else {
         return Vec::new();
     };
-    // The byte immediately after "stream" is a newline per spec
-    // (`\r\n` or `\n`).  Skip it.
-    let mut start = s_pos + b"stream".len();
+    let start = stream_data_start(body, s_pos);
+    let Some(e_rel) = find_subslice(&body[start..], b"endstream") else {
+        return Vec::new();
+    };
+    let end = trim_stream_data_end(body, start, start + e_rel);
+    let len = (end.saturating_sub(start)).min(MAX_STREAM_BYTES);
+    body[start..start + len].to_vec()
+}
+
+fn stream_data_start(body: &[u8], stream_pos: usize) -> usize {
+    let mut start = stream_pos + b"stream".len();
+    while start < body.len() && matches!(body[start], b' ' | b'\t') {
+        start += 1;
+    }
     if start < body.len() && body[start] == b'\r' {
         start += 1;
     }
     if start < body.len() && body[start] == b'\n' {
         start += 1;
     }
-    let Some(e_rel) = find_subslice(&body[start..], b"endstream") else {
-        return Vec::new();
-    };
-    let mut end = start + e_rel;
-    // Trim a trailing newline before `endstream` per spec.
+    start
+}
+
+fn stream_keyword_has_bad_delimiter(body: &[u8], stream_pos: usize) -> bool {
+    let after = stream_pos + b"stream".len();
+    match body.get(after).copied() {
+        Some(b'\r' | b'\n') => false,
+        Some(b' ' | b'\t') => {
+            let mut i = after;
+            while i < body.len() && matches!(body[i], b' ' | b'\t') {
+                i += 1;
+            }
+            !matches!(body.get(i).copied(), Some(b'\r' | b'\n'))
+        }
+        Some(_) | None => true,
+    }
+}
+
+fn stream_observed_len(body: &[u8], start: usize, raw_end: usize) -> usize {
+    trim_stream_data_end(body, start, raw_end).saturating_sub(start)
+}
+
+fn trim_stream_data_end(body: &[u8], start: usize, mut end: usize) -> usize {
     if end > start && body[end - 1] == b'\n' {
         end -= 1;
     }
     if end > start && body[end - 1] == b'\r' {
         end -= 1;
     }
-    let len = (end.saturating_sub(start)).min(MAX_STREAM_BYTES);
-    body[start..start + len].to_vec()
+    end
+}
+
+fn parse_direct_length(value: &str) -> Option<u64> {
+    let token = value.split_whitespace().next()?;
+    token.parse::<u64>().ok()
+}
+
+fn is_indirect_ref_text(value: &str) -> bool {
+    let mut parts = value.split_whitespace();
+    let Some(obj) = parts.next() else {
+        return false;
+    };
+    let Some(gen) = parts.next() else {
+        return false;
+    };
+    let Some(marker) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none()
+        && obj.parse::<u32>().is_ok()
+        && gen.parse::<u32>().is_ok()
+        && marker == "R"
 }
 
 fn parse_filter_list(value: &str) -> Vec<String> {
@@ -578,7 +813,8 @@ fn scan_trailer(data: &[u8]) -> Option<PdfTrailer> {
     if after[j..].starts_with(b"<<") {
         let close = find_matching_dict_close(&after[j..])?;
         let mut dict = BTreeMap::new();
-        walk_top_level_pairs(&after[j + 2..j + close], &mut dict);
+        let mut raw = BTreeMap::new();
+        walk_top_level_pairs(&after[j + 2..j + close], &mut dict, &mut raw);
         Some(PdfTrailer { dict })
     } else {
         None
@@ -593,8 +829,19 @@ fn compute_structural(
     data: &[u8],
     objects: &[PdfObject],
     trailer: &Option<PdfTrailer>,
+    visible_object_count: usize,
+    object_stream_inner_object_count: usize,
 ) -> PdfStructural {
-    let mut s = PdfStructural::default();
+    let mut s = PdfStructural {
+        visible_object_count: visible_object_count as u32,
+        object_stream_inner_object_count: object_stream_inner_object_count as u32,
+        trailing_bytes_after_eof: trailing_bytes_after_last_eof(data) as u64,
+        leading_bytes_before_header: leading_bytes_before_first_header(data) as u64,
+        trailer_count: count_subslice(data, b"trailer"),
+        startxref_count: count_subslice(data, b"startxref"),
+        byte_range_count: count_subslice(data, b"/ByteRange"),
+        ..Default::default()
+    };
     if let Some(t) = trailer {
         s.encrypted = t.dict.contains_key("Encrypt");
     }
@@ -611,6 +858,11 @@ fn compute_structural(
         s.has_acroform = cat.dict.contains_key("AcroForm");
         s.has_openaction = cat.dict.contains_key("OpenAction");
         s.has_additional_actions = cat.dict.contains_key("AA");
+        s.has_names_javascript = cat
+            .dict
+            .get("Names")
+            .map(|names| names.contains("/JavaScript"))
+            .unwrap_or(false);
         // XFA detection: AcroForm value contains `/XFA`.
         if let Some(af) = cat.dict.get("AcroForm") {
             s.has_xfa = af.contains("/XFA");
@@ -618,14 +870,133 @@ fn compute_structural(
     }
     // Filter / annotation scan.
     for obj in objects {
+        if obj.stream_anomalies.has_stream {
+            s.stream_count = s.stream_count.saturating_add(1);
+        }
+        if obj.stream_anomalies.missing_length {
+            s.stream_missing_length_count = s.stream_missing_length_count.saturating_add(1);
+        }
+        if obj.stream_anomalies.invalid_length {
+            s.stream_invalid_length_count = s.stream_invalid_length_count.saturating_add(1);
+        }
+        if obj.stream_anomalies.length_mismatch {
+            s.stream_length_mismatch_count = s.stream_length_mismatch_count.saturating_add(1);
+        }
+        if obj.stream_anomalies.bad_delimiter {
+            s.stream_bad_delimiter_count = s.stream_bad_delimiter_count.saturating_add(1);
+        }
+        if obj.stream_anomalies.missing_endstream {
+            s.stream_missing_endstream_count = s.stream_missing_endstream_count.saturating_add(1);
+        }
+        match obj.dict.get("Type").map(|v| v.trim()) {
+            Some("/Page") => s.page_count = s.page_count.saturating_add(1),
+            Some("/Annot") => s.annotation_count = s.annotation_count.saturating_add(1),
+            Some("/XObject") => s.xobject_count = s.xobject_count.saturating_add(1),
+            Some("/Font") => s.font_count = s.font_count.saturating_add(1),
+            Some("/Metadata") => s.metadata_count = s.metadata_count.saturating_add(1),
+            Some("/ObjStm") => s.objstm_count = s.objstm_count.saturating_add(1),
+            Some("/XRef") => s.xref_stream_count = s.xref_stream_count.saturating_add(1),
+            Some("/Sig") => s.signature_object_count = s.signature_object_count.saturating_add(1),
+            Some("/3D") => {
+                s.has_3d = true;
+                s.three_d_object_count = s.three_d_object_count.saturating_add(1);
+            }
+            _ => {}
+        }
+        if obj.dict.get("FT").map(|v| v.trim()) == Some("/Sig") {
+            s.signature_object_count = s.signature_object_count.saturating_add(1);
+        }
         if obj.stream_filters.iter().any(|f| f == "JBIG2Decode") {
             s.jbig2_filter_count = s.jbig2_filter_count.saturating_add(1);
         }
+        if obj.stream_filters.iter().any(|f| is_unusual_filter(f)) {
+            s.streams_with_unusual_filter_count =
+                s.streams_with_unusual_filter_count.saturating_add(1);
+        }
         if obj.dict.get("Subtype").map(|v| v.contains("/3D")) == Some(true) {
+            s.has_3d = true;
             s.three_d_object_count = s.three_d_object_count.saturating_add(1);
         }
+        if obj.dict.values().any(|value| value.contains("/RichMedia")) {
+            s.has_richmedia = true;
+        }
     }
+    s.unreferenced_object_count = count_unreferenced_objects(objects, trailer);
     s
+}
+
+fn is_unusual_filter(filter: &str) -> bool {
+    matches!(
+        filter,
+        "JBIG2Decode" | "JBIG2" | "LZWDecode" | "LZW" | "Crypt"
+    )
+}
+
+fn trailing_bytes_after_last_eof(data: &[u8]) -> usize {
+    let needle = b"%%EOF";
+    let mut last = None;
+    let mut start = 0;
+    while start + needle.len() <= data.len() {
+        let Some(rel) = find_subslice(&data[start..], needle) else {
+            break;
+        };
+        let abs = start + rel;
+        last = Some(abs + needle.len());
+        start = abs + needle.len();
+    }
+    last.map(|end| data.len().saturating_sub(end)).unwrap_or(0)
+}
+
+fn leading_bytes_before_first_header(data: &[u8]) -> usize {
+    find_subslice(data, b"%PDF-").unwrap_or(0)
+}
+
+fn count_subslice(data: &[u8], needle: &[u8]) -> u32 {
+    if needle.is_empty() {
+        return 0;
+    }
+    let mut count: u32 = 0;
+    let mut start = 0;
+    while start + needle.len() <= data.len() {
+        let Some(pos) = find_subslice(&data[start..], needle) else {
+            break;
+        };
+        count = count.saturating_add(1);
+        start = start + pos + needle.len();
+    }
+    count
+}
+
+fn count_unreferenced_objects(objects: &[PdfObject], trailer: &Option<PdfTrailer>) -> u32 {
+    let object_ids: BTreeSet<u32> = objects.iter().map(|o| o.id).collect();
+    if object_ids.is_empty() {
+        return 0;
+    }
+
+    let mut refs = BTreeSet::new();
+    for obj in objects {
+        for value in obj.dict.values() {
+            collect_indirect_refs(value, &mut refs);
+        }
+    }
+    if let Some(t) = trailer {
+        for value in t.dict.values() {
+            collect_indirect_refs(value, &mut refs);
+        }
+    }
+
+    object_ids.difference(&refs).count() as u32
+}
+
+fn collect_indirect_refs(value: &str, refs: &mut BTreeSet<u32>) {
+    let tokens: Vec<&str> = value.split_whitespace().collect();
+    for window in tokens.windows(3) {
+        if window[2] == "R" {
+            if let Ok(id) = window[0].parse::<u32>() {
+                refs.insert(id);
+            }
+        }
+    }
 }
 
 fn find_catalog(objects: &[PdfObject]) -> Option<&PdfObject> {
@@ -866,6 +1237,14 @@ pub(crate) fn resolve_js_value(raw: &str, objects: &[PdfObject]) -> String {
                 let s = String::from_utf8_lossy(&decoded);
                 return truncate(&s, MAX_SNIPPET);
             }
+            if !target.raw_value.is_empty() {
+                return decode_pdf_value_text(target.raw_value.as_bytes());
+            }
+            if let Some(names) = target.dict.get("Names") {
+                if let Some(js) = extract_subkey(names, "JS") {
+                    return resolve_js_value(&js, objects);
+                }
+            }
         }
         return truncate(trimmed, MAX_SNIPPET);
     }
@@ -964,6 +1343,183 @@ fn collect_embedded_files(objects: &[PdfObject]) -> Vec<PdfEmbeddedFile> {
     out
 }
 
+fn collect_stream_records(objects: &[PdfObject]) -> Vec<PdfStreamRecord> {
+    let mut out = Vec::new();
+    for obj in objects {
+        let Some(decoded) = decoded_stream_bytes(obj) else {
+            continue;
+        };
+        if decoded.is_empty() {
+            continue;
+        }
+        let magic_hex = decoded
+            .iter()
+            .take(8)
+            .map(|b| format!("{b:02x}"))
+            .collect::<Vec<_>>()
+            .join("");
+        let decoded_text = decoded_stream_text(&decoded);
+        if decoded_text.is_empty() && !is_interesting_stream_magic(&magic_hex) {
+            continue;
+        }
+        out.push(PdfStreamRecord {
+            object_id: obj.id,
+            filters: obj.stream_filters.clone(),
+            magic_hex,
+            decoded_text,
+        });
+    }
+    out
+}
+
+fn decoded_stream_text(decoded: &[u8]) -> String {
+    if !has_stream_text_signal(decoded) {
+        return String::new();
+    }
+    truncate(&String::from_utf8_lossy(decoded), MAX_DECODED_STREAM_TEXT)
+}
+
+fn has_stream_text_signal(data: &[u8]) -> bool {
+    const SIGNALS: &[&[u8]] = &[
+        b"/JavaScript",
+        b"eval",
+        b"unescape",
+        b"fromCharCode",
+        b"byteToChar",
+        b".replace",
+        b".substring",
+        b"Collab",
+        b"util.",
+        b"app.",
+        b"media.",
+        b"spell.",
+        b"SOAP",
+        b"Object.defineProperty",
+        b"event.richValue",
+        b"this.resetForm",
+        b"FWS",
+        b"CWS",
+    ];
+    SIGNALS
+        .iter()
+        .any(|signal| find_subslice_case_insensitive(data, signal).is_some())
+}
+
+fn is_interesting_stream_magic(magic_hex: &str) -> bool {
+    magic_hex.starts_with("465753")
+        || magic_hex.starts_with("435753")
+        || magic_hex.starts_with("5a5753")
+        || magic_hex.starts_with("d0cf11e0")
+        || magic_hex.starts_with("4d5a")
+        || magic_hex.starts_with("25504446")
+        || magic_hex.starts_with("504b0304")
+        || magic_hex.starts_with("7b5c727466")
+        || magic_hex.starts_with("0000000c6a502020")
+}
+
+fn collect_form_fields(objects: &[PdfObject]) -> Vec<PdfFormField> {
+    let mut out = Vec::new();
+    for obj in objects {
+        if !obj.dict.contains_key("FT")
+            && !obj.dict.contains_key("T")
+            && !obj.dict.contains_key("V")
+        {
+            continue;
+        }
+        let name = obj
+            .dict_raw
+            .get("T")
+            .map(|v| decode_pdf_value_text(v))
+            .unwrap_or_default();
+        let field_type = obj
+            .dict
+            .get("FT")
+            .map(|v| v.trim().trim_start_matches('/').to_string())
+            .unwrap_or_default();
+        let rect = obj
+            .dict
+            .get("Rect")
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default();
+        let raw_value = obj.dict_raw.get("V").map(Vec::as_slice).unwrap_or_default();
+        let value_length = raw_value.len().min(u32::MAX as usize) as u32;
+        let decoded = decode_base64_form_field_value(raw_value);
+        let decoded_value_length = decoded.len().min(u32::MAX as usize) as u32;
+        let decoded_value_snippet = truncate(&String::from_utf8_lossy(&decoded), MAX_SNIPPET);
+        let decoded_value = if decoded.len() <= MAX_FORM_FIELD_DECODED_VALUE {
+            String::from_utf8_lossy(&decoded).to_string()
+        } else {
+            String::new()
+        };
+
+        if !name.is_empty()
+            || !field_type.is_empty()
+            || !rect.is_empty()
+            || value_length > 0
+            || decoded_value_length > 0
+        {
+            out.push(PdfFormField {
+                name,
+                field_type,
+                rect,
+                value_length,
+                decoded_value_length,
+                decoded_value,
+                decoded_value_snippet,
+            });
+        }
+    }
+    out
+}
+
+fn decode_base64_form_field_value(raw: &[u8]) -> Vec<u8> {
+    let trimmed = trim_bytes(raw);
+    let encoded = if trimmed.starts_with(b"/") {
+        decode_pdf_name_bytes(&trimmed[1..])
+    } else if trimmed.starts_with(b"(") && trimmed.ends_with(b")") && trimmed.len() >= 2 {
+        unescape_pdf_literal_bytes(&trimmed[1..trimmed.len() - 1])
+    } else {
+        Vec::new()
+    };
+    if encoded.is_empty() {
+        return Vec::new();
+    }
+    decode_base64_bytes(&encoded).unwrap_or_default()
+}
+
+fn decode_pdf_name_bytes(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(raw.len());
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == b'#' && i + 2 < raw.len() {
+            if let (Some(h), Some(l)) = (
+                nibble(raw[i + 1].to_ascii_uppercase()),
+                nibble(raw[i + 2].to_ascii_uppercase()),
+            ) {
+                out.push((h << 4) | l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(raw[i]);
+        i += 1;
+    }
+    out
+}
+
+fn decode_base64_bytes(input: &[u8]) -> Option<Vec<u8>> {
+    use base64::Engine;
+
+    let compact: Vec<u8> = input
+        .iter()
+        .copied()
+        .filter(|b| !b.is_ascii_whitespace())
+        .collect();
+    base64::engine::general_purpose::STANDARD
+        .decode(compact)
+        .ok()
+}
+
 // ---------------------------------------------------------------------------
 // Info dict extraction
 // ---------------------------------------------------------------------------
@@ -984,16 +1540,11 @@ fn collect_info_dict(
         return out;
     };
     for (k, v) in &info_obj.dict {
-        // Strip surrounding `(...)` literal-string parens.
-        let trimmed = v.trim();
-        let cleaned = if trimmed.starts_with('(') && trimmed.ends_with(')') {
-            unescape_pdf_string(&trimmed[1..trimmed.len() - 1])
-        } else if trimmed.starts_with('<') && trimmed.ends_with('>') {
-            // Hex-string literal `<...>` — best-effort decode.
-            decode_hex_string(&trimmed[1..trimmed.len() - 1])
-        } else {
-            trimmed.to_string()
-        };
+        let cleaned = info_obj
+            .dict_raw
+            .get(k)
+            .map(|raw| decode_pdf_value_text(raw))
+            .unwrap_or_else(|| decode_pdf_value_text(v.as_bytes()));
         if !cleaned.is_empty() {
             out.insert(k.clone(), cleaned);
         }
@@ -1001,41 +1552,104 @@ fn collect_info_dict(
     out
 }
 
-fn unescape_pdf_string(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => out.push('\n'),
-                Some('r') => out.push('\r'),
-                Some('t') => out.push('\t'),
-                Some('(') => out.push('('),
-                Some(')') => out.push(')'),
-                Some('\\') => out.push('\\'),
-                Some(other) => out.push(other),
-                None => break,
-            }
-        } else {
-            out.push(c);
+fn decode_pdf_value_text(raw: &[u8]) -> String {
+    let trimmed = trim_bytes(raw);
+    let bytes = if trimmed.starts_with(b"(") && trimmed.ends_with(b")") && trimmed.len() >= 2 {
+        unescape_pdf_literal_bytes(&trimmed[1..trimmed.len() - 1])
+    } else if trimmed.starts_with(b"<")
+        && !trimmed.starts_with(b"<<")
+        && trimmed.ends_with(b">")
+        && trimmed.len() >= 2
+    {
+        decode_hex_bytes(&trimmed[1..trimmed.len() - 1]).unwrap_or_else(|| trimmed.to_vec())
+    } else {
+        trimmed.to_vec()
+    };
+    decode_pdf_text_bytes(&bytes)
+}
+
+fn unescape_pdf_literal_bytes(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len());
+    let mut i = 0;
+    while i < s.len() {
+        if s[i] != b'\\' {
+            out.push(s[i]);
+            i += 1;
+            continue;
         }
+        i += 1;
+        if i >= s.len() {
+            break;
+        }
+        match s[i] {
+            b'n' => out.push(b'\n'),
+            b'r' => out.push(b'\r'),
+            b't' => out.push(b'\t'),
+            b'b' => out.push(0x08),
+            b'f' => out.push(0x0c),
+            b'(' => out.push(b'('),
+            b')' => out.push(b')'),
+            b'\\' => out.push(b'\\'),
+            b'\r' => {
+                if s.get(i + 1) == Some(&b'\n') {
+                    i += 1;
+                }
+            }
+            b'\n' => {}
+            b'0'..=b'7' => {
+                let mut value = s[i] - b'0';
+                let mut consumed = 1;
+                while consumed < 3 {
+                    let Some(next @ b'0'..=b'7') = s.get(i + consumed).copied() else {
+                        break;
+                    };
+                    value = value.saturating_mul(8).saturating_add(next - b'0');
+                    consumed += 1;
+                }
+                out.push(value);
+                i += consumed - 1;
+            }
+            other => out.push(other),
+        }
+        i += 1;
     }
     out
 }
 
-fn decode_hex_string(s: &str) -> String {
-    let bytes: Vec<u8> = s
-        .as_bytes()
-        .chunks(2)
-        .filter_map(|w| {
-            let hi = (w.first()?).to_ascii_uppercase();
-            let lo = w.get(1).copied().unwrap_or(b'0').to_ascii_uppercase();
-            let h = nibble(hi)?;
-            let l = nibble(lo)?;
-            Some((h << 4) | l)
-        })
-        .collect();
-    String::from_utf8_lossy(&bytes).to_string()
+fn decode_hex_bytes(s: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let mut high: Option<u8> = None;
+    for &b in s {
+        if b.is_ascii_whitespace() {
+            continue;
+        }
+        let n = nibble(b.to_ascii_uppercase())?;
+        if let Some(h) = high.take() {
+            out.push((h << 4) | n);
+        } else {
+            high = Some(n);
+        }
+    }
+    if let Some(h) = high {
+        out.push(h << 4);
+    }
+    Some(out)
+}
+
+fn decode_pdf_text_bytes(bytes: &[u8]) -> String {
+    if bytes.starts_with(&[0xfe, 0xff]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_be_bytes([c[0], c[1]]));
+        String::from_utf16_lossy(&units.collect::<Vec<_>>())
+    } else if bytes.starts_with(&[0xff, 0xfe]) {
+        let units = bytes[2..]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]));
+        String::from_utf16_lossy(&units.collect::<Vec<_>>())
+    } else {
+        String::from_utf8_lossy(bytes).to_string()
+    }
 }
 
 fn nibble(b: u8) -> Option<u8> {
@@ -1054,6 +1668,12 @@ fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack.windows(needle.len()).position(|w| w == needle)
 }
 
+fn find_subslice_case_insensitive(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|w| w.eq_ignore_ascii_case(needle))
+}
+
 fn is_ws(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n' | 0x0c)
 }
@@ -1063,6 +1683,18 @@ fn is_name_char(b: u8) -> bool {
         b,
         b' ' | b'\t' | b'\r' | b'\n' | b'/' | b'<' | b'>' | b'[' | b']' | b'(' | b')' | 0x0c
     )
+}
+
+fn trim_bytes(bytes: &[u8]) -> &[u8] {
+    let mut start = 0;
+    let mut end = bytes.len();
+    while start < end && is_ws(bytes[start]) {
+        start += 1;
+    }
+    while end > start && is_ws(bytes[end - 1]) {
+        end -= 1;
+    }
+    &bytes[start..end]
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -1190,6 +1822,40 @@ trailer\n<<>>\n%%EOF\n";
         assert_eq!(doc.objects[0].stream_filters.len(), 2);
         assert_eq!(doc.objects[0].stream_filters[0], "FlateDecode");
         assert_eq!(doc.objects[0].stream_filters[1], "ASCIIHexDecode");
+        assert_eq!(doc.structural.stream_count, 1);
+    }
+
+    #[test]
+    fn parse_stream_length_mismatch() {
+        let pdf = b"%PDF-1.4\n\
+1 0 obj\n<< /Length 3 >>\nstream\nabcdef\nendstream\nendobj\n\
+trailer\n<<>>\nstartxref\n0\n%%EOF\n";
+        let doc = parse(pdf);
+        assert_eq!(doc.structural.stream_count, 1);
+        assert_eq!(doc.structural.stream_length_mismatch_count, 1);
+        assert_eq!(doc.structural.trailer_count, 1);
+        assert_eq!(doc.structural.startxref_count, 1);
+    }
+
+    #[test]
+    fn parse_stream_missing_length_and_bad_delimiter() {
+        let pdf = b"%PDF-1.4\n\
+1 0 obj\n<< /Filter /FlateDecode >>\nstream abc\nendstream\nendobj\n\
+trailer\n<<>>\n%%EOF\n";
+        let doc = parse(pdf);
+        assert_eq!(doc.structural.stream_count, 1);
+        assert_eq!(doc.structural.stream_missing_length_count, 1);
+        assert_eq!(doc.structural.stream_bad_delimiter_count, 1);
+    }
+
+    #[test]
+    fn parse_stream_missing_endstream() {
+        let pdf = b"%PDF-1.4\n\
+1 0 obj\n<< /Length 4 >>\nstream\ndata\nendobj\n\
+trailer\n<<>>\n%%EOF\n";
+        let doc = parse(pdf);
+        assert_eq!(doc.structural.stream_count, 1);
+        assert_eq!(doc.structural.stream_missing_endstream_count, 1);
     }
 
     /// AcroForm with XFA payload is detected.
@@ -1201,6 +1867,79 @@ trailer\n<<>>\n%%EOF\n";
         let doc = parse(pdf);
         assert!(doc.structural.has_acroform);
         assert!(doc.structural.has_xfa);
+    }
+
+    #[test]
+    fn parse_expands_flate_object_stream() {
+        use flate2::write::ZlibEncoder;
+        use std::io::Write;
+
+        let obj2 = b"<< /Type /Action /S /JavaScript /JS 3 0 R >>";
+        let obj3 = b"(app.alert(\"from objstm\"))";
+        let obj5 = b"<< /Type /Filespec /F (payload.exe) >>";
+        let off2 = 0;
+        let off3 = obj2.len() + 1;
+        let off5 = off3 + obj3.len() + 1;
+        let header = format!("2 {off2} 3 {off3} 5 {off5}\n");
+        let first = header.len();
+        let mut decoded = header.into_bytes();
+        decoded.extend_from_slice(obj2);
+        decoded.push(b'\n');
+        decoded.extend_from_slice(obj3);
+        decoded.push(b'\n');
+        decoded.extend_from_slice(obj5);
+
+        let mut enc = ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+        enc.write_all(&decoded).unwrap();
+        let compressed = enc.finish().unwrap();
+
+        let mut pdf = b"%PDF-1.7\n\
+1 0 obj\n<< /Type /Catalog /OpenAction 2 0 R >>\nendobj\n\
+4 0 obj\n"
+            .to_vec();
+        pdf.extend_from_slice(
+            format!(
+                "<< /Type /ObjStm /N 3 /First {first} /Filter /FlateDecode /Length {} >>\nstream\n",
+                compressed.len()
+            )
+            .as_bytes(),
+        );
+        pdf.extend_from_slice(&compressed);
+        pdf.extend_from_slice(b"\nendstream\nendobj\ntrailer\n<< /Root 1 0 R >>\n%%EOF\n");
+
+        let doc = parse(&pdf);
+        assert_eq!(doc.structural.objstm_count, 1);
+        assert_eq!(doc.structural.object_stream_inner_object_count, 3);
+        assert!(doc
+            .embedded_files
+            .iter()
+            .any(|f| f.filename == "payload.exe"));
+        let js = doc
+            .actions
+            .iter()
+            .find(|a| a.kind == PdfActionKind::JavaScript)
+            .expect("js action present");
+        assert!(
+            js.snippet.contains("from objstm"),
+            "snippet was: {}",
+            js.snippet
+        );
+    }
+
+    #[test]
+    fn info_literal_decodes_utf16be_bom() {
+        let mut pdf = b"%PDF-1.4\n\
+1 0 obj\n<< /Type /Catalog >>\nendobj\n\
+3 0 obj\n<< /Author ("
+            .to_vec();
+        pdf.extend_from_slice(&[0xfe, 0xff, 0x04, 0x14, 0x04, 0x38, 0x04, 0x3c, 0x04, 0x30]);
+        pdf.extend_from_slice(b") >>\nendobj\ntrailer\n<< /Root 1 0 R /Info 3 0 R >>\n%%EOF\n");
+
+        let doc = parse(&pdf);
+        assert_eq!(
+            doc.info.get("Author").map(std::string::String::as_str),
+            Some("Дима")
+        );
     }
 
     /// `/JS <id> <gen> R` resolves to the target object's stream

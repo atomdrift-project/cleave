@@ -15,6 +15,7 @@ use super::language_metrics::{
 };
 use super::lnk_metrics::LnkMetrics;
 use super::office_metrics::OfficeMetrics;
+use super::pdf_metrics::PdfMetrics;
 use super::png_metrics::PngMetrics;
 use super::text_metrics::{
     CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
@@ -154,6 +155,9 @@ pub struct Metrics {
     /// component is detected.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub office: Option<OfficeMetrics>,
+    /// PDF-specific structural and parser coverage metrics.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pdf: Option<PdfMetrics>,
 
     // === Composite scores ===
     /// Composite obfuscation score with component breakdown

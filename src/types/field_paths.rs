@@ -40,6 +40,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
         ShellMetrics,
     };
+    use super::pdf_metrics::PdfMetrics;
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
@@ -171,6 +172,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     for field in LnkMetrics::valid_field_paths() {
         paths.insert(format!("lnk.{}", field));
     }
+    for field in PdfMetrics::valid_field_paths() {
+        paths.insert(format!("pdf.{}", field));
+    }
 
     // Office metrics: cross-format fields plus per-container sub-structs.
     // Sub-structs (`ole`, `ooxml`, `vba`, `xlm`) are flattened so a trait can
@@ -238,6 +242,7 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
         ShellMetrics,
     };
+    use super::pdf_metrics::PdfMetrics;
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
@@ -261,6 +266,7 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     add!("archive", ArchiveMetrics);
     add!("package_json", PackageJsonMetrics);
     add!("chm", ChmMetrics);
+    add!("pdf", PdfMetrics);
     add!("python", PythonMetrics);
     add!("javascript", JavaScriptMetrics);
     add!("powershell", PowerShellMetrics);

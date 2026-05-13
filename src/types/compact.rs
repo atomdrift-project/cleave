@@ -414,21 +414,9 @@ mod formula_tests {
     #[test]
     fn json_formula_excludes_component_and_baseline() {
         let files = vec![file_with(vec![
-            finding(
-                "objectives/c2/http/beacon",
-                Criticality::Notable,
-                0.9,
-            ),
-            finding(
-                "micro-behaviors/fs/file/read",
-                Criticality::Component,
-                0.95,
-            ),
-            finding(
-                "metadata/lang/source",
-                Criticality::Baseline,
-                0.95,
-            ),
+            finding("objectives/c2/http/beacon", Criticality::Notable, 0.9),
+            finding("micro-behaviors/fs/file/read", Criticality::Component, 0.95),
+            finding("metadata/lang/source", Criticality::Baseline, 0.95),
         ])];
 
         let compact = compact_from_files(&files);

@@ -160,16 +160,13 @@ fn header_aligns_formula_arrow_under_label_arrow_single_file() {
     colored::control::unset_override();
 
     let lines: Vec<&str> = out.lines().collect();
-    let header = lines
-        .iter()
-        .find(|l| l.starts_with("diff "))
-        .copied()
-        .expect("header line missing");
-    let formula = lines
-        .iter()
-        .find(|l| l.contains("H(Db)Md(Bk)"))
-        .copied()
-        .expect("formula line missing");
+    let header = lines.iter().find(|l| l.starts_with("diff ")).copied();
+    assert!(header.is_some(), "header line missing");
+    let header = header.unwrap_or_default();
+
+    let formula = lines.iter().find(|l| l.contains("H(Db)Md(Bk)")).copied();
+    assert!(formula.is_some(), "formula line missing");
+    let formula = formula.unwrap_or_default();
     // Compare *codepoint* offsets, not byte offsets — `→` is multibyte.
     let codepoint_col = |s: &str, c: char| s.chars().position(|x| x == c);
     assert_eq!(
@@ -180,7 +177,9 @@ fn header_aligns_formula_arrow_under_label_arrow_single_file() {
 
     // `35.2% changed` MUST start past the formula's last codepoint so the
     // header text doesn't visually overlap the formula line below.
-    let pct_col = codepoint_col(header, '%').expect("header missing '%'");
+    let pct_col = codepoint_col(header, '%');
+    assert!(pct_col.is_some(), "header missing '%'");
+    let pct_col = pct_col.unwrap_or_default();
     let formula_end = formula.chars().count();
     assert!(
         pct_col >= formula_end,
@@ -274,7 +273,10 @@ fn pane_renders_added_file_formula_only() {
         }],
     });
     let out = format_terminal(&r);
-    assert!(out.contains("(added)"), "expected (added) marker in:\n{out}");
+    assert!(
+        out.contains("(added)"),
+        "expected (added) marker in:\n{out}"
+    );
     assert!(out.contains("O(C)"), "expected new formula in:\n{out}");
 }
 

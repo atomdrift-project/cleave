@@ -477,7 +477,7 @@ pub(crate) fn extract_lnk_data(data: &[u8]) -> Option<LnkData> {
     let network_name = link_info
         .as_ref()
         .and_then(|info| info.common_network_relative_link().as_ref())
-        .map(|network| network.name());
+        .map(::lnk::linkinfo::CommonNetworkRelativeLink::name);
 
     // Convert ShowCommand enum to u32
     let show_command = match header.show_command() {

@@ -54,6 +54,13 @@ Known to run awesomely on illumos, OpenBSD, FreeBSD, Linux, and macOS.
 - **Automated RE.** [rizin](https://github.com/rizinorg/rizin)-driven disassembly and xrefs on ELF/Mach-O/PE.
 - **Deterministic.** JSONL streaming, SHA256-keyed cache, AST via tree-sitter, YAML & YARA-X for signatures.
 
+## Docs
+
+- [docs/INTEGRATION.md](docs/INTEGRATION.md) — picking a path: CLI, library, or server
+- [docs/RUST_API.md](docs/RUST_API.md) — Rust library API
+- [docs/SERVER_API.md](docs/SERVER_API.md) — `cleave serve` HTTP endpoints
+- [docs/JSON.md](docs/JSON.md) — JSON report schema
+
 ## Rules
 
 - [cleave-traits](https://codeberg.org/atomdrift/cleave-traits)

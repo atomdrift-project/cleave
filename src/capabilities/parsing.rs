@@ -77,10 +77,27 @@ pub(crate) fn apply_trait_defaults(
                 "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
                     .to_string(),
             );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+            warnings.push(
+                "Invalid file type: 'none' is not valid in 'for:' — every trait must target at \
+                 least one file type. Specify concrete types (elf, python, ...) or named groups \
+                 (binaries, scripts, source, manifests, documents, media, data)."
+                    .to_string(),
+            );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
             "Invalid file type: '' (file default 'for: []' is empty — specify at least one file type)"
+                .to_string(),
+        );
+    } else if defaults
+        .r#for
+        .as_deref()
+        .is_some_and(|v| v.iter().any(|s| s.eq_ignore_ascii_case("none")))
+    {
+        warnings.push(
+            "Invalid file type: 'none' is not valid in file default 'for:' — every trait must \
+             target at least one file type. Specify concrete types or named groups."
                 .to_string(),
         );
     }
@@ -769,10 +786,27 @@ pub(crate) fn apply_composite_defaults(
                 "Invalid file type: '' (empty 'for: []' is not valid — specify at least one file type)"
                     .to_string(),
             );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("none")) {
+            warnings.push(
+                "Invalid file type: 'none' is not valid in 'for:' — every rule must target at \
+                 least one file type. Specify concrete types (elf, python, ...) or named groups \
+                 (binaries, scripts, source, manifests, documents, media, data)."
+                    .to_string(),
+            );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
             "Invalid file type: '' (file default 'for: []' is empty — specify at least one file type)"
+                .to_string(),
+        );
+    } else if defaults
+        .r#for
+        .as_deref()
+        .is_some_and(|v| v.iter().any(|s| s.eq_ignore_ascii_case("none")))
+    {
+        warnings.push(
+            "Invalid file type: 'none' is not valid in file default 'for:' — every rule must \
+             target at least one file type. Specify concrete types or named groups."
                 .to_string(),
         );
     }

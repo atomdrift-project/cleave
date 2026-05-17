@@ -171,9 +171,10 @@ traits:
 
 /// Pattern that matches BOTH the extracted name (`curl_url`) and the
 /// full call expression (`curl_url($url)`) must still count the call
-/// site exactly once. If we naively pushed two Evidence entries (name
-/// + full text) per call node, this would count 2 — corrupting
-/// `count_min`/`per_kb_min` thresholds in dependent rules.
+/// site exactly once. If we naively pushed two Evidence entries per
+/// call node (one for the name, one for the full text), this would
+/// count 2 — corrupting `count_min`/`per_kb_min` thresholds in
+/// dependent rules.
 #[test]
 fn substr_overlap_does_not_double_count_call_site() {
     let (_dir, stdout) = run_with_traits(

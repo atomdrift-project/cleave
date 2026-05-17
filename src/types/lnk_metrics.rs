@@ -69,7 +69,7 @@ pub struct LnkMetrics {
     /// Link header flag: PREFER_ENVIRONMENT_PATH bit is set.
     #[serde(default, skip_serializing_if = "is_false")]
     pub prefer_environment_path: bool,
-    /// Link header flag: KEEP_LOCAL_ID_LIST_FOR_UNC_TARGET bit is set.
+    /// Header flag KEEP_LOCAL_ID_LIST_FOR_UNC_TARGET set
     #[serde(default, skip_serializing_if = "is_false")]
     pub keep_local_id_list_for_unc_target: bool,
     /// ExtraData contains a TrackerDataBlock.

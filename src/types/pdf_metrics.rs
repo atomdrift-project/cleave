@@ -78,13 +78,13 @@ pub struct PdfMetrics {
     /// Streams using JBIG2, LZW, or Crypt filters.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub streams_with_unusual_filter_count: u32,
-    /// Objects that declare a PDF signature object or signature form field.
+    /// Objects declaring a signature or signature form field
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub signature_object_count: u32,
     /// `/ByteRange` entries observed in the raw PDF.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub byte_range_count: u32,
-    /// Incremental updates present in a signed PDF (`%%EOF` count minus one).
+    /// Incremental updates in a signed PDF (`%%EOF`-1)
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub signed_incremental_update_count: u32,
     /// Streams using `/JBIG2Decode`.
@@ -102,16 +102,16 @@ pub struct PdfMetrics {
     /// Form fields with a zero-area rectangle.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub hidden_zero_rect_field_count: u32,
-    /// Non-signature form fields whose `/T` name repeats beyond the first instance.
+    /// Non-signature form fields with repeated `/T` name
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub duplicate_form_name_count: u32,
-    /// Non-signature form fields whose rectangle repeats beyond the first instance.
+    /// Non-signature form fields with repeated rectangle
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub duplicate_form_rect_count: u32,
-    /// Non-signature form fields with the same name and rectangle repeated.
+    /// Non-signature fields repeating name and rectangle
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub duplicate_form_name_rect_count: u32,
-    /// Pairs of non-signature form fields with overlapping rectangles.
+    /// Pairs of non-signature fields with overlapping rects
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub overlapping_form_field_pair_count: u32,
     /// Largest decoded form-field value length.

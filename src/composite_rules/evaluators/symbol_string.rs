@@ -923,60 +923,91 @@ pub(crate) fn eval_raw<'a>(
             }
         }
     } else if let Some(exact_str) = exact {
-        // Full string match - OPTIMIZED: byte-level comparison for ASCII
-        if can_use_byte_matching(exact_str) {
-            // Fast path: Byte-level exact match (no UTF-8 conversion needed!)
-            let matched = if case_insensitive {
-                search_data.eq_ignore_ascii_case(exact_str.as_bytes())
+        // Per-line equality: the pattern must equal some trimmed line in `search_data`.
+        //
+        // This mirrors extracted-strings mode (where `exact` compares against a complete
+        // extracted string) by treating each line as the unit of equality for raw text.
+        // Pattern-as-substring within a line is `substr:`; pattern-as-token is regex.
+        //
+        // ASCII-only patterns can be compared byte-wise without UTF-8 conversion. The
+        // line splitter walks `search_data` directly and yields each line's (start, end)
+        // byte range so trimmed comparison stays allocation-free in the ASCII fast path.
+        let case_i = case_insensitive;
+        let ascii_path = can_use_byte_matching(exact_str);
+        let pat_bytes = exact_str.as_bytes();
+        let mut first_offset: Option<u64> = None;
+        let mut first_value: Option<String> = None;
+
+        let mut line_start = 0usize;
+        while line_start <= search_data.len() {
+            let line_end = memchr::memchr(b'\n', &search_data[line_start..])
+                .map(|p| line_start + p)
+                .unwrap_or(search_data.len());
+
+            // Strip trailing \r (CRLF) and surrounding ASCII whitespace.
+            let mut s = line_start;
+            let mut e = line_end;
+            if e > s && search_data[e - 1] == b'\r' {
+                e -= 1;
+            }
+            while s < e && (search_data[s] as char).is_ascii_whitespace() {
+                s += 1;
+            }
+            while e > s && (search_data[e - 1] as char).is_ascii_whitespace() {
+                e -= 1;
+            }
+            let line_bytes = &search_data[s..e];
+
+            let line_matches = if ascii_path {
+                if case_i {
+                    line_bytes.eq_ignore_ascii_case(pat_bytes)
+                } else {
+                    line_bytes == pat_bytes
+                }
             } else {
-                search_data == exact_str.as_bytes()
+                // Unicode pattern: convert this line only.
+                match std::str::from_utf8(line_bytes) {
+                    Ok(line_str) => {
+                        if case_i {
+                            line_str.eq_ignore_ascii_case(exact_str)
+                        } else {
+                            line_str == exact_str
+                        }
+                    }
+                    Err(_) => false,
+                }
             };
 
-            // When is: validator is set, only convert to string for validation if needed
-            let is_ok = validate_match(&String::from_utf8_lossy(search_data), is_check);
-
-            let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
-                .unwrap_or(false);
-
-            if matched && is_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                match_count = 1;
-                evidence.push(Evidence {
-                    method: "raw".to_string(),
-                    source: "raw_content".to_string(),
-                    value: format!("Exact match: {}", exact_str),
-                    location: None,
-                    offsets: vec![search_start as u64],
-                    ..Default::default()
-                });
+            if line_matches {
+                let line_value = String::from_utf8_lossy(line_bytes).to_string();
+                let is_ok = validate_match(&line_value, is_check);
+                let excluded_by_not = not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&line_value)))
+                    .unwrap_or(false);
+                if is_ok && !excluded_by_not {
+                    match_count += 1;
+                    if first_offset.is_none() {
+                        first_offset = Some((search_start + s) as u64);
+                        first_value = Some(line_value);
+                    }
+                }
             }
-        } else {
-            // Unicode pattern - use cached UTF-8 conversion
-            let content =
-                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
 
-            let matched = if case_insensitive {
-                content.eq_ignore_ascii_case(exact_str)
-            } else {
-                content.as_ref() == exact_str
-            };
-
-            let is_ok = validate_match(&content, is_check);
-            let excluded_by_not = not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
-                .unwrap_or(false);
-
-            if matched && is_ok && !excluded_by_not && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                match_count = 1;
-                evidence.push(Evidence {
-                    method: "raw".to_string(),
-                    source: "raw_content".to_string(),
-                    value: format!("Exact match: {}", exact_str),
-                    location: None,
-                    offsets: vec![search_start as u64],
-                    ..Default::default()
-                });
+            if line_end == search_data.len() {
+                break;
             }
+            line_start = line_end + 1;
+        }
+
+        if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "raw".to_string(),
+                source: "raw_content".to_string(),
+                value: first_value.unwrap_or_else(|| exact_str.clone()),
+                location: None,
+                offsets: first_offset.into_iter().collect(),
+                ..Default::default()
+            });
         }
     } else if let Some(substr_str) = substr {
         // Substring match - OPTIMIZED: use byte-level search for ASCII patterns

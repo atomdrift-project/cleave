@@ -1799,6 +1799,28 @@ pub fn run(
             }
             cli::SearchType::Text => {
                 if internal_file_type.uses_raw_text_search() {
+                    // For raw-text mode, `type: text exact:` matches a complete trimmed line.
+                    // If the pattern appears as substring but never as a standalone line, the
+                    // author almost certainly wanted `substr:` or a word-boundary regex.
+                    if method == cli::MatchMethod::Exact {
+                        let needle = if case_insensitive {
+                            pattern.to_ascii_lowercase()
+                        } else {
+                            pattern.to_string()
+                        };
+                        let haystack = if case_insensitive {
+                            String::from_utf8_lossy(binary_data).to_ascii_lowercase()
+                        } else {
+                            String::from_utf8_lossy(binary_data).to_string()
+                        };
+                        let substr_hits = haystack.matches(needle.as_str()).count();
+                        if substr_hits > 0 {
+                            output.push_str(&format!(
+                                "  Pattern appears {substr_hits} time(s) as substring but never as a standalone line.\n  In raw-text mode (source files, manifests), `text exact:` matches a complete trimmed line.\n  Did you want `--method contains`, or `--method regex` with `\\b...\\b`?\n"
+                            ));
+                        }
+                    }
+
                     let ast_literal_matches = {
                         let strings: Vec<&str> = report
                             .strings

@@ -661,6 +661,49 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset,
                 *section_offset_range,
             ),
+            Condition::Text {
+                exact,
+                substr,
+                regex,
+                case_insensitive,
+                ..
+            } => {
+                let desc = describe_condition(condition);
+                let result = evaluate_condition_simple(condition, &ctx);
+                let mut debug = ConditionDebugResult::new(desc, result.matched)
+                    .with_evidence(result.evidence);
+                // When a raw-text-mode file fails `text exact:` but the pattern is present as
+                // substring, surface the per-line semantic explicitly. Authors hit this when
+                // they expect `exact:` to find an identifier anywhere in source code.
+                if !result.matched
+                    && self.file_type.uses_raw_text_search()
+                    && exact.is_some()
+                    && substr.is_none()
+                    && regex.is_none()
+                {
+                    if let Some(pat) = exact {
+                        let hit = if *case_insensitive {
+                            String::from_utf8_lossy(self.binary_data)
+                                .to_ascii_lowercase()
+                                .contains(&pat.to_ascii_lowercase())
+                        } else {
+                            String::from_utf8_lossy(self.binary_data).contains(pat.as_str())
+                        };
+                        if hit {
+                            debug.details.push(format!(
+                                "💡 '{pat}' appears as substring but never as a standalone line."
+                            ));
+                            debug.details.push(
+                                "   In raw-text mode (source/manifests), `text exact:` matches a complete trimmed line.".to_string(),
+                            );
+                            debug.details.push(
+                                "   Use `substr:` to match anywhere in the file, or `regex: '\\b<pat>\\b'` for word-boundary match.".to_string(),
+                            );
+                        }
+                    }
+                }
+                debug
+            }
             _ => {
                 // Generic fallback for other condition types
                 let desc = describe_condition(condition);

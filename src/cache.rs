@@ -306,6 +306,13 @@ pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
 /// Keyed on the newest `.yaml`/`.yml` trait file mtime (third-party directory excluded),
 /// so YARA-only rule updates do not force a trait mapper rebuild.
 /// Falls back to binary mtime when no YAML files exist.
+///
+/// Also incorporates a short hash of the absolute traits-directory path so that
+/// distinct trait roots — `--traits-dir /tmp/A/traits` vs `/tmp/B/traits` — never
+/// collide on the same cache file. Without this discriminator, parallel test
+/// processes (or any two cleave invocations against different `--traits-dir`
+/// values whose newest YAML mtime rounds to the same second) could read each
+/// other's compiled mapper.
 pub(crate) fn mapper_cache_key() -> Result<String> {
     let mtime = most_recent_yaml_file()
         .map(|(t, _)| t)
@@ -316,8 +323,25 @@ pub(crate) fn mapper_cache_key() -> Result<String> {
         .as_secs();
 
     let version = env!("CARGO_PKG_VERSION");
+    let dir_tag = traits_dir_tag();
 
-    Ok(format!("capability-mapper-v5-{version}-{timestamp}.bin",))
+    Ok(format!(
+        "capability-mapper-v5-{version}-{dir_tag}-{timestamp}.bin"
+    ))
+}
+
+/// Short stable tag for the active traits directory, suitable for cache keys.
+/// Uses the absolute canonical path to discriminate concurrent processes that
+/// each pass `--traits-dir` at distinct locations.
+fn traits_dir_tag() -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let path = traits_path();
+    let canonical = std::fs::canonicalize(&path).unwrap_or(path);
+    let mut h = DefaultHasher::new();
+    canonical.hash(&mut h);
+    // 8 hex chars is enough discrimination for a filename component without bloating it.
+    format!("{:08x}", (h.finish() & 0xFFFF_FFFF) as u32)
 }
 
 /// Get the path to the capability mapper cache file

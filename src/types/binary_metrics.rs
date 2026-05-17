@@ -359,29 +359,33 @@ pub struct BinaryMetrics {
     pub embedded_file_count: u32,
 
     // === Cross-format security signals (Tier C) ===
-    /// Signed binary whose leaf cert subject CN looks like an
-    /// individual person's name (FIRSTNAME LASTNAME pattern, no
-    /// `O=` org). Catches the BEACH JOHN WILLIAM / cert-theft
-    /// pattern observed in supply-chain malware. Set during cert
-    /// extraction for any signed binary (PE Authenticode, Mach-O
-    /// Developer ID).
+    /// Cert leaf CN looks like a person's name
+    ///
+    /// Signed binary whose leaf cert subject CN matches FIRSTNAME LASTNAME
+    /// (no `O=` org). Catches the BEACH JOHN WILLIAM / cert-theft pattern
+    /// observed in supply-chain malware. Set during cert extraction for
+    /// any signed binary (PE Authenticode, Mach-O Developer ID).
     #[serde(default, skip_serializing_if = "is_false")]
     pub signed_with_individual_cert: bool,
+    /// Executable stack permitted by loader
+    ///
     /// Stack permissions allow execution. Cross-format equivalent of
     /// PE's NX-disabled scenario: ELF PT_GNU_STACK with PF_X, Mach-O
     /// MH_ALLOW_STACK_EXECUTION flag, etc. Counterpart to NX (ELF
     /// `nx_enabled`) so trait authors can write one rule.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_executable_stack: bool,
-    /// Entry point falls inside a writable loadable region across
-    /// any binary format. Derives from `pe.entry_in_writable_section`,
+    /// Entry point in writable loadable region
+    ///
+    /// Cross-format: derives from `pe.entry_in_writable_section`,
     /// `elf.entry_in_writable_segment`, or
     /// `macho.entry_in_writable_segment`. Lets trait authors write a
     /// single rule for "EP in writable region" regardless of format.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_writable_region: bool,
-    /// Number of overlapping sections / segments across any binary
-    /// format. Sums `pe.section_overlap_count`,
+    /// Count of overlapping sections/segments
+    ///
+    /// Cross-format sum of `pe.section_overlap_count`,
     /// `elf.segment_overlap_count`, and
     /// `macho.segment_overlap_count` (whichever applies).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -420,7 +424,7 @@ pub struct BinaryMetrics {
     /// Normalized string count: strings / sqrt(code_size)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub normalized_string_count: f32,
-    /// Code section ratio: executable_section_count / total_sections
+    /// Code section ratio (exec sections / total sections)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub code_section_ratio: f32,
     /// Complexity per KB: avg_complexity * 1024 / code_size
@@ -728,8 +732,10 @@ pub struct ElfMetrics {
     /// .gnu_debuglink section present
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_debuglink: bool,
-    /// `.rustc` section present — explicit Rust-crate-metadata marker.
-    /// Independent signal from import-based Rust runtime detection.
+    /// `.rustc` section present (Rust metadata marker)
+    ///
+    /// Explicit Rust-crate-metadata marker. Independent signal from
+    /// import-based Rust runtime detection.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_rustc_section: bool,
     /// Number of debug-related sections
@@ -765,220 +771,283 @@ pub struct ElfMetrics {
     pub ifunc_count: u32,
 
     // === Segment / EP anomalies (Tier A — PE-equivalent signals) ===
-    /// Entry point falls inside a PT_LOAD segment with PF_W set.
+    /// Entry point in writable PT_LOAD (PF_W set)
+    ///
     /// Loadable writable+executable regions containing the EP are the
     /// textbook self-modifying / unpacker-stub fingerprint.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_writable_segment: bool,
-    /// Entry point RVA does not fall in any PT_LOAD segment. Strong
-    /// header-tampering signal — the loader will fail or jump to
+    /// Entry point RVA outside all PT_LOAD segments
+    ///
+    /// Strong header-tampering signal — the loader will fail or jump to
     /// unmapped memory.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_outside_segments: bool,
-    /// Entry point falls in the PT_LOAD with the highest p_vaddr.
+    /// Entry point in last PT_LOAD (highest p_vaddr)
+    ///
     /// Benign on UPX-style packed binaries (the unpacker stub appends
     /// itself); suspicious on otherwise-normal vendor binaries.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_last_segment: bool,
-    /// Number of PT_LOAD segments with both PF_W and PF_X set —
-    /// directly loadable writable+executable regions. Modern toolchains
-    /// emit zero. Counterpart to PE's `wx_section_count`.
+    /// Count of W+X PT_LOAD segments
+    ///
+    /// PT_LOAD segments with both PF_W and PF_X — directly loadable
+    /// writable+executable regions. Modern toolchains emit zero.
+    /// Counterpart to PE's `wx_section_count`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub wx_segment_count: u32,
-    /// PT_GNU_STACK is present with PF_X set — executable stack.
-    /// Modern toolchains emit RW-only stack; X-stack on a recent build
-    /// is hand-crafted or extremely old.
+    /// PT_GNU_STACK marks stack as executable
+    ///
+    /// `PT_GNU_STACK` present with PF_X set. Modern toolchains emit
+    /// RW-only stack; X-stack on a recent build is hand-crafted or
+    /// extremely old.
     #[serde(default, skip_serializing_if = "is_false")]
     pub executable_stack: bool,
+    /// Count of overlapping PT_LOAD segment pairs
+    ///
     /// Number of PT_LOAD pairs with overlapping virtual address ranges.
     /// Legitimate ELFs never overlap; pefile-style parser confusion.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub segment_overlap_count: u32,
+    /// Names of overlapping PT_LOAD segments
+    ///
     /// Names ("PT_LOAD#N") of segments involved in any overlap.
     /// Carrier — surfaced via kv `elf.overlapping_segments[]`.
     #[serde(default, skip_serializing)]
     pub overlapping_segments: Vec<String>,
+    /// Gap between program headers and first PT_LOAD
+    ///
     /// Bytes between (ELF header + program headers) end and the first
     /// PT_LOAD's p_offset. Non-zero gap is a "header cave" — empty
     /// space the loader maps but tools may skip.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub first_segment_gap: u32,
-    /// `e_shnum` from ELF header disagrees with the actually-walked
-    /// section table count. Either the header lies or the parser
-    /// truncated; both indicate header tampering.
+    /// `e_shnum` disagrees with walked section count
+    ///
+    /// Either the header lies or the parser truncated; both indicate
+    /// header tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub section_header_count_mismatch: bool,
+    /// Multiple PT_INTERP segments (malformed)
+    ///
     /// More than one PT_INTERP segment is malformed per ELF spec.
     /// A strict tampering signal — should always be 0 or 1.
     #[serde(default, skip_serializing_if = "is_false")]
     pub multiple_pt_interp: bool,
 
     // === Dynamic-section anomalies (Tier B) ===
-    /// `DT_NEEDED` names the dynamic loader directly (`ld-linux-*`,
-    /// `ld-musl-*`, `ld.so`, `ld64.so`). Loader libs are normally
-    /// pulled in transitively by libc; an explicit dependency is
-    /// rare outside statically-linked glibc internals and the
-    /// xz 5.6.0 backdoor.
+    /// DT_NEEDED names the dynamic loader directly
+    ///
+    /// `DT_NEEDED` references `ld-linux-*`, `ld-musl-*`, `ld.so`, or
+    /// `ld64.so`. Loader libs are normally pulled in transitively by
+    /// libc; an explicit dependency is rare outside statically-linked
+    /// glibc internals and the xz 5.6.0 backdoor.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_direct_loader_dep: bool,
-    /// DT_AUDIT present — installs LD_AUDIT-style hooks that execute
-    /// before main(). Classic library-injection persistence vector.
+    /// DT_AUDIT present (LD_AUDIT pre-main hooks)
+    ///
+    /// Installs LD_AUDIT-style hooks that execute before main().
+    /// Classic library-injection persistence vector.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dt_audit: bool,
-    /// DT_DEPAUDIT present — same but for the binary's dependencies.
+    /// DT_DEPAUDIT present (audit hooks for deps)
+    ///
+    /// Same as `has_dt_audit` but for the binary's dependencies.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dt_depaudit: bool,
-    /// DT_RUNPATH starts with `$ORIGIN`. Common on portable binaries
-    /// but worth surfacing for trait authors writing portability /
-    /// supply-chain rules.
+    /// DT_RUNPATH begins with `$ORIGIN`
+    ///
+    /// Common on portable binaries but worth surfacing for trait
+    /// authors writing portability / supply-chain rules.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dt_runpath_uses_origin: bool,
+    /// Count of DT_NEEDED entries with absolute paths
+    ///
     /// DT_NEEDED entries whose name starts with `/` (absolute path).
     /// Bare names are the norm; absolute paths are deliberate
     /// redirection of the dynamic loader.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dt_needed_abs_path_count: u32,
-    /// DT_NEEDED entries containing `..` path traversal. Strong
-    /// indicator of an attempt to escape rpath sandboxing.
+    /// Count of DT_NEEDED entries with `..` traversal
+    ///
+    /// Strong indicator of an attempt to escape rpath sandboxing.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dt_needed_traversal_count: u32,
-    /// Raw DT_FLAGS_1 bitfield. Common bits: NOW, GLOBAL, NODELETE,
-    /// NOOPEN, ORIGIN, INITFIRST, NODEFLIB, PIE, NODIRECT, SYMINTPOSE.
-    /// Decoded named flags surface via kv `elf.dt_flags_1.*`.
+    /// Raw DT_FLAGS_1 dynamic-section bitfield
+    ///
+    /// Common bits: NOW, GLOBAL, NODELETE, NOOPEN, ORIGIN, INITFIRST,
+    /// NODEFLIB, PIE, NODIRECT, SYMINTPOSE. Decoded named flags
+    /// surface via kv `elf.dt_flags_1.*`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dt_flags_1: u32,
 
     // === Section name / flag anomalies ===
-    /// `.note.GNU-stack` section is absent. Modern toolchains emit it
-    /// to mark stack permissions; absence on a recent build = old
-    /// toolchain or hand-crafted ELF.
+    /// `.note.GNU-stack` section absent
+    ///
+    /// Modern toolchains emit it to mark stack permissions; absence on
+    /// a recent build = old toolchain or hand-crafted ELF.
     #[serde(default, skip_serializing_if = "is_false")]
     pub gnu_stack_section_absent: bool,
-    /// Both `.gnu.hash` AND `.hash` sections present. Modern binaries
-    /// use one or the other; both is unusual (legacy compatibility
-    /// linker option, rare in shipped binaries).
+    /// Both `.gnu.hash` and `.hash` sections present
+    ///
+    /// Modern binaries use one or the other; both is unusual (legacy
+    /// compatibility linker option, rare in shipped binaries).
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_both_hash_tables: bool,
+    /// Count of duplicate section names
+    ///
     /// Number of section names that appear more than once in the
     /// section table. Duplicates are deliberate parser confusion.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub duplicate_section_name_count: u32,
 
     // === Modern hardening markers (NT_GNU_PROPERTY_TYPE_0) ===
-    /// `GNU_PROPERTY_X86_FEATURE_1_AND` IBT bit set — Intel CET
-    /// indirect-branch tracking enabled. Modern x86_64 toolchains
-    /// (gcc/clang ≥9) emit this; absence on a recent build = old
-    /// toolchain or hand-crafted ELF. Counterpart of PE's
+    /// Intel CET indirect-branch tracking (IBT) set
+    ///
+    /// `GNU_PROPERTY_X86_FEATURE_1_AND` IBT bit set. Modern x86_64
+    /// toolchains (gcc/clang ≥9) emit this; absence on a recent build
+    /// = old toolchain or hand-crafted ELF. Counterpart of PE's
     /// `pe.dll_characteristics.guard_cf`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_cet_ibt: bool,
-    /// `GNU_PROPERTY_X86_FEATURE_1_AND` SHSTK bit set — Intel CET
-    /// shadow stack support. Same toolchain-recency signal as
-    /// `has_cet_ibt`.
+    /// Intel CET shadow stack (SHSTK) bit set
+    ///
+    /// `GNU_PROPERTY_X86_FEATURE_1_AND` SHSTK bit set. Same
+    /// toolchain-recency signal as `has_cet_ibt`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_cet_shstk: bool,
-    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` BTI bit set — ARM Branch
-    /// Target Identification. Required on Apple Silicon shipping
-    /// binaries and modern Linux arm64 builds.
+    /// ARM Branch Target Identification (BTI) set
+    ///
+    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` BTI bit set. Required on
+    /// Apple Silicon shipping binaries and modern Linux arm64 builds.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_aarch64_bti: bool,
-    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` PAC bit set — ARM Pointer
-    /// Authentication. Required on Apple Silicon; modern arm64 Linux.
+    /// ARM Pointer Authentication (PAC) bit set
+    ///
+    /// `GNU_PROPERTY_AARCH64_FEATURE_1_AND` PAC bit set. Required on
+    /// Apple Silicon; modern arm64 Linux.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_aarch64_pac: bool,
-    /// Minimum kernel version string from `NT_GNU_ABI_TAG`
-    /// (`"3.2.0"`, `"4.4.0"`, …). Claiming compatibility with very old
+    /// Minimum kernel version from NT_GNU_ABI_TAG
+    ///
+    /// E.g. `"3.2.0"`, `"4.4.0"`. Claiming compatibility with very old
     /// kernels on a recent build is a portable-malware indicator.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gnu_abi_min_kernel: Option<String>,
 
     // === Tier A extensions (modern toolchain / hardening posture) ===
-    /// `DT_RELR` / `DT_RELRSZ` present — RELR compressed relocations.
-    /// glibc 2.36+, lld 13+, gcc/binutils 2.38+ feature. Strong "modern
-    /// toolchain" marker; absent on hand-crafted ELF or static glibc.
+    /// DT_RELR present (compressed relocations)
+    ///
+    /// `DT_RELR` / `DT_RELRSZ` present. glibc 2.36+, lld 13+,
+    /// gcc/binutils 2.38+ feature. Strong "modern toolchain" marker;
+    /// absent on hand-crafted ELF or static glibc.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dt_relr: bool,
+    /// Count of DT_PREINIT_ARRAY functions
+    ///
     /// `DT_PREINIT_ARRAYSZ` / pointer-size — number of preinit
     /// functions. Run BEFORE `init_array`; legitimate binaries rarely
     /// use this beyond glibc itself, so non-zero values on user code
     /// are a common malware injection vector.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dt_preinit_array_count: u32,
-    /// `DT_DEBUG` present with non-zero `d_un` value — the rtld_db
-    /// pointer field. Should be 0 on a binary read from disk; a
-    /// non-zero value in a static dump is unusual.
+    /// DT_DEBUG carries non-zero rtld_db pointer
+    ///
+    /// `DT_DEBUG` present with non-zero `d_un` value. Should be 0 on a
+    /// binary read from disk; a non-zero value in a static dump is
+    /// unusual.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dt_debug: bool,
-    /// `DT_VERSYM` entries (versioned-symbol table) count. Modern
-    /// glibc binaries always have versioned symbols; absence on a
-    /// dynamically-linked Linux binary points to musl, custom static
+    /// Count of DT_VERSYM versioned-symbol entries
+    ///
+    /// Modern glibc binaries always have versioned symbols; absence on
+    /// a dynamically-linked Linux binary points to musl, custom static
     /// link, or hand-crafted ELF.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dt_versym_count: u32,
-    /// Minimum x86 ISA level from `GNU_PROPERTY_X86_ISA_1_NEEDED`
-    /// decoded into `"x86-64"`, `"x86-64-v2"`, `"x86-64-v3"`,
-    /// `"x86-64-v4"`. Catches "this binary requires AVX2" detection.
+    /// Minimum x86 ISA level required
+    ///
+    /// Decoded from `GNU_PROPERTY_X86_ISA_1_NEEDED` into `"x86-64"`,
+    /// `"x86-64-v2"`, `"x86-64-v3"`, `"x86-64-v4"`. Catches "this
+    /// binary requires AVX2" detection.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub x86_isa_level: Option<String>,
+    /// AArch64 pointer-auth scheme name
+    ///
     /// `GNU_PROPERTY_AARCH64_FEATURE_PAUTH` decoded — pointer-auth
     /// scheme platform/version (`"llvm.0"`, `"darwin"`, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pauth_scheme: Option<String>,
-    /// Number of sections with `SHF_COMPRESSED` flag — usually
-    /// compressed debug info. Presence = recent toolchain.
+    /// Count of SHF_COMPRESSED sections
+    ///
+    /// Usually compressed debug info. Presence = recent toolchain.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compressed_sections_count: u32,
-    /// Count of imported `__*_chk` symbols (`__memcpy_chk`,
-    /// `__sprintf_chk`, `__strcpy_chk`, etc.). FORTIFY_SOURCE
-    /// instrumentation. High counts indicate `-D_FORTIFY_SOURCE=2`
-    /// builds; absence on an otherwise-modern binary suggests
-    /// downgraded security.
+    /// Count of imported `__*_chk` (FORTIFY_SOURCE) symbols
+    ///
+    /// E.g. `__memcpy_chk`, `__sprintf_chk`, `__strcpy_chk`.
+    /// FORTIFY_SOURCE instrumentation. High counts indicate
+    /// `-D_FORTIFY_SOURCE=2` builds; absence on an otherwise-modern
+    /// binary suggests downgraded security.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub fortify_source_used: u32,
-    /// `DT_RELACOUNT` value — number of relative relocations. Non-zero
-    /// on PIE binaries; absence on an ostensibly-PIE binary is unusual.
+    /// DT_RELACOUNT — relative relocation count
+    ///
+    /// Non-zero on PIE binaries; absence on an ostensibly-PIE binary
+    /// is unusual.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub relacount: u32,
-    /// Detected linker family from `.comment` content + dynamic-tag
-    /// shape: `"gnu_ld"`, `"gold"`, `"lld"`, `"mold"`, or `None` when
-    /// the binary lacks a `.comment` section.
+    /// Detected linker family (gnu_ld/gold/lld/mold)
+    ///
+    /// Inferred from `.comment` content + dynamic-tag shape, or `None`
+    /// when the binary lacks a `.comment` section.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub linker_family: Option<String>,
 
     // === Structured kv carriers (kv-only — surfaced via binary_kv.rs) ===
-    /// Per-segment summary (PT_LOAD focused). Carrier — surfaced via
-    /// kv `elf.segments[]` so trait authors can match individual
-    /// segment permissions / extents.
+    /// Per-segment summary (PT_LOAD focused)
+    ///
+    /// Carrier — surfaced via kv `elf.segments[]` so trait authors can
+    /// match individual segment permissions / extents.
     #[serde(default, skip_serializing)]
     pub segment_entries: Vec<ElfSegmentEntry>,
-    /// `.text` section carries SHF_WRITE — section was deliberately
-    /// marked writable. Modern toolchains never emit this.
+    /// `.text` section marked SHF_WRITE
+    ///
+    /// Section was deliberately marked writable. Modern toolchains
+    /// never emit this.
     #[serde(default, skip_serializing_if = "is_false")]
     pub text_section_writable: bool,
-    /// `.rodata` section carries SHF_WRITE — read-only data section
-    /// is in fact writable. Strong flag-tampering signal.
+    /// `.rodata` section marked SHF_WRITE
+    ///
+    /// Read-only data section is in fact writable. Strong
+    /// flag-tampering signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub rodata_writable: bool,
-    /// ELF stripped of debug sections but `.symtab` is still present.
-    /// `strip --strip-all` removes both; default `strip` keeps `.symtab`.
-    /// Presence on a "stripped"-looking release binary indicates
-    /// inconsistent stripping by the build pipeline.
+    /// Stripped binary still carries `.symtab`
+    ///
+    /// `strip --strip-all` removes both; default `strip` keeps
+    /// `.symtab`. Presence on a "stripped"-looking release binary
+    /// indicates inconsistent stripping by the build pipeline.
     #[serde(default, skip_serializing_if = "is_false")]
     pub stripped_but_symtab_present: bool,
-    /// More than one distinct DW_AT_producer string — multiple
-    /// compilers contributed to a single output. Normal in some
-    /// legitimate cases (Rust calling C); suspicious for vendor
-    /// release binaries.
+    /// Multiple distinct DW_AT_producer strings
+    ///
+    /// More than one compiler contributed to a single output. Normal
+    /// in some legitimate cases (Rust calling C); suspicious for
+    /// vendor release binaries.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dwarf_mixed_producers: bool,
-    /// More than one distinct DW_AT_comp_dir directory — CUs were
-    /// compiled from different source roots. Suspicious in vendor
-    /// releases that should have a single canonical build root.
+    /// Multiple distinct DW_AT_comp_dir directories
+    ///
+    /// CUs were compiled from different source roots. Suspicious in
+    /// vendor releases that should have a single canonical build root.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dwarf_mixed_comp_dirs: bool,
-    /// `build.distro` plus observed `build.toolchain` is a
-    /// combination that doesn't exist as default in any released
-    /// distro version. Strong "the .comment was tampered with" signal.
+    /// Distro + toolchain combination implausible
+    ///
+    /// `build.distro` plus observed `build.toolchain` is a combination
+    /// that doesn't exist as default in any released distro version.
+    /// Strong "the .comment was tampered with" signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub distro_toolchain_implausible: bool,
 }
@@ -1382,15 +1451,16 @@ pub struct PeMetrics {
     /// into a previously-signed binary" attack pattern.
     #[serde(default, skip_serializing_if = "is_false")]
     pub signature_digest_mismatch: bool,
-    /// Authentihash computed with SHA-1 (legacy Authenticode). Used
-    /// internally for digest-mismatch verification when the signature
-    /// claims SHA-1; never serialized.
+    /// SHA-1 Authentihash (legacy Authenticode)
+    ///
+    /// Used internally for digest-mismatch verification when the
+    /// signature claims SHA-1; never serialized.
     #[serde(skip)]
     pub authentihash_sha1: Option<String>,
-    /// Authentihash computed with SHA-384. Internal verification only.
+    /// SHA-384 Authentihash (internal verification only)
     #[serde(skip)]
     pub authentihash_sha384: Option<String>,
-    /// Authentihash computed with SHA-512. Internal verification only.
+    /// SHA-512 Authentihash (internal verification only)
     #[serde(skip)]
     pub authentihash_sha512: Option<String>,
     /// SignerInfo issuer CN identifying the actual signing cert
@@ -1453,17 +1523,23 @@ pub struct PeMetrics {
     /// the recomputed Authentihash with that algorithm.
     #[serde(default, skip_serializing_if = "is_false")]
     pub nested_signature_digest_mismatch: bool,
+    /// SignerInfo signature failed verification
+    ///
     /// `has_signature && signature_verified == Some(false)` — the
     /// SignerInfo signature exists but doesn't validate against the
     /// leaf cert pubkey. Atomic-trait friendly (avoids `max: 0`
     /// false-positive on unsigned binaries).
     #[serde(default, skip_serializing_if = "is_false")]
     pub signature_verification_failed: bool,
+    /// SignerInfo cert disagrees with heuristic leaf
+    ///
     /// SignerInfo's IssuerAndSerialNumber points at a cert that
-    /// disagrees with the leaf cleave's heuristic picked. Atomic-
-    /// trait friendly counterpart of `signer_info_matches_leaf`.
+    /// disagrees with the leaf cleave's heuristic picked. Atomic-trait
+    /// friendly counterpart of `signer_info_matches_leaf`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub signer_info_mismatches_leaf: bool,
+    /// Nested-signature leaf lacks codeSigning EKU
+    ///
     /// Nested signature is present but its leaf cert isn't authorized
     /// for code signing. Mirrors `non_codesign_leaf`.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1489,44 +1565,57 @@ pub struct PeMetrics {
     /// signal. Carrier — surfaced via kv `pe.rich_header_compids[]`.
     #[serde(default, skip_serializing)]
     pub rich_header_compids: Vec<RichCompId>,
-    /// TLS callback addresses (RVAs). Carrier — surfaced via kv
-    /// `pe.tls_callback_addresses[]` so trait authors can match
-    /// individual callback locations.
+    /// TLS callback addresses (RVAs)
+    ///
+    /// Carrier — surfaced via kv `pe.tls_callback_addresses[]` so
+    /// trait authors can match individual callback locations.
     #[serde(default, skip_serializing)]
     pub tls_callback_addresses: Vec<u32>,
 
     // === Tier A: Load Config v2 fields (Win10+ hardening) ===
-    /// `GuardEHContinuationTable` count from Load Config v2. Modern
-    /// hardened binaries have non-zero values for EH-continuation CFG.
+    /// GuardEHContinuationTable count (Load Config v2)
+    ///
+    /// Modern hardened binaries have non-zero values for
+    /// EH-continuation CFG.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub guard_eh_cont_count: u32,
-    /// `GuardLongJumpTargetTable` count from Load Config v2. Same
-    /// "modern hardening" indicator as `cfg_func_count` was for v1.
+    /// GuardLongJumpTargetTable count (Load Config v2)
+    ///
+    /// Same "modern hardening" indicator as `cfg_func_count` was for
+    /// v1.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub guard_long_jump_target_count: u32,
+    /// DynamicValueRelocTable present (Win10+ relocs)
+    ///
     /// `DynamicValueRelocTable` present in Load Config v2 — Win10+
     /// dynamic-relocation feature.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dynamic_value_reloc_table: bool,
 
     // === Cross-field consistency anomalies (formerly consistency.*) ===
-    /// Authenticode signing cert was *issued* after the binary's
-    /// COFF build timestamp (`leaf_not_before > pe.timestamp`).
-    /// Almost always means an older binary was repackaged and re-
-    /// signed with a newer cert — supply-chain swap signal. Filtered
-    /// against deterministic-build (REPRO) timestamps which can
-    /// legitimately appear in the future.
+    /// Signing cert issued after the build timestamp
+    ///
+    /// Authenticode signing cert was *issued* after the binary's COFF
+    /// build timestamp (`leaf_not_before > pe.timestamp`). Almost
+    /// always means an older binary was repackaged and re-signed with
+    /// a newer cert — supply-chain swap signal. Filtered against
+    /// deterministic-build (REPRO) timestamps which can legitimately
+    /// appear in the future.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cert_issued_after_build: bool,
+    /// Cert org name absent from PDB path
+    ///
     /// No word from the Authenticode `primary_signer` organization
     /// appears as a path component in the PDB path. Vendor binaries
     /// share a brand name between build environment and signing
     /// identity; divergence (e.g. "Ubisoft" cert signing a binary
-    /// whose PDB path says "Unity Technologies") is a strong supply-
-    /// chain swap signal. Only set when both fields are present and
-    /// the signer is non-platform (not Microsoft/Windows).
+    /// whose PDB path says "Unity Technologies") is a strong
+    /// supply-chain swap signal. Only set when both fields are present
+    /// and the signer is non-platform (not Microsoft/Windows).
     #[serde(default, skip_serializing_if = "is_false")]
     pub cert_org_pdb_mismatch: bool,
+    /// Manifest version vs VERSIONINFO mismatch
+    ///
     /// PE side-by-side manifest assembly version disagrees with the
     /// VERSIONINFO ProductVersion. Indicates manifest tampering.
     #[serde(default, skip_serializing_if = "is_false")]
@@ -2052,101 +2141,128 @@ pub struct MachoMetrics {
     pub function_starts_count: u32,
 
     // === Segment / EP anomalies (Tier A — PE-equivalent signals) ===
-    /// Entry point falls inside a segment with VM_PROT_WRITE set.
+    /// Entry point in writable segment (VM_PROT_WRITE)
+    ///
     /// Same self-modifying / unpacker-stub fingerprint as PE's
     /// `entry_in_writable_section`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_writable_segment: bool,
+    /// Entry point outside all LC_SEGMENTs
+    ///
     /// Entry point virtual address does not fall in any LC_SEGMENT.
     /// Header tampering signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_outside_segments: bool,
-    /// Entry point falls in the segment with the highest vmaddr.
+    /// Entry point in last segment (highest vmaddr)
+    ///
     /// UPX-style packers produce this; suspicious otherwise.
     #[serde(default, skip_serializing_if = "is_false")]
     pub entry_in_last_segment: bool,
-    /// Number of segments with both VM_PROT_WRITE and VM_PROT_EXECUTE.
-    /// Modern Mach-O has zero. Counterpart to PE's `wx_section_count`.
+    /// Count of W+X segments (VM_PROT_WRITE|EXECUTE)
+    ///
+    /// Segments with both VM_PROT_WRITE and VM_PROT_EXECUTE. Modern
+    /// Mach-O has zero. Counterpart to PE's `wx_section_count`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub wx_segment_count: u32,
-    /// LC_ENCRYPTION_INFO / LC_ENCRYPTION_INFO_64 with cryptid != 0 —
-    /// the binary carries an encrypted region. Only legitimate in iOS
-    /// App Store binaries (FairPlay DRM); on macOS this is extremely
-    /// unusual and indicates a binary that shouldn't be where it is.
+    /// Encrypted region present (LC_ENCRYPTION_INFO)
+    ///
+    /// `LC_ENCRYPTION_INFO` / `LC_ENCRYPTION_INFO_64` with `cryptid !=
+    /// 0` — the binary carries an encrypted region. Only legitimate in
+    /// iOS App Store binaries (FairPlay DRM); on macOS this is
+    /// extremely unusual and indicates a binary that shouldn't be
+    /// where it is.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_encrypted_section: bool,
-    /// `__PAGEZERO` segment size in bytes. Architecture default is
-    /// `0x1_0000_0000` (4 GB) on x86_64/arm64 and `0x1000` (4 KB) on
-    /// i386. Wrong size = tampered or hand-crafted Mach-O — trait
-    /// authors compare against the expected value rather than reading
-    /// a derived bool.
+    /// `__PAGEZERO` segment size in bytes
+    ///
+    /// Architecture default is `0x1_0000_0000` (4 GB) on x86_64/arm64
+    /// and `0x1000` (4 KB) on i386. Wrong size = tampered or
+    /// hand-crafted Mach-O — trait authors compare against the
+    /// expected value rather than reading a derived bool.
     #[serde(default, skip_serializing_if = "is_zero_u64")]
     pub pagezero_size: u64,
+    /// Count of overlapping segment pairs
+    ///
     /// Number of segments whose virtual address ranges intersect
-    /// another segment's range. Legitimate Mach-O never has overlapping
-    /// segments; same parser-confusion signal as PE / ELF.
+    /// another segment's range. Legitimate Mach-O never has
+    /// overlapping segments; same parser-confusion signal as PE / ELF.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub segment_overlap_count: u32,
-    /// Names of segments involved in any overlap. Carrier — surfaced
-    /// via kv `macho.overlapping_segments[]`.
+    /// Names of overlapping segments
+    ///
+    /// Carrier — surfaced via kv `macho.overlapping_segments[]`.
     #[serde(default, skip_serializing)]
     pub overlapping_segments: Vec<String>,
 
     // === Dylib path anomalies (Tier B/C) ===
-    /// Number of LC_LOAD_DYLIB / LC_LOAD_WEAK_DYLIB entries whose
-    /// install_name doesn't start with `/`, `@executable_path`,
-    /// `@loader_path`, or `@rpath`. Bare names are unusual and
-    /// indicate a non-standard dylib search.
+    /// Count of unrooted dylib install_names
+    ///
+    /// LC_LOAD_DYLIB / LC_LOAD_WEAK_DYLIB entries whose install_name
+    /// doesn't start with `/`, `@executable_path`, `@loader_path`, or
+    /// `@rpath`. Bare names are unusual and indicate a non-standard
+    /// dylib search.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub dylib_path_unrooted_count: u32,
-    /// `@executable_path` referenced inside a Mach-O of type MH_DYLIB.
+    /// `@executable_path` used inside an MH_DYLIB
+    ///
     /// Wrong direction — `@executable_path` only resolves in
     /// executables. Strong indicator of mishandled or tampered dylib.
     #[serde(default, skip_serializing_if = "is_false")]
     pub executable_path_in_dylib: bool,
-    /// `@loader_path` referenced from a Mach-O of type MH_EXECUTE.
+    /// `@loader_path` used inside an MH_EXECUTE
+    ///
     /// Wrong direction — `@loader_path` only meaningfully resolves in
     /// dylibs (resolves to the dylib's own directory).
     #[serde(default, skip_serializing_if = "is_false")]
     pub loader_path_in_executable: bool,
-    /// Number of duplicate LC_LOAD_DYLIB entries (same install_name
-    /// loaded twice). Packing / injection artifact.
+    /// Count of duplicate LC_LOAD_DYLIB entries
+    ///
+    /// Same install_name loaded twice. Packing / injection artifact.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub duplicate_dylib_count: u32,
 
     // === Modern vs legacy markers ===
-    /// LC_DYLD_CHAINED_FIXUPS present (modern macOS 12+ dyld format).
-    /// Counterpart to legacy LC_DYLD_INFO. Cross-release drift between
-    /// these two on the same vendor binary is a build-pipeline change.
+    /// LC_DYLD_CHAINED_FIXUPS present (modern dyld)
+    ///
+    /// macOS 12+ dyld format. Counterpart to legacy LC_DYLD_INFO.
+    /// Cross-release drift between these two on the same vendor binary
+    /// is a build-pipeline change.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_chained_fixups: bool,
     /// LC_DYLD_INFO or LC_DYLD_INFO_ONLY present (legacy format).
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_dyld_info_legacy: bool,
-    /// LC_VERSION_MIN_MACOSX (etc.) present instead of the modern
-    /// LC_BUILD_VERSION. Indicates an old SDK or hand-crafted binary
-    /// — Apple deprecated LC_VERSION_MIN_* in favor of LC_BUILD_VERSION
-    /// in macOS 10.14 (2018).
+    /// Uses legacy LC_VERSION_MIN_* instead of LC_BUILD_VERSION
+    ///
+    /// Indicates an old SDK or hand-crafted binary — Apple deprecated
+    /// LC_VERSION_MIN_* in favor of LC_BUILD_VERSION in macOS 10.14
+    /// (2018).
     #[serde(default, skip_serializing_if = "is_false")]
     pub uses_legacy_version_min: bool,
-    /// Adhoc signature (signature_type = "adhoc") on a binary with
-    /// non-zero source_version or non-test team_identifier — i.e. a
+    /// Adhoc signature on a release-shaped binary
+    ///
+    /// `signature_type = "adhoc"` on a binary with non-zero
+    /// `source_version` or non-test `team_identifier` — i.e. a
     /// release-shaped binary signed without a real Developer ID.
     #[serde(default, skip_serializing_if = "is_false")]
     pub adhoc_on_release_binary: bool,
-    /// Number of LC_DATA_IN_CODE entries — embedded data within
-    /// executable sections (jump tables, string tables, …). High
-    /// counts can indicate jump-table-heavy code or obfuscation.
+    /// Count of LC_DATA_IN_CODE entries
+    ///
+    /// Embedded data within executable sections (jump tables, string
+    /// tables, …). High counts can indicate jump-table-heavy code or
+    /// obfuscation.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub data_in_code_count: u32,
 
     // === Structured kv carriers (kv-only — surfaced via binary_kv.rs) ===
-    /// Per-segment summary (LC_SEGMENT / LC_SEGMENT_64). Carrier —
-    /// surfaced via kv `macho.segments[]`.
+    /// Per-segment summary (LC_SEGMENT / LC_SEGMENT_64)
+    ///
+    /// Carrier — surfaced via kv `macho.segments[]`.
     #[serde(default, skip_serializing)]
     pub segment_entries: Vec<MachoSegmentEntry>,
-    /// Per-dylib load command summary. Carrier — surfaced via kv
-    /// `macho.dylibs[]`.
+    /// Per-dylib load command summary
+    ///
+    /// Carrier — surfaced via kv `macho.dylibs[]`.
     #[serde(default, skip_serializing)]
     pub dylib_entries: Vec<MachoDylibEntry>,
 
@@ -2154,7 +2270,9 @@ pub struct MachoMetrics {
     // Carriers for kv emission only — surface under `hash.{dylib, sym,
     // export, entitlement}`, never in the metrics output. Hashes are
     // values for trait `regex:` / cluster diffing, not ML features.
-    /// Counterpart of PE's `imphash` — sha256 of sorted dylib names.
+    /// SHA-256 of sorted dylib names (Mach-O imphash)
+    ///
+    /// Counterpart of PE's `imphash`.
     #[serde(skip)]
     pub dylib_hash: Option<String>,
     /// sha256 of sorted imported symbol names.
@@ -2168,68 +2286,91 @@ pub struct MachoMetrics {
     pub entitlement_hash: Option<String>,
 
     // === Tier A extensions (header flags, CodeDir flags, modern hardening) ===
-    /// Stack execution explicitly allowed via `MH_ALLOW_STACK_EXECUTION`.
-    /// Counterpart of ELF's `executable_stack`; bridged into the
-    /// cross-format `binary.has_executable_stack` signal.
+    /// MH_ALLOW_STACK_EXECUTION flag set
+    ///
+    /// Stack execution explicitly allowed. Counterpart of ELF's
+    /// `executable_stack`; bridged into the cross-format
+    /// `binary.has_executable_stack` signal.
     #[serde(default, skip_serializing_if = "is_false")]
     pub allow_stack_execution: bool,
-    /// `MH_NO_HEAP_EXECUTION` flag set — modern hardening (no
-    /// executable heap allocations). Most modern binaries set it.
+    /// MH_NO_HEAP_EXECUTION flag set (heap NX)
+    ///
+    /// Modern hardening (no executable heap allocations). Most modern
+    /// binaries set it.
     #[serde(default, skip_serializing_if = "is_false")]
     pub no_heap_execution: bool,
-    /// `MH_APP_EXTENSION_SAFE` flag — app extension can use this binary.
+    /// MH_APP_EXTENSION_SAFE flag set
+    ///
+    /// App extension can use this binary.
     #[serde(default, skip_serializing_if = "is_false")]
     pub app_extension_safe: bool,
-    /// `MH_DYLIB_IN_CACHE` flag set — slice belongs to dyld_shared_cache.
-    /// On a binary read from disk (not the cache itself) this is
-    /// anomalous and indicates a copy-out or extraction artifact.
+    /// MH_DYLIB_IN_CACHE flag set
+    ///
+    /// Slice belongs to `dyld_shared_cache`. On a binary read from
+    /// disk (not the cache itself) this is anomalous and indicates a
+    /// copy-out or extraction artifact.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dylib_in_cache: bool,
-    /// Raw CodeDirectory flags bitfield. Decoded named bits surface
-    /// via kv `macho.cs_flags.*` (runtime, library_validation,
-    /// linker_signed, adhoc, kill, hard, …). Bit values from Apple's
-    /// `<Security/CSCommon.h>` / XNU `cs_blobs.h`.
+    /// Raw CodeDirectory flags bitfield
+    ///
+    /// Decoded named bits surface via kv `macho.cs_flags.*` (runtime,
+    /// library_validation, linker_signed, adhoc, kill, hard, …). Bit
+    /// values from Apple's `<Security/CSCommon.h>` / XNU `cs_blobs.h`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub cs_flags: u32,
-    /// Minimum OS version embedded in CodeDirectory's `runtime` field
-    /// (`major.minor.patch` string). Distinct from `LC_BUILD_VERSION`
+    /// CodeDirectory `runtime` min OS version
+    ///
+    /// `major.minor.patch` string. Distinct from `LC_BUILD_VERSION`
     /// `min_os_*`; discrepancy = re-signing artifact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cs_runtime_version: Option<String>,
-    /// `__DATA_CONST` segment present — modern macOS hardening
-    /// (immutable after dyld processing). Standard on macOS 10.13+;
-    /// absence on a recent build is anomalous.
+    /// `__DATA_CONST` segment present
+    ///
+    /// Modern macOS hardening (immutable after dyld processing).
+    /// Standard on macOS 10.13+; absence on a recent build is
+    /// anomalous.
     #[serde(default, skip_serializing_if = "is_false")]
     pub has_data_const_segment: bool,
-    /// Number of Objective-C classes (entries in `__objc_classlist`).
-    /// Build-fingerprint material; vendor releases share stable counts.
+    /// Count of Objective-C classes
+    ///
+    /// Entries in `__objc_classlist`. Build-fingerprint material;
+    /// vendor releases share stable counts.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub objc_class_count: u32,
-    /// Number of Swift protocol conformances
-    /// (entries in `__swift5_proto`). Same use case as
+    /// Count of Swift protocol conformances
+    ///
+    /// Entries in `__swift5_proto`. Same use case as
     /// `objc_class_count`.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub swift_protocol_count: u32,
 
     // === Cross-field consistency anomalies (formerly consistency.*) ===
+    /// CodeDirectory ID vs CFBundleIdentifier mismatch
+    ///
     /// Code-signature CodeDirectory identifier disagrees with the
     /// embedded `__TEXT,__info_plist` `CFBundleIdentifier`. Indicates
     /// the binary was re-signed with a different identity (replay
     /// attack / supply-chain swap).
     #[serde(default, skip_serializing_if = "is_false")]
     pub bundle_identifier_mismatch: bool,
+    /// Universal slices disagree on code signing
+    ///
     /// Universal Mach-O where some slices carry an LC_CODE_SIGNATURE
     /// blob and others don't. Vendors sign all slices uniformly; a
     /// mixed state almost always means tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub slice_signing_divergence: bool,
-    /// __TEXT segment carries VM_PROT_WRITE in maxprot or initprot.
-    /// __TEXT should always be R+X only; W on __TEXT is tampering.
+    /// __TEXT segment carries VM_PROT_WRITE
+    ///
+    /// __TEXT carries write permission in maxprot or initprot. __TEXT
+    /// should always be R+X only; W on __TEXT is tampering.
     #[serde(default, skip_serializing_if = "is_false")]
     pub text_segment_writable: bool,
-    /// LC_ID_DYLIB install_name doesn't match the file's actual path
-    /// (basename mismatch). Used in supply-chain dylib attacks where
-    /// a malicious dylib claims to be a system library.
+    /// LC_ID_DYLIB install_name basename mismatch
+    ///
+    /// install_name doesn't match the file's actual path. Used in
+    /// supply-chain dylib attacks where a malicious dylib claims to be
+    /// a system library.
     #[serde(default, skip_serializing_if = "is_false")]
     pub dylib_install_name_mismatch: bool,
 }

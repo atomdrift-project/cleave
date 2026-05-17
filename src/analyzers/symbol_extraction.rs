@@ -23,6 +23,7 @@ pub(crate) fn extract_imports_from_tree(
         FileType::Lua => extract_lua_import,
         FileType::Go => extract_go_import,
         FileType::Perl => extract_perl_import,
+        FileType::CSharp => extract_csharp_import,
         _ => return, // Other languages don't have import extraction yet
     };
 
@@ -80,6 +81,7 @@ pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut A
         FileType::Lua => (tree_sitter_lua::LANGUAGE.into(), extract_lua_import),
         FileType::Go => (tree_sitter_go::LANGUAGE.into(), extract_go_import),
         FileType::Perl => (ts_parser_perl::LANGUAGE.into(), extract_perl_import),
+        FileType::CSharp => (tree_sitter_c_sharp::LANGUAGE.into(), extract_csharp_import),
         _ => return, // Other languages don't have import extraction yet
     };
 
@@ -256,6 +258,37 @@ fn extract_perl_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Optio
                     .ok()
                     .map(std::string::ToString::to_string);
             }
+        }
+    }
+    None
+}
+
+/// Extract C# using directives.
+///
+/// Grammar shape (tree-sitter-c-sharp): the import *target* is always the last
+/// `identifier` or `qualified_name` child of a `using_directive`, regardless of
+/// the directive form:
+///   `using System;`                   → identifier "System"
+///   `using System.Net.WebSockets;`    → qualified_name "System.Net.WebSockets"
+///   `using static System.Math;`       → qualified_name "System.Math"
+///   `using Json = System.Text.Json;`  → qualified_name "System.Text.Json"
+///                                        (the leading `identifier [field=name]` is the
+///                                         local alias; we ignore it and emit the
+///                                         imported namespace so traits can match the
+///                                         actual capability surface)
+fn extract_csharp_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
+    if node.kind() != "using_directive" {
+        return None;
+    }
+    // Walk children in reverse and take the first identifier/qualified_name we hit.
+    // For all four directive forms above, that yields the imported namespace.
+    for i in (0..node.child_count()).rev() {
+        let child = node.child(i as u32)?;
+        if matches!(child.kind(), "qualified_name" | "identifier") {
+            return child
+                .utf8_text(source)
+                .ok()
+                .map(std::string::ToString::to_string);
         }
     }
     None
@@ -727,6 +760,73 @@ exec(compile(data, '<>', 'exec'))
             !all_symbols.contains(&"wogyjaaijwqbpxe.decompress"),
             "Alias should have been resolved: {:?}",
             all_symbols
+        );
+    }
+
+    #[test]
+    fn test_csharp_extract_imports() {
+        let code = r#"
+using System;
+using System.Net.WebSockets;
+using System.Net.NetworkInformation;
+using static System.Math;
+using Json = System.Text.Json;
+
+namespace Foo
+{
+    public class Bar
+    {
+        public void Run() { Console.WriteLine("hi"); }
+    }
+}
+"#;
+
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/test/file.cs".to_string(),
+            file_type: "csharp".to_string(),
+            size_bytes: code.len() as u64,
+            sha256: "test".to_string(),
+            architectures: None,
+        });
+
+        extract_imports(code, &FileType::CSharp, &mut report);
+
+        let import_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
+        assert!(
+            import_symbols.contains(&"System"),
+            "Missing System: {:?}",
+            import_symbols
+        );
+        assert!(
+            import_symbols.contains(&"System.Net.WebSockets"),
+            "Missing System.Net.WebSockets: {:?}",
+            import_symbols
+        );
+        assert!(
+            import_symbols.contains(&"System.Net.NetworkInformation"),
+            "Missing System.Net.NetworkInformation: {:?}",
+            import_symbols
+        );
+        // `using static` and aliased imports should also surface their fully-qualified name.
+        assert!(
+            import_symbols.contains(&"System.Math"),
+            "Missing System.Math (using static): {:?}",
+            import_symbols
+        );
+        assert!(
+            import_symbols.contains(&"System.Text.Json"),
+            "Missing System.Text.Json (aliased): {:?}",
+            import_symbols
+        );
+
+        // Namespace and class declarations should NOT be imports.
+        assert!(
+            !import_symbols.contains(&"Foo"),
+            "Foo namespace should not be an import"
+        );
+        assert!(
+            !import_symbols.contains(&"Bar"),
+            "Bar class should not be an import"
         );
     }
 

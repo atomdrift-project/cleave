@@ -297,6 +297,16 @@ pub struct Evidence {
     /// Total occurrence count when offsets are truncated (0 means use offsets.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]
     pub count: usize,
+    /// Secondary value the matcher may try as a fallback. Currently
+    /// only populated by the AST cache for `call`-kind nodes, where
+    /// `value` is the full call expression text (`name(args)`) and
+    /// `alt_value` is the extracted call name (`name`). The matcher
+    /// tries `value` first, then `alt_value`, so a single AST node
+    /// produces at most one match regardless of which form the trait
+    /// pattern targets. Skipped in serialization — it's an internal
+    /// matching helper, not part of the observable Evidence surface.
+    #[serde(skip)]
+    pub alt_value: Option<String>,
 }
 
 impl Evidence {
@@ -315,6 +325,7 @@ impl Evidence {
             location: None,
             offsets: Vec::new(),
             count: 0,
+            alt_value: None,
         }
     }
 

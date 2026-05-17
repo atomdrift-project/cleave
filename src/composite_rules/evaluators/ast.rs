@@ -112,33 +112,46 @@ pub(crate) fn eval_ast<'a>(
         let mut evidence = Vec::new();
         let mut match_count = 0;
 
+        // Build the matcher once so it's shared between value/alt_value tries.
+        let test_match = |candidate: &str| -> bool {
+            match match_mode {
+                MatchMode::Exact => {
+                    if case_insensitive {
+                        candidate.eq_ignore_ascii_case(pattern)
+                    } else {
+                        candidate == pattern
+                    }
+                }
+                MatchMode::Substr => {
+                    if case_insensitive {
+                        candidate
+                            .to_lowercase()
+                            .contains(&pattern.to_lowercase())
+                    } else {
+                        candidate.contains(pattern)
+                    }
+                }
+                MatchMode::Regex => match build_regex(pattern, case_insensitive) {
+                    Ok(re) => re.is_match(candidate),
+                    Err(_) => false,
+                },
+            }
+        };
         for &nt in &node_types {
             if let Some(nodes) = cache.get(nt) {
                 for node_ev in nodes {
-                    // Re-verify the pattern on the cached node text
-                    let matched = match match_mode {
-                        MatchMode::Exact => {
-                            if case_insensitive {
-                                node_ev.value.eq_ignore_ascii_case(pattern)
-                            } else {
-                                node_ev.value == pattern
-                            }
-                        }
-                        MatchMode::Substr => {
-                            if case_insensitive {
-                                node_ev
-                                    .value
-                                    .to_lowercase()
-                                    .contains(&pattern.to_lowercase())
-                            } else {
-                                node_ev.value.contains(pattern)
-                            }
-                        }
-                        MatchMode::Regex => match build_regex(pattern, case_insensitive) {
-                            Ok(re) => re.is_match(&node_ev.value),
-                            Err(_) => false,
-                        },
-                    };
+                    // Try the primary value first (full node text), then
+                    // the alternate value if one is set. For call-kind
+                    // nodes `alt_value` holds the extracted function
+                    // name, so `exact: foo` matches `foo(args)` via the
+                    // alt path while `substr:`/`regex:` still resolve
+                    // against the full call-expression text via `value`.
+                    // Each node counts at most once.
+                    let matched = test_match(&node_ev.value)
+                        || node_ev
+                            .alt_value
+                            .as_deref()
+                            .is_some_and(|alt| test_match(alt));
 
                     if matched {
                         match_count += 1;
@@ -377,7 +390,13 @@ fn walk_ast_for_pattern_multi<'a>(
         let node_kind = node.kind();
         if target_node_types.contains(&node_kind) {
             if let Ok(text) = node.utf8_text(source) {
-                if matcher(text) {
+                // For call-kind nodes, also try the extracted function
+                // name as a fallback so `exact: foo` matches `foo(args)`.
+                // Mirrors the cache path; see `Evidence.alt_value` docs.
+                let alt = crate::analyzers::symbol_extraction::extract_function_name(&node, source);
+                let matched =
+                    matcher(text) || alt.as_deref().is_some_and(|a| matcher(a));
+                if matched {
                     *match_count += 1;
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {
@@ -390,6 +409,7 @@ fn walk_ast_for_pattern_multi<'a>(
                                 node.start_position().column + 1
                             )),
                             offsets: vec![node.start_byte() as u64],
+                            alt_value: alt,
                             ..Default::default()
                         });
                     }

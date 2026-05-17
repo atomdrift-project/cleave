@@ -3271,6 +3271,7 @@ mod scope_tests {
             location: Some(location.to_string()),
             offsets: Vec::new(),
             count: 0,
+            alt_value: None,
         }
     }
 
@@ -3350,6 +3351,75 @@ mod scope_tests {
         // Encoded payloads collapse to the input-wide key.
         assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib")), "");
         assert_eq!(Scope::File.key(None), "");
+    }
+
+    #[test]
+    fn file_collapses_positional_only_locations() {
+        // AST evidence carries pure "row:col" strings. Under
+        // `scope: file` these must collapse to the input-wide key so
+        // AST evidence pools with text/symbol/encoded evidence in
+        // the same analyzed unit. Regression for the bug where every
+        // AST match landed in its own bucket and composites with
+        // `scope: file` never satisfied `min_distinct_conditions`.
+        assert_eq!(Scope::File.key(Some("6:14")), "");
+        assert_eq!(Scope::File.key(Some("1:1")), "");
+        assert_eq!(Scope::File.key(Some("123:456")), "");
+        // Three-coord form (some evaluators may extend with a third
+        // numeric coordinate) also collapses.
+        assert_eq!(Scope::File.key(Some("7:1:42")), "");
+    }
+
+    #[test]
+    fn file_keeps_file_prefixed_locations() {
+        // Anything that carries actual file identity (path + position
+        // or just a path) must be preserved so two unrelated files in
+        // an archive don't get pooled. Only the empty/positional/decoded
+        // cases collapse.
+        assert_eq!(
+            Scope::File.key(Some("Analytics.php:10:5")),
+            "Analytics.php:10:5"
+        );
+        assert_eq!(Scope::File.key(Some("src/main.rs:42:1")), "src/main.rs:42:1");
+        assert_eq!(Scope::File.key(Some("file:foo")), "file:foo");
+        // Edge cases that look numeric but aren't `row:col`.
+        assert_eq!(Scope::File.key(Some("1:")), "1:");
+        assert_eq!(Scope::File.key(Some(":")), ":");
+        assert_eq!(Scope::File.key(Some("1:abc")), "1:abc");
+        assert_eq!(Scope::File.key(Some("abc:1")), "abc:1");
+        assert_eq!(Scope::File.key(Some("")), "");
+    }
+
+    #[test]
+    fn leaf_does_not_collapse_positional_locations() {
+        // `scope: leaf` is the strictest scope — every evidence must
+        // share the EXACT location. We must NOT widen leaf semantics
+        // when fixing the file-scope bug.
+        assert_eq!(Scope::Leaf.key(Some("6:14")), "6:14");
+        assert_eq!(Scope::Leaf.key(Some("7:1")), "7:1");
+        assert_eq!(Scope::Leaf.key(Some("Analytics.php:10:5")), "Analytics.php:10:5");
+    }
+
+    #[test]
+    fn is_positional_only_edge_cases() {
+        // Two-component all-digit forms are positional.
+        assert!(is_positional_only("1:2"));
+        assert!(is_positional_only("0:0"));
+        assert!(is_positional_only("123:456"));
+        // Trailing components are tolerated as long as the first two
+        // are all-digit.
+        assert!(is_positional_only("1:2:3"));
+        assert!(is_positional_only("10:20:trailing"));
+        // Anything with a non-digit component in the first or second
+        // position is not positional-only.
+        assert!(!is_positional_only(""));
+        assert!(!is_positional_only(":"));
+        assert!(!is_positional_only("1:"));
+        assert!(!is_positional_only(":1"));
+        assert!(!is_positional_only("1:abc"));
+        assert!(!is_positional_only("abc:1"));
+        assert!(!is_positional_only("Analytics.php:10:5"));
+        assert!(!is_positional_only("archive:foo.zip"));
+        assert!(!is_positional_only("encoding_chain:base64"));
     }
 
     #[test]

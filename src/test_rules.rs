@@ -1454,6 +1454,58 @@ impl<'a> RuleDebugger<'a> {
             result
                 .details
                 .push("No matching AST nodes found".to_string());
+
+            // Hint: the most common `kind: call exact: <bare-name>` mistake.
+            // The AST evaluator compares the pattern against the full call
+            // expression text (`name(args)`), so `exact: name` never
+            // matches. Detect the pattern and suggest the canonical
+            // workarounds, preferring `type: symbol` when the name is
+            // already extracted by the symbol pass.
+            if kind.as_deref() == Some("call") {
+                if let Some(name) = exact.as_deref() {
+                    let looks_like_bare_name = !name.is_empty()
+                        && !name.contains('(')
+                        && name
+                            .bytes()
+                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':');
+                    if looks_like_bare_name {
+                        let found_as_symbol = self
+                            .report
+                            .imports
+                            .iter()
+                            .any(|i| i.symbol == name)
+                            || self
+                                .report
+                                .exports
+                                .iter()
+                                .any(|e| e.symbol == name)
+                            || self
+                                .report
+                                .functions
+                                .iter()
+                                .any(|f| f.name == name);
+                        result.details.push(format!(
+                            "  hint: `ast kind=call exact: {n}` compares against the full \
+                             call expression text (e.g. `{n}(args)`), not just the name, so \
+                             it never matches.",
+                            n = name
+                        ));
+                        if found_as_symbol {
+                            result.details.push(format!(
+                                "        the symbol extractor sees `{n}` — switch this \
+                                 condition to `type: symbol exact: {n}`.",
+                                n = name
+                            ));
+                        } else {
+                            result.details.push(format!(
+                                "        switch to `type: symbol exact: {n}`, or stay on \
+                                 AST with `substr: \"{n}(\"` or `regex: \"^{n}\\\\b\"`.",
+                                n = name
+                            ));
+                        }
+                    }
+                }
+            }
         }
 
         result

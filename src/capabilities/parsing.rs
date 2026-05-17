@@ -84,6 +84,16 @@ pub(crate) fn apply_trait_defaults(
                  (binaries, scripts, source, manifests, documents, media, data)."
                     .to_string(),
             );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("unknown")) {
+            warnings.push(
+                "Invalid file type: 'unknown' is not valid in 'for:' — it isn't useful or \
+                 supported to write rules that target unknown file types. cleave only invokes \
+                 rules whose 'for:' matches the detected type, and 'unknown' files have no \
+                 detected type, so the rule could never fire. Specify concrete types (elf, \
+                 python, ...) or named groups (binaries, scripts, source, manifests, documents, \
+                 media, data)."
+                    .to_string(),
+            );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
@@ -98,6 +108,17 @@ pub(crate) fn apply_trait_defaults(
         warnings.push(
             "Invalid file type: 'none' is not valid in file default 'for:' — every trait must \
              target at least one file type. Specify concrete types or named groups."
+                .to_string(),
+        );
+    } else if defaults
+        .r#for
+        .as_deref()
+        .is_some_and(|v| v.iter().any(|s| s.eq_ignore_ascii_case("unknown")))
+    {
+        warnings.push(
+            "Invalid file type: 'unknown' is not valid in file default 'for:' — it isn't useful \
+             or supported to write rules for unknown file types. Specify concrete types or \
+             named groups."
                 .to_string(),
         );
     }
@@ -793,6 +814,15 @@ pub(crate) fn apply_composite_defaults(
                  (binaries, scripts, source, manifests, documents, media, data)."
                     .to_string(),
             );
+        } else if types.iter().any(|s| s.eq_ignore_ascii_case("unknown")) {
+            warnings.push(
+                "Invalid file type: 'unknown' is not valid in 'for:' — it isn't useful or \
+                 supported to write rules that target unknown file types. cleave only invokes \
+                 rules whose 'for:' matches the detected type, and 'unknown' files have no \
+                 detected type, so the rule could never fire. Specify concrete types or named \
+                 groups."
+                    .to_string(),
+            );
         }
     } else if defaults.r#for.as_deref().is_some_and(<[String]>::is_empty) {
         warnings.push(
@@ -807,6 +837,17 @@ pub(crate) fn apply_composite_defaults(
         warnings.push(
             "Invalid file type: 'none' is not valid in file default 'for:' — every rule must \
              target at least one file type. Specify concrete types or named groups."
+                .to_string(),
+        );
+    } else if defaults
+        .r#for
+        .as_deref()
+        .is_some_and(|v| v.iter().any(|s| s.eq_ignore_ascii_case("unknown")))
+    {
+        warnings.push(
+            "Invalid file type: 'unknown' is not valid in file default 'for:' — it isn't useful \
+             or supported to write rules for unknown file types. Specify concrete types or named \
+             groups."
                 .to_string(),
         );
     }
@@ -1960,7 +2001,14 @@ mod tests {
     }
 
     #[test]
-    fn test_for_none_unsets_file_types() {
+    fn test_for_none_is_rejected_with_clear_warning() {
+        // `for: [none]` used to be a way to unset inherited file types
+        // back to All. Commit 60975df2 ("clearer err message when for:
+        // [none] is used") intentionally turned this into an error so
+        // trait authors are forced to either omit `for:` or list
+        // concrete types. The pipeline still defaults `r#for` to
+        // `[All]` so downstream code keeps working, but a warning is
+        // emitted to surface the misuse.
         let defaults = super::super::models::TraitDefaults {
             platforms: Some(vec![
                 "linux".to_string(),
@@ -1979,15 +2027,48 @@ mod tests {
             std::path::Path::new("test.yaml"),
             true,
         );
-        // "none" unsets file_types via apply_vec_default, falling back to All
         assert!(
             result
                 .r#for
                 .contains(&crate::composite_rules::FileType::All),
-            "for: [none] should unset to All, got: {:?}",
+            "for: [none] should still fall back to All for downstream safety, got: {:?}",
             result.r#for
         );
-        assert!(warnings.is_empty(), "unexpected warnings: {:?}", warnings);
+        assert!(
+            warnings.iter().any(|w| w.contains("'none' is not valid")),
+            "expected a clear-error warning explaining 'none' is invalid in 'for:', got: {:?}",
+            warnings
+        );
+    }
+
+    #[test]
+    fn test_for_unknown_is_rejected_with_clear_warning() {
+        // `for: [unknown]` looks plausible — `FileType::Unknown` exists
+        // as an internal sentinel for files cleave couldn't identify —
+        // but rules targeting "unknown" can never fire usefully because
+        // the engine only invokes rules whose `for:` matches the
+        // detected type. The warning steers authors toward concrete
+        // types or named groups.
+        let defaults = super::super::models::TraitDefaults {
+            platforms: Some(vec!["linux".to_string()]),
+            ..super::super::models::TraitDefaults::default()
+        };
+        let raw = make_raw_trait("test-trait", Some(vec!["unknown".to_string()]));
+        let mut warnings = Vec::new();
+        super::apply_trait_defaults(
+            raw,
+            &defaults,
+            &mut warnings,
+            std::path::Path::new("test.yaml"),
+            true,
+        );
+        assert!(
+            warnings.iter().any(|w| {
+                w.contains("'unknown' is not valid") && w.contains("isn't useful or supported")
+            }),
+            "expected a clear-error warning explaining 'unknown' is invalid in 'for:', got: {:?}",
+            warnings
+        );
     }
 
     #[test]

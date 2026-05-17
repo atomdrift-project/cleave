@@ -98,13 +98,13 @@ fn rule_matched(stdout: &str, rule_id: &str) -> bool {
         .any(|line| line.starts_with(&format!("MATCHED {rule_id}")))
 }
 
-/// Bug 1: `type: ast kind: call exact: curl_exec` does not match a
-/// call site for `curl_exec($ch);` in a PHP file even though the
-/// symbol extractor sees the call (`cleave symbols` lists
-/// `curl_exec`). Ignored because the safe fix is in trait YAML
-/// (`type: symbol` or `substr: "name("`); see the module doc.
+/// Bug 1: `type: ast kind: call exact: curl_exec` MUST match a call
+/// site for `curl_exec($ch);` in a PHP file. The cache populates
+/// `Evidence.alt_value` with the extracted function name for
+/// call-kind nodes; the matcher tries `value` (full call text)
+/// first, then `alt_value` (extracted name). Each node still counts
+/// at most once so `count_min`/density rules aren't perturbed.
 #[test]
-#[ignore = "documented quirk — use type: symbol or substr: \"name(\" workaround"]
 fn ast_kind_call_exact_matches_php_function_call() {
     let traits = r#"
 defaults:

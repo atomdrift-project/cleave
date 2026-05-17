@@ -1570,7 +1570,15 @@ impl Scope {
 /// Strip cleave's decoded-payload suffix from a location, returning
 /// the leaf-file portion. Decoded payload locations carry the
 /// `encoding_chain:` prefix; for those the file-level key collapses
-/// to the empty string (same input).
+/// to the empty string (same input). Pure positional locations of
+/// the form `row:col` (or `row:col:tail`) — produced by the AST
+/// evaluator, which has no file path to prefix — also collapse to
+/// the empty string so AST evidence pools with non-AST evidence in
+/// the same analyzed unit under `scope: file`. Otherwise composites
+/// that mix AST conditions with text/symbol/encoded conditions can
+/// never satisfy `min_distinct_conditions` because every AST match
+/// buckets to its own `row:col` key while sibling evidence buckets to
+/// the empty key.
 ///
 /// For archive entry locations like `archive:foo.zip!bar.so`, no
 /// decode suffix is present and the input is returned unchanged.
@@ -1580,9 +1588,32 @@ fn strip_decode_suffix(location: &str) -> &str {
         // input-wide key so file-scoped composites still pool input
         // evidence with decoded evidence from the same input.
         ""
+    } else if is_positional_only(location) {
+        ""
     } else {
         location
     }
+}
+
+/// True if `location` is a pure `row:col` (or `row:col:...`) string
+/// with no leading file path, archive prefix, or scheme. Such
+/// locations carry no file-identity information so they should
+/// collapse to the input-wide key under `scope: file`.
+fn is_positional_only(location: &str) -> bool {
+    let mut parts = location.split(':');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    // Both leading components must be all-digit, non-empty. Any
+    // remaining trailing components are tolerated (some evaluators
+    // may extend the position with a third coordinate).
+    !first.is_empty()
+        && first.bytes().all(|b| b.is_ascii_digit())
+        && !second.is_empty()
+        && second.bytes().all(|b| b.is_ascii_digit())
 }
 
 /// For an archive entry location, return the path of its nearest

@@ -284,6 +284,12 @@ codegen-units = 1
 [profile.profiling]
 inherits = "release"
 debug = true
+# Override release's fat LTO for benchmark builds. Fat LTO + cu=1
+# adds ~10 min to the link step; thin LTO + cu=16 builds in roughly
+# a third of that while keeping most of LTO's runtime gain — the
+# right trade-off for tuna's tight propose-edit-bench iteration loop.
+lto = "thin"
+codegen-units = 16
 
 [profile.test]
 opt-level = 1  # Faster test execution

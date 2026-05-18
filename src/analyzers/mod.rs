@@ -265,6 +265,8 @@ pub fn analyzer_for_file_type(
 
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
+        | FileType::CargoToml
+        | FileType::PyProjectToml
         | FileType::PackageLockJson
         | FileType::Plist
         | FileType::SystemdService
@@ -380,6 +382,8 @@ pub(crate) fn analyzer_for_file_type_arc(
 
         // Text-based formats without tree-sitter - use generic analyzer
         FileType::PkgInfo
+        | FileType::CargoToml
+        | FileType::PyProjectToml
         | FileType::PackageLockJson
         | FileType::Plist
         | FileType::SystemdService
@@ -462,13 +466,30 @@ pub trait Analyzer {
 #[must_use]
 #[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
-    fileid::detect_path(file_path).map_or(FileType::Unknown, |d| d.file_type)
+    fileid::detect_path(file_path)
+        .map(|d| d.file_type)
+        .filter(|ft| *ft != FileType::Unknown)
+        .or_else(|| known_manifest_type_from_basename(file_path))
+        .unwrap_or(FileType::Unknown)
 }
 
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
-    fileid::detect(file_path, file_data).map_or(FileType::Unknown, |d| d.file_type)
+    fileid::detect(file_path, file_data)
+        .map(|d| d.file_type)
+        .filter(|ft| *ft != FileType::Unknown)
+        .or_else(|| known_manifest_type_from_basename(file_path))
+        .unwrap_or(FileType::Unknown)
+}
+
+fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
+    let name = file_path.file_name()?.to_str()?.to_ascii_lowercase();
+    match name.as_str() {
+        "cargo.toml" => Some(FileType::CargoToml),
+        "pyproject.toml" => Some(FileType::PyProjectToml),
+        _ => None,
+    }
 }
 
 /// Detect file type by reading the first 1KB from disk.
@@ -844,6 +865,26 @@ mod tests {
         let mut f = tempfile::NamedTempFile::with_suffix(".py").unwrap();
         f.write_all(b"import os\n").unwrap();
         assert_eq!(detect_file_type(f.path()).unwrap(), FileType::Python);
+    }
+
+    #[test]
+    fn bridge_known_toml_manifests_by_basename() {
+        assert_eq!(
+            detect_file_type_from_path(Path::new("Cargo.toml")),
+            FileType::CargoToml
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new("nested/Cargo.toml"), b"[package]\nname='x'\n"),
+            FileType::CargoToml
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new("pyproject.toml"), b"[project]\nname='x'\n"),
+            FileType::PyProjectToml
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new("config.toml"), b"[package]\nname='x'\n"),
+            FileType::Unknown
+        );
     }
 
     #[test]

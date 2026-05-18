@@ -87,6 +87,8 @@ impl GenericAnalyzer {
             FileType::DesktopEntry => "desktop-entry",
             FileType::Xml => "xml",
             FileType::PkgInfo => "pkg-info",
+            FileType::CargoToml => "cargo.toml",
+            FileType::PyProjectToml => "pyproject.toml",
             FileType::PackageLockJson => "package-lock.json",
             FileType::Plist => "plist",
             FileType::Html => "html",

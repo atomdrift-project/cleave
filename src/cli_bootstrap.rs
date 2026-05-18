@@ -308,12 +308,21 @@ pub(crate) fn configure_rayon_thread_pool() {
     // reaper — a true nested-join deadlock that work-stealing cannot
     // escape.
     //
-    // Experiment: limit-concurrency-mem
-    // Peak RSS scales with concurrent analyzer threads. Reducing the default
-    // pool size helps linearize memory-heavy parser state. We cap the default
-    // at 8 threads, but ensure at least 4 to avoid the deadlocks mentioned above.
+    // Empirical: a 9-point sweep on Apple Silicon (12 P-cores, archive
+    // benchmark, 3 samples per N) put the low-memory plateau at N=8 with
+    // wall within ~3.4% of the fastest. Higher N grew RSS monotonically
+    // and showed wall instability (sample failures, +20-30% wall) around
+    // N=11-14 as workers crossed the P/E boundary. ~2/3 of performance
+    // cores reproduces N=8 on this machine and scales: 4 on a 6-P
+    // MacBook, 16 on a 24-P workstation.
+    //
+    // This is tuned for Apple Silicon Pro/Max-class hardware running
+    // cleave's archive workload. Other platforms — in particular x86-64
+    // Linux with SMT, where preferred_default_thread_count returns None
+    // and we fall back to available_parallelism() that includes
+    // hyperthread siblings — probably need their own tuning pass.
+    // Override via CLEAVE_RAYON_THREADS when in doubt.
     const MIN_SAFE_THREADS: usize = 4;
-    const MAX_DEFAULT_THREADS: usize = 8;
 
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
     let explicit = std::env::var("CLEAVE_RAYON_THREADS")
@@ -340,8 +349,9 @@ pub(crate) fn configure_rayon_thread_pool() {
         let p_cores = preferred_default_thread_count();
         let base_threads = p_cores.unwrap_or(total_parallelism);
 
-        // Cap the default thread count to reduce peak RSS.
-        let threads = base_threads.clamp(MIN_SAFE_THREADS, MAX_DEFAULT_THREADS);
+        // Cap at ~2/3 of performance cores to bound peak RSS while
+        // keeping wall within ~3.4% of the empirical sweep optimum.
+        let threads = (base_threads * 2 / 3).max(MIN_SAFE_THREADS);
         builder = builder.num_threads(threads);
     }
 

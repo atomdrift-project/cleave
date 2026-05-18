@@ -386,6 +386,97 @@ impl super::CapabilityMapper {
         }
     }
 
+    /// Re-evaluate downgrades on `target_findings` with `extra_findings` mixed
+    /// into the evaluation context.
+    ///
+    /// Used after container-level composites have been added to the report:
+    /// per-file findings get a second chance to apply downgrades that
+    /// reference container-level traits (e.g. a per-file `cookies-get-all`
+    /// trait whose downgrade clause references the container-level
+    /// `metadata/signed/platform::mozilla-extension` composite).
+    ///
+    /// Idempotent: each finding's downgrade is re-evaluated starting from
+    /// the trait/composite's *declared* criticality (looked up in
+    /// `trait_definitions` / `composite_rules`), not from the finding's
+    /// current crit. Calling this twice yields the same result as calling
+    /// it once.
+    pub(crate) fn reeval_downgrades_cross_scope(
+        &self,
+        target_findings: &mut [crate::types::Finding],
+        extra_findings: &[crate::types::Finding],
+        report: &AnalysisReport,
+        binary_data: &[u8],
+        file_type: RuleFileType,
+        section_map: &SectionMap,
+    ) {
+        if target_findings.is_empty() {
+            return;
+        }
+
+        // Build a combined slice so the evaluator sees both the target's own
+        // findings (which trait-reference conditions check against) and the
+        // container-level extras.
+        let mut combined: Vec<crate::types::Finding> =
+            Vec::with_capacity(target_findings.len() + extra_findings.len());
+        combined.extend_from_slice(target_findings);
+        combined.extend_from_slice(extra_findings);
+
+        let ctx = EvaluationContext::new(
+            report,
+            binary_data,
+            file_type,
+            &self.platforms,
+            Some(&combined),
+            None,
+        )
+        .with_section_map(section_map);
+
+        let composite_by_id: rustc_hash::FxHashMap<&str, &crate::composite_rules::CompositeTrait> =
+            self.composite_rules
+                .iter()
+                .map(|r| (r.id.as_str(), r))
+                .collect();
+
+        let debug_downgrade = std::env::var("DEBUG_DOWNGRADE").is_ok();
+
+        for finding in target_findings.iter_mut() {
+            // Atomic traits first: look up the TraitDefinition by id and
+            // re-evaluate its downgrade clause if any.
+            if let Some(&idx) = self.trait_id_map.get(finding.id.as_str()) {
+                let trait_def = &self.trait_definitions[idx];
+                if let Some(downgrade) = &trait_def.downgrade {
+                    let new_crit = trait_def.evaluate_downgrade(downgrade, &trait_def.crit, &ctx);
+                    if new_crit != finding.crit {
+                        if debug_downgrade {
+                            eprintln!(
+                                "DEBUG: Cross-scope downgrade for trait '{}': {:?} -> {:?}",
+                                finding.id, finding.crit, new_crit
+                            );
+                        }
+                        finding.crit = new_crit;
+                    }
+                    continue;
+                }
+            }
+
+            // Composite rules: same dance, but against composite_rules.
+            if let Some(rule) = composite_by_id.get(finding.id.as_str()) {
+                if let Some(downgrade) = &rule.downgrade {
+                    let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
+                    if new_crit != finding.crit {
+                        if debug_downgrade {
+                            eprintln!(
+                                "DEBUG: Cross-scope downgrade for composite '{}': {:?} -> {:?}",
+                                finding.id, finding.crit, new_crit
+                            );
+                        }
+                        finding.crit = new_crit;
+                    }
+                }
+            }
+        }
+    }
+
     /// Evaluate composite rules at the container level using findings from all nested files.
     ///
     /// This enables cross-file composite rules that can detect patterns spanning multiple
@@ -828,5 +919,180 @@ traits:
         let mapper = make_basename_mapper();
         let findings = mapper.evaluate_basename_traits_for_entries(&[]);
         assert!(findings.is_empty());
+    }
+
+    /// Cross-scope downgrade pass — the central behavior used to demote
+    /// per-file findings (e.g. `cookies-get-all`) when a container-level
+    /// gate (e.g. `metadata/signed/platform::mozilla-extension`) is in
+    /// scope. The mapper builds findings from per-file evaluation only;
+    /// the gate lives in `extra_findings`.
+    #[allow(clippy::expect_used)]
+    fn make_cross_scope_mapper() -> super::super::CapabilityMapper {
+        let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/target::target-trait"
+    desc: "target trait that should downgrade in presence of gate"
+    crit: suspicious
+    if:
+      type: basename
+      exact: "target.js"
+    downgrade:
+      any:
+      - id: "test/gate::gate-trait"
+
+  - id: "test/gate::gate-trait"
+    desc: "gate trait — container-level marker"
+    crit: baseline
+    if:
+      type: basename
+      exact: "gate.json"
+"#;
+        let file = write_test_traits(yaml);
+        super::super::CapabilityMapper::from_yaml(file.path()).expect("load cross-scope mapper")
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_cross_scope_downgrade_fires_with_gate_in_extras() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let mapper = make_cross_scope_mapper();
+        let report = make_test_report();
+
+        // Per-file findings: just the target trait at its original Suspicious crit.
+        let mut target_findings = vec![make_test_finding(
+            "test/target::target-trait",
+            Criticality::Suspicious,
+        )];
+        // Container-level findings (extras): the gate trait fires here.
+        let extras = vec![make_test_finding(
+            "test/gate::gate-trait",
+            Criticality::Baseline,
+        )];
+
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+
+        assert_eq!(
+            target_findings[0].crit,
+            Criticality::Notable,
+            "Suspicious target trait should downgrade to Notable when gate is in extras"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_cross_scope_downgrade_noop_without_gate() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let mapper = make_cross_scope_mapper();
+        let report = make_test_report();
+
+        let mut target_findings = vec![make_test_finding(
+            "test/target::target-trait",
+            Criticality::Suspicious,
+        )];
+        // No gate in extras — downgrade conditions don't match.
+        let extras: Vec<crate::types::Finding> = Vec::new();
+
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+
+        assert_eq!(
+            target_findings[0].crit,
+            Criticality::Suspicious,
+            "Without gate in extras, target trait keeps original crit"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_cross_scope_downgrade_is_idempotent() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let mapper = make_cross_scope_mapper();
+        let report = make_test_report();
+
+        // Start at Suspicious; the gate is present in extras.
+        let mut target_findings = vec![make_test_finding(
+            "test/target::target-trait",
+            Criticality::Suspicious,
+        )];
+        let extras = vec![make_test_finding(
+            "test/gate::gate-trait",
+            Criticality::Baseline,
+        )];
+
+        // First pass: Suspicious → Notable.
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+        assert_eq!(target_findings[0].crit, Criticality::Notable);
+
+        // Second pass: must stay at Notable, not slide to Baseline. The reeval
+        // starts from the trait's declared crit (Suspicious), not the
+        // finding's current crit, so the result is the same regardless of
+        // how many times the pass runs.
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+        assert_eq!(
+            target_findings[0].crit,
+            Criticality::Notable,
+            "Repeated reeval must not stack downgrades"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_cross_scope_downgrade_handles_unknown_trait_id() {
+        use crate::composite_rules::{FileType as RuleFileType, SectionMap};
+
+        let mapper = make_cross_scope_mapper();
+        let report = make_test_report();
+
+        // A finding whose id is in neither trait_definitions nor
+        // composite_rules should be left untouched (no panic, no crit change).
+        let mut target_findings = vec![make_test_finding(
+            "test/unknown::never-defined",
+            Criticality::Suspicious,
+        )];
+        let extras: Vec<crate::types::Finding> = Vec::new();
+
+        mapper.reeval_downgrades_cross_scope(
+            &mut target_findings,
+            &extras,
+            &report,
+            &[],
+            RuleFileType::All,
+            &SectionMap::default(),
+        );
+
+        assert_eq!(target_findings[0].crit, Criticality::Suspicious);
     }
 }

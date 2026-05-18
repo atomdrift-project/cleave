@@ -1603,4 +1603,218 @@ mod tests {
             .iter()
             .any(|f| f.id == "cap/unpacked"));
     }
+
+    // ==================== seal_archive_metadata_kv Tests ====================
+
+    fn archive_report_with_entries(entries: Vec<ArchiveEntry>) -> AnalysisReport {
+        let target = TargetInfo {
+            path: "test.zip".to_string(),
+            file_type: "zip".to_string(),
+            size_bytes: 1024,
+            sha256: "abc".to_string(),
+            architectures: None,
+        };
+        let mut report = AnalysisReport::new(target);
+        report.archive_contents = entries;
+        report
+    }
+
+    #[test]
+    fn test_seal_archive_metadata_kv_empty_is_noop() {
+        let mut report = archive_report_with_entries(Vec::new());
+        report.seal_archive_metadata_kv();
+        assert!(
+            report.kv_tree.is_none(),
+            "Empty archive_contents should not produce a kv tree"
+        );
+    }
+
+    #[test]
+    fn test_seal_archive_metadata_kv_emits_members_and_aggregates() {
+        let entries = vec![
+            ArchiveEntry {
+                path: "manifest.json".to_string(),
+                file_type: "json".to_string(),
+                sha256: "h1".to_string(),
+                size_bytes: 4108,
+                compressed_size: Some(926),
+                compression_method: Some("deflate".to_string()),
+                mtime_unix: Some(1_700_000_000),
+                mode_octal: Some(0o755),
+                uid: Some(1000),
+                gid: Some(1000),
+                uname: Some("alice".to_string()),
+                gname: Some("staff".to_string()),
+                entry_type: Some("regular".to_string()),
+                linkname: None,
+                host_os: None,
+            },
+            ArchiveEntry {
+                path: "lib/setuid-bin".to_string(),
+                file_type: "elf".to_string(),
+                sha256: "h2".to_string(),
+                size_bytes: 8000,
+                compressed_size: Some(4000),
+                compression_method: Some("stored".to_string()),
+                mtime_unix: Some(1_700_000_300),
+                // setuid + world-writable bits set, exercising both decompositions.
+                mode_octal: Some(0o4757),
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some("regular".to_string()),
+                linkname: None,
+                host_os: None,
+            },
+            ArchiveEntry {
+                path: "external".to_string(),
+                file_type: "symlink".to_string(),
+                sha256: String::new(),
+                size_bytes: 0,
+                compressed_size: Some(0),
+                compression_method: Some("stored".to_string()),
+                mtime_unix: Some(1_700_000_100),
+                mode_octal: Some(0o120777),
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some("symlink".to_string()),
+                linkname: Some("/etc/passwd".to_string()),
+                host_os: None,
+            },
+        ];
+        let mut report = archive_report_with_entries(entries);
+        report.seal_archive_metadata_kv();
+
+        let kv = report.kv_tree.expect("kv_tree should be populated");
+        let archive = kv
+            .get("archive")
+            .expect("archive subtree should be present");
+
+        // Per-member objects survive verbatim with their forensic fields.
+        let members = archive
+            .get("members")
+            .and_then(|v| v.as_array())
+            .expect("archive.members should be an array");
+        assert_eq!(members.len(), 3);
+        let first = &members[0];
+        assert_eq!(first.get("path").and_then(|v| v.as_str()), Some("manifest.json"));
+        assert_eq!(first.get("uname").and_then(|v| v.as_str()), Some("alice"));
+        assert_eq!(first.get("mode_octal").and_then(|v| v.as_u64()), Some(0o755));
+        assert_eq!(
+            first.get("compression_method").and_then(|v| v.as_str()),
+            Some("deflate")
+        );
+
+        // Member count + aggregates.
+        assert_eq!(
+            archive.get("member_count").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+
+        // Compression aggregate: deflate + stored present.
+        let comp = archive
+            .get("compression")
+            .expect("archive.compression should be present");
+        let methods: Vec<&str> = comp
+            .get("methods")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert!(methods.contains(&"deflate"));
+        assert!(methods.contains(&"stored"));
+        // method_counts.deflate = 1, method_counts.stored = 2
+        assert_eq!(
+            comp.get("method_counts")
+                .and_then(|v| v.get("stored"))
+                .and_then(|v| v.as_u64()),
+            Some(2)
+        );
+
+        // Timing aggregates emit when at least one mtime is present.
+        let timing = archive
+            .get("timing")
+            .expect("archive.timing should be present when mtimes exist");
+        assert_eq!(
+            timing.get("mtime_min").and_then(|v| v.as_i64()),
+            Some(1_700_000_000)
+        );
+        assert_eq!(
+            timing.get("mtime_max").and_then(|v| v.as_i64()),
+            Some(1_700_000_300)
+        );
+        assert_eq!(
+            timing.get("mtime_spread_seconds").and_then(|v| v.as_i64()),
+            Some(300)
+        );
+        assert_eq!(
+            timing.get("mtime_unique_count").and_then(|v| v.as_u64()),
+            Some(3)
+        );
+
+        // Security decomposition: setuid bit on the elf, world-writable on
+        // elf + symlink, one external symlink with absolute target.
+        let security = archive
+            .get("security")
+            .expect("archive.security should be present");
+        assert_eq!(
+            security.get("setuid_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            security.get("symlink_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            security.get("external_symlink_count").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+
+        // Builder names lifted from POSIX ownership strings.
+        let builder = archive
+            .get("builder")
+            .expect("archive.builder should be present");
+        let unames: Vec<&str> = builder
+            .get("unames")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
+        assert_eq!(unames, vec!["alice"]);
+    }
+
+    #[test]
+    fn test_seal_archive_metadata_kv_omits_timing_when_no_mtimes() {
+        // Mozilla web-ext zeroes timestamps; the sentinel (1980, 0, 0) is
+        // rejected by the extractor, so all mtime_unix fields are None.
+        // The seal should omit `archive.timing` entirely rather than emit a
+        // misleading 0/0/0 block.
+        let entries = vec![ArchiveEntry {
+            path: "manifest.json".to_string(),
+            file_type: "json".to_string(),
+            sha256: "h1".to_string(),
+            size_bytes: 100,
+            compressed_size: Some(50),
+            compression_method: Some("deflate".to_string()),
+            mtime_unix: None,
+            mode_octal: None,
+            uid: None,
+            gid: None,
+            uname: None,
+            gname: None,
+            entry_type: Some("regular".to_string()),
+            linkname: None,
+            host_os: None,
+        }];
+        let mut report = archive_report_with_entries(entries);
+        report.seal_archive_metadata_kv();
+
+        let kv = report.kv_tree.expect("kv_tree present");
+        let archive = kv.get("archive").expect("archive subtree present");
+        assert!(
+            archive.get("timing").is_none(),
+            "timing block should be absent when no mtimes were captured"
+        );
+    }
 }

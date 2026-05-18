@@ -1112,6 +1112,37 @@ impl TraitDefinition {
         }
     }
 
+    /// Re-evaluate this trait's downgrade clause against a (possibly richer)
+    /// evaluation context, returning the new criticality that should be applied.
+    ///
+    /// Used by the cross-scope downgrade pass: a per-file trait that references
+    /// a container-level finding (e.g. `metadata/signed/platform::mozilla-extension`)
+    /// gets a second chance to apply its downgrade once container composites
+    /// have been evaluated and merged into the report.
+    ///
+    /// `base_crit` should be the trait's *declared* criticality (`self.crit`),
+    /// not the finding's current crit, so the pass is idempotent: calling it
+    /// twice yields the same result as calling it once.
+    pub(crate) fn evaluate_downgrade<'a>(
+        &self,
+        conditions: &DowngradeConditions,
+        base_crit: &Criticality,
+        ctx: &EvaluationContext<'a>,
+    ) -> Criticality {
+        if self.eval_downgrade_conditions(conditions, ctx) {
+            match base_crit {
+                Criticality::Hostile => Criticality::Suspicious,
+                Criticality::Suspicious => Criticality::Notable,
+                Criticality::Notable => Criticality::Baseline,
+                Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
+                    Criticality::Component
+                }
+            }
+        } else {
+            *base_crit
+        }
+    }
+
     /// Evaluate a single downgrade condition set.
     /// All specified blocks (all/any/none) must pass for the downgrade to trigger.
     fn eval_downgrade_conditions<'a>(

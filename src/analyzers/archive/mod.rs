@@ -26,6 +26,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ::zip::ZipArchive;
+use crate::composite_rules::SectionMap;
 use guards::{
     sanitize_entry_path, ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE,
     MAX_TOTAL_SIZE,
@@ -957,6 +958,49 @@ impl ArchiveAnalyzer {
             &report.target.file_type,
         );
         report.findings.extend(container_findings);
+
+        // Cross-scope downgrade pass: per-file findings (in report.files[*])
+        // were originally evaluated with only their own file's findings in
+        // scope. Now that container composites have been added to
+        // report.findings, give every per-file finding a second chance to
+        // apply downgrades that reference container-level traits (e.g.
+        // `metadata/signed/platform::mozilla-extension`). Pass empty bytes
+        // and an empty SectionMap — id-reference conditions don't need them,
+        // and re-reading every file's bytes here would be prohibitive.
+        let container_file_type = mapper.detect_file_type(&report.target.file_type);
+        let empty_section_map = SectionMap::default();
+        let container_snapshot: Vec<crate::types::Finding> = report.findings.clone();
+        // Re-evaluate downgrades on the container's own findings using the
+        // same findings list as extras. This catches container-level
+        // composites whose downgrade clauses reference other container-level
+        // composites (e.g. `broad-content-injection` referencing
+        // `mozilla-extension`) — both fire at this scope but the initial
+        // composite eval doesn't re-run downgrades.
+        let mut container_findings = std::mem::take(&mut report.findings);
+        mapper.reeval_downgrades_cross_scope(
+            &mut container_findings,
+            &container_snapshot,
+            report,
+            &[],
+            container_file_type,
+            &empty_section_map,
+        );
+        report.findings = container_findings;
+        // Detach files so we can pass `report` immutably to the reeval; the
+        // reeval evaluator only reads report-level metadata (target.path,
+        // kv_tree) so this swap is safe.
+        let mut files = std::mem::take(&mut report.files);
+        for file in &mut files {
+            mapper.reeval_downgrades_cross_scope(
+                &mut file.findings,
+                &container_snapshot,
+                report,
+                &[],
+                container_file_type,
+                &empty_section_map,
+            );
+        }
+        report.files = files;
     }
 
     /// Extract an archive from in-memory data into `dest_dir`.

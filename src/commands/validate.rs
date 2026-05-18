@@ -619,9 +619,14 @@ const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
     ("ls.macOS.xz", 9),
     ("package.json.xz", 5),
     ("php-wundii-flowcrafter.tar.xz", 12),
+    // pyaigis is the canonical "defensive scanner whose pattern database
+    // looks like its targets" test case. After the scanner-context audit
+    // landed it scores 35; cap is 38 (current + 3 headroom). A regression
+    // that takes pyaigis above 38 means a credential/jailbreak/exploit
+    // trait stopped honoring `unless: llm-scanner-context`.
+    ("pyaigis-top10.tar.xz", 38),
     ("rand-user-agent.js.xz", 3),
     ("run.bat.xz", 2),
-    ("test_cli.py.xz", 3),
 ];
 
 /// Default per-file score cap for `testdata/does-nothing/` samples.

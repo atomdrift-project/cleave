@@ -237,6 +237,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
     "ftp",
+    "grpc",    // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
     "http",
     "icmp",
     "ip",

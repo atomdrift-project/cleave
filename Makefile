@@ -35,7 +35,7 @@ help: ## Show this help
 	@echo "  validate              - Validate trait definitions (for: restrictions, taxonomy, etc.)"
 	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/ (DATASET=200MB)"
 	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
-	@echo "  tuna                  - LLM autoresearch loop: propose, gate, bench, cherry-pick wins (Ctrl-C to stop)"
+	@echo "  tuna                  - LLM autoresearch loop, alternating memory/cpu; cherry-picks wins (Ctrl-C to stop)"
 	@echo "  tuna-once             - Run one tuna cycle then cherry-pick accepted experiments"
 	@echo "  clean                 - Clean all build artifacts"
 
@@ -247,13 +247,16 @@ TUNA_PROVIDER    ?= gemini
 TUNA_MODE        ?=
 TUNA_INTERVAL    ?= 30
 
-tuna: ## Run cleave-tuna in a loop; cherry-pick accepted experiments onto current branch
+tuna: ## Run cleave-tuna in a loop, alternating memory/cpu; cherry-pick accepted experiments
 	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before starting tuna"; exit 1; }
-	@echo "tuna: looping forever (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) samples=$(TUNA_SAMPLES) provider=$(TUNA_PROVIDER) mode=$(TUNA_MODE)"
-	@while true; do \
-		$(MAKE) tuna-once || exit $$?; \
-		echo "tuna: sleeping $(TUNA_INTERVAL)s before next cycle — Ctrl-C to stop"; \
+	@echo "tuna: looping forever, alternating memory/cpu (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) samples=$(TUNA_SAMPLES) provider=$(TUNA_PROVIDER)"
+	@mode=memory; \
+	while true; do \
+		echo "tuna: starting cycle in $$mode mode"; \
+		$(MAKE) tuna-once TUNA_MODE=$$mode || exit $$?; \
+		if [ "$$mode" = "memory" ]; then mode=cpu; else mode=memory; fi; \
+		echo "tuna: sleeping $(TUNA_INTERVAL)s before next cycle ($$mode) — Ctrl-C to stop"; \
 		sleep $(TUNA_INTERVAL); \
 	done
 

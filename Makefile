@@ -242,7 +242,8 @@ TUNA_REPO        ?= ../cleave-tuna
 TUNA_BIN         ?= $(TUNA_REPO)/out/cleave-tuna
 TUNA_DATASET     ?= 100MB
 TUNA_EXPERIMENTS ?= 6
-TUNA_SAMPLES     ?= 3
+TUNA_SCREEN_SAMPLES  ?= 1
+TUNA_CONFIRM_SAMPLES ?= 3
 TUNA_PROVIDER    ?= gemini
 TUNA_MODE        ?=
 TUNA_INTERVAL    ?= 30
@@ -250,7 +251,7 @@ TUNA_INTERVAL    ?= 30
 tuna: ## Run cleave-tuna in a loop, alternating memory/cpu; cherry-pick accepted experiments
 	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before starting tuna"; exit 1; }
-	@echo "tuna: looping forever, alternating memory/cpu (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) samples=$(TUNA_SAMPLES) provider=$(TUNA_PROVIDER)"
+	@echo "tuna: looping forever, alternating memory/cpu (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) screen-samples=$(TUNA_SCREEN_SAMPLES) confirm-samples=$(TUNA_CONFIRM_SAMPLES) provider=$(TUNA_PROVIDER)"
 	@mode=memory; \
 	while true; do \
 		echo "tuna: starting cycle in $$mode mode"; \
@@ -265,7 +266,8 @@ tuna-once: ## One cleave-tuna cycle, then cherry-pick accepted experiments
 	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before tuna-once"; exit 1; }
 	@before=$$(git rev-parse HEAD); \
 	$(TUNA_BIN) --source $(CURDIR) --root $(TUNA_REPO) --dataset $(TUNA_DATASET) \
-		--experiments $(TUNA_EXPERIMENTS) --samples $(TUNA_SAMPLES) \
+		--experiments $(TUNA_EXPERIMENTS) \
+		--screen-samples $(TUNA_SCREEN_SAMPLES) --confirm-samples $(TUNA_CONFIRM_SAMPLES) \
 		--provider $(TUNA_PROVIDER) $(if $(TUNA_MODE),--$(TUNA_MODE),) \
 		|| { echo "tuna: cleave-tuna exited non-zero; not cherry-picking"; exit 1; }; \
 	branch=$$(git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/heads/tuna/*' | head -1); \

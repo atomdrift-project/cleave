@@ -9,7 +9,7 @@ use tempfile::TempDir;
 fn cleave_cmd() -> assert_cmd::Command {
     #[allow(deprecated)]
     let mut cmd = assert_cmd::Command::cargo_bin("cleave").unwrap();
-    cmd.env("cleave_SKIP_YARA", "1");
+    cmd.env("CLEAVE_SKIP_YARA", "1");
     cmd.env("CLEAVE_SKIP_TRAITS", "1");
     cmd
 }

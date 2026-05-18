@@ -303,3 +303,23 @@ opt-level = 3
 
 [profile.dev.package.regalloc2]
 opt-level = 3
+
+# Optimize the cleave crate itself in debug builds so integration tests
+# (which spawn `target/debug/cleave` as a subprocess) don't pay 30s+ of
+# unoptimized trait/capability init on every invocation.
+[profile.dev.package.cleave]
+opt-level = 3
+
+# Trait/capability init parses 6490 YAML files into 35k+ regex traits on
+# every cleave invocation — yaml + regex compile dominate subprocess startup.
+[profile.dev.package.regex]
+opt-level = 3
+
+[profile.dev.package.regex-automata]
+opt-level = 3
+
+[profile.dev.package.serde_yaml]
+opt-level = 3
+
+[profile.dev.package.aho-corasick]
+opt-level = 3

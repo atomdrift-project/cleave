@@ -28,7 +28,7 @@ int main(int argc, char **argv) {
     .unwrap();
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
-    cmd.env("cleave_SKIP_YARA", "1")
+    cmd.env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "kv", path.to_str().unwrap()]);
     let output = cmd.output().expect("run cleave kv");
     assert!(
@@ -86,7 +86,7 @@ fn cleave_kv_path_filter_works_on_source_files() {
     std::fs::write(&path, "int main(void) { puts(\"hi\"); return 0; }\n").unwrap();
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
-    cmd.env("cleave_SKIP_YARA", "1").args([
+    cmd.env("CLEAVE_SKIP_YARA", "1").args([
         "--json",
         "kv",
         path.to_str().unwrap(),

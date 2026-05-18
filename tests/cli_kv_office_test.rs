@@ -90,7 +90,7 @@ fn build_minimal_docx(creator: &str, created: &str, modified: &str) -> Vec<u8> {
 
 fn run_kv(path: &std::path::Path, filter: Option<&str>) -> serde_json::Value {
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
-    cmd.env("cleave_SKIP_YARA", "1")
+    cmd.env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "kv", path.to_str().unwrap()]);
     if let Some(f) = filter {
         cmd.args(["--path", f]);

@@ -27,7 +27,7 @@ fn test_utf16_sample_full_analysis_completes_within_90_seconds() {
     let start = Instant::now();
 
     let assert = cmd
-        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
         .args(["--json", "analyze", sample.to_str().unwrap()])
         .timeout(Duration::from_secs(90))

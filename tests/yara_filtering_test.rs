@@ -81,7 +81,7 @@ fn test_shell_script_matches_shell_rules() {
     fs::write(&script_path, "#!/bin/bash\necho 'aWYgW1sg' | base64 -d\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -136,7 +136,7 @@ fn test_python_rules_filtered_for_shell_scripts() {
     fs::write(&script_path, "#!/bin/bash\nimport os\neval something\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -185,7 +185,7 @@ fn test_python_file_matches_python_rules() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", py_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -244,7 +244,7 @@ fn test_generic_rules_never_filtered() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -283,7 +283,7 @@ fn test_javascript_file_filters_non_js_rules() {
     fs::write(&js_file, "const data = 'import os';\neval(data);\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", js_file.to_str().unwrap()])
         .output()
         .unwrap();
@@ -345,8 +345,8 @@ fn test_scan_multi_filetype_directory() {
     // broken installed rule set (the `cleave-traits` repo can drift
     // between schema versions) doesn't cause the binary to bail.
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
-        .env("cleave_SKIP_TRAITS", "1")
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_SKIP_TRAITS", "1")
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .output()
         .unwrap();
@@ -379,7 +379,7 @@ fn test_filtered_criticality_level() {
     fs::write(&script_path, "#!/bin/bash\nimport marshal\n").unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();
@@ -427,7 +427,7 @@ fn test_filtered_matches_preserved() {
     .unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
+        .env("CLEAVE_BUILTIN_YARA_ONLY", "1") // Skip third-party YARA for faster tests
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .output()
         .unwrap();

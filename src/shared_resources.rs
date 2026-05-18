@@ -10,7 +10,7 @@ use crate::yara_engine::YaraEngine;
 use std::sync::{Arc, OnceLock};
 
 fn skip_traits_requested() -> bool {
-    std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
+    std::env::var("CLEAVE_SKIP_TRAITS").is_ok()
 }
 
 /// Global CapabilityMapper behind a RwLock for hot-reload support.
@@ -236,7 +236,6 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _skip_guard = EnvVarGuard::set("CLEAVE_SKIP_TRAITS", "1");
-        let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
         reload_capability_mapper().expect("reload empty mapper");
         let m1 = capability_mapper().expect("mapper should load");
         let m2 = capability_mapper().expect("mapper should load");
@@ -283,7 +282,6 @@ mod tests {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let _skip_guard = EnvVarGuard::unset("CLEAVE_SKIP_TRAITS");
-        let _skip_guard_lower = EnvVarGuard::unset("cleave_SKIP_TRAITS");
 
         let good = tempfile::tempdir().expect("create tempdir");
         std::fs::write(

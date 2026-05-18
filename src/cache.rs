@@ -38,6 +38,28 @@ pub fn skip_cache() -> bool {
     }
 }
 
+/// Returns `true` if the capability-mapper cache should be skipped.
+///
+/// The mapper cache is keyed on trait-YAML mtime, so it self-invalidates when
+/// any trait file changes. It's a pure function of the traits directory and has
+/// no dependency on the file being analyzed — re-compiling otherwise costs
+/// 10s+ per process (parsing 6490 YAMLs into 35k+ regex-backed traits), which
+/// dominates integration-test wall time.
+///
+/// Unlike the analysis cache, this defaults to ENABLED even in debug builds
+/// and is NOT skipped by `CLEAVE_SKIP_CACHE` — tests that want fresh per-file
+/// analysis still benefit from reusing the compiled trait set.
+///
+/// - `CLEAVE_SKIP_MAPPER_CACHE=1` / `true` → skip
+/// - Env var unset                         → don't skip (always use the cache)
+#[must_use]
+pub fn skip_mapper_cache() -> bool {
+    match std::env::var("CLEAVE_SKIP_MAPPER_CACHE") {
+        Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
+        Err(_) => false,
+    }
+}
+
 /// Returns `true` if the YARA rule-compilation cache should be skipped.
 ///
 /// The YARA cache is invalidated by YAR-file mtime; re-compiling otherwise

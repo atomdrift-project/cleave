@@ -232,7 +232,7 @@ impl YaraEngine {
         let _span = tracing::info_span!("load_yara_rules").entered();
 
         // Fast path: skip YARA entirely for tests that don't need it
-        if std::env::var("CLEAVE_SKIP_YARA").is_ok() || std::env::var("cleave_SKIP_YARA").is_ok() {
+        if std::env::var("CLEAVE_SKIP_YARA").is_ok() {
             tracing::info!("YARA skipped (CLEAVE_SKIP_YARA set)");
             return (0, 0);
         }

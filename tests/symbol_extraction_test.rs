@@ -13,8 +13,8 @@ use tempfile::TempDir;
 /// Skips YARA and traits for speed - these tests only care about AST/tree-sitter parsing
 fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - not needed for symbol extraction tests
-        .env("cleave_SKIP_TRAITS", "1") // Skip trait loading - only testing AST parsing
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - not needed for symbol extraction tests
+        .env("CLEAVE_SKIP_TRAITS", "1") // Skip trait loading - only testing AST parsing
         .args(["--json", "--verbose", "analyze", file_path])
         .output()
         .expect("Failed to run cleave");

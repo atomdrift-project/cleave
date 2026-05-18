@@ -92,7 +92,7 @@ fn stage_sample(sample: &Sample, staging: &Path) -> PathBuf {
 /// Run cleave's CLI in JSON mode and return the parsed report.
 fn analyze(path: &Path) -> serde_json::Value {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "analyze", path.to_str().unwrap()])
         .output()
         .expect("invoke cleave");

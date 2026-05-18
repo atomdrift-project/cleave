@@ -9,8 +9,8 @@ use tempfile::TempDir;
 
 fn isolated_cleave_cmd() -> assert_cmd::Command {
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
-    cmd.env("cleave_SKIP_YARA", "1");
-    cmd.env("cleave_SKIP_TRAITS", "1");
+    cmd.env("CLEAVE_SKIP_YARA", "1");
+    cmd.env("CLEAVE_SKIP_TRAITS", "1");
     cmd
 }
 
@@ -50,7 +50,7 @@ fn test_analyze_nonexistent_file() {
 /// Test analyze command with a simple shell script.
 ///
 /// Uses `--json` because terminal output suppresses files with no
-/// findings (a trivial one-liner with `cleave_SKIP_TRAITS=1` produces
+/// findings (a trivial one-liner with `CLEAVE_SKIP_TRAITS=1` produces
 /// none). JSON output always includes the file path, so the test
 /// stays a true CLI smoke test and doesn't depend on the installed
 /// rule set firing anything.
@@ -174,7 +174,7 @@ fn test_analyze_multiple_files() {
 
 fn test_diff_nonexistent_files() {
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["diff", "/nonexistent/old.bin", "/nonexistent/new.bin"])
         .assert()
         .failure();
@@ -220,7 +220,7 @@ fn test_diff_different_files() {
 #[test]
 
 fn test_missing_subcommand() {
-    assert_cmd::cargo_bin_cmd!("cleave")
+    isolated_cleave_cmd()
         .assert()
         .failure()
         .stderr(predicate::str::contains("Usage"));
@@ -235,7 +235,7 @@ fn test_invalid_argument() {
     fs::write(&script, "#!/bin/bash\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["--invalid-arg", "analyze", script.to_str().unwrap()])
         .assert()
         .failure();
@@ -315,7 +315,7 @@ fn test_yara_flag() {
     fs::write(&script, "#!/bin/bash\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["analyze", script.to_str().unwrap(), "--yara"])
         .assert()
         .success();
@@ -334,7 +334,7 @@ fn test_yara_third_party_flag() {
     // Third-party YARA is opt-in (disabled by default)
     // This test verifies the --third-party-yara flag enables it
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["analyze", script.to_str().unwrap(), "--third-party-yara"])
         .assert()
         .success();
@@ -344,7 +344,7 @@ fn test_yara_third_party_flag() {
 #[test]
 fn test_strings_nonexistent_file() {
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["strings", "/nonexistent/file.bin"])
         .assert()
         .failure()
@@ -359,7 +359,7 @@ fn test_strings_shell_script() {
     fs::write(&script, "#!/bin/bash\necho 'hello world'\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["strings", script.to_str().unwrap()])
         .assert()
         .success()
@@ -375,7 +375,7 @@ fn test_strings_json_output() {
     fs::write(&script, "#!/bin/bash\necho 'test'\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["--json", "strings", script.to_str().unwrap()])
         .assert()
         .success()
@@ -391,7 +391,7 @@ fn test_strings_custom_min_length() {
     fs::write(&script, "#!/bin/bash\necho 'ab'\necho 'verylongstring'\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["strings", script.to_str().unwrap(), "-m", "10"])
         .assert()
         .success()
@@ -402,7 +402,7 @@ fn test_strings_custom_min_length() {
 #[test]
 fn test_symbols_nonexistent_file() {
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", "/nonexistent/file.bin"])
         .assert()
         .failure()
@@ -417,7 +417,7 @@ fn test_symbols_shell_script() {
     fs::write(&script, "#!/bin/bash\nls -la\ngrep pattern file.txt\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", script.to_str().unwrap()])
         .assert()
         .success()
@@ -440,7 +440,7 @@ fn test_symbols_python_script() {
     .unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", py_file.to_str().unwrap()])
         .assert()
         .success()
@@ -456,7 +456,7 @@ fn test_symbols_json_output() {
     fs::write(&script, "#!/bin/bash\nls\n").unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["--json", "symbols", script.to_str().unwrap()])
         .assert()
         .success()
@@ -477,7 +477,7 @@ fn test_symbols_javascript_file() {
     .unwrap();
 
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", js_file.to_str().unwrap()])
         .assert()
         .success()
@@ -490,7 +490,7 @@ fn test_symbols_javascript_file() {
 fn test_symbols_binary_with_addresses() {
     // Test with /bin/ls which should have symbol addresses
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", "/bin/ls"])
         .assert()
         .success()
@@ -507,7 +507,7 @@ fn test_strings_vs_symbols_difference() {
 
     // Strings should find literal text
     let strings_output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["strings", script.to_str().unwrap()])
         .output()
         .unwrap();
@@ -515,7 +515,7 @@ fn test_strings_vs_symbols_difference() {
 
     // Symbols should find function calls
     let symbols_output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - testing CLI functionality
         .args(["symbols", script.to_str().unwrap()])
         .output()
         .unwrap();

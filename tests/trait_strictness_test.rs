@@ -35,11 +35,7 @@ composite_rules:
     // Run cleave - should succeed (downgrade is non-fatal)
     // The rule will be silently downgraded from HOSTILE to SUSPICIOUS
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
-        .env("cleave_ALLOW_INLINE_PRIMITIVES", "1")
-        .env("cleave_VALIDATE", "0")
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success();
@@ -84,11 +80,7 @@ composite_rules:
     // not that it passes all strict validation rules
     // Allow inline primitives since these tests are testing criticality downgrading, not inline validation
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
-        .env("cleave_ALLOW_INLINE_PRIMITIVES", "1")
-        .env("cleave_VALIDATE", "0")
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success();
@@ -115,11 +107,9 @@ traits:
     fs::write(&target_file, "#!/bin/bash\n# dummy\n").unwrap();
 
     // Should NOT show warning for SUSPICIOUS traits anymore
-    // Set cleave_TRAITS_PATH to point to our custom traits directory
+    
     assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
-        .env("cleave_TRAITS_PATH", traits_dir.to_str().unwrap())
-        .env("cleave_CAPABILITIES", traits_dir.to_str().unwrap())
+        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
         .args(["analyze", target_file.to_str().unwrap()])
         .assert()
         .success()

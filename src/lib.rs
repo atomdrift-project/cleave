@@ -2480,16 +2480,14 @@ mod tests {
         tmp.as_file().write_all(code).expect("write test content");
         let path = tmp.path();
 
-        let options = AnalysisOptions::default();
+        // Skip YARA: this test checks depth-limit handling, not YARA matches,
+        // and the YARA engine load adds ~60s of unnecessary init.
+        let options = AnalysisOptions {
+            disable_yara: true,
+            ..AnalysisOptions::default()
+        };
         let mapper = shared_resources::capability_mapper_with_options(&options)
             .expect("mapper should load for depth-limit test");
-        let yara = if options.disable_yara {
-            None
-        } else {
-            Some(shared_resources::yara_engine(
-                options.enable_third_party_yara,
-            ))
-        };
 
         // Analyze at exactly MAX_ANALYSIS_DEPTH — any encoded payloads found
         // should trigger the deep-nesting finding instead of recursing.
@@ -2498,7 +2496,7 @@ mod tests {
             path,
             &options,
             &mapper,
-            yara.as_ref(),
+            None,
             None,
             None,
             MAX_ANALYSIS_DEPTH,
@@ -2543,6 +2541,7 @@ mod tests {
 
         let options = AnalysisOptions {
             all_files: true,
+            disable_yara: true,
             ..AnalysisOptions::default()
         };
         let mapper = shared_resources::capability_mapper_with_options(&options)

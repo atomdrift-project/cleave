@@ -126,9 +126,9 @@ test-fast: ## Run tests quickly (skip YARA in spawned processes, uses nextest)
 	@echo ""
 	@cargo build --quiet
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
-		cleave_SKIP_YARA=1 cargo nextest run --workspace --lib; \
+		CLEAVE_SKIP_YARA=1 cargo nextest run --workspace --lib; \
 	else \
-		cleave_SKIP_YARA=1 cargo test --workspace --lib; \
+		CLEAVE_SKIP_YARA=1 cargo test --workspace --lib; \
 	fi
 	@echo ""
 	@echo "✓ Fast tests passed"

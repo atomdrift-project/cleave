@@ -8,12 +8,12 @@ use tempfile::TempDir;
 
 fn run_analyze_json(path: &Path, traits_dir: &Path) -> Value {
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
         .env_remove("CLEAVE_SKIP_TRAITS")
-        .env_remove("cleave_SKIP_TRAITS")
+        .env_remove("CLEAVE_SKIP_TRAITS")
         .env_remove("CLEAVE_TRAITS_DIR")
-        .env_remove("cleave_TRAITS_DIR")
+        .env_remove("CLEAVE_TRAITS_DIR")
         .args([
             "--format",
             "json",

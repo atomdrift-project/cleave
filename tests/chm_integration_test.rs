@@ -293,8 +293,12 @@ fn pstools_real_sample_has_no_dropper_findings() {
 // ────────────────────────────────────────────────────────────────────
 
 fn run_cleave_json(path: &Path) -> Value {
+    // All assertions in this file target trait/composite IDs from YAML, not
+    // YARA matches — skipping YARA shaves ~4s of cold-cache rule loading off
+    // every test invocation without affecting coverage.
     let mut bin = assert_cmd::cargo_bin_cmd!("cleave");
     let output = bin
+        .env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "analyze", path.to_str().unwrap()])
         .output()
         .expect("cleave run");

@@ -17,7 +17,7 @@ fn log_mapper_init_error(err: &anyhow::Error) {
 
 impl super::CapabilityMapper {
     fn skip_traits_requested() -> bool {
-        std::env::var("CLEAVE_SKIP_TRAITS").is_ok() || std::env::var("cleave_SKIP_TRAITS").is_ok()
+        std::env::var("CLEAVE_SKIP_TRAITS").is_ok()
     }
 
     /// Default minimum precision for hostile rules.
@@ -64,7 +64,6 @@ impl super::CapabilityMapper {
         // Keep unit tests hermetic by default. Tests that need real trait data should
         // provide it explicitly via CLEAVE_TRAITS_DIR or use from_yaml/from_directory.
         if std::env::var_os("CLEAVE_TRAITS_DIR").is_none()
-            && std::env::var_os("cleave_TRAITS_DIR").is_none()
             && !Self::skip_traits_requested()
         {
             return Self::empty();

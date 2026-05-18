@@ -2094,15 +2094,31 @@ composite_rules:
 
     #[test]
     fn test_validate_traits_library_entrypoint() {
-        // Smoke test: `validate_traits()` is reachable from the library
-        // surface and returns a `Result` instead of panicking. It is NOT
-        // a pass/fail gate on the installed rule set — the rules live in
-        // a separate `cleave-traits` repo whose contents this crate does
-        // not own, so asserting `.unwrap()` here couples a library-API
-        // test to ambient data state. Regressions in the validator
-        // itself (panics, infinite loops, missing-dir handling) will
-        // still surface; schema drift in the user's checkout will not.
-        let _ = crate::validate_traits();
+        // Smoke test: full validation reaches the public API and returns
+        // a `Result` instead of panicking. Pointed at a synthetic traits
+        // directory rather than the configured rule set — running full
+        // validation across the 6490-file production tree takes 60+ s
+        // and was bottlenecking the entire test suite. Regressions in
+        // the validator itself (panics, infinite loops, missing-dir
+        // handling) still surface here.
+        let temp_dir = tempfile::tempdir().unwrap();
+        let traits_dir = temp_dir.path().join("traits");
+        std::fs::create_dir(&traits_dir).unwrap();
+        std::fs::write(
+            traits_dir.join("smoke.yaml"),
+            r#"
+traits:
+  - id: "smoke/test::trait"
+    desc: "Smoke-test trait"
+    crit: baseline
+    if:
+      type: symbol
+      pattern: "smoke_test_symbol"
+"#,
+        )
+        .unwrap();
+
+        let _ = crate::capabilities::CapabilityMapper::from_directory(&traits_dir);
     }
 
     #[test]

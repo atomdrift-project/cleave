@@ -346,8 +346,11 @@ impl super::CapabilityMapper {
             eprintln!("🔍 Loading capabilities from: {}", dir_path.display());
         }
 
-        // Try to load from cache (skip validation when loading from cache)
-        let skip_cache = crate::cache::skip_cache();
+        // Try to load from cache (skip validation when loading from cache).
+        // Mapper cache is decoupled from the per-file analysis cache: it's a
+        // pure function of the traits dir, mtime-invalidated, and safe to
+        // share across test invocations that set CLEAVE_SKIP_CACHE=1.
+        let skip_cache = crate::cache::skip_mapper_cache();
         if !enable_full_validation && !skip_cache {
             if let Ok(cache_path) = crate::cache::mapper_cache_path() {
                 if cache_path.exists() {

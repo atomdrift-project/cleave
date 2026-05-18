@@ -19,11 +19,11 @@ use tempfile::TempDir;
 fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
     let traits_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cleave-traits");
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
         .env("CLEAVE_LOGS_DIR", "/tmp/cleave-test-logs")
         .env_remove("CLEAVE_SKIP_TRAITS")
-        .env_remove("cleave_SKIP_TRAITS")
+        .env_remove("CLEAVE_SKIP_TRAITS")
         .env("CLEAVE_TRAITS_DIR", traits_dir)
         .args(["--format", "json", "analyze", path.to_str().unwrap()])
         .output()
@@ -482,7 +482,7 @@ echo "Done"
     fs::write(&path, script).unwrap();
 
     let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("cleave_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_YARA", "1")
         .env("CLEAVE_SKIP_CACHE", "1")
         .args(["--format", "json", "analyze", path.to_str().unwrap()])
         .output()

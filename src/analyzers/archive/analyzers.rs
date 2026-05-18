@@ -2084,6 +2084,26 @@ impl ArchiveAnalyzer {
         report.archive_contents.extend(collected_archive_entries);
         report.files.extend(collected_files);
 
+        // Expose archive member paths as a kv-subtree so traits can match on
+        // archive contents. The motivating case is Mozilla-signed `.xpi`
+        // extensions, which carry `META-INF/cose.manifest` + `META-INF/
+        // mozilla.{rsa,sf}` as a signature chain — recognizing those member
+        // paths gives a `metadata/signed/platform::mozilla-extension` benign-
+        // context marker analogous to the existing Microsoft-Windows signing
+        // detection. Use kv path `archive.members[]` to match individual
+        // entries via `regex:` or `exact:`.
+        if !report.archive_contents.is_empty() {
+            let members: Vec<serde_json::Value> = report
+                .archive_contents
+                .iter()
+                .map(|e| serde_json::Value::String(e.path.clone()))
+                .collect();
+            report.merge_kv_subtree(
+                "archive",
+                serde_json::json!({ "members": members }),
+            );
+        }
+
         // Add metadata about archive contents
         report.metadata.errors.push(format!(
             "Archive contains {} files analyzed, {} traits and {} capabilities detected",

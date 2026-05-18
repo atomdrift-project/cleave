@@ -9,51 +9,33 @@
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper to analyze a file and check for specific traits/symbols
-/// Skips YARA and traits for speed - these tests only care about AST/tree-sitter parsing
+/// Helper to analyze a file and check for specific traits/symbols.
+///
+/// Runs in-process with YARA + trait loading disabled — these tests only
+/// care about AST/tree-sitter parsing, so the heavy resource init is
+/// unnecessary. Returns the compact-format JSON output equivalent to
+/// `cleave --json analyze <path>`.
 fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
-    let output = assert_cmd::cargo_bin_cmd!("cleave")
-        .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - not needed for symbol extraction tests
-        .env("CLEAVE_SKIP_TRAITS", "1") // Skip trait loading - only testing AST parsing
-        .args(["--json", "--verbose", "analyze", file_path])
-        .output()
-        .expect("Failed to run cleave");
+    // CLEAVE_SKIP_TRAITS is honored by shared_resources at first mapper
+    // init in this process. Tests in this file all set it via the same
+    // helper, so it stays consistent.
+    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        if json.get("fs").and_then(|f| f.as_array()).is_some() {
-            return json;
+    let options = cleave::AnalysisOptions {
+        disable_yara: true,
+        ..Default::default()
+    };
+    let mut report = match cleave::analyze_file(file_path, &options) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("analyze_file failed for {file_path}: {err:?}");
+            return serde_json::json!({});
         }
-        if json.get("files").and_then(|f| f.as_array()).is_some() {
-            return json;
-        }
-        if json.get("type").and_then(|t| t.as_str()) == Some("file") {
-            return serde_json::json!({ "files": [json] });
-        }
-    }
-
-    let mut files = Vec::new();
-    for line in stdout
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-    {
-        if let Ok(json) = serde_json::from_str::<serde_json::Value>(line) {
-            if json.get("type").and_then(|t| t.as_str()) == Some("file") {
-                files.push(json);
-            }
-        }
-    }
-
-    if !files.is_empty() {
-        return serde_json::json!({ "files": files });
-    }
-
-    eprintln!(
-        "Failed to parse analyzer JSON output (status={}): {}",
-        output.status, stdout
-    );
-    serde_json::json!({})
+    };
+    report.shrink_to_fit();
+    report.finalize();
+    let compact = cleave::types::compact_from_files(&report.files);
+    serde_json::to_value(&compact).expect("serialize compact report")
 }
 
 /// Get the first file entry from either legacy `files` or compact `fs`.

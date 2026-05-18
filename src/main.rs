@@ -140,7 +140,11 @@ fn main() -> Result<()> {
         effective_log_file.as_deref(),
     );
     log_startup(effective_log_file.as_deref(), args.verbose);
+
+    // Limit concurrency to reduce peak RSS (especially during archive analysis).
+    // Configured via rayon::ThreadPoolBuilder in cli_bootstrap.
     configure_rayon_thread_pool();
+
     #[cfg(debug_assertions)]
     start_deadlock_detector();
 

@@ -306,14 +306,20 @@ pub(crate) fn configure_rayon_thread_pool() {
     // walk + JAR class-file YARA scan). With fewer than ~4 workers the
     // inner par_iter can commit every thread and the outer join has no
     // reaper — a true nested-join deadlock that work-stealing cannot
-    // escape. We honour the explicit override regardless (some users have
-    // legitimate reasons: tests, constrained CI, profiling), but log
-    // loudly so the failure mode is discoverable.
+    // escape.
+    //
+    // Experiment: limit-concurrency-mem
+    // Peak RSS scales with concurrent analyzer threads. Reducing the default
+    // pool size helps linearize memory-heavy parser state. We cap the default
+    // at 8 threads, but ensure at least 4 to avoid the deadlocks mentioned above.
     const MIN_SAFE_THREADS: usize = 4;
+    const MAX_DEFAULT_THREADS: usize = 8;
+
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
     let explicit = std::env::var("CLEAVE_RAYON_THREADS")
         .ok()
         .and_then(|s| s.parse().ok());
+
     if let Some(threads) = explicit {
         if threads < MIN_SAFE_THREADS {
             tracing::warn!(
@@ -326,9 +332,19 @@ pub(crate) fn configure_rayon_thread_pool() {
             );
         }
         builder = builder.num_threads(threads);
-    } else if let Some(p_cores) = preferred_default_thread_count() {
-        builder = builder.num_threads(p_cores);
+    } else {
+        let total_parallelism = std::thread::available_parallelism()
+            .map(|p| p.get())
+            .unwrap_or(MIN_SAFE_THREADS);
+
+        let p_cores = preferred_default_thread_count();
+        let base_threads = p_cores.unwrap_or(total_parallelism);
+
+        // Cap the default thread count to reduce peak RSS.
+        let threads = base_threads.clamp(MIN_SAFE_THREADS, MAX_DEFAULT_THREADS);
+        builder = builder.num_threads(threads);
     }
+
     // build_global fails if a pool is already installed (e.g. by a parent
     // binary like litmus). That's the desired behaviour — we only configure
     // the pool when cleave owns it.

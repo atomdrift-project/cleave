@@ -102,12 +102,22 @@ pub(crate) fn bytes_regex_cache(
 /// Compile an ASCII-only pattern into a `regex::bytes::Regex` for zero-UTF-8-validation
 /// matching against raw file bytes. Returns `Err` if the pattern uses Unicode features —
 /// callers must gate on `can_use_byte_matching` first.
+///
+/// **Multi-line is enabled.** `^` matches start-of-haystack and after every `\n`; `$`
+/// matches end-of-haystack and before every `\n`. This mirrors the per-line semantic
+/// of `text exact:` in raw-text mode — trait authors writing `regex: '^namespace '`
+/// against PHP source expect line anchoring, not whole-file anchoring. Without
+/// multi-line, `^namespace ` on a source file would only match if the file *began*
+/// with `namespace`, which is almost never true (PHP files start with `<?php`).
+/// Single-line strings extracted from binaries are unaffected because they contain
+/// no `\n` for the alternate anchor points to match.
 pub(crate) fn compile_bytes_regex(
     pattern: &str,
     case_insensitive: bool,
 ) -> Result<regex::bytes::Regex, regex::Error> {
     let mut builder = regex::bytes::RegexBuilder::new(pattern);
     builder.case_insensitive(case_insensitive);
+    builder.multi_line(true);
     builder.build()
 }
 
@@ -257,11 +267,15 @@ pub(crate) fn build_regex(pattern: &str, case_insensitive: bool) -> anyhow::Resu
         }
     }
 
-    // Compile outside the lock
-    let regex = if case_insensitive {
-        Regex::new(&format!("(?i){}", pattern))?
-    } else {
-        Regex::new(pattern)?
+    // Compile outside the lock. Multi-line is enabled so `^` / `$` line-anchor in
+    // raw-text mode (source/manifests), matching the per-line semantic of
+    // `text exact:`. Strings extracted from binaries contain no `\n`, so the
+    // alternate anchors have nothing extra to match — behavior is unchanged there.
+    let regex = {
+        let mut builder = regex::RegexBuilder::new(pattern);
+        builder.case_insensitive(case_insensitive);
+        builder.multi_line(true);
+        builder.build()?
     };
 
     // Insert with write lock (LRU will evict oldest if at capacity)

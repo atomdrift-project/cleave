@@ -865,6 +865,177 @@ fn test_eval_raw_regex() {
     assert!(result.matched);
 }
 
+// Per-line regex anchor coverage. In raw-text mode (source files, manifests)
+// trait authors expect `regex: '^foo'` to match `foo` at the start of any line,
+// not only at the start of the file. The fix in eval_raw enables multi_line on
+// both the ASCII byte-regex and the Unicode regex builders so `^` / `$` anchor
+// at `\n` boundaries. Without these tests the next refactor of compile_bytes_regex
+// or build_regex would silently regress every source-language regex trait that
+// uses line anchors (the entire framework-context family added for Flowcrafter).
+
+#[test]
+fn test_eval_raw_regex_caret_matches_line_start_ascii() {
+    let report = create_test_report();
+    // Three lines; `namespace` appears on the third line, NOT line 1.
+    let content = "<?php\n\nnamespace Wundii\\Flowcrafter\\Console;\n";
+    let ctx = create_test_context(&report, content.as_bytes());
+
+    let pattern = r"^namespace ".to_string();
+    let re = regex::Regex::new(&format!("(?m){pattern}")).unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        Some(&re),
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+
+    assert!(
+        result.matched,
+        "^namespace must match per-line in raw-text mode (multi_line flag); \
+         this is the test that broke the framework-context trait family until eval_raw \
+         enabled multi-line regex compilation"
+    );
+}
+
+#[test]
+fn test_eval_raw_regex_dollar_matches_line_end_ascii() {
+    let report = create_test_report();
+    // Each line ends with `;` — `;$` must match per-line, not just at file end.
+    let content = "use Symfony\\Component\\Console\\Command\\Command;\nuse Foo\\Bar;\n";
+    let ctx = create_test_context(&report, content.as_bytes());
+
+    let pattern = r";$".to_string();
+    let re = regex::Regex::new(&format!("(?m){pattern}")).unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        Some(&re),
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+
+    assert!(result.matched, "`;$` must match end-of-line in raw-text mode");
+}
+
+#[test]
+fn test_eval_raw_regex_caret_unicode_path() {
+    // Force the Unicode path with a non-ASCII pattern (so can_use_byte_matching
+    // returns false and eval_raw falls into the unicode regex branch).
+    let report = create_test_report();
+    let content = "header\n\nnaïve_marker_at_line_start\nbody\n";
+    let ctx = create_test_context(&report, content.as_bytes());
+
+    let pattern = r"^naïve_marker".to_string();
+    let re = regex::RegexBuilder::new(&pattern)
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        Some(&re),
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+
+    assert!(
+        result.matched,
+        "Unicode-path regex must also honor per-line anchors so non-ASCII patterns \
+         don't silently regress when multi_line is added only to the byte path"
+    );
+}
+
+#[test]
+fn test_eval_raw_regex_caret_not_at_line_start_does_not_match() {
+    // Negative case: `^x` against `bar x foo` (no x at any line start) must NOT match,
+    // even though `x` is present as a substring. Confirms the anchor is honored, not
+    // ignored. Prevents a regression where someone "fixes" multi-line by simply
+    // stripping anchors.
+    let report = create_test_report();
+    let content = "bar x foo\nbaz x qux\n";
+    let ctx = create_test_context(&report, content.as_bytes());
+
+    let pattern = r"^x".to_string();
+    let re = regex::RegexBuilder::new(&pattern)
+        .multi_line(true)
+        .build()
+        .unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        Some(&re),
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+
+    assert!(
+        !result.matched,
+        "`^x` must not match an x that's mid-line; line-anchoring must remain strict"
+    );
+}
+
+#[test]
+fn test_eval_raw_regex_unanchored_still_finds_substring() {
+    // Sanity: a non-anchored pattern continues to match anywhere in the file.
+    // Guards against a regression where someone confuses multi-line with anchored-only.
+    let report = create_test_report();
+    let content = "alpha\nbeta needle gamma\ndelta\n";
+    let ctx = create_test_context(&report, content.as_bytes());
+
+    let pattern = r"needle".to_string();
+    let re = regex::Regex::new(&pattern).unwrap();
+
+    let location = ContentLocationParams::default();
+    let result = eval_raw(
+        None,
+        None,
+        Some(&pattern),
+        None,
+        false,
+        false,
+        Some(&re),
+        None,
+        &location,
+        &ctx,
+        None,
+    );
+
+    assert!(result.matched);
+}
+
 #[test]
 fn test_eval_raw_case_insensitive() {
     let report = create_test_report();
@@ -2378,4 +2549,59 @@ fn kind_none_preserves_legacy_semantics() {
     );
     assert!(result.matched);
     assert_eq!(result.evidence[0].value, "MyExport");
+}
+
+// =============================================================================
+// Regex builder multi-line guard.
+//
+// Both `build_regex` (Unicode/cache path) and `compile_bytes_regex` (ASCII byte
+// path) MUST enable multi-line so `^` / `$` anchor at `\n` boundaries in raw-text
+// mode. The eval_raw flow uses these directly, and trait authors writing
+// `regex: '^namespace '` against source code expect line anchoring — without
+// multi-line they get whole-file anchoring instead, which never matches a PHP
+// file (PHP starts with `<?php`). These tests guard the builders themselves
+// against a future refactor that drops the flag.
+// =============================================================================
+
+#[test]
+fn build_regex_enables_multi_line_anchors() {
+    // Unicode path: cached `build_regex` must compile with multi_line so `^`
+    // matches start-of-line, not only start-of-haystack.
+    let re = crate::composite_rules::evaluators::build_regex(r"^namespace ", false)
+        .expect("build_regex must succeed for a simple pattern");
+    assert!(
+        re.is_match("<?php\n\nnamespace Foo;\n"),
+        "build_regex should produce a multi-line regex so `^` matches per-line in raw text"
+    );
+    assert!(
+        !re.is_match("<?php\nuse Foo;\n"),
+        "anchored pattern must still reject input where no line begins with the prefix"
+    );
+}
+
+#[test]
+fn compile_bytes_regex_enables_multi_line_anchors() {
+    // ASCII byte path: hot loop in eval_raw. Same guarantee required.
+    let re = crate::composite_rules::evaluators::compile_bytes_regex(r"^namespace ", false)
+        .expect("compile_bytes_regex must succeed for a simple ASCII pattern");
+    assert!(
+        re.is_match(b"<?php\n\nnamespace Foo;\n"),
+        "compile_bytes_regex should produce a multi-line bytes regex"
+    );
+    assert!(
+        !re.is_match(b"<?php\nuse Foo;\n"),
+        "byte-regex line anchor must remain strict for non-matching input"
+    );
+}
+
+#[test]
+fn build_regex_dollar_anchors_per_line() {
+    // `$` should match before each `\n` as well as at end of haystack.
+    let re = crate::composite_rules::evaluators::build_regex(r";$", false).unwrap();
+    let haystack = "use Foo\\Bar;\nuse Baz;\n";
+    let count = re.find_iter(haystack).count();
+    assert!(
+        count >= 2,
+        "multi-line `$` should match end of every line, got {count} matches"
+    );
 }

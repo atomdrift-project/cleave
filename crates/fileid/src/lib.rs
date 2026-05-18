@@ -592,6 +592,51 @@ mod tests {
         assert!(det.extension_mismatch());
     }
 
+    // ── AppleDouble (._<name>) resource forks ────────────────────────────
+    // Regression guard: a benign Composer tarball lit up at suspicious
+    // because cleave classified macOS resource forks (`._foo.php`) as PHP
+    // and then ran obfuscation traits over their binary bodies. Magic-byte
+    // detection must return Unknown so `is_program()` skips analysis.
+
+    #[test]
+    fn appledouble_magic_returns_unknown() {
+        // AppleDouble: 00 05 16 07 + version + filler + entry table.
+        // 16 bytes is enough for the magic + version slot tested below.
+        let data = b"\x00\x05\x16\x07\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let det = detect(Path::new("._foo.php"), data).unwrap();
+        assert_eq!(det.file_type, FileType::Unknown);
+        // Magic detection must win over the `.php` extension fallback —
+        // otherwise the body gets analyzed as PHP and entropy traits fire.
+        assert!(
+            !det.file_type.is_program(),
+            "AppleDouble bodies must be skipped by is_program() so cleave doesn't \
+             analyze them; otherwise benign tarballs with macOS resource forks \
+             score as suspicious"
+        );
+    }
+
+    #[test]
+    fn appledouble_magic_overrides_php_extension() {
+        let data = b"\x00\x05\x16\x07\x00\x02\x00\x00rest_is_binary_metadata";
+        let det = detect(Path::new("wundii-flowcrafter/._index.php"), data).unwrap();
+        assert_eq!(det.file_type, FileType::Unknown);
+        assert_eq!(det.source, DetectionSource::Magic);
+    }
+
+    #[test]
+    fn null_byte_without_appledouble_magic_does_not_match() {
+        // Negative: a file that starts with 0x00 but isn't AppleDouble
+        // (e.g. raw padded data) must not be misclassified as Unknown via
+        // this path. Falls through to extension/heuristic detection.
+        let data = b"\x00\x00\x00\x00more null bytes here";
+        let det = detect(Path::new("padding.dat"), data);
+        // .dat extension maps to Data; the 0x00 arm must not have intercepted.
+        assert!(
+            det.is_none() || det.unwrap().file_type != FileType::Unknown,
+            "unrelated 0x00-leading bytes must not be claimed as AppleDouble"
+        );
+    }
+
     // ── Java ─────────────────────────────────────────────────────────
 
     #[test]

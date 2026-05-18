@@ -524,9 +524,22 @@ pub fn check_extension_content_mismatch(
     if is_xhtml_html_document(file_data, det.file_type, ext_type) {
         return None;
     }
+    if is_appledouble_sidecar(file_path) {
+        // macOS pollutes tarballs with `._<name>` sidecars carrying xattrs and
+        // resource forks. The body is intentionally not the same type as the
+        // extension's claim — that's the AppleDouble convention, not evasion.
+        return None;
+    }
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = format!("{ext_type:?}");
     Some((ext_desc, content_desc, false))
+}
+
+fn is_appledouble_sidecar(file_path: &Path) -> bool {
+    file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("._"))
 }
 
 fn is_xhtml_html_document(file_data: &[u8], content_type: FileType, ext_type: FileType) -> bool {
@@ -883,5 +896,41 @@ mod tests {
             "python-bytecode"
         );
         assert_eq!(FileType::Elf.report_file_type(), "elf");
+    }
+
+    #[test]
+    fn appledouble_sidecar_predicate_matches_dot_underscore_prefix() {
+        // Basename starts with `._` → macOS AppleDouble sidecar by convention.
+        assert!(is_appledouble_sidecar(Path::new("._index.php")));
+        assert!(is_appledouble_sidecar(Path::new("foo/bar/._index.php")));
+        assert!(is_appledouble_sidecar(Path::new(
+            "/tmp/extracted/wundii-flowcrafter/._FlowConsole.php"
+        )));
+        // Plain hidden files (`.foo`), or `._` mid-name, are NOT sidecars.
+        assert!(!is_appledouble_sidecar(Path::new(".env")));
+        assert!(!is_appledouble_sidecar(Path::new("real._not_sidecar.php")));
+        assert!(!is_appledouble_sidecar(Path::new("index.php")));
+    }
+
+    #[test]
+    fn check_extension_mismatch_suppresses_appledouble_sidecar() {
+        // `._foo.php` extension claims PHP, content is AppleDouble magic →
+        // fileid returns Unknown. Pre-fix this fired the
+        // `metadata/file-extension-mismatch` trait at suspicious for every
+        // `._` file in a macOS-built tarball, lighting up benign Composer
+        // archives. The is_appledouble_sidecar guard must short-circuit.
+        let ad = b"\x00\x05\x16\x07\x00\x02\x00\x00Mac OS X        \x00\x00\x00\x00";
+        assert!(
+            check_extension_content_mismatch(Path::new("wundii/._index.php"), ad).is_none(),
+            "AppleDouble sidecars must not trigger the extension-mismatch trait — \
+             the mismatch is by macOS convention, not evasion"
+        );
+        // Sanity: a real PHP file with PE magic still fires the trait so this
+        // suppression isn't accidentally broader than intended.
+        let pe = b"MZ\x90\x00\x03\x00\x00\x00\x04\x00\x00\x00\xff\xff\x00\x00";
+        assert!(
+            check_extension_content_mismatch(Path::new("legit.php"), pe).is_some(),
+            "non-sidecar files with extension/content mismatch must still flag"
+        );
     }
 }

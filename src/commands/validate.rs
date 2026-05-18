@@ -618,10 +618,10 @@ const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
     ("liblzma.so.5.4.5.xz", 5),
     ("ls.macOS.xz", 9),
     ("package.json.xz", 5),
+    ("php-wundii-flowcrafter.tar.xz", 12),
     ("rand-user-agent.js.xz", 3),
     ("run.bat.xz", 2),
     ("test_cli.py.xz", 3),
-    ("wp-signup.php.xz", 3),
 ];
 
 /// Default per-file score cap for `testdata/does-nothing/` samples.

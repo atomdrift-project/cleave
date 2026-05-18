@@ -23,6 +23,25 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
     // Dispatch on data[0] to avoid evaluating 30+ conditions sequentially.
     // Each arm only checks formats that start with that byte.
     let result = match data[0] {
+        0x00 => {
+            // AppleDouble (`._<name>`) resource forks: 00 05 16 07.
+            // macOS routinely smuggles these into tarballs alongside real
+            // files. Their bodies are binary metadata blobs (xattrs, finder
+            // info, resource forks), not the file types their extension
+            // claims. Return Unknown so cleave's `is_program()` skip kicks
+            // in — otherwise `._foo.php` gets analyzed as PHP, the binary
+            // body trips entropy/obfuscation traits, and a benign Composer
+            // tarball lights up at suspicious.
+            if data.len() >= 4
+                && data[1] == 0x05
+                && data[2] == 0x16
+                && data[3] == 0x07
+            {
+                Some((FileType::Unknown, DetectionSource::Magic))
+            } else {
+                None
+            }
+        }
         0x7F => {
             // ELF: 7F 45 4C 46
             if data.len() >= 4 && data[1] == b'E' && data[2] == b'L' && data[3] == b'F' {

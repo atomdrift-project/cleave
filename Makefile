@@ -7,7 +7,7 @@ OUT_DIR = out
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate
+.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once
 
 # Default target
 all: build
@@ -35,6 +35,8 @@ help: ## Show this help
 	@echo "  validate              - Validate trait definitions (for: restrictions, taxonomy, etc.)"
 	@echo "  benchmark             - Benchmark release build against ~/data/benchmark/ (DATASET=200MB)"
 	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
+	@echo "  tuna                  - LLM autoresearch loop: propose, gate, bench, cherry-pick wins (Ctrl-C to stop)"
+	@echo "  tuna-once             - Run one tuna cycle then cherry-pick accepted experiments"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -233,6 +235,45 @@ loadtest: ## Run load test against cleave server
 	@cd tools/loadtest && go build -o loadtest .
 	@echo "✓ Running load test..."
 	@tools/loadtest/loadtest $(LOADTEST_ARGS)
+
+# cleave-tuna: LLM-driven CPU+memory autoresearch loop.
+# See ../cleave-tuna/README.md.
+TUNA_REPO        ?= ../cleave-tuna
+TUNA_BIN         ?= $(TUNA_REPO)/out/cleave-tuna
+TUNA_DATASET     ?= 100MB
+TUNA_EXPERIMENTS ?= 6
+TUNA_SAMPLES     ?= 3
+TUNA_PROVIDER    ?= gemini
+TUNA_MODE        ?=
+TUNA_INTERVAL    ?= 30
+
+tuna: ## Run cleave-tuna in a loop; cherry-pick accepted experiments onto current branch
+	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before starting tuna"; exit 1; }
+	@echo "tuna: looping forever (Ctrl-C to stop). settings: dataset=$(TUNA_DATASET) experiments=$(TUNA_EXPERIMENTS) samples=$(TUNA_SAMPLES) provider=$(TUNA_PROVIDER) mode=$(TUNA_MODE)"
+	@while true; do \
+		$(MAKE) tuna-once || exit $$?; \
+		echo "tuna: sleeping $(TUNA_INTERVAL)s before next cycle — Ctrl-C to stop"; \
+		sleep $(TUNA_INTERVAL); \
+	done
+
+tuna-once: ## One cleave-tuna cycle, then cherry-pick accepted experiments
+	@test -x $(TUNA_BIN) || { echo "build cleave-tuna first: (cd $(TUNA_REPO) && make build)"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before tuna-once"; exit 1; }
+	@before=$$(git rev-parse HEAD); \
+	$(TUNA_BIN) --source $(CURDIR) --root $(TUNA_REPO) --dataset $(TUNA_DATASET) \
+		--experiments $(TUNA_EXPERIMENTS) --samples $(TUNA_SAMPLES) \
+		--provider $(TUNA_PROVIDER) $(if $(TUNA_MODE),--$(TUNA_MODE),) \
+		|| { echo "tuna: cleave-tuna exited non-zero; not cherry-picking"; exit 1; }; \
+	branch=$$(git for-each-ref --sort=-committerdate --format='%(refname:short)' 'refs/heads/tuna/*' | head -1); \
+	if [ -z "$$branch" ]; then echo "tuna: no tuna/* branch found"; exit 0; fi; \
+	ahead=$$(git rev-list --count $$before..$$branch); \
+	if [ "$$ahead" = "0" ]; then \
+		echo "tuna: no accepted experiments on $$branch — nothing to cherry-pick"; \
+		exit 0; \
+	fi; \
+	echo "tuna: cherry-picking $$ahead commit(s) from $$branch"; \
+	git cherry-pick $$branch~$$ahead..$$branch
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)

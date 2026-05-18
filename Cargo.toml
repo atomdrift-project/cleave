@@ -277,6 +277,10 @@ proptest = "1.11"
 name = "analyze"
 harness = false
 
+[profile.release]
+lto = "fat"
+codegen-units = 1
+
 [profile.profiling]
 inherits = "release"
 debug = true

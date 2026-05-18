@@ -243,6 +243,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "ip",
     "ipc",
     "modbus",   // Modbus industrial control protocol          (TCP 502)
+    "nats",     // NATS pub/sub messaging                      (TCP 4222)
     "opcua",    // OPC UA industrial interoperability          (TCP 4840)
     "profinet", // PROFINET industrial Ethernet                (RT/IRT)
     "proxy",

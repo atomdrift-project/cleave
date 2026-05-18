@@ -236,6 +236,249 @@ impl AnalysisReport {
     /// are stashed under `_legacy` so we never lose data. Used by
     /// every per-format kv attacher (`png`, `jpeg`, `class`, `pyc`,
     /// `pickle`, `jar`, `rpm`, …).
+    /// Materialize an `archive.*` kv subtree from `archive_contents`.
+    ///
+    /// Emits one entry per member (with all forensic fields the extractors
+    /// captured) plus aggregate subtrees that traits can match on without
+    /// iterating the array themselves:
+    ///
+    /// - `archive.members[]` — full per-member objects (paths, sha256,
+    ///   sizes, mode bits, mtime, uid/gid/uname/gname, link targets).
+    /// - `archive.member_count` — total entries surfaced.
+    /// - `archive.compression.{methods, method_counts, ratio}` — choice of
+    ///   compressor across members and the aggregate ratio.
+    /// - `archive.timing.{mtime_min, mtime_max, mtime_spread_seconds,
+    ///   mtime_unique_count}` — temporal fingerprint useful for supply-chain
+    ///   triage (genuine builds cluster, replays smear, reproducible builds
+    ///   pin to one or two epochs).
+    /// - `archive.security.{setuid_count, setgid_count, sticky_count,
+    ///   world_writable_count, symlink_count, external_symlink_count}` —
+    ///   permission/symlink shapes that gate supply-chain risk traits.
+    /// - `archive.format.{entry_types, regular_count, directory_count,
+    ///   symlink_count}` — entry-type histogram.
+    /// - `archive.builder.{unames, gnames}` — POSIX ownership strings tar
+    ///   often leaks (real usernames frequently appear in supply-chain samples).
+    ///
+    /// Idempotent: callers may invoke this multiple times; the last call
+    /// wins. No-op when `archive_contents` is empty.
+    pub(crate) fn seal_archive_metadata_kv(&mut self) {
+        if self.archive_contents.is_empty() {
+            return;
+        }
+
+        use std::collections::BTreeMap;
+        let mut method_counts: BTreeMap<String, u64> = BTreeMap::new();
+        let mut entry_type_counts: BTreeMap<String, u64> = BTreeMap::new();
+        let mut unames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut gnames: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+        let mut mtimes: Vec<i64> = Vec::new();
+        let mut total_uncompressed: u64 = 0;
+        let mut total_compressed: u64 = 0;
+        let mut setuid_count: u64 = 0;
+        let mut setgid_count: u64 = 0;
+        let mut sticky_count: u64 = 0;
+        let mut world_writable_count: u64 = 0;
+        let mut symlink_count: u64 = 0;
+        let mut external_symlink_count: u64 = 0;
+
+        let mut members = Vec::with_capacity(self.archive_contents.len());
+        for entry in &self.archive_contents {
+            let mut obj = serde_json::Map::new();
+            obj.insert("path".into(), serde_json::Value::String(entry.path.clone()));
+            obj.insert(
+                "type".into(),
+                serde_json::Value::String(entry.file_type.clone()),
+            );
+            obj.insert(
+                "sha256".into(),
+                serde_json::Value::String(entry.sha256.clone()),
+            );
+            obj.insert(
+                "size_bytes".into(),
+                serde_json::Value::Number(entry.size_bytes.into()),
+            );
+            if let Some(v) = entry.compressed_size {
+                obj.insert("compressed_size".into(), serde_json::Value::Number(v.into()));
+                total_compressed = total_compressed.saturating_add(v);
+            }
+            total_uncompressed = total_uncompressed.saturating_add(entry.size_bytes);
+            if let Some(ref m) = entry.compression_method {
+                obj.insert(
+                    "compression_method".into(),
+                    serde_json::Value::String(m.clone()),
+                );
+                *method_counts.entry(m.clone()).or_insert(0) += 1;
+            }
+            if let Some(t) = entry.mtime_unix {
+                obj.insert("mtime_unix".into(), serde_json::Value::Number(t.into()));
+                mtimes.push(t);
+            }
+            if let Some(m) = entry.mode_octal {
+                obj.insert("mode_octal".into(), serde_json::Value::Number(m.into()));
+                if m & 0o4000 != 0 {
+                    setuid_count += 1;
+                }
+                if m & 0o2000 != 0 {
+                    setgid_count += 1;
+                }
+                if m & 0o1000 != 0 {
+                    sticky_count += 1;
+                }
+                if m & 0o002 != 0 {
+                    world_writable_count += 1;
+                }
+            }
+            if let Some(u) = entry.uid {
+                obj.insert("uid".into(), serde_json::Value::Number(u.into()));
+            }
+            if let Some(g) = entry.gid {
+                obj.insert("gid".into(), serde_json::Value::Number(g.into()));
+            }
+            if let Some(ref u) = entry.uname {
+                obj.insert("uname".into(), serde_json::Value::String(u.clone()));
+                unames.insert(u.clone());
+            }
+            if let Some(ref g) = entry.gname {
+                obj.insert("gname".into(), serde_json::Value::String(g.clone()));
+                gnames.insert(g.clone());
+            }
+            if let Some(ref t) = entry.entry_type {
+                obj.insert("entry_type".into(), serde_json::Value::String(t.clone()));
+                *entry_type_counts.entry(t.clone()).or_insert(0) += 1;
+                if t == "symlink" {
+                    symlink_count += 1;
+                    if let Some(ref link) = entry.linkname {
+                        if link.starts_with('/') || link.contains("..") {
+                            external_symlink_count += 1;
+                        }
+                    }
+                }
+            }
+            if let Some(ref link) = entry.linkname {
+                obj.insert("linkname".into(), serde_json::Value::String(link.clone()));
+            }
+            if let Some(ref os) = entry.host_os {
+                obj.insert("host_os".into(), serde_json::Value::String(os.clone()));
+            }
+            members.push(serde_json::Value::Object(obj));
+        }
+
+        let mut root = serde_json::Map::new();
+        root.insert("members".into(), serde_json::Value::Array(members));
+        root.insert(
+            "member_count".into(),
+            serde_json::Value::Number((self.archive_contents.len() as u64).into()),
+        );
+
+        if !method_counts.is_empty() || total_compressed > 0 {
+            let mut comp = serde_json::Map::new();
+            let methods: Vec<serde_json::Value> = method_counts
+                .keys()
+                .map(|k| serde_json::Value::String(k.clone()))
+                .collect();
+            let counts: serde_json::Map<String, serde_json::Value> = method_counts
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::Number((*v).into())))
+                .collect();
+            comp.insert("methods".into(), serde_json::Value::Array(methods));
+            comp.insert(
+                "method_counts".into(),
+                serde_json::Value::Object(counts),
+            );
+            if total_uncompressed > 0 && total_compressed > 0 {
+                let ratio = total_compressed as f64 / total_uncompressed as f64;
+                if let Some(n) = serde_json::Number::from_f64(ratio) {
+                    comp.insert("ratio".into(), serde_json::Value::Number(n));
+                }
+            }
+            root.insert("compression".into(), serde_json::Value::Object(comp));
+        }
+
+        if !mtimes.is_empty() {
+            let mut timing = serde_json::Map::new();
+            let min = *mtimes.iter().min().unwrap_or(&0);
+            let max = *mtimes.iter().max().unwrap_or(&0);
+            let unique: std::collections::BTreeSet<i64> = mtimes.iter().copied().collect();
+            timing.insert("mtime_min".into(), serde_json::Value::Number(min.into()));
+            timing.insert("mtime_max".into(), serde_json::Value::Number(max.into()));
+            timing.insert(
+                "mtime_spread_seconds".into(),
+                serde_json::Value::Number((max - min).into()),
+            );
+            timing.insert(
+                "mtime_unique_count".into(),
+                serde_json::Value::Number((unique.len() as u64).into()),
+            );
+            root.insert("timing".into(), serde_json::Value::Object(timing));
+        }
+
+        let mut security = serde_json::Map::new();
+        security.insert(
+            "setuid_count".into(),
+            serde_json::Value::Number(setuid_count.into()),
+        );
+        security.insert(
+            "setgid_count".into(),
+            serde_json::Value::Number(setgid_count.into()),
+        );
+        security.insert(
+            "sticky_count".into(),
+            serde_json::Value::Number(sticky_count.into()),
+        );
+        security.insert(
+            "world_writable_count".into(),
+            serde_json::Value::Number(world_writable_count.into()),
+        );
+        security.insert(
+            "symlink_count".into(),
+            serde_json::Value::Number(symlink_count.into()),
+        );
+        security.insert(
+            "external_symlink_count".into(),
+            serde_json::Value::Number(external_symlink_count.into()),
+        );
+        root.insert("security".into(), serde_json::Value::Object(security));
+
+        if !entry_type_counts.is_empty() {
+            let mut fmt = serde_json::Map::new();
+            let types: Vec<serde_json::Value> = entry_type_counts
+                .keys()
+                .map(|k| serde_json::Value::String(k.clone()))
+                .collect();
+            fmt.insert("entry_types".into(), serde_json::Value::Array(types));
+            for (k, v) in &entry_type_counts {
+                fmt.insert(
+                    format!("{}_count", k.replace('-', "_")),
+                    serde_json::Value::Number((*v).into()),
+                );
+            }
+            root.insert("format".into(), serde_json::Value::Object(fmt));
+        }
+
+        if !unames.is_empty() || !gnames.is_empty() {
+            let mut builder = serde_json::Map::new();
+            if !unames.is_empty() {
+                builder.insert(
+                    "unames".into(),
+                    serde_json::Value::Array(
+                        unames.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                    ),
+                );
+            }
+            if !gnames.is_empty() {
+                builder.insert(
+                    "gnames".into(),
+                    serde_json::Value::Array(
+                        gnames.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                    ),
+                );
+            }
+            root.insert("builder".into(), serde_json::Value::Object(builder));
+        }
+
+        self.merge_kv_subtree("archive", serde_json::Value::Object(root));
+    }
+
     pub(crate) fn merge_kv_subtree(&mut self, namespace: &str, value: serde_json::Value) {
         let mut root = match self.kv_tree.take().map(|b| *b) {
             Some(serde_json::Value::Object(m)) => m,
@@ -831,7 +1074,13 @@ impl TargetInfo {
 /// Metadata about a file contained within an archive
 /// The path field matches Evidence.location without the "archive:" prefix.
 /// For nested archives, uses `!` separator: "inner.tar.gz!path/to/file.txt"
-#[derive(Debug, Serialize, Deserialize, Clone)]
+///
+/// The optional fields below are populated by format-aware extractors (zip,
+/// tar). They surface forensically-useful header data that the archive
+/// carries: timestamps, POSIX ownership/mode, compression choice, entry
+/// type, link targets. Traits at the archive root query these via the
+/// `archive.members[]` kv subtree materialized by `seal_archive_metadata_kv`.
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 pub struct ArchiveEntry {
     /// Path within the archive. For nested archives, uses `!` separator.
     /// Examples: "lib/utils.so", "inner.tar.gz!malware/script.sh"
@@ -841,8 +1090,48 @@ pub struct ArchiveEntry {
     pub file_type: String,
     /// SHA256 hash of the file contents
     pub sha256: String,
-    /// File size in bytes
+    /// File size in bytes (uncompressed)
     pub size_bytes: u64,
+
+    /// Compressed size in bytes (zip per-entry; tar entries are uncompressed so this matches size_bytes).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compressed_size: Option<u64>,
+    /// Compression method: "stored", "deflate", "lzma", "zstd", "bzip2", etc.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub compression_method: Option<String>,
+    /// Modification time as Unix epoch seconds. Zip stores 2-second-resolution
+    /// DOS time by default; the UT extra-field carries real Unix timestamps.
+    /// Tar carries native Unix time.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mtime_unix: Option<i64>,
+    /// POSIX mode bits (12 low bits standard; setuid/setgid/sticky included).
+    /// Zip provides this only when version_made_by indicates a Unix host;
+    /// tar always provides it. Format: decimal of the 16-bit mode value.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub mode_octal: Option<u32>,
+    /// Numeric user id (tar only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub uid: Option<u64>,
+    /// Numeric group id (tar only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gid: Option<u64>,
+    /// User name string (tar only — surprisingly often the real username).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub uname: Option<String>,
+    /// Group name string (tar only).
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub gname: Option<String>,
+    /// Entry type: "regular", "symlink", "hardlink", "dir", "char-dev",
+    /// "block-dev", "fifo", "pax-header", "gnu-longname", etc.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub entry_type: Option<String>,
+    /// Link target for symlinks and hardlinks.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub linkname: Option<String>,
+    /// Host OS that created the entry (zip version_made_by upper byte).
+    /// Values: "msdos", "unix", "macintosh", "ntfs", "vfat", "amiga", etc.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub host_os: Option<String>,
 }
 
 #[cfg(test)]
@@ -1007,6 +1296,7 @@ mod tests {
             file_type: "elf".to_string(),
             sha256: "abc123".to_string(),
             size_bytes: 4096,
+            ..ArchiveEntry::default()
         };
 
         assert_eq!(entry.path, "lib/utils.so");
@@ -1020,6 +1310,7 @@ mod tests {
             file_type: "shell".to_string(),
             sha256: "def456".to_string(),
             size_bytes: 256,
+            ..ArchiveEntry::default()
         };
 
         assert!(entry.path.contains('!'));

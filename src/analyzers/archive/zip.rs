@@ -11,8 +11,8 @@
 //! - Firefox extensions (.xpi)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
-    LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractedMemberMetadata,
+    ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
 use crate::types::{container_metrics::ArchiveMetrics, ArchiveEntry};
 use anyhow::{Context, Result};
@@ -64,6 +64,7 @@ pub(crate) fn inspect_zip_metadata_from_reader<R: Read + Seek>(
             file_type: "unknown".to_string(),
             sha256: String::new(),
             size_bytes: entry.size(),
+            ..ArchiveEntry::default()
         });
     }
 
@@ -263,6 +264,22 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
         let entry_name = entry.name().to_string();
         trace!("Entry {}: {}", i, entry_name);
 
+        let compressed_size = Some(entry.compressed_size());
+        let compression_method = Some(format_zip_compression(entry.compression()));
+        let mtime_unix = entry.last_modified().and_then(zip_datetime_to_unix);
+        let mode_octal = entry.unix_mode();
+        let is_dir_flag = entry.is_dir();
+        let is_symlink_flag = entry
+            .unix_mode()
+            .is_some_and(|m| m & 0o170000 == 0o120000);
+        let entry_type_str = if is_dir_flag {
+            "directory"
+        } else if is_symlink_flag {
+            "symlink"
+        } else {
+            "regular"
+        };
+
         if entry_name.len() > MAX_PATH_COMPONENT_LEN {
             guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
                 len: entry_name.len(),
@@ -275,6 +292,12 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
             guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
             continue; // Skip this file but continue extraction
         };
+
+        let rel_path = outpath
+            .strip_prefix(dest_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| entry_name.clone());
+        let mut linkname_capture: Option<String> = None;
 
         // Check for symlinks (zip files can contain them via external attributes)
         // S_IFLNK = 0o120000, S_IFMT = 0o170000
@@ -293,13 +316,43 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
                                     format!("{} -> {}", entry_name, target_str),
                                 ));
                             }
+                            linkname_capture = Some(target_str);
                         }
                     }
                 }
+                guard.record_member_metadata(ExtractedMemberMetadata {
+                    archive_path: rel_path,
+                    compressed_size,
+                    compression_method,
+                    mtime_unix,
+                    mode_octal,
+                    uid: None,
+                    gid: None,
+                    uname: None,
+                    gname: None,
+                    entry_type: Some(entry_type_str.to_string()),
+                    linkname: linkname_capture,
+                    host_os: None,
+                });
                 // Skip symlinks regardless (we don't extract them)
                 continue;
             }
         }
+
+        guard.record_member_metadata(ExtractedMemberMetadata {
+            archive_path: rel_path,
+            compressed_size,
+            compression_method,
+            mtime_unix,
+            mode_octal,
+            uid: None,
+            gid: None,
+            uname: None,
+            gname: None,
+            entry_type: Some(entry_type_str.to_string()),
+            linkname: None,
+            host_os: None,
+        });
 
         if entry.is_dir() {
             fs::create_dir_all(&outpath)?;
@@ -368,11 +421,74 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
     Ok(())
 }
 
+/// Short label for a ZIP compression method.
+pub(super) fn format_zip_compression(method: zip::CompressionMethod) -> String {
+    use zip::CompressionMethod;
+    match method {
+        CompressionMethod::Stored => "stored".to_string(),
+        CompressionMethod::Deflated => "deflate".to_string(),
+        CompressionMethod::Bzip2 => "bzip2".to_string(),
+        CompressionMethod::Zstd => "zstd".to_string(),
+        CompressionMethod::Lzma => "lzma".to_string(),
+        CompressionMethod::Xz => "xz".to_string(),
+        CompressionMethod::Aes => "aes".to_string(),
+        other => format!("{:?}", other).to_ascii_lowercase(),
+    }
+}
+
+/// Convert a ZIP `DateTime` (interpreted as UTC) to unix seconds.
+///
+/// ZIP stores timestamps as MS-DOS date/time pairs with no timezone; treating
+/// them as UTC is the conventional interpretation for forensic comparison.
+pub(super) fn zip_datetime_to_unix(dt: zip::DateTime) -> Option<i64> {
+    let year = dt.year();
+    if year < 1970 || year > 2999 {
+        return None;
+    }
+    let days = days_from_civil(year as i32, dt.month() as u32, dt.day() as u32)?;
+    let secs = (dt.hour() as i64) * 3600
+        + (dt.minute() as i64) * 60
+        + (dt.second() as i64);
+    Some(days * 86_400 + secs)
+}
+
+/// Days from 1970-01-01 for the given Gregorian (y, m, d).
+/// Based on Howard Hinnant's chrono algorithms (date.h). Returns `None` for
+/// invalid month/day values.
+fn days_from_civil(y: i32, m: u32, d: u32) -> Option<i64> {
+    if !(1..=12).contains(&m) || d == 0 || d > 31 {
+        return None;
+    }
+    let y_adj = if m <= 2 { y - 1 } else { y };
+    let era = y_adj.div_euclid(400);
+    let yoe = (y_adj - era * 400) as u32;
+    let mp = if m > 2 { m - 3 } else { m + 9 };
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some((era as i64) * 146_097 + doe as i64 - 719_468)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::analyzers::archive::guards::ExtractionGuard;
     use tempfile::tempdir;
+
+    #[test]
+    fn test_days_from_civil_epoch() {
+        assert_eq!(days_from_civil(1970, 1, 1), Some(0));
+        assert_eq!(days_from_civil(1970, 1, 2), Some(1));
+        assert_eq!(days_from_civil(2000, 1, 1), Some(10_957));
+        assert_eq!(days_from_civil(2024, 1, 1), Some(19_723));
+    }
+
+    #[test]
+    fn test_days_from_civil_invalid() {
+        assert_eq!(days_from_civil(2024, 0, 1), None);
+        assert_eq!(days_from_civil(2024, 13, 1), None);
+        assert_eq!(days_from_civil(2024, 1, 0), None);
+        assert_eq!(days_from_civil(2024, 1, 32), None);
+    }
 
     #[test]
     #[allow(clippy::expect_used)]

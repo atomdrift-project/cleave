@@ -26,7 +26,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use ::zip::ZipArchive;
-use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE};
+use guards::{
+    sanitize_entry_path, ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE,
+    MAX_TOTAL_SIZE,
+};
 use utils::calculate_sha256;
 
 /// Default maximum file size to keep in memory (100 MB)
@@ -794,6 +797,7 @@ impl ArchiveAnalyzer {
                     ..Default::default()
                 }],
             });
+            report.seal_archive_metadata_kv();
             self.evaluate_container_findings(&mut report);
             return Ok(report);
         }
@@ -802,6 +806,10 @@ impl ArchiveAnalyzer {
             && !zip_has_encrypted_entries(data).unwrap_or(false)
         {
             self.analyze_zip_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            let member_metadata = guard.take_member_metadata();
+            if !member_metadata.is_empty() {
+                merge_archive_member_metadata(&mut report, member_metadata);
+            }
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal =
                 should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
@@ -831,6 +839,7 @@ impl ArchiveAnalyzer {
             // down; the in-memory short-circuit needs the same pass
             // or composites like `python-package-with-dll` will never
             // see member basenames.
+            report.seal_archive_metadata_kv();
             self.evaluate_container_findings(&mut report);
             return Ok(report);
         }
@@ -887,6 +896,15 @@ impl ArchiveAnalyzer {
             self.analyze_generic_archive(temp_dir.path(), &mut report, start);
         }
 
+        // Drain per-entry forensic metadata captured during extraction and
+        // merge it into `report.archive_contents` by archive-relative path.
+        // Aggregate kv-tree exposure (`archive.compression.*`,
+        // `archive.timing.*`, …) is built later when the report is sealed.
+        let member_metadata = guard.take_member_metadata();
+        if !member_metadata.is_empty() {
+            merge_archive_member_metadata(&mut report, member_metadata);
+        }
+
         let analysis_elapsed = start.elapsed();
         if analysis_elapsed.as_secs() > 60 {
             tracing::warn!(
@@ -900,6 +918,7 @@ impl ArchiveAnalyzer {
             );
         }
 
+        report.seal_archive_metadata_kv();
         self.evaluate_container_findings(&mut report);
 
         Ok(report)
@@ -1093,6 +1112,77 @@ impl Analyzer for ArchiveAnalyzer {
         crate::analyzers::detect_file_type(file_path)
             .map(|ft| ft.is_archive())
             .unwrap_or(false)
+    }
+}
+
+/// Merge per-entry forensic metadata captured by [`ExtractionGuard`] during
+/// extraction into the matching `ArchiveEntry` items in `report.archive_contents`.
+///
+/// Matching strategy: exact match on `archive_path` first (top-level archives),
+/// then fall back to the suffix after the last `!` (nested archives, where
+/// `ArchiveEntry.path` is `parent.zip!inner/path`). Only optional fields that
+/// are still `None` are populated — never overwrite values already set by the
+/// caller. Entries in the metadata vec that don't match any `ArchiveEntry`
+/// (e.g. directories or symlinks not surfaced in `archive_contents`) are
+/// dropped silently; aggregate kv exposure will capture them in a later pass.
+fn merge_archive_member_metadata(
+    report: &mut AnalysisReport,
+    metadata: Vec<ExtractedMemberMetadata>,
+) {
+    use std::collections::HashMap;
+
+    let mut by_path: HashMap<String, ExtractedMemberMetadata> = metadata
+        .into_iter()
+        .map(|m| (m.archive_path.clone(), m))
+        .collect();
+
+    for entry in &mut report.archive_contents {
+        let key = if by_path.contains_key(&entry.path) {
+            Some(entry.path.clone())
+        } else {
+            entry
+                .path
+                .rsplit('!')
+                .next()
+                .filter(|s| by_path.contains_key(*s))
+                .map(|s| s.to_string())
+        };
+        let Some(key) = key else { continue };
+        let Some(meta) = by_path.remove(&key) else { continue };
+
+        if entry.compressed_size.is_none() {
+            entry.compressed_size = meta.compressed_size;
+        }
+        if entry.compression_method.is_none() {
+            entry.compression_method = meta.compression_method;
+        }
+        if entry.mtime_unix.is_none() {
+            entry.mtime_unix = meta.mtime_unix;
+        }
+        if entry.mode_octal.is_none() {
+            entry.mode_octal = meta.mode_octal;
+        }
+        if entry.uid.is_none() {
+            entry.uid = meta.uid;
+        }
+        if entry.gid.is_none() {
+            entry.gid = meta.gid;
+        }
+        if entry.uname.is_none() {
+            entry.uname = meta.uname;
+        }
+        if entry.gname.is_none() {
+            entry.gname = meta.gname;
+        }
+        if entry.entry_type.is_none() {
+            entry.entry_type = meta.entry_type;
+        }
+        if entry.linkname.is_none() {
+            entry.linkname = meta.linkname;
+        }
+        if entry.host_os.is_none() {
+            entry.host_os = meta.host_os;
+        }
     }
 }
 
@@ -1587,6 +1677,81 @@ composite_rules:
             "Should have nested entry with ! separator: {:?}",
             report.archive_contents
         );
+    }
+
+    #[test]
+    fn test_archive_member_metadata_captured() {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use tar::Builder;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let outer_zip_path = temp_dir.path().join("outer.zip");
+
+        // tar.gz containing one file with explicit mode + mtime
+        let inner_tar_gz_data = {
+            let mut tar_data = Vec::new();
+            {
+                let enc = GzEncoder::new(&mut tar_data, Compression::default());
+                let mut tar_builder = Builder::new(enc);
+                let content = b"#!/bin/sh\necho hi";
+                let mut header = tar::Header::new_gnu();
+                header.set_path("payload.sh").unwrap();
+                header.set_size(content.len() as u64);
+                header.set_mode(0o755);
+                header.set_mtime(1_700_000_000);
+                header.set_uid(1000);
+                header.set_gid(1000);
+                header.set_username("alice").unwrap();
+                header.set_groupname("staff").unwrap();
+                header.set_cksum();
+                tar_builder.append(&header, &content[..]).unwrap();
+                tar_builder.finish().unwrap();
+            }
+            tar_data
+        };
+
+        // ZIP wrapping the tar.gz, Stored compression so we can assert it.
+        {
+            let file = File::create(&outer_zip_path).unwrap();
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("inner.tar.gz", options).unwrap();
+            std::io::Write::write_all(&mut zip, &inner_tar_gz_data).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let report = ArchiveAnalyzer::new().analyze(&outer_zip_path).unwrap();
+
+        let outer = report
+            .archive_contents
+            .iter()
+            .find(|e| e.path == "inner.tar.gz")
+            .expect("outer ZIP member missing");
+        assert_eq!(
+            outer.compression_method.as_deref(),
+            Some("stored"),
+            "ZIP compression_method should be 'stored' for the outer entry"
+        );
+        assert_eq!(outer.entry_type.as_deref(), Some("regular"));
+
+        let inner = report
+            .archive_contents
+            .iter()
+            .find(|e| e.path == "inner.tar.gz!payload.sh")
+            .expect("nested tar member missing");
+        assert_eq!(
+            inner.mode_octal,
+            Some(0o755),
+            "nested tar entry should preserve mode_octal"
+        );
+        assert_eq!(inner.mtime_unix, Some(1_700_000_000));
+        assert_eq!(inner.uid, Some(1000));
+        assert_eq!(inner.gid, Some(1000));
+        assert_eq!(inner.uname.as_deref(), Some("alice"));
+        assert_eq!(inner.gname.as_deref(), Some("staff"));
+        assert_eq!(inner.entry_type.as_deref(), Some("regular"));
     }
 
     #[test]

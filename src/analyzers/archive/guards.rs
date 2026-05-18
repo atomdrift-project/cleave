@@ -37,6 +37,32 @@ pub(crate) const MAX_COMPRESSION_RATIO: u64 = 100;
 /// under the normal per-file extraction cap.
 pub(crate) const MIN_ZIP_BOMB_UNCOMPRESSED_SIZE: u64 = 100 * 1024 * 1024;
 
+/// Per-member forensic metadata captured during extraction.
+///
+/// Fields are populated from the archive container format (tar headers, ZIP
+/// central directory, etc.) at the point the entry is read. After extraction
+/// completes, [`ExtractionGuard::take_member_metadata`] is drained and merged
+/// into the corresponding [`crate::types::core::ArchiveEntry`] items by path.
+///
+/// `archive_path` is the entry name as recorded *inside* the archive — kept
+/// pre-sanitization so the merge can key by the same string the analyzer
+/// computes from the extracted directory walk (after sanitization round-trip).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ExtractedMemberMetadata {
+    pub archive_path: String,
+    pub compressed_size: Option<u64>,
+    pub compression_method: Option<String>,
+    pub mtime_unix: Option<i64>,
+    pub mode_octal: Option<u32>,
+    pub uid: Option<u64>,
+    pub gid: Option<u64>,
+    pub uname: Option<String>,
+    pub gname: Option<String>,
+    pub entry_type: Option<String>,
+    pub linkname: Option<String>,
+    pub host_os: Option<String>,
+}
+
 /// Reasons an archive may be considered hostile
 #[derive(Debug, Clone)]
 pub(crate) enum HostileArchiveReason {
@@ -77,6 +103,7 @@ pub(crate) struct ExtractionGuard {
     total_bytes: AtomicU64,
     file_count: AtomicUsize,
     hostile_reasons: Mutex<Vec<HostileArchiveReason>>,
+    member_metadata: Mutex<Vec<ExtractedMemberMetadata>>,
     /// Per-request cancellation flag from the server. When set, extraction
     /// stops at the next entry boundary via `check_file_count()`.
     cancellation: Option<Arc<AtomicBool>>,
@@ -89,6 +116,7 @@ impl ExtractionGuard {
             total_bytes: AtomicU64::new(0),
             file_count: AtomicUsize::new(0),
             hostile_reasons: Mutex::new(Vec::new()),
+            member_metadata: Mutex::new(Vec::new()),
             cancellation: None,
         }
     }
@@ -99,6 +127,7 @@ impl ExtractionGuard {
             total_bytes: AtomicU64::new(0),
             file_count: AtomicUsize::new(0),
             hostile_reasons: Mutex::new(Vec::new()),
+            member_metadata: Mutex::new(Vec::new()),
             cancellation: flag,
         }
     }
@@ -125,6 +154,22 @@ impl ExtractionGuard {
         self.hostile_reasons
             .lock()
             .map(|mut r| std::mem::take(&mut *r))
+            .unwrap_or_default()
+    }
+
+    /// Record forensic metadata for an archive entry. Called from per-format
+    /// extractors (tar, zip, …) when the entry header is read.
+    pub(crate) fn record_member_metadata(&self, metadata: ExtractedMemberMetadata) {
+        if let Ok(mut entries) = self.member_metadata.lock() {
+            entries.push(metadata);
+        }
+    }
+
+    /// Drain accumulated per-member metadata for merging into the final report.
+    pub(crate) fn take_member_metadata(&self) -> Vec<ExtractedMemberMetadata> {
+        self.member_metadata
+            .lock()
+            .map(|mut m| std::mem::take(&mut *m))
             .unwrap_or_default()
     }
 

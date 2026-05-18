@@ -13,8 +13,8 @@
 //! - Alpine Linux packages (.apk) - TAR.GZ format (detected by magic)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, ExtractionGuard, HostileArchiveReason, LimitedReader,
-    MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+    sanitize_entry_path, symlink_escapes, ExtractedMemberMetadata, ExtractionGuard,
+    HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
 use anyhow::{Context, Result};
 use std::fs::{self, File};
@@ -51,10 +51,56 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
         };
 
         let entry_type = entry.header().entry_type();
+        let header = entry.header();
+        let mode_octal = header.mode().ok();
+        let uid = header.uid().ok();
+        let gid = header.gid().ok();
+        let mtime_unix = header.mtime().ok().map(|m| m as i64);
+        let uname = header
+            .username()
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let gname = header
+            .groupname()
+            .ok()
+            .flatten()
+            .filter(|s| !s.is_empty())
+            .map(|s| s.to_string());
+        let entry_type_str = tar_entry_type_label(entry_type);
+        let rel_path = outpath
+            .strip_prefix(dest_dir)
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| entry_name.clone());
+        let linkname_opt = if entry_type.is_symlink() || entry_type.is_hard_link() {
+            entry
+                .link_name()
+                .ok()
+                .flatten()
+                .map(|p| p.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        guard.record_member_metadata(ExtractedMemberMetadata {
+            archive_path: rel_path,
+            compressed_size: None,
+            compression_method: None,
+            mtime_unix,
+            mode_octal,
+            uid,
+            gid,
+            uname,
+            gname,
+            entry_type: Some(entry_type_str.to_string()),
+            linkname: linkname_opt.clone(),
+            host_os: None,
+        });
+
         if entry_type.is_symlink() || entry_type.is_hard_link() {
-            if let Ok(Some(link_target)) = entry.link_name() {
-                let target_str = link_target.to_string_lossy();
-                if symlink_escapes(&outpath, &target_str, dest_dir) {
+            if let Some(target_str) = linkname_opt.as_deref() {
+                if symlink_escapes(&outpath, target_str, dest_dir) {
                     guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
                         "{} -> {}",
                         entry_name, target_str
@@ -121,4 +167,25 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
     }
 
     Ok(())
+}
+
+/// Map a tar EntryType to a short forensic label.
+fn tar_entry_type_label(t: tar::EntryType) -> &'static str {
+    use tar::EntryType;
+    match t {
+        EntryType::Regular => "regular",
+        EntryType::Link => "hardlink",
+        EntryType::Symlink => "symlink",
+        EntryType::Char => "char-device",
+        EntryType::Block => "block-device",
+        EntryType::Directory => "directory",
+        EntryType::Fifo => "fifo",
+        EntryType::Continuous => "continuous",
+        EntryType::GNULongName => "gnu-longname",
+        EntryType::GNULongLink => "gnu-longlink",
+        EntryType::GNUSparse => "gnu-sparse",
+        EntryType::XGlobalHeader => "pax-global",
+        EntryType::XHeader => "pax-header",
+        _ => "other",
+    }
 }

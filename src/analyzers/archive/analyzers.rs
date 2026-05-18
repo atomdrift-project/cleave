@@ -656,10 +656,30 @@ impl ArchiveAnalyzer {
                 .to_string_lossy()
                 .replace('\\', "/");
 
+            // Capture forensic metadata from the central-directory header
+            // before any reads consume the entry. linkname is set in the
+            // symlink branch below; non-symlink/non-dir entries record here.
+            let entry_compressed_size = entry.compressed_size();
+            let entry_compression = super::zip::format_zip_compression(entry.compression());
+            let entry_mtime = entry.last_modified().and_then(super::zip::zip_datetime_to_unix);
+            let entry_mode_octal = entry.unix_mode();
+            let entry_is_dir = entry.is_dir();
+            let entry_is_symlink = entry
+                .unix_mode()
+                .is_some_and(|m| m & 0o170000 == 0o120000);
+            let entry_type_label = if entry_is_dir {
+                "directory"
+            } else if entry_is_symlink {
+                "symlink"
+            } else {
+                "regular"
+            };
+
             if let Some(mode) = entry.unix_mode() {
                 if mode & 0o170000 == 0o120000 {
                     let mut target_buf = Vec::new();
                     let mut limited = LimitedReader::new(&mut entry, 4096);
+                    let mut linkname_capture: Option<String> = None;
                     if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
                         if read_size > 0 && read_size < 4096 {
                             if let Ok(target_str) = String::from_utf8(target_buf) {
@@ -668,9 +688,26 @@ impl ArchiveAnalyzer {
                                         format!("{} -> {}", entry_name, target_str),
                                     ));
                                 }
+                                linkname_capture = Some(target_str);
                             }
                         }
                     }
+                    guard.record_member_metadata(
+                        super::guards::ExtractedMemberMetadata {
+                            archive_path: relative_path.clone(),
+                            compressed_size: Some(entry_compressed_size),
+                            compression_method: Some(entry_compression),
+                            mtime_unix: entry_mtime,
+                            mode_octal: entry_mode_octal,
+                            uid: None,
+                            gid: None,
+                            uname: None,
+                            gname: None,
+                            entry_type: Some(entry_type_label.to_string()),
+                            linkname: linkname_capture,
+                            host_os: None,
+                        },
+                    );
                     continue;
                 }
             }
@@ -678,6 +715,21 @@ impl ArchiveAnalyzer {
             if entry.is_dir() {
                 continue;
             }
+
+            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                archive_path: relative_path.clone(),
+                compressed_size: Some(entry_compressed_size),
+                compression_method: Some(entry_compression),
+                mtime_unix: entry_mtime,
+                mode_octal: entry_mode_octal,
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some(entry_type_label.to_string()),
+                linkname: None,
+                host_os: None,
+            });
             if entry.encrypted() {
                 anyhow::bail!("Password required to decrypt file");
             }
@@ -907,6 +959,7 @@ impl ArchiveAnalyzer {
             file_type: member.file_type.report_file_type(),
             sha256: member.sha256.clone(),
             size_bytes: member.data.len() as u64,
+            ..ArchiveEntry::default()
         };
         let member_start = std::time::Instant::now();
         let logical_path = Path::new(&member.relative_path);
@@ -1435,6 +1488,7 @@ impl ArchiveAnalyzer {
                     file_type: file_type.report_file_type(),
                     sha256: sha256.clone(),
                     size_bytes: file_data.len() as u64,
+                    ..ArchiveEntry::default()
                 };
 
                 let member_start = std::time::Instant::now();
@@ -1641,6 +1695,7 @@ impl ArchiveAnalyzer {
                     file_type: file_type.report_file_type(),
                     sha256: sha256.clone(),
                     size_bytes: file_data.len() as u64,
+                    ..ArchiveEntry::default()
                 };
 
                 let member_start = std::time::Instant::now();
@@ -1917,6 +1972,7 @@ impl ArchiveAnalyzer {
                     file_type: file_type.report_file_type(),
                     sha256: sha256.clone(),
                     size_bytes: file_data.len() as u64,
+                    ..ArchiveEntry::default()
                 };
 
                 let member_start = std::time::Instant::now();
@@ -2084,25 +2140,10 @@ impl ArchiveAnalyzer {
         report.archive_contents.extend(collected_archive_entries);
         report.files.extend(collected_files);
 
-        // Expose archive member paths as a kv-subtree so traits can match on
-        // archive contents. The motivating case is Mozilla-signed `.xpi`
-        // extensions, which carry `META-INF/cose.manifest` + `META-INF/
-        // mozilla.{rsa,sf}` as a signature chain — recognizing those member
-        // paths gives a `metadata/signed/platform::mozilla-extension` benign-
-        // context marker analogous to the existing Microsoft-Windows signing
-        // detection. Use kv path `archive.members[]` to match individual
-        // entries via `regex:` or `exact:`.
-        if !report.archive_contents.is_empty() {
-            let members: Vec<serde_json::Value> = report
-                .archive_contents
-                .iter()
-                .map(|e| serde_json::Value::String(e.path.clone()))
-                .collect();
-            report.merge_kv_subtree(
-                "archive",
-                serde_json::json!({ "members": members }),
-            );
-        }
+        // Emit the `archive.*` kv subtree (members + aggregates) so traits
+        // can match on archive contents and shape. See
+        // [`AnalysisReport::seal_archive_metadata_kv`] for the field layout.
+        report.seal_archive_metadata_kv();
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(

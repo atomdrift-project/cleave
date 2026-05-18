@@ -728,6 +728,7 @@ impl UnifiedSourceAnalyzer {
                 file_type: payload.detected_type.report_file_type(),
                 sha256: crate::analyzers::utils::calculate_sha256(&payload_content),
                 size_bytes: payload_content.len() as u64,
+                ..crate::types::ArchiveEntry::default()
             };
             report.archive_contents.push(entry_metadata);
 
@@ -810,6 +811,7 @@ impl UnifiedSourceAnalyzer {
                     file_type: payload.detected_type.report_file_type(),
                     sha256: crate::analyzers::utils::calculate_sha256(&payload_content),
                     size_bytes: payload_content.len() as u64,
+                    ..crate::types::ArchiveEntry::default()
                 };
                 report.archive_contents.push(entry_metadata);
 

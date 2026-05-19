@@ -5,6 +5,10 @@
 BINARY = cleave
 OUT_DIR = out
 
+# Honor CARGO_TARGET_DIR if set (cleave-tuna sets it to share the cargo cache
+# across worktrees). Falls back to the cargo default `target` otherwise.
+CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
+
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
 .PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once
@@ -75,7 +79,7 @@ check-cargo: ## Verify cargo is installed
 release: check-cargo $(OUT_DIR) ## Build in release mode
 	@echo "Building $(BINARY) (release mode, treating warnings as errors)..."
 	cargo build --release --features jemalloc
-	cp target/release/$(BINARY) $(OUT_DIR)/$(BINARY).new && mv -f $(OUT_DIR)/$(BINARY).new $(OUT_DIR)/$(BINARY)
+	cp $(CARGO_TARGET)/release/$(BINARY) $(OUT_DIR)/$(BINARY).new && mv -f $(OUT_DIR)/$(BINARY).new $(OUT_DIR)/$(BINARY)
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY); fi
 	@echo "✓ Release binary: $(OUT_DIR)/$(BINARY)"
 
@@ -169,7 +173,7 @@ coverage: ## Generate code coverage report
 	@echo "Generating code coverage report..."
 	@command -v cargo-llvm-cov >/dev/null 2>&1 || { echo "Error: cargo-llvm-cov not installed. Run: cargo install cargo-llvm-cov"; exit 1; }
 	cargo llvm-cov --workspace --ignore-filename-regex '(tests|main\.rs)' --html
-	@echo "✓ Coverage report generated at: target/llvm-cov/html/index.html"
+	@echo "✓ Coverage report generated at: $(CARGO_TARGET)/llvm-cov/html/index.html"
 
 ci: test lint ## Run all CI checks (test + lint)
 	@echo "✓ All CI checks passed"
@@ -177,7 +181,7 @@ ci: test lint ## Run all CI checks (test + lint)
 validate: ## Validate trait definitions (for: restrictions, taxonomy, precision, etc.)
 	@echo "Validating trait definitions..."
 	cargo build --quiet
-	./target/debug/$(BINARY) validate
+	./$(CARGO_TARGET)/debug/$(BINARY) validate
 	@echo "✓ Validation passed"
 
 clean: ## Clean all build artifacts
@@ -189,12 +193,12 @@ clean: ## Clean all build artifacts
 regenerate-testdata: release ## Regenerate integration test snapshots
 	@echo "Regenerating test data from ~/data/cleave..."
 	cargo build --release --quiet --bin regenerate_testdata
-	./target/release/regenerate_testdata
+	./$(CARGO_TARGET)/release/regenerate_testdata
 
 bench-build: $(OUT_DIR) ## Build benchmark binary (release + debug symbols for profiling)
 	@echo "Building $(BINARY) (profiling: release + debug symbols)..."
 	cargo build --profile profiling --features jemalloc
-	cp target/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).bench
+	cp $(CARGO_TARGET)/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).bench
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).bench; fi
 	@echo "✓ Benchmark binary: $(OUT_DIR)/$(BINARY).bench"
 
@@ -216,7 +220,7 @@ sampled-benchmark: bench-build ## Benchmark with samply CPU profiling
 heap-build: $(OUT_DIR) ## Build with jemalloc heap profiling support
 	@echo "Building $(BINARY) (heap profiling: release + debug + jemalloc-prof)..."
 	cargo build --profile profiling --features jemalloc-prof
-	cp target/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).heap
+	cp $(CARGO_TARGET)/profiling/$(BINARY) $(OUT_DIR)/$(BINARY).heap
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY).heap; fi
 	@echo "✓ Heap-profiling binary: $(OUT_DIR)/$(BINARY).heap"
 

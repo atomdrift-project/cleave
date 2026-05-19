@@ -240,7 +240,7 @@ loadtest: ## Run load test against cleave server
 # See ../cleave-tuna/README.md.
 TUNA_REPO        ?= ../cleave-tuna
 TUNA_BIN         ?= $(TUNA_REPO)/out/cleave-tuna
-TUNA_DATASET     ?= 100MB
+TUNA_DATASET     ?= archive
 TUNA_EXPERIMENTS ?= 6
 TUNA_SCREEN_SAMPLES  ?= 1
 TUNA_CONFIRM_SAMPLES ?= 3

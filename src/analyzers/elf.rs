@@ -1438,20 +1438,24 @@ impl ElfAnalyzer {
         self.arch_name_from_machine(elf.header.e_machine)
     }
 
+    /// Map an ELF `e_machine` value to its canonical short name. The
+    /// constants come straight from the System V ABI / `elf.h` and
+    /// are stable across vendors, so a literal match avoids depending
+    /// on goblin's re-export.
     fn arch_name_from_machine(&self, e_machine: u16) -> String {
         match e_machine {
-            goblin::elf::header::EM_X86_64 => "x86_64".to_string(),
-            goblin::elf::header::EM_386 => "i386".to_string(),
-            goblin::elf::header::EM_AARCH64 => "aarch64".to_string(),
-            goblin::elf::header::EM_ARM => "arm".to_string(),
-            goblin::elf::header::EM_RISCV => "riscv".to_string(),
-            goblin::elf::header::EM_MIPS => "mips".to_string(),
-            goblin::elf::header::EM_PPC => "powerpc".to_string(),
-            goblin::elf::header::EM_PPC64 => "powerpc64".to_string(),
-            goblin::elf::header::EM_SPARC | 18 | 43 => "sparc".to_string(), // SPARC, SPARC32PLUS, SPARCV9
-            goblin::elf::header::EM_68K => "m68k".to_string(),
-            22 => "s390".to_string(),   // S390
-            42 => "superh".to_string(), // SH
+            62 => "x86_64".to_string(),     // EM_X86_64
+            3 => "i386".to_string(),        // EM_386
+            183 => "aarch64".to_string(),   // EM_AARCH64
+            40 => "arm".to_string(),        // EM_ARM
+            243 => "riscv".to_string(),     // EM_RISCV
+            8 => "mips".to_string(),        // EM_MIPS
+            20 => "powerpc".to_string(),    // EM_PPC
+            21 => "powerpc64".to_string(),  // EM_PPC64
+            2 | 18 | 43 => "sparc".to_string(), // EM_SPARC + SPARC32PLUS + SPARCV9
+            4 => "m68k".to_string(),        // EM_68K
+            22 => "s390".to_string(),       // EM_S390
+            42 => "superh".to_string(),     // EM_SH
             _ => format!("unknown_{}", e_machine),
         }
     }

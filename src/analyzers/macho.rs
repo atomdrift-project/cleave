@@ -1940,11 +1940,28 @@ impl Analyzer for MachOAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Ok(data) = fs::read(file_path) {
-            goblin_safe::parse_mach(&data).is_ok()
-        } else {
-            false
+        // Magic-byte gate. Full parse runs once we commit to analyze().
+        // Covers thin Mach-O (LE/BE 32 and 64-bit) and fat universal
+        // binaries (cafebabe / cafebabf / bebafeca / bfbafeca).
+        let Ok(mut file) = fs::File::open(file_path) else {
+            return false;
+        };
+        use std::io::Read;
+        let mut magic = [0u8; 4];
+        if file.read_exact(&mut magic).is_err() {
+            return false;
         }
+        matches!(
+            magic,
+            [0xfe, 0xed, 0xfa, 0xce]     // thin 32-bit, big-endian
+                | [0xce, 0xfa, 0xed, 0xfe]    // thin 32-bit, little-endian
+                | [0xfe, 0xed, 0xfa, 0xcf]    // thin 64-bit, big-endian
+                | [0xcf, 0xfa, 0xed, 0xfe]    // thin 64-bit, little-endian
+                | [0xca, 0xfe, 0xba, 0xbe]    // fat 32-bit
+                | [0xbe, 0xba, 0xfe, 0xca]    // fat 32-bit, byte-swapped
+                | [0xca, 0xfe, 0xba, 0xbf]    // fat 64-bit
+                | [0xbf, 0xba, 0xfe, 0xca]    // fat 64-bit, byte-swapped
+        )
     }
 }
 

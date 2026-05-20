@@ -568,14 +568,23 @@ impl ElfAnalyzer {
                 // Update architecture now that we have parsed the header
                 report.target.architectures = Some(vec![self.arch_name(&elf)]);
 
-                let note_summary = self.summarize_elf_notes(&elf, data);
+                let note_summary = if let Some(c) = ctx {
+                    self.summarize_elf_notes_from_ctx(c)
+                } else {
+                    self.summarize_elf_notes(&elf, data)
+                };
 
                 // Compute ELF-specific metrics
                 let elf_metrics = self.compute_elf_metrics(&elf, &note_summary, data);
                 let symbols_found = !elf.syms.is_empty();
 
-                // Calculate code_size from goblin section flags (more accurate than radare2)
-                let code_size = Some(self.compute_code_size(&elf));
+                // Calculate code_size from executable section sizes
+                // (more accurate than radare2's function discovery).
+                let code_size = Some(if let Some(c) = ctx {
+                    self.compute_code_size_from_ctx(c)
+                } else {
+                    self.compute_code_size(&elf)
+                });
                 let needs_r2_strings =
                     stng_strings.is_none() && self.preextracted_strings.is_none();
 
@@ -1931,6 +1940,95 @@ impl ElfAnalyzer {
         }
 
         code_size
+    }
+
+    /// Sum of executable section sizes, sourced from expose's typed
+    /// section view. Equivalent to `compute_code_size` but reads
+    /// `flags` containing `"execinstr"` instead of decoding the raw
+    /// `SHF_EXECINSTR` bit.
+    fn compute_code_size_from_ctx(
+        &self,
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+    ) -> u64 {
+        ctx.parsed
+            .sections()
+            .iter()
+            .filter(|s| s.flags.iter().any(|f| f == "execinstr"))
+            .map(|s| s.vsize)
+            .sum()
+    }
+
+    /// `summarize_elf_notes`'s expose-backed counterpart. All the
+    /// hardening features expose decodes during its own parse —
+    /// `elf.has_cet_ibt`, `elf.has_aarch64_pac`, `elf.build_id`,
+    /// `elf.abi.min_kernel`, `elf.x86_isa_level`, `elf.pauth_scheme`,
+    /// `elf.note_count` — are already on the report's flat metric
+    /// map / kv tree, so this just gathers them. No bytes-level notes
+    /// walking.
+    fn summarize_elf_notes_from_ctx(
+        &self,
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+    ) -> ElfNoteSummary {
+        let parsed = &ctx.parsed;
+        let metrics = parsed.metrics();
+        let values = parsed.values();
+
+        let note_count = metrics.get("elf.note_count").unwrap_or(0.0) as u32;
+        let build_id = values
+            .get("elf.build_id")
+            .and_then(|v| v.as_str())
+            .and_then(decode_hex_string);
+        let gnu_abi_min_kernel = values
+            .get("elf.abi.min_kernel")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let x86_isa_level = values
+            .get("elf.x86_isa_level")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+        let pauth_scheme = values
+            .get("elf.pauth_scheme")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
+
+        ElfNoteSummary {
+            note_count,
+            build_id,
+            truncated: false,
+            has_cet_ibt: metrics.get("elf.has_cet_ibt").unwrap_or(0.0) > 0.0,
+            has_cet_shstk: metrics.get("elf.has_cet_shstk").unwrap_or(0.0) > 0.0,
+            has_aarch64_bti: metrics.get("elf.has_aarch64_bti").unwrap_or(0.0) > 0.0,
+            has_aarch64_pac: metrics.get("elf.has_aarch64_pac").unwrap_or(0.0) > 0.0,
+            gnu_abi_min_kernel,
+            x86_isa_level,
+            pauth_scheme,
+        }
+    }
+}
+
+/// Decode a contiguous hex string into bytes. Returns `None` on odd
+/// length or non-hex characters. Used to recover the raw GNU build-id
+/// bytes from `elf.build_id` (which expose stores hex-encoded).
+fn decode_hex_string(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(s.len() / 2);
+    let bytes = s.as_bytes();
+    for pair in bytes.chunks_exact(2) {
+        let hi = hex_nibble(pair[0])?;
+        let lo = hex_nibble(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Some(out)
+}
+
+fn hex_nibble(c: u8) -> Option<u8> {
+    match c {
+        b'0'..=b'9' => Some(c - b'0'),
+        b'a'..=b'f' => Some(c - b'a' + 10),
+        b'A'..=b'F' => Some(c - b'A' + 10),
+        _ => None,
     }
 }
 

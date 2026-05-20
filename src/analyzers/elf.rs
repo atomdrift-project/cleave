@@ -608,7 +608,11 @@ impl ElfAnalyzer {
                 }
                 let r2_inner = if on_rayon_worker {
                     let goblin_start = std::time::Instant::now();
-                    self.analyze_structure(&elf, data, &mut report);
+                    if let Some(c) = ctx {
+                        self.analyze_structure_from_ctx(c, data, &mut report);
+                    } else {
+                        self.analyze_structure(&elf, data, &mut report);
+                    }
                     self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
                     if let Some(c) = ctx {
                         self.analyze_sections_from_ctx(c, &mut report);
@@ -658,7 +662,11 @@ impl ElfAnalyzer {
                         },
                         || {
                             let goblin_start = std::time::Instant::now();
-                            self.analyze_structure(&elf, data, &mut report);
+                            if let Some(c) = ctx {
+                        self.analyze_structure_from_ctx(c, data, &mut report);
+                    } else {
+                        self.analyze_structure(&elf, data, &mut report);
+                    }
                             self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
                             if let Some(c) = ctx {
                         self.analyze_sections_from_ctx(c, &mut report);
@@ -1165,6 +1173,109 @@ impl ElfAnalyzer {
         report.shrink_to_fit();
 
         report
+    }
+
+    /// `analyze_structure`'s expose-backed counterpart. Synthesises the
+    /// same `binary/format/elf`, `binary/arch/*`, `binary/stripped`,
+    /// `binary/pie`, and `metadata/build/debug::elf-debuglink` features
+    /// but pulls every input from expose's view of the file.
+    fn analyze_structure_from_ctx(
+        &self,
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+        data: &[u8],
+        report: &mut AnalysisReport,
+    ) {
+        let parsed = &ctx.parsed;
+        let metrics = parsed.metrics();
+        let values = parsed.values();
+
+        report.structure.push(StructuralFeature {
+            id: "binary/format/elf".to_string(),
+            desc: "ELF binary format".to_string(),
+            evidence: vec![Evidence {
+                method: "magic".to_string(),
+                source: "expose".to_string(),
+                value: "0x7f".to_string(), // ELF magic byte 0
+                location: None,
+                ..Default::default()
+            }],
+        });
+
+        // Architecture comes from expose's `elf.machine` string (e.g.
+        // "x86_64"). Fall back to "unknown" when expose couldn't
+        // identify the machine.
+        let arch = values
+            .get("elf.machine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        report.structure.push(StructuralFeature {
+            id: format!("binary/arch/{}", arch),
+            desc: format!("{} architecture", arch),
+            evidence: vec![Evidence {
+                method: "header".to_string(),
+                source: "expose".to_string(),
+                value: format!("elf.machine={}", arch),
+                location: None,
+                ..Default::default()
+            }],
+        });
+
+        // `binary.is_stripped` = 1.0 when `.symtab` is absent (the
+        // canonical "stripped" definition; expose computes this in
+        // `binary_flags`).
+        if metrics.get("binary.is_stripped").unwrap_or(0.0) > 0.0 {
+            report.structure.push(StructuralFeature {
+                id: "binary/stripped".to_string(),
+                desc: "Symbol table stripped".to_string(),
+                evidence: vec![Evidence {
+                    method: "symbols".to_string(),
+                    source: "expose".to_string(),
+                    value: "no_symtab".to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+        }
+
+        // PIE detection: expose flags `binary.is_pie = 1.0` for
+        // dynamically-linked ET_DYN executables (shared libraries that
+        // are also ET_DYN don't count).
+        if metrics.get("binary.is_pie").unwrap_or(0.0) > 0.0 {
+            report.structure.push(StructuralFeature {
+                id: "binary/pie".to_string(),
+                desc: "Position Independent Executable".to_string(),
+                evidence: vec![Evidence {
+                    method: "header".to_string(),
+                    source: "expose".to_string(),
+                    value: "ET_DYN".to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+        }
+
+        // `.gnu_debuglink` section — present when a build was stripped
+        // with split-debug. Walk expose's typed section list, then
+        // slice into `data` for the section contents.
+        for section in parsed.sections().iter() {
+            if section.name != ".gnu_debuglink" || section.file_size == 0 {
+                continue;
+            }
+            let offset = section.file_offset as usize;
+            let end = offset.saturating_add(section.file_size as usize);
+            if end > data.len() {
+                continue;
+            }
+            if let Some(debuglink) = Self::gnu_debuglink_name(&data[offset..end]) {
+                Self::push_metadata_finding(
+                    report,
+                    "metadata/build/debug::elf-debuglink",
+                    ".gnu_debuglink reference present",
+                    "section",
+                    debuglink,
+                );
+            }
+        }
     }
 
     fn analyze_structure<'a>(&self, elf: &Elf<'a>, data: &[u8], report: &mut AnalysisReport) {

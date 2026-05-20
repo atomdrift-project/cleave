@@ -360,6 +360,25 @@ pub enum Command {
         layer: Option<String>,
     },
 
+    /// Dump everything expose extracts from one or more files.
+    ///
+    /// `cleave inspect <file> [<file>...]` dumps every top-level tree
+    /// (`fileid`, `values`, `strings`, `metrics`, `ast`, `sections`,
+    /// `imports`, `exports`, `functions`, `errors`). A single file
+    /// produces a pretty JSON object; multiple files produce JSONL
+    /// keyed by `path`.
+    ///
+    /// Pick a subcommand to filter to a single tree:
+    /// `cleave inspect imports <file> [<file>...]`.
+    Inspect {
+        /// Optional tree filter
+        #[command(subcommand)]
+        tree: Option<InspectTree>,
+
+        /// One or more target files (when no tree subcommand is given)
+        targets: Vec<String>,
+    },
+
     /// Dump key/value pairs from structured files (manifests, systemd units, LNK, plist, office docs)
     Kv {
         /// Target file (package.json, Cargo.toml, manifest.json, *.plist, *.lnk, *.service,
@@ -592,6 +611,94 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
         )
     };
     Ok((start, end))
+}
+
+/// Tree filter for `cleave inspect`. Each variant maps 1:1 onto an
+/// accessor on `expose::ParsedFile`. `errors` is intentionally omitted —
+/// recovered parse errors still ship in the full dump, but a dedicated
+/// filter is low signal in practice.
+#[derive(Debug, Clone, clap::Subcommand)]
+pub enum InspectTree {
+    /// File identification — file type + detection source
+    Fileid {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Structural key-value tree (paths usable by `type: kv` rules)
+    Values {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Extracted strings — literals and decoded payloads
+    Strings {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Flat metric map (`text.char_entropy`, `pe.import_count`, …)
+    Metrics {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// AST projections — call sites, member chains, string args
+    Ast {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Binary sections — name, extents, entropy, flag vocabulary
+    Sections {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Imported foreign symbols
+    Imports {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Locally-defined exported symbols
+    Exports {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    /// Functions / methods defined in the file
+    Functions {
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+}
+
+impl InspectTree {
+    /// File targets carried by this subtree subcommand.
+    #[must_use]
+    pub fn targets(&self) -> &[String] {
+        match self {
+            Self::Fileid { targets }
+            | Self::Values { targets }
+            | Self::Strings { targets }
+            | Self::Metrics { targets }
+            | Self::Ast { targets }
+            | Self::Sections { targets }
+            | Self::Imports { targets }
+            | Self::Exports { targets }
+            | Self::Functions { targets } => targets,
+        }
+    }
+
+    /// Stable kebab-style identifier used as a JSON key when emitting
+    /// per-file subtree dumps.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Fileid { .. } => "fileid",
+            Self::Values { .. } => "values",
+            Self::Strings { .. } => "strings",
+            Self::Metrics { .. } => "metrics",
+            Self::Ast { .. } => "ast",
+            Self::Sections { .. } => "sections",
+            Self::Imports { .. } => "imports",
+            Self::Exports { .. } => "exports",
+            Self::Functions { .. } => "functions",
+        }
+    }
 }
 
 /// Type of content to search in

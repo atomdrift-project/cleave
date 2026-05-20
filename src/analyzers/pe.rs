@@ -3429,13 +3429,23 @@ impl Analyzer for PEAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Ok(data) = fs::read(file_path) {
-            // Use the panic-safe wrapper: a panic here should just mean
-            // "not analyzable as PE", not unwind the caller.
-            goblin_safe::parse_pe(&data).is_ok()
-        } else {
-            false
+        // PE magic-byte check: `MZ` + valid `e_lfanew` pointing at `PE\0\0`.
+        // A full goblin parse just to gate analyzability is wasted work
+        // — the actual parse happens once we commit to analyze().
+        let Ok(mut file) = fs::File::open(file_path) else {
+            return false;
+        };
+        use std::io::{Read, Seek, SeekFrom};
+        let mut head = [0u8; 64];
+        if file.read_exact(&mut head).is_err() || &head[0..2] != b"MZ" {
+            return false;
         }
+        let e_lfanew = u32::from_le_bytes([head[60], head[61], head[62], head[63]]) as u64;
+        if file.seek(SeekFrom::Start(e_lfanew)).is_err() {
+            return false;
+        }
+        let mut sig = [0u8; 4];
+        file.read_exact(&mut sig).is_ok() && &sig == b"PE\0\0"
     }
 }
 

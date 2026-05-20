@@ -62,6 +62,7 @@
 pub mod analyze;
 pub mod diff;
 pub mod extract;
+pub mod inspect;
 pub mod iter_files;
 pub mod shared;
 pub mod test;
@@ -78,6 +79,7 @@ pub use extract::{
     sections::run as extract_sections_command, strings::run as extract_strings_command,
     symbols::run as extract_symbols_command,
 };
+pub use inspect::run as inspect_command;
 pub use iter_files::{run as iter_files_command, IterFilesConfig};
 pub use test::{test_match, test_rules};
 pub use validate::run as validate_command;

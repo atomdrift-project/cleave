@@ -7,6 +7,7 @@
 
 use crate::radare2::R2String;
 use crate::types::{StringInfo, StringType};
+use base64::{engine::general_purpose, Engine as _};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use stng::{ExtractedString, StringMethod};
@@ -190,7 +191,24 @@ impl StringExtractor {
             }
 
             total_bytes += value_len;
+            let decoded_sidecar = self.decoded_base64_sidecar(es);
             strings.push(self.convert_extracted_string(es.clone()));
+
+            if let Some(decoded) = decoded_sidecar {
+                let decoded_len = decoded.value.len();
+                if strings.len() >= MAX_STRINGS_PER_FILE {
+                    self.truncated
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                if total_bytes + decoded_len > MAX_TOTAL_STRING_BYTES {
+                    self.truncated
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                total_bytes += decoded_len;
+                strings.push(decoded);
+            }
         }
         strings
     }
@@ -225,9 +243,59 @@ impl StringExtractor {
             }
 
             total_bytes += value_len;
+            let decoded_sidecar = self.decoded_base64_sidecar(&es);
             strings.push(self.convert_extracted_string(es));
+
+            if let Some(decoded) = decoded_sidecar {
+                let decoded_len = decoded.value.len();
+                if strings.len() >= MAX_STRINGS_PER_FILE {
+                    self.truncated
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                if total_bytes + decoded_len > MAX_TOTAL_STRING_BYTES {
+                    self.truncated
+                        .store(true, std::sync::atomic::Ordering::SeqCst);
+                    break;
+                }
+                total_bytes += decoded_len;
+                strings.push(decoded);
+            }
         }
         strings
+    }
+
+    fn decoded_base64_sidecar(&self, es: &ExtractedString) -> Option<StringInfo> {
+        if es.kind != Some(StringType::Base64)
+            || matches!(
+                es.method,
+                StringMethod::Base64Decode | StringMethod::Base64ObfuscatedDecode
+            )
+        {
+            return None;
+        }
+
+        let trimmed = es.value.trim();
+        if trimmed.len() < self.min_length {
+            return None;
+        }
+
+        let decoded = decode_base64_string(trimmed)?;
+        let decoded_text = String::from_utf8(decoded).ok()?;
+        if !is_printable_decoded_text(&decoded_text) || decoded_text.trim().len() < self.min_length
+        {
+            return None;
+        }
+
+        Some(StringInfo {
+            value: decoded_text,
+            offset: Some(es.data_offset),
+            encoding: "utf8".to_string(),
+            string_type: None,
+            section: es.section.clone(),
+            encoding_chain: vec!["base64".to_string()],
+            fragments: None,
+        })
     }
 
     /// Convert an ExtractedString from stng to StringInfo
@@ -268,6 +336,21 @@ impl StringExtractor {
     }
 }
 
+fn decode_base64_string(value: &str) -> Option<Vec<u8>> {
+    general_purpose::STANDARD
+        .decode(value)
+        .or_else(|_| general_purpose::STANDARD_NO_PAD.decode(value))
+        .or_else(|_| general_purpose::URL_SAFE.decode(value))
+        .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(value))
+        .ok()
+}
+
+fn is_printable_decoded_text(value: &str) -> bool {
+    value
+        .chars()
+        .all(|ch| !ch.is_control() || matches!(ch, '\n' | '\r' | '\t'))
+}
+
 impl Default for StringExtractor {
     fn default() -> Self {
         Self::new()
@@ -278,6 +361,29 @@ impl Default for StringExtractor {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose;
+
+    fn extracted_string(
+        value: String,
+        method: StringMethod,
+        kind: Option<StringType>,
+    ) -> ExtractedString {
+        ExtractedString {
+            value,
+            data_offset: 42,
+            section: Some(".rodata".to_string()),
+            method,
+            kind,
+            raw: None,
+            source: None,
+            fragments: None,
+            section_size: None,
+            section_executable: None,
+            section_writable: None,
+            architecture: None,
+            function_meta: None,
+        }
+    }
 
     #[test]
     fn test_string_extraction() {
@@ -377,6 +483,50 @@ mod tests {
 
         // No printable strings should be found
         assert!(strings.is_empty());
+    }
+
+    #[test]
+    fn test_convert_base64_classification_adds_encoded_sidecar() {
+        let decoded = r#"{"callback_host":"https://example.invalid","callback_interval":30}"#;
+        let encoded = general_purpose::STANDARD.encode(decoded);
+        let raw = vec![extracted_string(
+            encoded.clone(),
+            StringMethod::RawScan,
+            Some(StringType::Base64),
+        )];
+        let extractor = StringExtractor::new();
+
+        let strings = extractor.convert_stng_strings(&raw);
+
+        assert!(strings.iter().any(|s| {
+            s.value == encoded
+                && s.string_type == Some(StringType::Base64)
+                && s.encoding_chain.is_empty()
+        }));
+        let sidecar = strings
+            .iter()
+            .find(|s| s.value == decoded)
+            .expect("base64 classified strings should expose decoded text to encoded traits");
+        assert_eq!(sidecar.encoding_chain, vec!["base64"]);
+        assert_eq!(sidecar.offset, Some(42));
+        assert_eq!(sidecar.section.as_deref(), Some(".rodata"));
+    }
+
+    #[test]
+    fn test_convert_base64_decode_method_does_not_duplicate_sidecar() {
+        let decoded = r#"{"callback_host":"https://example.invalid"}"#;
+        let raw = vec![extracted_string(
+            decoded.to_string(),
+            StringMethod::Base64Decode,
+            None,
+        )];
+        let extractor = StringExtractor::new();
+
+        let strings = extractor.convert_stng_strings(&raw);
+
+        let decoded_entries = strings.iter().filter(|s| s.value == decoded).count();
+        assert_eq!(decoded_entries, 1);
+        assert_eq!(strings[0].encoding_chain, vec!["base64"]);
     }
 
     #[test]

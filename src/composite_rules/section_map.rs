@@ -1,11 +1,10 @@
 //! Section mapping for binary files.
 //!
 //! Provides utilities for resolving section names and byte ranges
-//! in ELF, Mach-O, and PE binaries.
+//! in ELF, Mach-O, and PE binaries. The section table is always
+//! sourced from `expose::open`'s typed `Sections` view — cleave
+//! never re-parses the file format.
 
-use goblin::elf::Elf;
-use goblin::mach::{Mach, MachO};
-use goblin::pe::PE;
 use rustc_hash::FxHashMap;
 use std::sync::{Arc, RwLock};
 
@@ -42,108 +41,35 @@ impl SectionMap {
         }
     }
 
-    /// Create a section map from an ELF binary.
-    #[must_use]
-    pub(crate) fn from_elf(elf: &Elf<'_>, file_size: u64) -> Self {
-        let mut sections = Vec::new();
-
-        for sh in &elf.section_headers {
-            if let Some(name) = elf.shdr_strtab.get_at(sh.sh_name) {
-                sections.push(SectionInfo {
-                    name: name.to_string(),
-                    start: sh.sh_offset,
-                    end: sh.sh_offset + sh.sh_size,
-                });
-            }
-        }
-
-        Self {
-            sections,
-            file_size,
-            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
-        }
-    }
-
-    /// Create a section map from a Mach-O binary.
-    #[must_use]
-    pub(crate) fn from_macho(macho: &MachO<'_>, file_size: u64) -> Self {
-        let mut sections = Vec::new();
-
-        for segment in &macho.segments {
-            if let Ok(segment_sections) = segment.sections() {
-                for (section, _) in segment_sections {
-                    if let Ok(name) = section.name() {
-                        let seg_name = segment.name().unwrap_or("");
-                        sections.push(SectionInfo {
-                            name: format!("{},{}", seg_name, name),
-                            start: section.offset as u64,
-                            end: section.offset as u64 + section.size,
-                        });
-                    }
-                }
-            }
-        }
-
-        Self {
-            sections,
-            file_size,
-            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
-        }
-    }
-
-    /// Create a section map from a PE binary.
-    #[must_use]
-    pub(crate) fn from_pe(pe: &PE<'_>, file_size: u64) -> Self {
-        let mut sections = Vec::new();
-
-        for section in &pe.sections {
-            if let Ok(name) = section.name() {
-                sections.push(SectionInfo {
-                    name: name.to_string(),
-                    start: section.pointer_to_raw_data as u64,
-                    end: (section.pointer_to_raw_data + section.size_of_raw_data) as u64,
-                });
-            }
-        }
-
-        Self {
-            sections,
-            file_size,
-            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
-        }
-    }
-
-    /// Create a section map by auto-detecting binary format.
+    /// Create a section map by sourcing the section table from
+    /// `expose::open`.
     ///
-    /// All goblin parsing goes through `crate::analyzers::goblin_safe`, which
-    /// catches panics from goblin's PE / ELF / Mach-O walkers and converts
-    /// them into normal `Err` values. A caught panic just falls through to
-    /// the next format, and ultimately to an empty section map — matching
-    /// the behaviour for binaries we can't identify at all.
+    /// Every binary format expose recognises (ELF, PE, Mach-O thin,
+    /// Mach-O fat) surfaces its sections through `parsed.sections()`
+    /// with `name`/`file_offset`/`file_size` fields already normalised.
+    /// Files expose can't parse (unknown format, malformed magic)
+    /// produce an empty section list, which becomes an empty
+    /// `SectionMap` — the same behaviour the old goblin-fallback path
+    /// produced.
     pub(crate) fn from_binary(binary_data: &[u8]) -> Self {
-        use crate::analyzers::goblin_safe;
         let file_size = binary_data.len() as u64;
-
-        if let Some(elf) = goblin_safe::parse_elf(binary_data).ok() {
-            return Self::from_elf(&elf, file_size);
+        let Ok(parsed) = expose::open(binary_data) else {
+            return Self::empty(file_size);
+        };
+        let sections: Vec<SectionInfo> = parsed
+            .sections()
+            .iter()
+            .map(|s| SectionInfo {
+                name: s.name.clone(),
+                start: s.file_offset,
+                end: s.file_offset.saturating_add(s.file_size),
+            })
+            .collect();
+        Self {
+            sections,
+            file_size,
+            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
         }
-
-        if let Some(macho) = goblin_safe::parse_mach(binary_data).ok() {
-            match macho {
-                Mach::Binary(m) => return Self::from_macho(&m, file_size),
-                Mach::Fat(_) => {
-                    // For fat binaries, we can't easily resolve sections without
-                    // knowing which architecture we're evaluating.
-                    return Self::empty(file_size);
-                }
-            }
-        }
-
-        if let Some(pe) = goblin_safe::parse_pe(binary_data).ok() {
-            return Self::from_pe(&pe, file_size);
-        }
-
-        Self::empty(file_size)
     }
 
     /// Returns true if this map contains any section information.

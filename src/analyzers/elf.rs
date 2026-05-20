@@ -601,7 +601,11 @@ impl ElfAnalyzer {
                     let goblin_start = std::time::Instant::now();
                     self.analyze_structure(&elf, data, &mut report);
                     self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
-                    self.analyze_sections(&elf, data, &mut report);
+                    if let Some(c) = ctx {
+                        self.analyze_sections_from_ctx(c, &mut report);
+                    } else {
+                        self.analyze_sections(&elf, data, &mut report);
+                    }
                     goblin_ms = goblin_start.elapsed().as_millis();
                     if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
                         None
@@ -647,7 +651,11 @@ impl ElfAnalyzer {
                             let goblin_start = std::time::Instant::now();
                             self.analyze_structure(&elf, data, &mut report);
                             self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
-                            self.analyze_sections(&elf, data, &mut report);
+                            if let Some(c) = ctx {
+                        self.analyze_sections_from_ctx(c, &mut report);
+                    } else {
+                        self.analyze_sections(&elf, data, &mut report);
+                    }
                             goblin_ms = goblin_start.elapsed().as_millis();
                         },
                     );
@@ -1333,6 +1341,56 @@ impl ElfAnalyzer {
                     // binary_extractors scan. The YAML trait
                     // `metadata/binary/linking::ifunc` reads from kv.
                 }
+            }
+        }
+    }
+
+    /// Walk the section table from expose's typed `Sections` view +
+    /// per-section entropies from its metric map. No second goblin
+    /// parse — the data is already in `ctx.parsed`.
+    fn analyze_sections_from_ctx(
+        &self,
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+        report: &mut AnalysisReport,
+    ) {
+        let parsed = &ctx.parsed;
+        let metrics_view = parsed.metrics();
+        for (idx, section) in parsed.sections().iter().enumerate() {
+            if section.file_size == 0 {
+                continue;
+            }
+            let entropy = metrics_view
+                .iter()
+                .find(|(k, _)| *k == format!("sections[{idx}].entropy"))
+                .map(|(_, v)| v)
+                .unwrap_or(0.0);
+            report.sections.push(Section {
+                name: section.name.clone(),
+                address: Some(section.vaddr),
+                offset: Some(section.file_offset),
+                size: section.file_size,
+                entropy,
+                // Permissions stay a hex-formatted sh_flags string for
+                // backward compat with existing cleave traits that read
+                // `permissions`. Once #73 retires `permissions` in favour
+                // of `flags[]` membership checks, this slot can be
+                // emitted as the expose-style array instead.
+                permissions: Some(format!("{}", section.flags.join(","))),
+            });
+
+            let level = EntropyLevel::from_value(entropy);
+            if level == EntropyLevel::High {
+                report.structure.push(StructuralFeature {
+                    id: "entropy/high".to_string(),
+                    desc: "High entropy section (possibly packed/encrypted)".to_string(),
+                    evidence: vec![Evidence {
+                        method: "entropy".to_string(),
+                        source: "entropy_analyzer".to_string(),
+                        value: format!("{:.2}", entropy),
+                        location: Some(section.name.clone()),
+                        ..Default::default()
+                    }],
+                });
             }
         }
     }

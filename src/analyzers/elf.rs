@@ -575,7 +575,11 @@ impl ElfAnalyzer {
                 };
 
                 // Compute ELF-specific metrics
-                let elf_metrics = self.compute_elf_metrics(&elf, &note_summary, data);
+                let elf_metrics = if let Some(c) = ctx {
+                    self.compute_elf_metrics_from_ctx(c, &note_summary)
+                } else {
+                    self.compute_elf_metrics(&elf, &note_summary, data)
+                };
                 let symbols_found = !elf.syms.is_empty();
 
                 // Calculate code_size from executable section sizes
@@ -2025,6 +2029,167 @@ impl ElfAnalyzer {
         }
         // Tier 2 — modern hardening markers from NT_GNU_PROPERTY_TYPE_0
         // and the minimum-kernel string from NT_GNU_ABI_TAG.
+        metrics.has_cet_ibt = note_summary.has_cet_ibt;
+        metrics.has_cet_shstk = note_summary.has_cet_shstk;
+        metrics.has_aarch64_bti = note_summary.has_aarch64_bti;
+        metrics.has_aarch64_pac = note_summary.has_aarch64_pac;
+        metrics.gnu_abi_min_kernel = note_summary.gnu_abi_min_kernel.clone();
+        metrics.x86_isa_level = note_summary.x86_isa_level.clone();
+        metrics.pauth_scheme = note_summary.pauth_scheme.clone();
+
+        metrics
+    }
+
+    /// `compute_elf_metrics`'s expose-backed counterpart. Reads every
+    /// field from `ctx.parsed`'s emitted metrics + values + section
+    /// list — no goblin walks needed. The structural data expose
+    /// surfaces during its own parse covers everything cleave used to
+    /// re-derive locally.
+    fn compute_elf_metrics_from_ctx(
+        &self,
+        ctx: &crate::analysis_context::AnalysisContext<'_>,
+        note_summary: &ElfNoteSummary,
+    ) -> crate::types::binary_metrics::ElfMetrics {
+        let parsed = &ctx.parsed;
+        let m = parsed.metrics();
+        let v = parsed.values();
+
+        // `:` lists from DT_RPATH / DT_RUNPATH that expose surfaces as
+        // arrays-of-strings under values; each entry can still be a
+        // colon-joined list when goblin returned one DT_*PATH entry
+        // carrying multiple paths.
+        let split_paths = |json: Option<&serde_json::Value>| -> Vec<String> {
+            json.and_then(|j| j.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e.as_str())
+                        .flat_map(|s| s.split(':'))
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let string_array = |path: &str| -> Vec<String> {
+            v.get(path)
+                .and_then(|j| j.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let get_u32 = |key: &str| m.get(key).unwrap_or(0.0) as u32;
+        let get_u64 = |key: &str| m.get(key).unwrap_or(0.0) as u64;
+        let get_bool = |key: &str| m.get(key).unwrap_or(0.0) > 0.0;
+
+        let needed: Vec<String> = string_array("elf.needed");
+        let rpaths = split_paths(v.get("elf.rpath"));
+        let runpaths = split_paths(v.get("elf.runpath"));
+
+        let mut metrics = crate::types::binary_metrics::ElfMetrics {
+            // Header fields. e_type/e_machine numeric IDs are dropped
+            // — the canonical names live in values as elf.type/machine
+            // strings, and trait engines threshold on those.
+            class_bits: get_u32("elf.bits"),
+            little_endian: get_bool("elf.little_endian"),
+            entry: get_u64("elf.entry"),
+            program_header_count: get_u32("elf.program_header_count"),
+            section_count: get_u32("elf.section_count"),
+            section_relocation_group_count: get_u32("elf.section_relocation_group_count"),
+
+            // Dynamic-section structural facts.
+            has_interpreter: v.get("elf.interpreter").is_some(),
+            has_soname: v.get("elf.soname").is_some(),
+            soname: v
+                .get("elf.soname")
+                .and_then(|j| j.as_str())
+                .map(str::to_string),
+            rpath_count: rpaths.len() as u32,
+            runpath_count: runpaths.len() as u32,
+            needed,
+            rpaths,
+            runpaths,
+
+            // Symbol + relocation table counts.
+            dynsym_count: get_u32("elf.dynsym_count"),
+            symtab_count: get_u32("elf.symtab_count"),
+            dynrela_count: get_u32("elf.dynrela_count"),
+            dynrel_count: get_u32("elf.dynrel_count"),
+            pltreloc_count: get_u32("elf.pltreloc_count"),
+
+            // Section + dynamic flags.
+            has_plt: get_bool("elf.has_plt"),
+            has_got: get_bool("elf.has_got"),
+            has_eh_frame: get_bool("elf.has_eh_frame"),
+            has_note: get_bool("elf.has_note"),
+            has_rpath: !v.get("elf.rpath").is_none(),
+            has_runpath: !v.get("elf.runpath").is_none(),
+            has_gnu_hash: get_bool("elf.has_gnu_hash"),
+            has_textrel: get_bool("elf.has_dt_textrel"),
+            has_dt_audit: get_bool("elf.has_dt_audit"),
+            has_dt_depaudit: get_bool("elf.has_dt_depaudit"),
+            has_dt_debug: get_bool("elf.has_dt_debug"),
+            has_dt_relr: get_bool("elf.has_dt_relr"),
+
+            // Constructor counts.
+            init_array_count: get_u32("elf.init_array_count"),
+            fini_array_count: get_u32("elf.fini_array_count"),
+            dt_preinit_array_count: get_u32("elf.preinit_array_count"),
+
+            // Program-header analysis.
+            load_segment_max_p_filesz: get_u64("elf.load_segment_max_file_size"),
+            load_segment_max_p_memsz: get_u64("elf.load_segment_max_memory_size"),
+            nx_enabled: get_bool("elf.nx_enabled"),
+            executable_stack: get_bool("elf.executable_stack"),
+            gnu_stack_section_absent: get_bool("elf.gnu_stack_section_absent"),
+            entry_in_writable_segment: get_bool("elf.entry_in_writable_segment"),
+
+            // DT_NEEDED anomalies.
+            dt_needed_abs_path_count: get_u32("elf.dt_needed_abs_path_count"),
+            dt_needed_traversal_count: get_u32("elf.dt_needed_traversal_count"),
+            dt_runpath_uses_origin: get_bool("elf.dt_runpath_uses_origin"),
+            has_direct_loader_dep: get_bool("elf.has_direct_loader_dep"),
+
+            // RELRO from expose's values tree (`elf.relro` is
+            // "partial" / "full"; absent when no PT_GNU_RELRO).
+            relro: v
+                .get("elf.relro")
+                .and_then(|j| j.as_str())
+                .map(str::to_string),
+
+            // Entry-point section name from expose's values tree.
+            entry_section: v
+                .get("elf.entry_section")
+                .and_then(|j| j.as_str())
+                .map(str::to_string),
+
+            // FORTIFY_SOURCE — count of __*_chk imports.
+            fortify_source_used: get_u32("elf.fortify_source_count"),
+
+            // .comment-section toolchain attribution.
+            comment_entry_count: get_u32("elf.comment_entry_count"),
+            comment_distinct_count: get_u32("elf.comment_distinct_count"),
+
+            ..Default::default()
+        };
+
+        // Entry-not-in-text derives from entry_section.
+        metrics.entry_not_in_text = metrics.entry != 0
+            && metrics.entry_section.is_some()
+            && metrics.entry_section.as_deref() != Some(".text");
+
+        // Note-summary fields populated from the ElfNoteSummary the
+        // caller already built (from expose data via
+        // summarize_elf_notes_from_ctx).
+        metrics.note_count = note_summary.note_count;
+        if let Some(build_id) = &note_summary.build_id {
+            metrics.has_build_id = true;
+            metrics.build_id_length = build_id.len() as u32;
+            metrics.build_id = Some(hex::encode(build_id));
+        }
         metrics.has_cet_ibt = note_summary.has_cet_ibt;
         metrics.has_cet_shstk = note_summary.has_cet_shstk;
         metrics.has_aarch64_bti = note_summary.has_aarch64_bti;

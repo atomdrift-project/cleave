@@ -81,6 +81,14 @@ missing_panics_doc = "allow"  # Too strict for internal functions
 # Procedural macros
 cleave-macros = { path = "cleave-macros" }
 
+# Single-pass metadata / metrics / strings / sections / AST extractor.
+# Owns every binary, archive-index, structured-document, and source-code
+# parser cleave consumes. Goal: cleave never invokes goblin, zip, tar,
+# tree-sitter, or the structured-format parsers directly — every parse
+# is materialised once via expose::open() and reused via the typed
+# views on `ParsedFile`.
+expose = { path = "../expose" }
+
 # Binary parsing
 goblin = "0.10"
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }

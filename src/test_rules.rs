@@ -252,6 +252,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parsed: None,
             cancellation: None,
         }
     }
@@ -576,6 +577,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parsed: None,
             cancellation: None,
         };
 
@@ -670,8 +672,8 @@ impl<'a> RuleDebugger<'a> {
             } => {
                 let desc = describe_condition(condition);
                 let result = evaluate_condition_simple(condition, &ctx);
-                let mut debug = ConditionDebugResult::new(desc, result.matched)
-                    .with_evidence(result.evidence);
+                let mut debug =
+                    ConditionDebugResult::new(desc, result.matched).with_evidence(result.evidence);
                 // When a raw-text-mode file fails `text exact:` but the pattern is present as
                 // substring, surface the per-line semantic explicitly. Authors hit this when
                 // they expect `exact:` to find an identifier anywhere in source code.
@@ -714,6 +716,7 @@ impl<'a> RuleDebugger<'a> {
     }
 
     fn debug_trait_reference(&self, id: &str) -> ConditionDebugResult {
+        let id = id.trim_end_matches('/');
         let desc = format!("trait: {}", id);
 
         // Mirror eval_trait() logic: check findings FIRST, then re-evaluate if needed
@@ -984,11 +987,7 @@ impl<'a> RuleDebugger<'a> {
     ) -> ConditionDebugResult {
         let desc = format!("metrics: {} (min: {:?}, max: {:?})", field, min, max);
 
-        let value = self
-            .report
-            .metrics
-            .as_ref()
-            .and_then(|m| crate::types::scores::get_metric_value(m, field));
+        let value = crate::types::scores::get_metric_value(&self.report, field);
         let matched =
             value.is_some_and(|v| min.is_none_or(|m| v >= m) && max.is_none_or(|m| v <= m));
 
@@ -1018,30 +1017,22 @@ impl<'a> RuleDebugger<'a> {
                         binary.avg_complexity
                     ));
                 }
-                if let Some(text) = &metrics.text {
-                    result
-                        .details
-                        .push(format!("  text.total_lines: {}", text.total_lines));
-                }
-                if let Some(funcs) = &metrics.functions {
-                    result
-                        .details
-                        .push(format!("  functions.count: {}", funcs.total));
-                }
-                if let Some(ids) = &metrics.identifiers {
-                    result.details.push(format!(
-                        "  identifiers.single_char_ratio: {:.4}",
-                        ids.single_char_ratio
-                    ));
-                    result
-                        .details
-                        .push(format!("  identifiers.avg_length: {:.4}", ids.avg_length));
-                    result
-                        .details
-                        .push(format!("  identifiers.total: {}", ids.total));
-                    result
-                        .details
-                        .push(format!("  identifiers.unique: {}", ids.unique_count));
+            }
+            // `text.*`, `functions.*`, `identifiers.*` are populated on
+            // the flat metric map; surface whatever's present for the
+            // diagnostic output.
+            if let Some(flat) = &self.report.expose_metrics {
+                for key in [
+                    "text.total_lines",
+                    "functions.total",
+                    "identifiers.single_char_ratio",
+                    "identifiers.avg_length",
+                    "identifiers.total",
+                    "identifiers.unique_count",
+                ] {
+                    if let Some(v) = flat.get(key) {
+                        result.details.push(format!("  {key}: {v}"));
+                    }
                 }
             }
         }
@@ -1086,6 +1077,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parsed: None,
             cancellation: None,
         };
 
@@ -1462,6 +1454,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parsed: None,
             cancellation: None,
         };
 
@@ -1512,21 +1505,9 @@ impl<'a> RuleDebugger<'a> {
                             .bytes()
                             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':');
                     if looks_like_bare_name {
-                        let found_as_symbol = self
-                            .report
-                            .imports
-                            .iter()
-                            .any(|i| i.symbol == name)
-                            || self
-                                .report
-                                .exports
-                                .iter()
-                                .any(|e| e.symbol == name)
-                            || self
-                                .report
-                                .functions
-                                .iter()
-                                .any(|f| f.name == name);
+                        let found_as_symbol = self.report.imports.iter().any(|i| i.symbol == name)
+                            || self.report.exports.iter().any(|e| e.symbol == name)
+                            || self.report.functions.iter().any(|f| f.name == name);
                         result.details.push(format!(
                             "  hint: `ast kind=call exact: {n}` compares against the full \
                              call expression text (e.g. `{n}(args)`), not just the name, so \
@@ -1602,6 +1583,7 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
+            parsed: None,
             cancellation: None,
         };
 

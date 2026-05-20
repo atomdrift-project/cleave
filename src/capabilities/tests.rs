@@ -14,9 +14,7 @@ use crate::composite_rules::{
     Arch, CompositeTrait, Condition, FileType as RuleFileType, Platform, SectionMap,
     TraitDefinition,
 };
-use crate::types::{
-    AnalysisReport, Criticality, Finding, FindingKind, Metrics, TargetInfo, TextMetrics,
-};
+use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo, TextMetrics};
 use anyhow::Result;
 use std::path::Path;
 
@@ -941,17 +939,22 @@ fn test_excessive_line_length_skips_binary_like_unknown_blob() {
     let mapper = CapabilityMapper::empty();
     let mut report = test_report_with_findings(vec![]);
     report.target.file_type = "unknown".to_string();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
-            null_byte_count: 67_036_441,
-            non_printable_ratio: 0.9985,
-            max_line_length: 60_237_102,
-            most_common_char: Some('\0'),
-            most_common_ratio: 0.9982,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+    {
+        use crate::types::core::{flatten_into_metrics, MetricsExt};
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        flatten_into_metrics(
+            &TextMetrics {
+                null_byte_count: 67_036_441,
+                non_printable_ratio: 0.9985,
+                max_line_length: 60_237_102,
+                most_common_ratio: 0.9982,
+                ..Default::default()
+            },
+            "text",
+            flat,
+        );
+        flat.set_b("text.most_common_char_is_null", true);
+    }
 
     let findings = mapper.evaluate_composite_rules(
         &report,
@@ -972,18 +975,23 @@ fn test_excessive_line_length_skips_escaped_tensor_text_blob() {
     let mapper = CapabilityMapper::empty();
     let mut report = test_report_with_findings(vec![]);
     report.target.file_type = "unknown".to_string();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
-            char_entropy: 1.37,
-            max_line_length: 33_554_458,
-            lines_over_1000: 4,
-            octal_escape_count: 17_303_119,
-            escape_density: 23.51,
-            digit_ratio: 0.948,
-            ..Default::default()
-        }),
-        ..Default::default()
-    });
+    {
+        use crate::types::core::flatten_into_metrics;
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        flatten_into_metrics(
+            &TextMetrics {
+                char_entropy: 1.37,
+                max_line_length: 33_554_458,
+                lines_over_1000: 4,
+                octal_escape_count: 17_303_119,
+                escape_density: 23.51,
+                digit_ratio: 0.948,
+                ..Default::default()
+            },
+            "text",
+            flat,
+        );
+    }
 
     let findings = mapper.evaluate_composite_rules(
         &report,

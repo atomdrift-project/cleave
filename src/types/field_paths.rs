@@ -34,13 +34,12 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     use super::binary_metrics::{
         BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
     };
-    use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
+    use super::container_metrics::ArchiveMetrics;
     use super::language_metrics::{
         CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
         ShellMetrics,
     };
-    use super::pdf_metrics::PdfMetrics;
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
@@ -141,52 +140,129 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Container/Archive metrics
+    // `archive.*` flows through expose_metrics via flattened
+    // `ArchiveMetrics`. The struct's field set still acts as the
+    // canonical path manifest.
     for field in ArchiveMetrics::valid_field_paths() {
         paths.insert(format!("archive.{}", field));
     }
-    for field in PackageJsonMetrics::valid_field_paths() {
-        paths.insert(format!("package_json.{}", field));
-    }
-    for field in ChmMetrics::valid_field_paths() {
-        paths.insert(format!("chm.{}", field));
+    // `chm.*` and `package_json.*` paths come from expose's
+    // emission (no typed marker struct cleave-side).
+    for field in [
+        "chm.default_topic_missing",
+        "chm.html_entry_count",
+        "chm.max_user_entry_size",
+        "chm.no_compiler_version",
+        "chm.title_topic_mismatch",
+        "chm.user_byte_ratio",
+    ] {
+        paths.insert(field.to_string());
     }
 
-    // Image metrics (shared across PNG and JPEG)
-    use super::image_metrics::ImageMetrics;
-    for field in ImageMetrics::valid_field_paths() {
-        paths.insert(format!("image.{}", field));
-    }
-
-    // Format-specific image metrics
-    use super::jpeg_metrics::JpegMetrics;
-    use super::png_metrics::PngMetrics;
-    for field in PngMetrics::valid_field_paths() {
-        paths.insert(format!("png.{}", field));
-    }
-    for field in JpegMetrics::valid_field_paths() {
-        paths.insert(format!("jpeg.{}", field));
+    // Image metrics (image.*, jpeg.*, png.*) flow through
+    // `expose_metrics` rather than typed marker structs; field
+    // validation accepts any of those paths.
+    for field in [
+        "image.width",
+        "image.height",
+        "image.channels",
+        "image.pixel_entropy",
+        "image.histogram_flatness",
+        "image.edge_density",
+        "image.r_entropy",
+        "image.g_entropy",
+        "image.b_entropy",
+        "jpeg.appended_bytes",
+        "jpeg.comment_bytes",
+        "jpeg.exif_size",
+        "png.bit_depth",
+        "png.compression_ratio",
+        "png.a_entropy",
+    ] {
+        paths.insert(field.to_string());
     }
 
     // Document/shortcut metrics
-    use super::lnk_metrics::LnkMetrics;
-    for field in LnkMetrics::valid_field_paths() {
-        paths.insert(format!("lnk.{}", field));
-    }
-    for field in PdfMetrics::valid_field_paths() {
-        paths.insert(format!("pdf.{}", field));
+    // LNK whitespace/presence metrics live in expose's flat metric
+    // map (`lnk.*` keys); no typed marker struct here.
+    // PDF metrics similarly live in cleave's flat metric map under
+    // `pdf.*` keys, populated by `analyzers::pdf::pdf_kv::populate_pdf_metrics`.
+    for field in [
+        "lnk.args_leading_spaces",
+        "lnk.args_leading_tabs",
+        "lnk.args_max_whitespace_run",
+        "lnk.args_whitespace_total",
+        "pdf.action_count",
+        "pdf.annotation_count",
+        "pdf.annotations_per_page",
+        "pdf.byte_range_count",
+        "pdf.decoded_form_value_max_len",
+        "pdf.duplicate_form_name_count",
+        "pdf.duplicate_form_name_rect_count",
+        "pdf.duplicate_form_rect_count",
+        "pdf.embedded_file_count",
+        "pdf.font_count",
+        "pdf.form_field_count",
+        "pdf.hidden_zero_rect_field_count",
+        "pdf.jbig2_filter_count",
+        "pdf.javascript_action_count",
+        "pdf.leading_bytes_before_header",
+        "pdf.metadata_count",
+        "pdf.object_count",
+        "pdf.object_stream_inner_object_count",
+        "pdf.objstm_count",
+        "pdf.overlapping_form_field_pair_count",
+        "pdf.page_count",
+        "pdf.risky_feature_score",
+        "pdf.signature_object_count",
+        "pdf.signed_incremental_update_count",
+        "pdf.startxref_count",
+        "pdf.stream_bad_delimiter_count",
+        "pdf.stream_count",
+        "pdf.stream_invalid_length_count",
+        "pdf.stream_length_mismatch_count",
+        "pdf.stream_missing_endstream_count",
+        "pdf.stream_missing_length_count",
+        "pdf.streams_with_unusual_filter_count",
+        "pdf.three_d_object_count",
+        "pdf.trailer_count",
+        "pdf.trailing_bytes_after_eof",
+        "pdf.unreferenced_object_count",
+        "pdf.uri_action_count",
+        "pdf.uri_actions_per_page",
+        "pdf.visible_object_count",
+        "pdf.xobject_count",
+        "pdf.xref_stream_count",
+    ] {
+        paths.insert(field.to_string());
     }
 
     // Office metrics: cross-format fields plus per-container sub-structs.
-    // Sub-structs (`ole`, `ooxml`, `vba`, `xlm`) are flattened so a trait can
-    // write `field: office.xlm.char_count` directly, mirroring how `binary.*`
-    // and the language-specific metrics expose their fields.
-    use super::office_metrics::{OfficeMetrics, OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
-    for field in OfficeMetrics::valid_field_paths() {
-        // Skip the four nested-struct field names; they're not numeric and
-        // are exposed as `office.<sub>.<field>` instead.
-        if !matches!(field, "ole" | "ooxml" | "vba" | "xlm") {
-            paths.insert(format!("office.{}", field));
-        }
+    // Cross-format `office.*` fields flow through `expose_metrics`
+    // (no typed `OfficeMetrics` struct after #41). Sub-structs
+    // (`ole`, `ooxml`, `vba`, `xlm`) remain as internal data
+    // carriers populated by analyzer parsers, then flattened into
+    // `office.<sub>.<field>` via `flatten_into_metrics`.
+    use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
+    // Cross-format `office.*` fields don't have a typed struct anymore;
+    // trait validation accepts any `office.X` path that the analyzer
+    // writes to `expose_metrics`.
+    for field in [
+        "office.dde_link_count",
+        "office.doc_type",
+        "office.embedded_executable_count",
+        "office.external_frame_count",
+        "office.external_image_count",
+        "office.external_oleobject_count",
+        "office.external_ref_count",
+        "office.external_template_count",
+        "office.has_macros",
+        "office.is_encrypted",
+        "office.is_macro_enabled_extension",
+        "office.vba_module_count",
+        "office.vba_source_size",
+    ] {
+        paths.insert(field.to_string());
     }
     for field in OleMetrics::valid_field_paths() {
         paths.insert(format!("office.ole.{}", field));
@@ -236,13 +312,12 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     use super::binary_metrics::{
         BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
     };
-    use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
+    use super::container_metrics::ArchiveMetrics;
     use super::language_metrics::{
         CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
         PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
         ShellMetrics,
     };
-    use super::pdf_metrics::PdfMetrics;
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
@@ -264,9 +339,9 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     add!("macho", MachoMetrics);
     add!("java_class", JavaClassMetrics);
     add!("archive", ArchiveMetrics);
-    add!("package_json", PackageJsonMetrics);
-    add!("chm", ChmMetrics);
-    add!("pdf", PdfMetrics);
+    // chm and package_json descriptions retired (typed structs gone).
+    // PDF descriptions live in expose's emission rather than a typed
+    // marker struct.
     add!("python", PythonMetrics);
     add!("javascript", JavaScriptMetrics);
     add!("powershell", PowerShellMetrics);
@@ -298,24 +373,16 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         }
     }
 
-    // Image metrics
-    use super::image_metrics::ImageMetrics;
-    use super::jpeg_metrics::JpegMetrics;
-    use super::png_metrics::PngMetrics;
-    add!("image", ImageMetrics);
-    add!("png", PngMetrics);
-    add!("jpeg", JpegMetrics);
+    // Image metrics (image.*, jpeg.*, png.*) live in
+    // `expose_metrics` rather than typed marker structs.
 
-    // LNK / Office
-    use super::lnk_metrics::LnkMetrics;
-    add!("lnk", LnkMetrics);
+    // LNK metrics live in expose; field descriptions for `lnk.*`
+    // come from expose's emission rather than a typed struct here.
 
-    use super::office_metrics::{OfficeMetrics, OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
-    for (field, desc) in OfficeMetrics::field_descriptions() {
-        if !desc.is_empty() && !matches!(field, "ole" | "ooxml" | "vba" | "xlm") {
-            map.insert(format!("office.{}", field), desc);
-        }
-    }
+    // Office metrics
+    // Cross-format `office.*` field descriptions retired with the
+    // typed `OfficeMetrics` struct. Sub-struct descriptions stay.
+    use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
     add!("office.ole", OleMetrics);
     add!("office.ooxml", OoxmlMetrics);
     add!("office.vba", VbaMetrics);

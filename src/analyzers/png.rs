@@ -10,7 +10,7 @@ use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
 use crate::strings::StringExtractor;
-use crate::types::{AnalysisReport, BinaryMetrics, ImageMetrics, Metrics, PngMetrics, TargetInfo};
+use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -70,53 +70,17 @@ impl PngAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("png-analyzer".to_string());
 
-        // Structural pass — chunk-table walk for kv tree + counts.
-        // Cheap (no zlib) and complementary to the pixel-statistic
-        // pass below.  Runs first so the resulting counts can fold
-        // into the PngMetrics that the pixel pass populates.
-        let structural = super::png_kv::extract(data);
-
-        // Parse and analyze PNG
-        if let Some((image_metrics, mut png_metrics)) = analyze_png_data(data) {
-            if let Some((_, ref counts)) = structural {
-                png_metrics.chunks_total = counts.chunks_total;
-                png_metrics.chunks_idat = counts.chunks_idat;
-                png_metrics.chunks_after_iend = counts.chunks_after_iend;
-                png_metrics.trailing_bytes = counts.trailing_bytes;
-                png_metrics.text_chunks_total_bytes = counts.text_chunks_total_bytes;
-                png_metrics.unknown_chunks_count = counts.unknown_chunks_count;
-            }
-            report.metrics = Some(Metrics {
-                binary: Some(BinaryMetrics {
-                    overall_entropy: calculate_entropy(data) as f32,
-                    ..Default::default()
-                }),
-                image: Some(image_metrics),
-                png: Some(png_metrics),
-                ..Default::default()
-            });
-        } else if let Some((_, ref counts)) = structural {
-            // Pixel decode failed (truncated/corrupt) but we can still
-            // emit the structural counts — useful for stego cases
-            // where the IDAT is intentionally invalid.
-            report.metrics = Some(Metrics {
-                png: Some(crate::types::PngMetrics {
-                    chunks_total: counts.chunks_total,
-                    chunks_idat: counts.chunks_idat,
-                    chunks_after_iend: counts.chunks_after_iend,
-                    trailing_bytes: counts.trailing_bytes,
-                    text_chunks_total_bytes: counts.text_chunks_total_bytes,
-                    unknown_chunks_count: counts.unknown_chunks_count,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-        }
-
-        // Attach the kv subtree last so it survives whichever metric
-        // path above ran (or didn't).  Namespaced under `png.*`.
-        if let Some((kv_value, _)) = structural {
-            report.merge_kv_subtree("png", kv_value);
+        // Pixel-statistic pass — entropy / dimensions / bit-depth
+        // metrics that aren't part of expose's chunk-table view.
+        // Chunk-level kv (`png.dimensions`, `png.text.*`,
+        // `png.chunks`, `png.features`, …) comes from expose via
+        // the dual-emission step in `evaluate_and_merge_findings`.
+        // Pixel-stat metrics flow into the report's flat metric
+        // map under `image.*` / `png.*` keys.
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        if analyze_png_data(data, flat).is_some() {
+            use crate::types::MetricsExt;
+            flat.set_f("binary.overall_entropy", calculate_entropy(data));
         }
 
         if let Some(strings) = stng_strings {
@@ -156,8 +120,15 @@ impl Analyzer for PngAnalyzer {
     }
 }
 
-/// Analyze PNG data and extract steganography-relevant metrics
-fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
+/// Analyze PNG data and push steganography-relevant metrics into
+/// the report's flat metric map under `image.*` and `png.*` keys.
+/// Returns `Some(())` when the PNG header parsed; `None` when the
+/// bytes aren't a recognisable PNG.
+fn analyze_png_data(
+    data: &[u8],
+    metrics: &mut std::collections::BTreeMap<String, f64>,
+) -> Option<()> {
+    use crate::types::MetricsExt;
     use png::Decoder;
 
     let decoder = Decoder::new(data);
@@ -169,22 +140,23 @@ fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
     let bit_depth = info.bit_depth as u32;
     let color_type = info.color_type;
 
-    // Determine number of channels
-    let channels = match color_type {
-        png::ColorType::Grayscale | png::ColorType::Indexed => 1, // Indexed is palette-based
+    let channels: u32 = match color_type {
+        png::ColorType::Grayscale | png::ColorType::Indexed => 1,
         png::ColorType::GrayscaleAlpha => 2,
         png::ColorType::Rgb => 3,
         png::ColorType::Rgba => 4,
     };
 
-    // Decode pixel data. Skip the entropy/edge analysis when the decoded
-    // buffer would exceed `MAX_DECODE_BYTES`: a malicious or merely huge
-    // PNG (e.g. decompression bomb, 16K screenshot) shouldn't get to allocate
-    // hundreds of megabytes per worker just so we can compute entropy on it.
-    // The structural metadata (`width`, `height`, `bit_depth`, file SHA, etc.)
-    // is captured before this point and is what the threat-detection rules
-    // actually key on; the per-channel entropy is a coarse signal that loses
-    // little fidelity from skipping outsized images.
+    metrics.set_u("image.width", width.into());
+    metrics.set_u("image.height", height.into());
+    metrics.set_u("image.channels", channels.into());
+    metrics.set_u("png.bit_depth", bit_depth.into());
+
+    // Decode pixel data. Skip the entropy/edge analysis when the
+    // decoded buffer would exceed `MAX_DECODE_BYTES` — a malicious
+    // or merely huge PNG shouldn't allocate hundreds of MiB per
+    // worker. Structural metadata above is preserved; only the
+    // per-channel entropy is skipped.
     const MAX_DECODE_BYTES: usize = 32 * 1024 * 1024;
     let buf_size = reader.output_buffer_size();
     if buf_size > MAX_DECODE_BYTES {
@@ -195,31 +167,12 @@ fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
             buf_size_mb = buf_size / 1024 / 1024,
             "Skipping PNG pixel-entropy analysis: decoded buffer exceeds cap"
         );
-        return Some((
-            ImageMetrics {
-                width,
-                height,
-                channels,
-                pixel_entropy: 0.0,
-                histogram_flatness: 0.0,
-                edge_density: 0.0,
-                r_entropy: 0.0,
-                g_entropy: 0.0,
-                b_entropy: 0.0,
-            },
-            PngMetrics {
-                bit_depth,
-                compression_ratio: 0.0,
-                a_entropy: 0.0,
-                ..Default::default()
-            },
-        ));
+        return Some(());
     }
     let mut pixels = vec![0u8; buf_size];
     let output_info = reader.next_frame(&mut pixels).ok()?;
     let pixels = &pixels[..output_info.buffer_size()];
 
-    // Calculate raw pixel size for compression ratio
     let raw_size = (width as usize)
         * (height as usize)
         * (channels as usize)
@@ -230,42 +183,27 @@ fn analyze_png_data(data: &[u8]) -> Option<(ImageMetrics, PngMetrics)> {
         1.0
     };
 
-    // Calculate overall pixel entropy
     let pixel_entropy = calculate_entropy(pixels) as f32;
 
-    // Calculate per-channel entropy for RGB/RGBA images
     let (r_entropy, g_entropy, b_entropy, a_entropy) = if channels >= 3 {
         calculate_channel_entropy(pixels, channels as usize)
     } else {
         (pixel_entropy, 0.0, 0.0, 0.0)
     };
 
-    // Calculate histogram flatness
     let histogram_flatness = calculate_histogram_flatness(pixels);
-
-    // Calculate edge density (measure of visual structure)
     let edge_density =
         calculate_edge_density(pixels, width as usize, height as usize, channels as usize);
 
-    Some((
-        ImageMetrics {
-            width,
-            height,
-            channels,
-            pixel_entropy,
-            histogram_flatness,
-            edge_density,
-            r_entropy,
-            g_entropy,
-            b_entropy,
-        },
-        PngMetrics {
-            bit_depth,
-            compression_ratio,
-            a_entropy,
-            ..Default::default()
-        },
-    ))
+    metrics.set_f("image.pixel_entropy", f64::from(pixel_entropy));
+    metrics.set_f("image.histogram_flatness", f64::from(histogram_flatness));
+    metrics.set_f("image.edge_density", f64::from(edge_density));
+    metrics.set_f("image.r_entropy", f64::from(r_entropy));
+    metrics.set_f("image.g_entropy", f64::from(g_entropy));
+    metrics.set_f("image.b_entropy", f64::from(b_entropy));
+    metrics.set_f("png.compression_ratio", f64::from(compression_ratio));
+    metrics.set_f("png.a_entropy", f64::from(a_entropy));
+    Some(())
 }
 
 /// Calculate entropy for each color channel separately

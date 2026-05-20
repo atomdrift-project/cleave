@@ -1023,11 +1023,11 @@ const WELL_KNOWN_TOOL_CATEGORIES: &[&str] = &[
 /// Kept in sync with `ALLOWED_WELL_KNOWN` in directory_whitelist.rs. Anything outside
 /// this set is reported by the directory whitelist; this list is reused here to scope
 /// second-level subcategory checks.
-const WELL_KNOWN_TOP_LEVEL: &[&str] = &["malware", "tool", "app", "lib", "game"];
+const WELL_KNOWN_TOP_LEVEL: &[&str] = &["malware", "unwanted", "tool", "app", "lib", "game"];
 
 /// Validate that well-known/<category>/ only contains whitelisted second-level
 /// subcategories where one is defined (currently malware/ and tool/). The app/, lib/,
-/// and game/ buckets have no fixed subcategory list and are ignored here.
+/// game/, and unwanted/ buckets have no fixed subcategory list and are ignored here.
 ///
 /// Returns `(directory_path, unknown_category)` for violations.
 #[must_use]

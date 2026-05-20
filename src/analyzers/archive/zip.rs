@@ -269,9 +269,7 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
         let mtime_unix = entry.last_modified().and_then(zip_datetime_to_unix);
         let mode_octal = entry.unix_mode();
         let is_dir_flag = entry.is_dir();
-        let is_symlink_flag = entry
-            .unix_mode()
-            .is_some_and(|m| m & 0o170000 == 0o120000);
+        let is_symlink_flag = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
         let entry_type_str = if is_dir_flag {
             "directory"
         } else if is_symlink_flag {
@@ -446,9 +444,7 @@ pub(super) fn zip_datetime_to_unix(dt: zip::DateTime) -> Option<i64> {
         return None;
     }
     let days = days_from_civil(year as i32, dt.month() as u32, dt.day() as u32)?;
-    let secs = (dt.hour() as i64) * 3600
-        + (dt.minute() as i64) * 60
-        + (dt.second() as i64);
+    let secs = (dt.hour() as i64) * 3600 + (dt.minute() as i64) * 60 + (dt.second() as i64);
     Some(days * 86_400 + secs)
 }
 

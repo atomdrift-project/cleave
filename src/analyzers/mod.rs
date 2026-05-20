@@ -46,21 +46,7 @@ pub(crate) mod utils;
 pub(crate) mod binary_kv;
 // Source-code kv-tree synthesis (imports/exports/functions).
 pub(crate) mod source_kv;
-// JAR kv-tree synthesis (MANIFEST.MF + structural signals).
-pub(crate) mod jar_kv;
-// PNG structural kv-tree synthesis (chunk walk + steganography signals).
-pub(crate) mod png_kv;
-// JPEG structural kv-tree synthesis (marker walk + EXIF attribution).
-pub(crate) mod jpeg_kv;
-// Java `.class` structural kv-tree synthesis (constant pool +
-// access flags + class hierarchy + SourceFile attribution).
-pub(crate) mod class_kv;
 // Python `.pyc` bytecode kv-tree synthesis (header + co_filename).
-pub(crate) mod pyc_kv;
-// Python pickle kv-tree synthesis (protocol + modules + opcode set).
-pub(crate) mod pickle_kv;
-// RPM package header kv-tree synthesis (BUILDHOST + attribution).
-pub(crate) mod rpm_kv;
 // B0.5 quick-win extractors: ELF .comment, sanitizer detection, etc.
 pub(crate) mod binary_extractors;
 // B1: Go buildinfo extractor (cross-format PE/ELF/Mach-O/raw).
@@ -82,7 +68,6 @@ pub(crate) mod elf;
 pub(crate) mod embedded_binary_detector;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
-pub(crate) mod lnk;
 pub(crate) mod macho;
 pub(crate) mod macho_codesign;
 pub(crate) mod office;
@@ -234,11 +219,6 @@ pub fn analyzer_for_file_type(
             pdf::PdfAnalyzer::new().with_capability_mapper(mapper_or_empty),
         )),
 
-        // LNK files - Windows shortcuts
-        FileType::Lnk => Some(Box::new(
-            lnk::LnkAnalyzer::new().with_capability_mapper(mapper_or_empty),
-        )),
-
         // Image analyzers - steganography detection
         FileType::Jpeg => Some(Box::new(
             jpeg::JpegAnalyzer::new().with_capability_mapper(mapper_or_empty),
@@ -348,11 +328,6 @@ pub(crate) fn analyzer_for_file_type_arc(
         // PDF documents — lenient byte-scan extractor.
         FileType::Pdf => Some(Box::new(
             pdf::PdfAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
-        )),
-
-        // LNK files - Windows shortcuts
-        FileType::Lnk => Some(Box::new(
-            lnk::LnkAnalyzer::new().with_capability_mapper_arc(mapper_or_empty),
         )),
 
         // Image analyzers - steganography detection

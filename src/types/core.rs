@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use super::binary::{
     AnalysisMetadata, Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch,
 };
-use super::code_structure::{BinaryProperties, CodeMetrics, OverlayMetrics, SourceCodeMetrics};
 use super::diff::DiffReportV1;
 use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
@@ -118,18 +117,11 @@ pub struct AnalysisReport {
     /// Syscalls detected via binary analysis (ELF, Mach-O)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
-    /// Binary format-specific properties (security features, packing indicators)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub binary_properties: Option<BinaryProperties>,
-    /// Code complexity metrics (cyclomatic complexity, nesting)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub code_metrics: Option<CodeMetrics>,
-    /// Source code-specific metrics (imports, class count, etc.)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub source_code_metrics: Option<SourceCodeMetrics>,
-    /// Overlay data metrics (appended data after the binary)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub overlay_metrics: Option<OverlayMetrics>,
+    // `binary_properties`, `code_metrics`, `source_code_metrics`,
+    // and `overlay_metrics` were typed Option<*> fields with zero
+    // production constructors (#41). Their data surface flows
+    // through `expose_metrics` under `binary.*` / `code.*` / etc.
+    // keys when populated.
     /// Unified metrics container for ML analysis
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metrics: Option<Metrics>,
@@ -142,6 +134,17 @@ pub struct AnalysisReport {
     /// same path map trait authors target.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub kv_tree: Option<Box<serde_json::Value>>,
+    /// Expose's flat metric map (`{ "lnk.args_max_whitespace_run":
+    /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
+    /// trait-rule resolution for `type: metrics, field: …` can read
+    /// expose-emitted values without round-tripping through cleave's
+    /// typed `*Metrics` structs (which would silently fail serde on
+    /// the first `f64` → `u32`/`u64`/`bool` mismatch).
+    ///
+    /// `get_metric_value` checks the typed `metrics` struct first
+    /// (for cleave-native fields) and falls back to this flat map.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
     /// Raw paths discovered (complete list)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub paths: Vec<PathInfo>,
@@ -183,6 +186,125 @@ pub struct AnalysisReport {
     pub diff: Option<DiffReportV1>,
 }
 
+/// Convenience writes / reads into the flat `metrics` map. Cast-from-f64
+/// boilerplate stays here so callers don't repeat it at every emit site.
+pub trait MetricsExt {
+    fn set_u(&mut self, key: impl Into<String>, value: u64);
+    fn set_i(&mut self, key: impl Into<String>, value: i64);
+    fn set_f(&mut self, key: impl Into<String>, value: f64);
+    fn set_b(&mut self, key: impl Into<String>, value: bool);
+    fn set_b_opt(&mut self, key: impl Into<String>, value: Option<bool>);
+    fn get_u(&self, key: &str) -> Option<u64>;
+    fn get_b(&self, key: &str) -> Option<bool>;
+}
+
+impl MetricsExt for std::collections::BTreeMap<String, f64> {
+    fn set_u(&mut self, key: impl Into<String>, value: u64) {
+        self.insert(key.into(), value as f64);
+    }
+    fn set_i(&mut self, key: impl Into<String>, value: i64) {
+        self.insert(key.into(), value as f64);
+    }
+    fn set_f(&mut self, key: impl Into<String>, value: f64) {
+        self.insert(key.into(), value);
+    }
+    fn set_b(&mut self, key: impl Into<String>, value: bool) {
+        self.insert(key.into(), if value { 1.0 } else { 0.0 });
+    }
+    fn set_b_opt(&mut self, key: impl Into<String>, value: Option<bool>) {
+        if let Some(v) = value {
+            self.set_b(key, v);
+        }
+    }
+    fn get_u(&self, key: &str) -> Option<u64> {
+        self.get(key).map(|v| *v as u64)
+    }
+    fn get_b(&self, key: &str) -> Option<bool> {
+        self.get(key).map(|v| *v != 0.0)
+    }
+}
+
+/// Flatten any `Serialize` value into the flat metric map under
+/// dotted keys prefixed with `prefix`. Numbers become `f64`; bools
+/// become `1.0` / `0.0`; nested objects recurse; strings and arrays
+/// are skipped (they belong in `kv_tree`, not `metrics`). The
+/// transitional path during #41 — producers that still build typed
+/// structs internally can dump them into `expose_metrics` in one
+/// call instead of writing N `metrics.insert(...)` lines by hand.
+pub fn flatten_into_metrics<T: serde::Serialize>(
+    value: &T,
+    prefix: &str,
+    out: &mut std::collections::BTreeMap<String, f64>,
+) {
+    if let Ok(json) = serde_json::to_value(value) {
+        flatten_json_into_metrics(&json, prefix, out);
+    }
+}
+
+fn flatten_json_into_metrics(
+    value: &serde_json::Value,
+    prefix: &str,
+    out: &mut std::collections::BTreeMap<String, f64>,
+) {
+    if let serde_json::Value::Object(map) = value {
+        for (k, v) in map {
+            let key = if prefix.is_empty() {
+                k.clone()
+            } else {
+                format!("{prefix}.{k}")
+            };
+            match v {
+                serde_json::Value::Number(n) => {
+                    if let Some(f) = n.as_f64() {
+                        out.insert(key, f);
+                    }
+                }
+                serde_json::Value::Bool(b) => {
+                    out.insert(key, if *b { 1.0 } else { 0.0 });
+                }
+                serde_json::Value::Object(_) => flatten_json_into_metrics(v, &key, out),
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Set a value at a dotted path inside an `Option<Box<serde_json::Value>>`
+/// kv tree, creating intermediate objects as needed. `serde_json::Value`
+/// becomes the canonical home for any metric-shaped data that doesn't
+/// fit `f64` (strings, arrays, structured records).
+pub fn kv_set_path(
+    tree: &mut Option<Box<serde_json::Value>>,
+    dotted: &str,
+    value: serde_json::Value,
+) {
+    let root = tree.get_or_insert_with(|| Box::new(serde_json::Value::Object(Default::default())));
+    let mut current = root.as_mut();
+    if !matches!(current, serde_json::Value::Object(_)) {
+        *current = serde_json::Value::Object(Default::default());
+    }
+    let parts: Vec<&str> = dotted.split('.').collect();
+    let (last, parents) = match parts.split_last() {
+        Some(p) => p,
+        None => return,
+    };
+    for part in parents {
+        let map = current
+            .as_object_mut()
+            .expect("kv_set_path: parent must be object");
+        let entry = map
+            .entry(part.to_string())
+            .or_insert_with(|| serde_json::Value::Object(Default::default()));
+        if !matches!(entry, serde_json::Value::Object(_)) {
+            *entry = serde_json::Value::Object(Default::default());
+        }
+        current = entry;
+    }
+    if let Some(obj) = current.as_object_mut() {
+        obj.insert((*last).to_string(), value);
+    }
+}
+
 impl AnalysisReport {
     /// Create a new analysis report for the given target, timestamped now
     #[must_use]
@@ -207,12 +329,9 @@ impl AnalysisReport {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            binary_properties: None,
-            code_metrics: None,
-            source_code_metrics: None,
-            overlay_metrics: None,
             metrics: None,
             kv_tree: None,
+            expose_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),
@@ -298,7 +417,10 @@ impl AnalysisReport {
                 serde_json::Value::Number(entry.size_bytes.into()),
             );
             if let Some(v) = entry.compressed_size {
-                obj.insert("compressed_size".into(), serde_json::Value::Number(v.into()));
+                obj.insert(
+                    "compressed_size".into(),
+                    serde_json::Value::Number(v.into()),
+                );
                 total_compressed = total_compressed.saturating_add(v);
             }
             total_uncompressed = total_uncompressed.saturating_add(entry.size_bytes);
@@ -381,10 +503,7 @@ impl AnalysisReport {
                 .map(|(k, v)| (k.clone(), serde_json::Value::Number((*v).into())))
                 .collect();
             comp.insert("methods".into(), serde_json::Value::Array(methods));
-            comp.insert(
-                "method_counts".into(),
-                serde_json::Value::Object(counts),
-            );
+            comp.insert("method_counts".into(), serde_json::Value::Object(counts));
             if total_uncompressed > 0 && total_compressed > 0 {
                 let ratio = total_compressed as f64 / total_uncompressed as f64;
                 if let Some(n) = serde_json::Number::from_f64(ratio) {
@@ -461,7 +580,10 @@ impl AnalysisReport {
                 builder.insert(
                     "unames".into(),
                     serde_json::Value::Array(
-                        unames.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                        unames
+                            .iter()
+                            .map(|s| serde_json::Value::String(s.clone()))
+                            .collect(),
                     ),
                 );
             }
@@ -469,7 +591,10 @@ impl AnalysisReport {
                 builder.insert(
                     "gnames".into(),
                     serde_json::Value::Array(
-                        gnames.iter().map(|s| serde_json::Value::String(s.clone())).collect(),
+                        gnames
+                            .iter()
+                            .map(|s| serde_json::Value::String(s.clone()))
+                            .collect(),
                     ),
                 );
             }
@@ -489,7 +614,18 @@ impl AnalysisReport {
             }
             None => serde_json::Map::new(),
         };
-        root.insert(namespace.into(), value);
+        // Deep-merge into any existing namespace value when both
+        // sides are objects, so multiple contributors (e.g. expose
+        // adds `build.toolchain.*` while cleave's binary_extractors
+        // adds `build.username`) coexist instead of clobbering.
+        // Falls back to outright replace for non-object values.
+        let merged = match (root.remove(namespace), value) {
+            (Some(serde_json::Value::Object(existing)), serde_json::Value::Object(incoming)) => {
+                serde_json::Value::Object(deep_merge_objects(existing, incoming))
+            }
+            (_, v) => v,
+        };
+        root.insert(namespace.into(), merged);
         self.kv_tree = Some(Box::new(serde_json::Value::Object(root)));
     }
 
@@ -821,10 +957,6 @@ impl AnalysisReport {
         let _ = std::mem::take(&mut self.directories);
         let _ = std::mem::take(&mut self.env_vars);
         let _ = std::mem::take(&mut self.archive_contents);
-        self.binary_properties = None;
-        self.code_metrics = None;
-        self.source_code_metrics = None;
-        self.overlay_metrics = None;
         self.metrics = None;
 
         // Clear fields that are redundant with files[0] / summary
@@ -858,15 +990,12 @@ impl AnalysisReport {
             .and_then(|a| a.first().cloned());
         file.findings = self.findings.clone();
         file.metrics = self.metrics.clone();
+        file.expose_metrics = self.expose_metrics.clone();
         file.structure = self.structure.clone();
         file.strings = self.strings.clone();
         file.imports = self.imports.clone();
         file.exports = self.exports.clone();
         file.sections = self.sections.clone();
-        file.binary_properties = self.binary_properties.clone();
-        file.code_metrics = self.code_metrics.clone();
-        file.source_code_metrics = self.source_code_metrics.clone();
-        file.overlay_metrics = self.overlay_metrics.clone();
 
         file.populate_file_metrics();
         if let Some(tree) = self.kv_tree.as_deref() {
@@ -910,10 +1039,6 @@ impl AnalysisReport {
         file.imports = self.imports;
         file.exports = self.exports;
         file.sections = self.sections;
-        file.binary_properties = self.binary_properties;
-        file.code_metrics = self.code_metrics;
-        file.source_code_metrics = self.source_code_metrics;
-        file.overlay_metrics = self.overlay_metrics;
 
         file.populate_file_metrics();
         if let Some(tree) = self.kv_tree.as_deref() {
@@ -971,6 +1096,29 @@ fn flatten_kv_for_output(
         }
     }
     walk(value, "", out);
+}
+
+/// Recursively merge two JSON objects. Object children are unioned
+/// (with the right-hand-side winning on leaf collisions); non-object
+/// leaves are replaced by the right-hand value. Used by
+/// [`AnalysisReport::merge_kv_subtree`] so multiple writers under the
+/// same top-level namespace coexist (e.g. expose populates
+/// `build.toolchain.*` while cleave's `binary_extractors` populates
+/// `build.username`).
+fn deep_merge_objects(
+    mut existing: serde_json::Map<String, serde_json::Value>,
+    incoming: serde_json::Map<String, serde_json::Value>,
+) -> serde_json::Map<String, serde_json::Value> {
+    for (k, v) in incoming {
+        let merged = match (existing.remove(&k), v) {
+            (Some(serde_json::Value::Object(a)), serde_json::Value::Object(b)) => {
+                serde_json::Value::Object(deep_merge_objects(a, b))
+            }
+            (_, b) => b,
+        };
+        existing.insert(k, merged);
+    }
+    existing
 }
 
 /// Collapse duplicate findings in-place by `id`. The surviving entry takes
@@ -1700,9 +1848,15 @@ mod tests {
             .expect("archive.members should be an array");
         assert_eq!(members.len(), 3);
         let first = &members[0];
-        assert_eq!(first.get("path").and_then(|v| v.as_str()), Some("manifest.json"));
+        assert_eq!(
+            first.get("path").and_then(|v| v.as_str()),
+            Some("manifest.json")
+        );
         assert_eq!(first.get("uname").and_then(|v| v.as_str()), Some("alice"));
-        assert_eq!(first.get("mode_octal").and_then(|v| v.as_u64()), Some(0o755));
+        assert_eq!(
+            first.get("mode_octal").and_then(|v| v.as_u64()),
+            Some(0o755)
+        );
         assert_eq!(
             first.get("compression_method").and_then(|v| v.as_str()),
             Some("deflate")
@@ -1768,7 +1922,9 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            security.get("external_symlink_count").and_then(|v| v.as_u64()),
+            security
+                .get("external_symlink_count")
+                .and_then(|v| v.as_u64()),
             Some(1)
         );
 

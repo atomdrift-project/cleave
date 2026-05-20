@@ -230,29 +230,37 @@ impl super::CapabilityMapper {
                     | RuleFileType::Png
                     | RuleFileType::Pdf
             );
-        let binary_like_text_blob = report
-            .metrics
-            .as_ref()
-            .and_then(|metrics| metrics.text.as_ref())
-            .is_some_and(|text| {
-                text.null_byte_count >= 4_096
-                    || (text.non_printable_ratio >= 0.30
-                        && text.max_line_length > MAX_LINE_LENGTH as u32)
-                    || (text.most_common_char == Some('\0') && text.most_common_ratio >= 0.80)
-            });
-        let escaped_tensor_text_blob = report
-            .metrics
-            .as_ref()
-            .and_then(|metrics| metrics.text.as_ref())
-            .is_some_and(|text| {
-                report.target.file_type.eq_ignore_ascii_case("unknown")
-                    && text.max_line_length > MAX_LINE_LENGTH as u32
-                    && text.lines_over_1000 <= 8
-                    && text.char_entropy <= 2.0
-                    && text.octal_escape_count >= 100_000
-                    && text.escape_density >= 5.0
-                    && text.digit_ratio >= 0.90
-            });
+        let m = |key: &str| -> Option<f64> {
+            report
+                .expose_metrics
+                .as_ref()
+                .and_then(|fm| fm.get(key).copied())
+        };
+        let binary_like_text_blob = {
+            let null_bytes = m("text.null_byte_count").unwrap_or(0.0) as u32;
+            let non_printable_ratio = m("text.non_printable_ratio").unwrap_or(0.0) as f32;
+            let max_line_length = m("text.max_line_length").unwrap_or(0.0) as u32;
+            let most_common_is_null = m("text.most_common_char_is_null").unwrap_or(0.0) > 0.0;
+            let most_common_ratio = m("text.most_common_ratio").unwrap_or(0.0) as f32;
+            null_bytes >= 4_096
+                || (non_printable_ratio >= 0.30 && max_line_length > MAX_LINE_LENGTH as u32)
+                || (most_common_is_null && most_common_ratio >= 0.80)
+        };
+        let escaped_tensor_text_blob = {
+            let max_line_length = m("text.max_line_length").unwrap_or(0.0) as u32;
+            let lines_over_1000 = m("text.lines_over_1000").unwrap_or(0.0) as u32;
+            let char_entropy = m("text.char_entropy").unwrap_or(0.0) as f32;
+            let octal_escape_count = m("text.octal_escape_count").unwrap_or(0.0) as u32;
+            let escape_density = m("text.escape_density").unwrap_or(0.0) as f32;
+            let digit_ratio = m("text.digit_ratio").unwrap_or(0.0) as f32;
+            report.target.file_type.eq_ignore_ascii_case("unknown")
+                && max_line_length > MAX_LINE_LENGTH as u32
+                && lines_over_1000 <= 8
+                && char_entropy <= 2.0
+                && octal_escape_count >= 100_000
+                && escape_density >= 5.0
+                && digit_ratio >= 0.90
+        };
 
         let has_excessive_line = if is_binary_format
             || binary_like_text_blob
@@ -283,10 +291,10 @@ impl super::CapabilityMapper {
             // Also downgrade any file with very few lines (≤5) — these are
             // typically serialized data, not obfuscated code.
             let is_few_lines = report
-                .metrics
+                .expose_metrics
                 .as_ref()
-                .and_then(|m| m.text.as_ref())
-                .is_some_and(|text| text.total_lines <= 5);
+                .and_then(|m| m.get("text.total_lines").copied())
+                .is_some_and(|v| v as u32 <= 5);
             let is_likely_bundle = is_source_map
                 || is_json_data
                 || is_few_lines

@@ -12,7 +12,7 @@ use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::calculate_entropy;
 use crate::strings::StringExtractor;
-use crate::types::{AnalysisReport, BinaryMetrics, ImageMetrics, JpegMetrics, Metrics, TargetInfo};
+use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -67,46 +67,14 @@ impl JpegAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("jpeg-analyzer".to_string());
 
-        // Structural marker walk → kv tree + segment counts. Cheap
-        // (no pixel decode) and complementary to the entropy pass.
-        let structural = super::jpeg_kv::extract(data);
-
-        if let Some((image_metrics, mut jpeg_metrics)) = analyze_jpeg_data(data) {
-            if let Some((_, ref counts)) = structural {
-                jpeg_metrics.segment_count = counts.segment_count;
-                jpeg_metrics.app_segment_count = counts.app_segment_count;
-                jpeg_metrics.com_count = counts.com_count;
-                jpeg_metrics.dqt_count = counts.dqt_count;
-                jpeg_metrics.dht_count = counts.dht_count;
-                jpeg_metrics.soi_count = counts.soi_count;
-                jpeg_metrics.maker_note_bytes = counts.maker_note_bytes;
-            }
-            report.metrics = Some(Metrics {
-                binary: Some(BinaryMetrics {
-                    overall_entropy: calculate_entropy(data) as f32,
-                    ..Default::default()
-                }),
-                image: Some(image_metrics),
-                jpeg: Some(jpeg_metrics),
-                ..Default::default()
-            });
-        } else if let Some((_, ref counts)) = structural {
-            report.metrics = Some(Metrics {
-                jpeg: Some(crate::types::JpegMetrics {
-                    segment_count: counts.segment_count,
-                    app_segment_count: counts.app_segment_count,
-                    com_count: counts.com_count,
-                    dqt_count: counts.dqt_count,
-                    dht_count: counts.dht_count,
-                    soi_count: counts.soi_count,
-                    maker_note_bytes: counts.maker_note_bytes,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
-        }
-        if let Some((kv_value, _)) = structural {
-            report.merge_kv_subtree("jpeg", kv_value);
+        // `jpeg.*` kv (marker walk, EXIF, ICC/IPTC/XMP flags, comment)
+        // comes from expose's dual emission. Pixel-stat metrics
+        // (entropy / dimensions / DCT histograms) flow into the
+        // report's flat metric map cleave-side.
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        if analyze_jpeg_data(data, flat).is_some() {
+            use crate::types::MetricsExt;
+            flat.set_f("binary.overall_entropy", calculate_entropy(data));
         }
 
         if let Some(strings) = stng_strings {
@@ -230,8 +198,15 @@ fn scan_jpeg_markers(data: &[u8]) -> (u64, u64, u64) {
     (0, comment_bytes, exif_size)
 }
 
-/// Analyze JPEG data and extract steganography-relevant metrics
-fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
+/// Analyze JPEG data and push steganography-relevant metrics into
+/// the report's flat metric map under `image.*` and `jpeg.*` keys.
+/// Returns `Some(())` when the JPEG header parsed; `None` when the
+/// bytes aren't a recognisable JPEG.
+fn analyze_jpeg_data(
+    data: &[u8],
+    metrics: &mut std::collections::BTreeMap<String, f64>,
+) -> Option<()> {
+    use crate::types::MetricsExt;
     use jpeg_decoder::Decoder;
     use std::io::Cursor;
 
@@ -248,6 +223,15 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
         jpeg_decoder::PixelFormat::RGB24 => 3,
         jpeg_decoder::PixelFormat::CMYK32 => 4,
     };
+
+    // Header-derived metrics emit unconditionally — they don't
+    // depend on the heavy pixel decode below.
+    metrics.set_u("image.width", width.into());
+    metrics.set_u("image.height", height.into());
+    metrics.set_u("image.channels", channels.into());
+    metrics.set_u("jpeg.appended_bytes", appended_bytes);
+    metrics.set_u("jpeg.comment_bytes", comment_bytes);
+    metrics.set_u("jpeg.exif_size", exif_size);
 
     // Skip pixel decode for outsized images: a malicious or merely huge JPEG
     // (decompression bomb, 16K photo) shouldn't get to allocate hundreds of
@@ -266,25 +250,7 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
             predicted_mb = predicted / 1024 / 1024,
             "Skipping JPEG pixel-entropy analysis: decoded buffer exceeds cap"
         );
-        return Some((
-            ImageMetrics {
-                width,
-                height,
-                channels,
-                pixel_entropy: 0.0,
-                histogram_flatness: 0.0,
-                edge_density: 0.0,
-                r_entropy: 0.0,
-                g_entropy: 0.0,
-                b_entropy: 0.0,
-            },
-            JpegMetrics {
-                appended_bytes,
-                comment_bytes,
-                exif_size,
-                ..Default::default()
-            },
-        ));
+        return Some(());
     }
     let pixels = decoder.decode().ok()?;
 
@@ -296,32 +262,19 @@ fn analyze_jpeg_data(data: &[u8]) -> Option<(ImageMetrics, JpegMetrics)> {
     let edge_density =
         calculate_edge_density(&pixels, width as usize, height as usize, channels as usize);
 
-    // Calculate per-channel entropy for RGB images
     let (r_entropy, g_entropy, b_entropy) = if channels >= 3 {
         calculate_channel_entropy(&pixels, channels as usize)
     } else {
         (0.0, 0.0, 0.0)
     };
 
-    Some((
-        ImageMetrics {
-            width,
-            height,
-            channels,
-            pixel_entropy,
-            histogram_flatness,
-            edge_density,
-            r_entropy,
-            g_entropy,
-            b_entropy,
-        },
-        JpegMetrics {
-            appended_bytes,
-            comment_bytes,
-            exif_size,
-            ..Default::default()
-        },
-    ))
+    metrics.set_f("image.pixel_entropy", f64::from(pixel_entropy));
+    metrics.set_f("image.histogram_flatness", f64::from(histogram_flatness));
+    metrics.set_f("image.edge_density", f64::from(edge_density));
+    metrics.set_f("image.r_entropy", f64::from(r_entropy));
+    metrics.set_f("image.g_entropy", f64::from(g_entropy));
+    metrics.set_f("image.b_entropy", f64::from(b_entropy));
+    Some(())
 }
 
 /// Calculate entropy for each color channel separately

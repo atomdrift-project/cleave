@@ -4,23 +4,6 @@ use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
 use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
-use super::container_metrics::{ArchiveMetrics, ChmMetrics, PackageJsonMetrics};
-use super::file_metrics::FileMetrics;
-use super::image_metrics::ImageMetrics;
-use super::jpeg_metrics::JpegMetrics;
-use super::language_metrics::{
-    CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
-    PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
-    ShellMetrics,
-};
-use super::lnk_metrics::LnkMetrics;
-use super::office_metrics::OfficeMetrics;
-use super::pdf_metrics::PdfMetrics;
-use super::png_metrics::PngMetrics;
-use super::text_metrics::{
-    CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
-    StringMetrics, TextMetrics,
-};
 use super::{is_zero_f32, is_zero_u32};
 
 // =============================================================================
@@ -31,79 +14,26 @@ use super::{is_zero_f32, is_zero_u32};
 /// Sections are only present when applicable to the file type
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
 pub struct Metrics {
-    // === Universal file-level metrics (every file type) ===
-    /// File-level metrics that apply to every file regardless of type.
-    /// Populated by the analyze pipeline post-analyzer so consumers (the
-    /// diff command in particular) can rely on `file.size` being present.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file: Option<FileMetrics>,
+    // File-level metrics (`file.size`) flow through
+    // `AnalysisReport::expose_metrics` rather than a typed sub-struct.
 
     // === Universal text metrics (all text files) ===
-    /// Line counts and basic text statistics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub text: Option<TextMetrics>,
-    /// Identifier (variable/function name) statistics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub identifiers: Option<IdentifierMetrics>,
-    /// Statistics about string literals in the file
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub strings: Option<StringMetrics>,
-    /// Comment density and coverage metrics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub comments: Option<CommentMetrics>,
-    /// Function complexity and size metrics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub functions: Option<FunctionMetrics>,
-    /// Statement type distribution
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub statements: Option<StatementMetrics>,
-    /// Import statement and dependency metrics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub imports: Option<ImportMetrics>,
-    /// Encoded embedded-code counts
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub encoded: Option<EncodedMetrics>,
+    // `text.*`, `identifiers.*`, `strings.*`, `comments.*`, `functions.*`,
+    // `statements.*`, `imports.*`, `encoded.*` all flow through
+    // `AnalysisReport::expose_metrics` (the flat metric map). The typed
+    // sub-fields were dropped in #41 — `analyzers::unified` flattens
+    // its in-memory builders into expose_metrics directly. The struct
+    // definitions (`TextMetrics`, `IdentifierMetrics`, …) survive as
+    // producer-side builders and as the canonical field-path manifest
+    // surfaced through `field_paths::all_valid_metric_paths`.
 
-    // === Language-specific metrics (mutually exclusive) ===
-    /// Python-specific metrics (only for Python files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub python: Option<PythonMetrics>,
-    /// JavaScript-specific metrics (only for JS/TS files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub javascript: Option<JavaScriptMetrics>,
-    /// PowerShell-specific metrics (only for PS1 files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub powershell: Option<PowerShellMetrics>,
-    /// Shell script-specific metrics (only for shell scripts)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shell: Option<ShellMetrics>,
-    /// PHP-specific metrics (only for PHP files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub php: Option<PhpMetrics>,
-    /// Ruby-specific metrics (only for Ruby files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ruby: Option<RubyMetrics>,
-    /// Perl-specific metrics (only for Perl files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub perl: Option<PerlMetrics>,
-    /// Go-specific metrics (only for Go files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub go_metrics: Option<GoMetrics>,
-    /// Rust-specific metrics (only for Rust files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rust_metrics: Option<RustMetrics>,
-    /// C-specific metrics (only for C files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub c_metrics: Option<CMetrics>,
-    /// Java source-specific metrics (only for Java source files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub java: Option<JavaSourceMetrics>,
-    /// Lua-specific metrics (only for Lua files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lua: Option<LuaMetrics>,
-    /// C#-specific metrics (only for C# files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub csharp: Option<CSharpMetrics>,
+    // Language-specific metric sub-fields (`python`, `javascript`,
+    // `powershell`, `shell`, `php`, `ruby`, `perl`, `go_metrics`,
+    // `rust_metrics`, `c_metrics`, `java`, `lua`, `csharp`) retired
+    // — all were typed marker structs with zero production
+    // producers (#41). If language-specific metrics get wired,
+    // they flow through `AnalysisReport::expose_metrics` under
+    // `<language>.*` keys.
 
     // === Binary-specific metrics ===
     /// Cross-format binary metrics (entropy, imports, strings)
@@ -121,54 +51,37 @@ pub struct Metrics {
     /// Java class file-specific metrics
     #[serde(skip_serializing_if = "Option::is_none")]
     pub java_class: Option<JavaClassMetrics>,
+    // Container/Archive metrics (`archive.*`, `chm.*`,
+    // `package_json.*`) flow through `AnalysisReport::expose_metrics`.
+    // ArchiveMetrics is populated by `analyzers::archive::zip::inspect_zip_metadata_from_reader`;
+    // chm and package_json metrics come from expose's emission.
 
-    // === Container/Archive metrics ===
-    /// Archive file metrics (zip, tar, etc.)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub archive: Option<ArchiveMetrics>,
-    /// CHM (Compiled HTML Help) container metrics — derived ratios
-    /// and per-entry aggregates layered on top of the raw `chm.*` kv.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub chm: Option<ChmMetrics>,
-    /// npm package.json metrics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub package_json: Option<PackageJsonMetrics>,
+    // Image metrics (pixel entropy, histogram, edge density, per-channel
+    // entropy, JPEG/PNG format-specific counts) flow through
+    // `AnalysisReport::expose_metrics` under `image.*` / `jpeg.*` /
+    // `png.*` keys. Populated by analyzers/jpeg.rs and
+    // analyzers/png.rs through their `analyze_jpeg_data` /
+    // `analyze_png_data` helpers.
 
-    // === Image metrics ===
-    /// Shared image metrics (pixel entropy, histogram, edge density, per-channel entropy)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image: Option<ImageMetrics>,
-    /// JPEG-specific metrics (appended bytes, comment bytes, EXIF size)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub jpeg: Option<JpegMetrics>,
-    /// PNG-specific metrics (compression ratio, bit depth, alpha entropy)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub png: Option<PngMetrics>,
+    // === Document metrics ===
+    // LNK whitespace/presence metrics flow through
+    // `AnalysisReport::expose_metrics` under `lnk.*` keys — no typed
+    // sub-struct because expose's flat metric map is the source of
+    // truth for that surface.
+    // Office metrics (cross-format + per-container `ole.*`/`ooxml.*`/
+    // `vba.*`/`xlm.*` sub-fields) flow through
+    // `AnalysisReport::expose_metrics` under `office.*` dotted keys.
+    // Populated by `analyzers/office/mod.rs::populate_*_metrics`.
+    // PDF metrics flow through `AnalysisReport::expose_metrics`
+    // under `pdf.*` keys — populated by analyzers/pdf via
+    // `populate_pdf_metrics`. No typed sub-struct here.
 
-    // === Document/shortcut metrics ===
-    /// LNK-specific metrics (presence flags and argument whitespace analysis)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub lnk: Option<LnkMetrics>,
-    /// Microsoft Office metrics (cross-format and per-container sub-metrics).
-    /// Populated for OLE2 and OOXML documents; nested `ole`/`ooxml`/`vba`/
-    /// `xlm` sub-structs are present only when the corresponding format
-    /// component is detected.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub office: Option<OfficeMetrics>,
-    /// PDF-specific structural and parser coverage metrics.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pdf: Option<PdfMetrics>,
-
-    // === Composite scores ===
-    /// Composite obfuscation score with component breakdown
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub obfuscation: Option<ObfuscationScore>,
-    /// Composite packing score with component breakdown
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub packing: Option<PackingScore>,
-    /// Composite supply chain risk score with component breakdown
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub supply_chain: Option<SupplyChainScore>,
+    // `obfuscation`, `packing`, `supply_chain` composite scores
+    // retired — they were declared as typed marker structs with
+    // zero production producers (#41). If/when composite scoring
+    // gets wired, the per-component values flow through
+    // `AnalysisReport::expose_metrics` under `obfuscation.*` /
+    // `packing.*` / `supply_chain.*` keys.
 }
 
 /// Embedded code counts by decoded language and encoding.
@@ -374,7 +287,22 @@ pub struct SupplyChainScore {
 /// A leaf missing from the serialized JSON due to `skip_serializing_if` is treated as 0.0
 /// when its parent container exists (common for numeric fields with `is_zero` skips).
 #[must_use]
-pub(crate) fn get_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
+pub(crate) fn get_metric_value(report: &crate::types::AnalysisReport, field: &str) -> Option<f64> {
+    if let Some(metrics) = report.metrics.as_ref() {
+        if let Some(v) = typed_metric_value(metrics, field) {
+            return Some(v);
+        }
+    }
+    // Fall back to expose's flat metric map — see the docstring on
+    // `AnalysisReport::expose_metrics` for why this isn't merged into
+    // the typed struct above.
+    report
+        .expose_metrics
+        .as_ref()
+        .and_then(|m| m.get(field).copied())
+}
+
+fn typed_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
     // Convert metrics to JSON value for dynamic access
     let value = serde_json::to_value(metrics).ok()?;
 
@@ -389,11 +317,15 @@ pub(crate) fn get_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
     }
 
     // Leaf lookup: a missing leaf under an existing object parent means the numeric
-    // field was skipped by `skip_serializing_if = "is_zero_*"` — treat it as 0.0.
+    // field was skipped by `skip_serializing_if = "is_zero_*"` — treat it as 0.0
+    // only when the parent struct itself is present and non-empty (so we don't
+    // shadow expose's flat-map fallback for namespaces cleave never populates).
     match current.get(last) {
         Some(serde_json::Value::Number(n)) => n.as_f64(),
         Some(serde_json::Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
-        None if current.is_object() => Some(0.0),
+        None if current.is_object() && current.as_object().is_some_and(|o| !o.is_empty()) => {
+            Some(0.0)
+        }
         Some(_) | None => None,
     }
 }
@@ -407,19 +339,6 @@ mod tests {
     #[test]
     fn test_metrics_default() {
         let metrics = Metrics::default();
-        assert!(metrics.text.is_none());
-        assert!(metrics.binary.is_none());
-        assert!(metrics.python.is_none());
-        assert!(metrics.obfuscation.is_none());
-    }
-
-    #[test]
-    fn test_metrics_with_text() {
-        let metrics = Metrics {
-            text: Some(TextMetrics::default()),
-            ..Default::default()
-        };
-        assert!(metrics.text.is_some());
         assert!(metrics.binary.is_none());
     }
 
@@ -433,16 +352,6 @@ mod tests {
         assert!(metrics.binary.is_some());
         assert!(metrics.elf.is_some());
         assert!(metrics.pe.is_none());
-    }
-
-    #[test]
-    fn test_metrics_with_language() {
-        let metrics = Metrics {
-            python: Some(PythonMetrics::default()),
-            ..Default::default()
-        };
-        assert!(metrics.python.is_some());
-        assert!(metrics.javascript.is_none());
     }
 
     // ==================== ObfuscationScore Default Tests ====================

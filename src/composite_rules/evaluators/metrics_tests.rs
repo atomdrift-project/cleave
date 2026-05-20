@@ -6,7 +6,7 @@
 use super::*;
 use crate::composite_rules::context::EvaluationContext;
 use crate::composite_rules::types::FileType;
-use crate::types::scores::Metrics;
+use crate::types::core::{flatten_into_metrics, MetricsExt};
 use crate::types::text_metrics::{FunctionMetrics, IdentifierMetrics, TextMetrics};
 use crate::types::{AnalysisReport, TargetInfo};
 
@@ -25,6 +25,15 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
     EvaluationContext::test_only_new(report, data, FileType::All)
 }
 
+/// Test helper: flatten a typed metric builder into `report.expose_metrics`
+/// under `prefix`. Keeps test fixtures expressive (typed struct, named
+/// fields, default fill) while exercising the same flat-map surface that
+/// production code uses.
+fn add<T: serde::Serialize>(report: &mut AnalysisReport, prefix: &str, value: &T) {
+    let flat = report.expose_metrics.get_or_insert_with(Default::default);
+    flatten_into_metrics(value, prefix, flat);
+}
+
 // =============================================================================
 // eval_metrics tests - Text metrics
 // =============================================================================
@@ -32,13 +41,14 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
 #[test]
 fn test_eval_metrics_text_char_entropy() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             char_entropy: 5.5,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -50,13 +60,14 @@ fn test_eval_metrics_text_char_entropy() {
 #[test]
 fn test_eval_metrics_text_avg_line_length() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             avg_line_length: 85.0,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -67,13 +78,14 @@ fn test_eval_metrics_text_avg_line_length() {
 #[test]
 fn test_eval_metrics_text_whitespace_ratio() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             whitespace_ratio: 0.15,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -89,13 +101,14 @@ fn test_eval_metrics_text_whitespace_ratio() {
 #[test]
 fn test_eval_metrics_identifiers_avg_entropy() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        identifiers: Some(IdentifierMetrics {
+    add(
+        &mut report,
+        "identifiers",
+        &IdentifierMetrics {
             avg_entropy: 3.8,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -107,13 +120,14 @@ fn test_eval_metrics_identifiers_avg_entropy() {
 #[test]
 fn test_eval_metrics_identifiers_single_char_ratio() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        identifiers: Some(IdentifierMetrics {
+    add(
+        &mut report,
+        "identifiers",
+        &IdentifierMetrics {
             single_char_ratio: 0.45,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -132,15 +146,16 @@ fn test_eval_metrics_identifiers_single_char_ratio() {
 #[test]
 fn test_eval_metrics_identifiers_reuse_ratio() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        identifiers: Some(IdentifierMetrics {
+    add(
+        &mut report,
+        "identifiers",
+        &IdentifierMetrics {
             reuse_ratio: 0.25,
             total: 100,
             unique_count: 25,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -163,13 +178,14 @@ fn test_eval_metrics_identifiers_reuse_ratio() {
 #[test]
 fn test_eval_metrics_functions_max_nesting_depth() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        functions: Some(FunctionMetrics {
+    add(
+        &mut report,
+        "functions",
+        &FunctionMetrics {
             max_nesting_depth: 8,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -188,14 +204,15 @@ fn test_eval_metrics_functions_max_nesting_depth() {
 #[test]
 fn test_eval_metrics_functions_over_100_lines() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        functions: Some(FunctionMetrics {
+    add(
+        &mut report,
+        "functions",
+        &FunctionMetrics {
             over_100_lines: 3,
             total: 10,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -213,13 +230,14 @@ fn test_eval_metrics_functions_over_100_lines() {
 #[test]
 fn test_eval_metrics_functions_density() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        functions: Some(FunctionMetrics {
+    add(
+        &mut report,
+        "functions",
+        &FunctionMetrics {
             density_per_100_lines: 15.0,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -242,13 +260,14 @@ fn test_eval_metrics_functions_density() {
 fn test_eval_metrics_min_size() {
     let mut report = create_test_report();
     report.target.size_bytes = 5000;
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             char_entropy: 5.0,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -272,13 +291,14 @@ fn test_eval_metrics_min_size() {
 fn test_eval_metrics_max_size() {
     let mut report = create_test_report();
     report.target.size_bytes = 5000;
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             char_entropy: 5.0,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -315,22 +335,20 @@ fn test_eval_metrics_no_metrics() {
 #[test]
 fn test_eval_metrics_missing_field() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics::default()), // Fields are 0
-        ..Default::default()
-    });
+    // Empty flat map — `text.char_entropy` lookups return None.
+    report.expose_metrics.get_or_insert_with(Default::default);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    // Field exists but is 0
+    // Field absent → !matched.
     let result = eval_metrics("text.char_entropy", Some(1.0), None, None, None, &ctx);
-    assert!(!result.matched); // 0 < 1.0
+    assert!(!result.matched);
 }
 
 #[test]
 fn test_eval_metrics_unknown_field() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics::default());
+    report.expose_metrics.get_or_insert_with(Default::default);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -341,15 +359,13 @@ fn test_eval_metrics_unknown_field() {
 #[test]
 fn test_eval_metrics_missing_submetrics() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        // text is None
-        identifiers: Some(IdentifierMetrics::default()),
-        ..Default::default()
-    });
+    // Populate identifiers but not text.
+    let flat = report.expose_metrics.get_or_insert_with(Default::default);
+    flat.set_f("identifiers.avg_entropy", 0.0);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
-    // text metrics not present
+    // text.* keys absent → !matched.
     let result = eval_metrics("text.char_entropy", Some(1.0), None, None, None, &ctx);
     assert!(!result.matched);
 }
@@ -357,13 +373,14 @@ fn test_eval_metrics_missing_submetrics() {
 #[test]
 fn test_eval_metrics_evidence_format() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             char_entropy: 5.5,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -379,13 +396,14 @@ fn test_eval_metrics_evidence_format() {
 #[test]
 fn test_eval_metrics_min_and_max() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             char_entropy: 5.0,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -405,13 +423,14 @@ fn test_eval_metrics_min_and_max() {
 #[test]
 fn test_eval_metrics_digit_ratio() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             digit_ratio: 0.35,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -423,13 +442,14 @@ fn test_eval_metrics_digit_ratio() {
 #[test]
 fn test_eval_metrics_empty_line_ratio() {
     let mut report = create_test_report();
-    report.metrics = Some(Metrics {
-        text: Some(TextMetrics {
+    add(
+        &mut report,
+        "text",
+        &TextMetrics {
             empty_line_ratio: 0.05,
             ..Default::default()
-        }),
-        ..Default::default()
-    });
+        },
+    );
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 

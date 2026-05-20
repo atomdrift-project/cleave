@@ -87,9 +87,11 @@ impl super::CapabilityMapper {
                     // can match `foo(args)` call expressions. See
                     // `Evidence.alt_value` docs.
                     let call_node_types: FxHashSet<&'static str> =
-                        crate::composite_rules::ast_kinds::map_kind_to_node_types("call", file_type)
-                            .into_iter()
-                            .collect();
+                        crate::composite_rules::ast_kinds::map_kind_to_node_types(
+                            "call", file_type,
+                        )
+                        .into_iter()
+                        .collect();
                     let mut cache = FxHashMap::default();
                     let mut cursor = tree.walk();
                     crate::analyzers::ast_walker::walk_tree_with_stats(

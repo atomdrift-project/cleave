@@ -98,6 +98,7 @@ impl GenericAnalyzer {
             FileType::Data => "data",
             FileType::Pdf => "pdf",
             FileType::PythonBytecode => "python-bytecode",
+            FileType::Lnk => "lnk",
             _ => "unknown",
         }
     }
@@ -149,16 +150,8 @@ impl GenericAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // PythonBytecode (.pyc) — surface header + co_filename as
-        // `pyc.*` kv. Only fires when we have the original bytes
-        // (the analyzer is otherwise text-shaped).
-        if matches!(self.file_type, FileType::PythonBytecode) {
-            if let Some(bytes) = original_bytes {
-                if let Some(kv) = super::pyc_kv::extract(bytes) {
-                    report.merge_kv_subtree("pyc", kv);
-                }
-            }
-        }
+        // `pyc.*` kv comes from expose's dual emission in the
+        // capability mapper — no synthesis needed here.
 
         // Add structural feature
         let (parser_name, description) = if let Some((_, _)) = self.treesitter_config() {
@@ -320,17 +313,25 @@ impl GenericAnalyzer {
 
         // Compute basic metrics
         let t_metrics = std::time::Instant::now();
-        report.metrics = Some(self.compute_metrics(content, original_bytes));
+        self.compute_metrics(content, original_bytes, &mut report);
         tracing::debug!(
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
         );
 
-        // Evaluate all rules (atomic + composite) and merge into report
+        // Evaluate all rules (atomic + composite) and merge into report.
+        //
+        // Use the original binary bytes (`original_bytes`) rather than
+        // `content.as_bytes()` — the latter is the UTF-8-lossy view, which
+        // for binary inputs (LNK / pyc / RPM / etc. routed through this
+        // analyzer) replaces every non-UTF-8 byte with U+FFFD (3 bytes
+        // `EF BF BD`) and shifts every offset, corrupting expose's
+        // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
+        let eval_bytes = original_bytes.unwrap_or_else(|| content.as_bytes());
         self.capability_mapper.evaluate_and_merge_findings(
             &mut report,
-            content.as_bytes(),
+            eval_bytes,
             tree.as_ref(),
             None,
         );
@@ -460,25 +461,36 @@ impl GenericAnalyzer {
         }
     }
 
-    fn compute_metrics(&self, content: &str, original_bytes: Option<&[u8]>) -> Metrics {
+    fn compute_metrics(
+        &self,
+        content: &str,
+        original_bytes: Option<&[u8]>,
+        report: &mut AnalysisReport,
+    ) {
         let text = crate::analyzers::text_metrics::analyze_text(content);
-        let binary = if matches!(self.file_type, FileType::Data) {
+        {
+            use crate::types::core::flatten_into_metrics;
+            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            flatten_into_metrics(&text, "text", flat);
+            if let Some(c) = text.most_common_char {
+                use crate::types::core::MetricsExt;
+                flat.set_u("text.most_common_char_codepoint", u64::from(c as u32));
+                flat.set_b("text.most_common_char_is_null", c == '\0');
+            }
+        }
+        if matches!(self.file_type, FileType::Data) {
             // Data files are opaque blobs; populate byte-level entropy so rules
             // can threshold on `binary.overall_entropy` to flag encrypted payloads.
             // Use the raw bytes when available — a lossy UTF-8 round trip collapses
             // non-printable bytes to U+FFFD and tanks the entropy score.
             let bytes = original_bytes.unwrap_or(content.as_bytes());
-            Some(crate::types::BinaryMetrics {
-                overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,
+            report.metrics = Some(Metrics {
+                binary: Some(crate::types::BinaryMetrics {
+                    overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,
+                    ..Default::default()
+                }),
                 ..Default::default()
-            })
-        } else {
-            None
-        };
-        Metrics {
-            text: Some(text),
-            binary,
-            ..Default::default()
+            });
         }
     }
 }
@@ -522,8 +534,11 @@ start payload.exe
 
         // Should extract strings (quoted strings are extracted)
         assert!(!report.strings.is_empty());
-        // Should have metrics
-        assert!(report.metrics.is_some());
+        // text.* metrics flow through expose_metrics now
+        assert!(report
+            .expose_metrics
+            .as_ref()
+            .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
     }
 
     #[test]

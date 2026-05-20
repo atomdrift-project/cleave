@@ -145,6 +145,7 @@ const ALLOWED_CREDENTIAL_ACCESS: &[&str] = &[
     "validation",         // Credential validation
     "vpn",                // VPN config credentials
     "wallet",             // Crypto wallet access                          B0028
+    "wifi",               // Saved Wi-Fi credentials                       T1555
     "windows-registry",   // Registry credential extraction
 ];
 
@@ -237,7 +238,7 @@ const ALLOWED_MB_COMMUNICATIONS: &[&str] = &[
     "email",
     "ethernet-ip", // EtherNet/IP + CIP industrial protocol     (TCP 44818)
     "ftp",
-    "grpc",    // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
+    "grpc", // gRPC client/server (HTTP/2 RPC)             (TCP 50051)
     "http",
     "icmp",
     "ip",
@@ -598,11 +599,12 @@ const ALLOWED_SUPPLY_CHAIN: &[&str] = &[
 ///
 /// These represent specific named entities the system can identify by fingerprint:
 /// - malware/ — malicious families
+/// - unwanted/ — potentially unwanted software and riskware families
 /// - tool/   — security/sysadmin/RE tooling and dual-use binaries
 /// - app/    — end-user applications
 /// - lib/    — libraries and frameworks
 /// - game/   — games and game engines
-const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "tool", "app", "lib", "game"];
+const ALLOWED_WELL_KNOWN: &[&str] = &["malware", "unwanted", "tool", "app", "lib", "game"];
 
 /// Allowed subdirectories in well-known/malware/
 ///

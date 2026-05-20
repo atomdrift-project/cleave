@@ -107,6 +107,46 @@ impl super::CapabilityMapper {
             SectionMap::empty(binary_data.len() as u64)
         };
 
+        // Open the file once via the shared `AnalysisContext` and
+        // merge expose's structured view into `report.kv_tree` /
+        // `report.metrics` for the trait engine. All other call
+        // sites that need format-native kv read through the same
+        // entry point — see `cleave::analysis_context`.
+        let target_path = std::path::PathBuf::from(&report.target.path);
+        if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(&target_path, binary_data) {
+            let values_tree = ctx.values_tree();
+            // Stash expose's flat metric map verbatim on the
+            // report. `get_metric_value` consults it as a fallback
+            // after the typed `Metrics` struct, so expose-emitted
+            // metrics (`lnk.args_max_whitespace_run`, `pdf.action_count`,
+            // `binary.is_pie`, …) are reachable to trait rules without
+            // a fragile serde round-trip — serde rejects `f64` → any
+            // integer-typed field, which would silently drop the
+            // whole `Metrics` rebuild on the first collision.
+            let expose_map: std::collections::BTreeMap<String, f64> = ctx
+                .parsed
+                .metrics()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            drop(ctx);
+            if let serde_json::Value::Object(map) = values_tree {
+                for (namespace, subtree) in map {
+                    report.merge_kv_subtree(&namespace, subtree);
+                }
+            }
+            if !expose_map.is_empty() {
+                // Merge into any pre-populated map (text-side analyzers
+                // populate `text.*`/`identifiers.*`/etc. before reaching
+                // the capability mapper). Overwriting would silently
+                // drop those keys.
+                let dest = report.expose_metrics.get_or_insert_with(Default::default);
+                for (k, v) in expose_map {
+                    dest.insert(k, v);
+                }
+            }
+        }
+
         // Use precomputed regex matches if provided, otherwise compute now
         let raw_regex_matches = precomputed_raw_regex
             .unwrap_or_else(|| self.precompute_raw_regex_matches(binary_data, &file_type));
@@ -425,6 +465,8 @@ impl super::CapabilityMapper {
     /// Mirrors the ID-matching logic used in `eval_trait` so that retroactive suppression
     /// behaves identically to runtime evaluation.
     fn unless_trait_id_matches(&self, id: &str, all_ids: &FxHashSet<&str>) -> bool {
+        let id = id.trim_end_matches('/');
+
         // Specific reference (contains `::`): exact match only.
         if id.contains("::") {
             return all_ids.contains(id);
@@ -442,8 +484,10 @@ impl super::CapabilityMapper {
 
         // Has slashes but no `::`: directory-prefix match.
         // e.g. "micro-behaviors/fs" matches any finding under that path.
-        all_ids
-            .iter()
-            .any(|fid| *fid == id || fid.starts_with(&format!("{id}/")))
+        let prefix_new = format!("{id}::");
+        let prefix_legacy = format!("{id}/");
+        all_ids.iter().any(|fid| {
+            *fid == id || fid.starts_with(&prefix_new) || fid.starts_with(&prefix_legacy)
+        })
     }
 }

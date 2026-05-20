@@ -17,96 +17,12 @@ use serde::{Deserialize, Serialize};
 
 use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
 
-/// Cross-format Microsoft Office metrics.
-///
-/// Populated for both legacy OLE2 (`.doc`/`.xls`/`.ppt`) and OOXML
-/// (`.docx`/`.xlsx`/`.pptx` and their `*m` macro-enabled variants).
-/// The `ole`/`ooxml` sub-structs hold container-format-specific counts; the
-/// fields directly on `OfficeMetrics` are valid for either.
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct OfficeMetrics {
-    // === Type discrimination ===
-    /// File-extension-derived document type string
-    ///
-    /// (e.g., `docm`, `xlsb`, `pps`). Distinct from `target.file_type`, which collapses
-    /// macro-enabled variants. Empty when the analyzer could not classify the extension.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub doc_type: String,
-
-    /// File extension implies macro support (*m, xla, xll)
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_macro_enabled_extension: bool,
-
-    /// Document contains VBA modules or XLM macrosheets
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub has_macros: bool,
-
-    /// Document is encrypted via OLE or OOXML encryption
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_encrypted: bool,
-
-    // === Top-level VBA presence ===
-    /// Number of decompressed VBA modules across all macro projects.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub vba_module_count: u32,
-    /// Total VBA source size in bytes after MS-OVBA decompression.
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub vba_source_size: u64,
-
-    // === Embedded payloads ===
-    /// Count of embedded executables in OLE or OOXML
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub embedded_executable_count: u32,
-    /// OLE10Native embedded objects (file droppers).
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub ole10_native_count: u32,
-    /// Count of embedded OLE objects in the document
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub embedded_ole_count: u32,
-
-    // === External references ===
-    /// Count of external relationship references
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub external_ref_count: u32,
-    /// Count of external template relationships
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub external_template_count: u32,
-    /// External oleObject relationships (remote OLE link).
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub external_oleobject_count: u32,
-    /// External frame/subDocument relationships.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub external_frame_count: u32,
-    /// External image relationships (HTTP-fetched lure imagery).
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub external_image_count: u32,
-
-    // === DDE ===
-    /// DDE field codes detected in document body XML.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub dde_link_count: u32,
-
-    // === Sub-metrics (container-format-specific) ===
-    /// OLE2-specific metrics (CompObj, SummaryInformation, stream stats).
-    /// Populated for legacy formats (`.doc`, `.xls`, `.ppt`, `.msg`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ole: Option<OleMetrics>,
-
-    /// OOXML-specific metrics (ZIP entry stats, content-type flags).
-    /// Populated for modern formats (`.docx`, `.xlsx`, `.pptx` and `*m`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ooxml: Option<OoxmlMetrics>,
-
-    /// VBA project aggregate counts (Declare/CreateObject frequency).
-    /// Populated when one or more VBA modules are present.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub vba: Option<VbaMetrics>,
-
-    /// Excel 4.0 (XLM) macrosheet counts.
-    /// Populated when an XLM macrosheet is present.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub xlm: Option<XlmMetrics>,
-}
+// `OfficeMetrics` retired — cross-format office fields
+// (`doc_type`, `has_macros`, `external_*_count`, etc.) flow through
+// `AnalysisReport::expose_metrics` under `office.*` dotted keys.
+// The container-format sub-structs (Ole/Ooxml/Vba/Xlm) below
+// remain as crate-internal data carriers that analyzer parsers
+// build then flatten via `flatten_into_metrics`.
 
 /// OLE2 / Compound File Binary specific metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
@@ -363,44 +279,30 @@ pub struct XlmMetrics {
 mod tests {
     use super::*;
 
-    /// `OfficeMetrics::default()` must round-trip through serde producing an
-    /// empty JSON object — every field is `skip_serializing_if`-guarded.
+    /// The remaining sub-struct carriers (Ole/Ooxml/Vba/Xlm) still
+    /// round-trip through serde producing empty JSON for the
+    /// default value — every field is `skip_serializing_if`-guarded.
+    /// Cross-format `office.*` lifecycle moved to
+    /// `analyzers/office/mod.rs::populate_*_metrics` tests.
     #[test]
-    fn default_serializes_empty() {
-        let metrics = OfficeMetrics::default();
-        let json = serde_json::to_string(&metrics).unwrap();
-        assert_eq!(json, "{}");
+    fn default_sub_structs_serialize_empty() {
+        assert_eq!(serde_json::to_string(&OleMetrics::default()).unwrap(), "{}");
+        assert_eq!(
+            serde_json::to_string(&OoxmlMetrics::default()).unwrap(),
+            "{}"
+        );
+        assert_eq!(serde_json::to_string(&VbaMetrics::default()).unwrap(), "{}");
+        assert_eq!(serde_json::to_string(&XlmMetrics::default()).unwrap(), "{}");
     }
 
-    /// Populating one nested struct serializes only that path.
+    /// Populated XLM serializes the populated field.
     #[test]
-    fn populated_xlm_only_serializes_xlm() {
-        let metrics = OfficeMetrics {
-            xlm: Some(XlmMetrics {
-                char_count: 250,
-                ..Default::default()
-            }),
+    fn populated_xlm_serializes() {
+        let xlm = XlmMetrics {
+            char_count: 250,
             ..Default::default()
         };
-        let json = serde_json::to_value(&metrics).unwrap();
-        assert!(json.get("xlm").is_some());
-        assert!(json.get("ole").is_none());
-        assert!(json.get("ooxml").is_none());
-        assert!(json.get("vba").is_none());
-        assert_eq!(json["xlm"]["char_count"], 250);
-    }
-
-    /// Doc-type discrimination round-trips.
-    #[test]
-    fn doc_type_string_roundtrip() {
-        let metrics = OfficeMetrics {
-            doc_type: "docm".into(),
-            is_macro_enabled_extension: true,
-            ..Default::default()
-        };
-        let json = serde_json::to_string(&metrics).unwrap();
-        let back: OfficeMetrics = serde_json::from_str(&json).unwrap();
-        assert_eq!(back.doc_type, "docm");
-        assert!(back.is_macro_enabled_extension);
+        let json = serde_json::to_value(&xlm).unwrap();
+        assert_eq!(json["char_count"], 250);
     }
 }

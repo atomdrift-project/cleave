@@ -8,7 +8,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
-use super::code_structure::{BinaryProperties, CodeMetrics, OverlayMetrics, SourceCodeMetrics};
 use super::core::Criticality;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::scores::Metrics;
@@ -109,25 +108,19 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
 
-    /// Binary properties
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub binary_properties: Option<BinaryProperties>,
-
-    /// Code complexity metrics (cyclomatic complexity, nesting)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub code_metrics: Option<CodeMetrics>,
-
-    /// Source code metrics
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub source_code_metrics: Option<SourceCodeMetrics>,
-
-    /// Overlay data metrics (appended data after the binary)
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub overlay_metrics: Option<OverlayMetrics>,
-
+    // `binary_properties`, `code_metrics`, `source_code_metrics`,
+    // and `overlay_metrics` retired — their data surface flows
+    // through `expose_metrics` when populated.
     /// Unified metrics container
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub metrics: Option<Metrics>,
+
+    /// Flat metric map — same role as
+    /// `AnalysisReport::expose_metrics`. Populated piece-by-piece
+    /// as typed `*Metrics` sub-structs retire under #41. The
+    /// dotted-key namespace mirrors expose's emission convention.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
 
     /// Paths discovered
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -199,11 +192,8 @@ impl FileAnalysis {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            binary_properties: None,
-            code_metrics: None,
-            source_code_metrics: None,
-            overlay_metrics: None,
             metrics: None,
+            expose_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),
@@ -309,14 +299,15 @@ impl FileAnalysis {
 
     /// Ensure `metrics.file.size` is set from `self.size`. Called by the
     /// analysis pipeline post-analyzer so every file type carries this
-    /// universal metric, regardless of which analyzer ran.
+    /// universal metric, regardless of which analyzer ran. Writes the
+    /// flat-map carrier directly — the typed `FileMetrics` struct is
+    /// retired (#41).
     pub(crate) fn populate_file_metrics(&mut self) {
+        use super::MetricsExt;
         let size = self.size;
-        self.metrics
-            .get_or_insert_with(super::scores::Metrics::default)
-            .file
-            .get_or_insert_with(super::file_metrics::FileMetrics::default)
-            .size = size;
+        self.expose_metrics
+            .get_or_insert_with(Default::default)
+            .set_u("file.size", size);
     }
 }
 
@@ -495,10 +486,6 @@ mod tests {
         assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
         assert!(fa.encoding.is_none());
-        assert!(fa.binary_properties.is_none());
-        assert!(fa.code_metrics.is_none());
-        assert!(fa.source_code_metrics.is_none());
-        assert!(fa.overlay_metrics.is_none());
         assert!(fa.metrics.is_none());
         assert!(fa.extracted_path.is_none());
     }

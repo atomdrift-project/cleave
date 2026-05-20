@@ -44,16 +44,20 @@ pub(crate) mod core;
 pub(crate) mod diff;
 pub mod field_paths;
 pub(crate) mod file_analysis;
-pub(crate) mod file_metrics;
-pub(crate) mod image_metrics;
-pub(crate) mod jpeg_metrics;
+// file_metrics retired — `file.size` flows through expose_metrics.
+// image_metrics, jpeg_metrics, png_metrics retired —
+// pixel-stat metrics flow through `AnalysisReport::expose_metrics`
+// under `image.*`, `jpeg.*`, `png.*` keys.
 pub(crate) mod language_metrics;
-pub(crate) mod lnk_metrics;
+// lnk_metrics retired — LNK whitespace/presence metrics flow through
+// expose's flat metric map under `lnk.*` keys (`AnalysisReport::expose_metrics`).
 pub(crate) mod ml_features;
 pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
-pub(crate) mod pdf_metrics;
-pub(crate) mod png_metrics;
+// pdf_metrics retired — PDF metrics live in
+// `AnalysisReport::expose_metrics` under `pdf.*` keys, populated by
+// `analyzers::pdf::pdf_kv::populate_pdf_metrics`.
+// png_metrics retired (see image_metrics block above).
 pub(crate) mod scores;
 pub(crate) mod text_metrics;
 pub(crate) mod traits_findings;
@@ -63,7 +67,10 @@ pub(crate) mod traits_findings;
 #[allow(unused_imports)]
 pub use compact::{compact_from_files, CompactReport};
 #[allow(unused_imports)]
-pub use core::{AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, TargetInfo};
+pub use core::{
+    flatten_into_metrics, kv_set_path, AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload,
+    MetricsExt, TargetInfo,
+};
 
 pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]
@@ -117,10 +124,6 @@ pub(crate) use language_metrics::{
 };
 
 pub(crate) use binary_metrics::{BinaryMetrics, MachoMetrics};
-pub(crate) use image_metrics::ImageMetrics;
-pub(crate) use jpeg_metrics::JpegMetrics;
-pub(crate) use pdf_metrics::PdfMetrics;
-pub(crate) use png_metrics::PngMetrics;
 
 pub(crate) use scores::{EncodedMetrics, Metrics};
 

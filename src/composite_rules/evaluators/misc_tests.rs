@@ -134,6 +134,27 @@ fn test_eval_trait_prefix_match() {
 }
 
 #[test]
+fn test_eval_trait_prefix_match_with_trailing_slash() {
+    let mut report = create_test_report("/test/binary");
+    report.findings.push(create_test_finding(
+        "well-known/game/steam::steam-product-name",
+    ));
+    let data = vec![];
+    let ctx = EvaluationContext::new(
+        &report,
+        &data,
+        FileType::Pe,
+        &[Platform::Windows],
+        None,
+        None,
+    );
+
+    // RULES.md documents directory references with a trailing slash.
+    let result = eval_trait("well-known/game/steam/", &ctx);
+    assert!(result.matched);
+}
+
+#[test]
 fn test_eval_trait_additional_findings() {
     let report = create_test_report("/test/binary");
     let additional = vec![create_test_finding("net/connect/tcp")];

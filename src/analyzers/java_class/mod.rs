@@ -77,12 +77,8 @@ impl JavaClassAnalyzer {
 
         self.detect_capabilities(&class_info, &mut report);
 
-        // Structural kv subtree (`class.*`) — version, hierarchy,
-        // SourceFile attribute. Cheap, complementary to the
-        // capability/string analysis above.
-        if let Some(kv) = super::class_kv::extract(data) {
-            report.merge_kv_subtree("class", kv);
-        }
+        // `class.*` kv comes from expose's dual emission in the
+        // capability mapper — no synthesis here.
 
         Ok(report)
     }

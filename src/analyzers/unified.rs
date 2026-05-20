@@ -19,7 +19,11 @@ use crate::analyzers::{
     FileType, FileTypeExt,
 };
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, EncodedMetrics, Function, Metrics, StringInfo, TargetInfo};
+use crate::types::core::{flatten_into_metrics, MetricsExt};
+use crate::types::text_metrics::{
+    CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StringMetrics, TextMetrics,
+};
+use crate::types::{AnalysisReport, EncodedMetrics, Function, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::path::Path;
@@ -488,15 +492,8 @@ impl UnifiedSourceAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // PythonBytecode (.pyc) — surface header + co_filename as
-        // `pyc.*` kv. The unified analyzer is otherwise text-shaped
-        // (tree-sitter source parsing) and won't decode bytecode, so
-        // this is the only place the kv tree gets populated.
-        if matches!(self.file_type, FileType::PythonBytecode) {
-            if let Some(kv) = super::pyc_kv::extract(original_bytes) {
-                report.merge_kv_subtree("pyc", kv);
-            }
-        }
+        // `pyc.*` kv now comes from expose's dual emission step
+        // in `evaluate_and_merge_findings`; no synthesis here.
 
         // Add structural feature
         report
@@ -602,10 +599,7 @@ impl UnifiedSourceAnalyzer {
             report.findings.push(finding);
 
             let text = crate::analyzers::text_metrics::analyze_text(content);
-            report.metrics = Some(crate::types::Metrics {
-                text: Some(text),
-                ..Default::default()
-            });
+            emit_text_to_expose(&text, &mut report);
         }
 
         if timed_out {
@@ -627,10 +621,7 @@ impl UnifiedSourceAnalyzer {
             // evaluate.  For a large single-line minified/obfuscated file the
             // resulting max_line_length alone is a strong indicator.
             let text = crate::analyzers::text_metrics::analyze_text(content);
-            report.metrics = Some(crate::types::Metrics {
-                text: Some(text),
-                ..Default::default()
-            });
+            emit_text_to_expose(&text, &mut report);
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -920,11 +911,13 @@ impl UnifiedSourceAnalyzer {
             crate::path_mapper::analyze_and_link_paths(&mut report);
             crate::env_mapper::analyze_and_link_env_vars(&mut report);
 
-            // Compute metrics
-            let mut metrics = self.compute_metrics(&root, content);
-
-            // Compute import metrics from already-extracted imports
-            if !report.imports.is_empty() {
+            // Compute text-side metrics into report.expose_metrics.
+            // All text/identifier/string/comment/function/import/encoded
+            // counters flow through the flat metric map under their
+            // respective `text.*`/`identifiers.*`/etc. dotted keys.
+            let imports_opt = if report.imports.is_empty() {
+                None
+            } else {
                 let file_type_str = match self.file_type {
                     crate::analyzers::FileType::Python => "python",
                     crate::analyzers::FileType::JavaScript
@@ -935,16 +928,12 @@ impl UnifiedSourceAnalyzer {
                     crate::analyzers::FileType::Lua => "lua",
                     _ => "unknown",
                 };
-                metrics.imports = Some(import_metrics::analyze_imports(
+                Some(import_metrics::analyze_imports(
                     &report.imports,
                     file_type_str,
-                ));
-            }
-
-            // Compute ratio metrics from already-populated counters
-            Self::compute_text_ratio_metrics(&mut metrics);
-
-            report.metrics = Some(metrics);
+                ))
+            };
+            self.populate_text_metrics(&root, content, imports_opt.as_ref(), &mut report);
         }
         // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
         // Guard against recursion: when this analyzer was created for inner analysis
@@ -1161,10 +1150,19 @@ impl UnifiedSourceAnalyzer {
         }
     }
 
-    fn compute_metrics<'a>(&self, root: &tree_sitter::Node<'a>, content: &str) -> Metrics {
+    /// Build all text-side metrics (text/identifiers/strings/comments/
+    /// functions/imports/encoded) and flatten them into
+    /// `report.expose_metrics` under their respective dotted prefixes.
+    /// Cross-component ratios on `text.*` are computed before flattening.
+    fn populate_text_metrics<'a>(
+        &self,
+        root: &tree_sitter::Node<'a>,
+        content: &str,
+        imports: Option<&ImportMetrics>,
+        report: &mut AnalysisReport,
+    ) {
         let source = content.as_bytes();
-        let text = text_metrics::analyze_text(content);
-        let total_lines = text.total_lines;
+        let mut text = text_metrics::analyze_text(content);
 
         // Single-pass AST walk extracts identifiers, strings, and functions together
         let (identifiers, strings, func_infos) = self.extract_all_from_tree(root, source);
@@ -1180,28 +1178,39 @@ impl UnifiedSourceAnalyzer {
 
         let comment_metrics = comment_metrics::analyze_comments(content, self.config.comment_style);
 
-        let func_metrics = function_metrics::analyze_functions(&func_infos, total_lines);
+        let func_metrics = function_metrics::analyze_functions(&func_infos, text.total_lines);
 
-        let mut metrics = Metrics {
-            text: Some(text),
-            identifiers: Some(identifier_metrics),
-            strings: Some(string_metrics),
-            comments: Some(comment_metrics),
-            functions: Some(func_metrics),
-            ..Default::default()
-        };
-
-        if let Some(encoding) = self
+        let encoded = self
             .encoded_context
             .as_ref()
             .and_then(|chain| chain.first())
-        {
-            let mut encoded = EncodedMetrics::default();
-            encoded.increment(self.config.file_type, encoding);
-            metrics.encoded = Some(encoded);
-        }
+            .map(|encoding| {
+                let mut e = EncodedMetrics::default();
+                e.increment(self.config.file_type, encoding);
+                e
+            });
 
-        metrics
+        Self::compute_text_ratios(
+            &mut text,
+            &identifier_metrics,
+            &string_metrics,
+            &comment_metrics,
+            &func_metrics,
+            imports,
+        );
+
+        emit_text_to_expose(&text, report);
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        flatten_into_metrics(&identifier_metrics, "identifiers", flat);
+        flatten_into_metrics(&string_metrics, "strings", flat);
+        flatten_into_metrics(&comment_metrics, "comments", flat);
+        flatten_into_metrics(&func_metrics, "functions", flat);
+        if let Some(imps) = imports {
+            flatten_into_metrics(imps, "imports", flat);
+        }
+        if let Some(e) = &encoded {
+            flatten_into_metrics(e, "encoded", flat);
+        }
     }
 
     /// Single-pass AST walk that extracts identifiers, string values, and function info
@@ -1282,46 +1291,31 @@ impl UnifiedSourceAnalyzer {
         }
     }
 
-    /// Compute ratio and normalized metrics from already-populated AST metrics.
-    /// Call this after all base counters are populated (including imports).
-    /// All metrics are just division operations - zero parsing overhead.
-    fn compute_text_ratio_metrics(metrics: &mut Metrics) {
-        // Get references to all metric components
-        let text = metrics.text.as_mut();
-        let identifiers = metrics.identifiers.as_ref();
-        let strings = metrics.strings.as_ref();
-        let comments = metrics.comments.as_ref();
-        let functions = metrics.functions.as_ref();
-        let _statements = metrics.statements.as_ref();
-        let imports = metrics.imports.as_ref();
-
-        // Only proceed if we have text metrics (required for ratios)
-        let Some(text) = text else { return };
-
+    /// Compute cross-component ratio and normalized metrics on `text`
+    /// using already-populated sub-metrics. Pure division — zero parsing
+    /// overhead.
+    fn compute_text_ratios(
+        text: &mut TextMetrics,
+        identifiers: &IdentifierMetrics,
+        strings: &StringMetrics,
+        comments: &CommentMetrics,
+        functions: &FunctionMetrics,
+        imports: Option<&ImportMetrics>,
+    ) {
         // Cross-component ratios (per function)
-        if let Some(funcs) = functions {
-            if funcs.total > 0 {
-                if let Some(strs) = strings {
-                    text.strings_to_functions_ratio = strs.total as f32 / funcs.total as f32;
-                }
-                if let Some(idents) = identifiers {
-                    text.identifiers_to_functions_ratio =
-                        idents.unique_count as f32 / funcs.total as f32;
-                }
-                if let Some(imps) = imports {
-                    text.imports_to_functions_ratio = imps.total as f32 / funcs.total as f32;
-                }
+        if functions.total > 0 {
+            text.strings_to_functions_ratio = strings.total as f32 / functions.total as f32;
+            text.identifiers_to_functions_ratio =
+                identifiers.unique_count as f32 / functions.total as f32;
+            if let Some(imps) = imports {
+                text.imports_to_functions_ratio = imps.total as f32 / functions.total as f32;
             }
         }
 
         // Per-line density ratios
         if text.total_lines > 0 {
-            if let Some(idents) = identifiers {
-                text.identifier_density = idents.total as f32 / text.total_lines as f32;
-            }
-            if let Some(strs) = strings {
-                text.string_density = strs.total as f32 / text.total_lines as f32;
-            }
+            text.identifier_density = identifiers.total as f32 / text.total_lines as f32;
+            text.string_density = strings.total as f32 / text.total_lines as f32;
             if let Some(imps) = imports {
                 text.import_density = (imps.total as f32 * 100.0) / text.total_lines as f32;
             }
@@ -1329,57 +1323,48 @@ impl UnifiedSourceAnalyzer {
             // Size-independent normalized metrics
             let lines_sqrt = (text.total_lines as f32).sqrt();
             if lines_sqrt > 0.0 {
-                if let Some(funcs) = functions {
-                    text.normalized_function_count = funcs.total as f32 / lines_sqrt;
-                }
+                text.normalized_function_count = functions.total as f32 / lines_sqrt;
                 if let Some(imps) = imports {
                     text.normalized_import_count = imps.total as f32 / lines_sqrt;
                 }
-                if let Some(strs) = strings {
-                    text.normalized_string_count = strs.total as f32 / lines_sqrt;
-                }
+                text.normalized_string_count = strings.total as f32 / lines_sqrt;
             }
 
             let lines_log = (text.total_lines as f32).log2();
             if lines_log > 0.0 {
-                if let Some(idents) = identifiers {
-                    text.normalized_unique_identifiers = idents.unique_count as f32 / lines_log;
-                }
+                text.normalized_unique_identifiers = identifiers.unique_count as f32 / lines_log;
             }
         }
 
         // Obfuscation indicator ratios
-        if let Some(idents) = identifiers {
-            if idents.unique_count > 0 {
-                let suspicious = idents.hex_like_names
-                    + idents.base64_like_names
-                    + idents.sequential_names
-                    + idents.keyboard_pattern_names
-                    + idents.repeated_char_names;
-                text.suspicious_identifier_ratio = suspicious as f32 / idents.unique_count as f32;
-            }
+        if identifiers.unique_count > 0 {
+            let suspicious = identifiers.hex_like_names
+                + identifiers.base64_like_names
+                + identifiers.sequential_names
+                + identifiers.keyboard_pattern_names
+                + identifiers.repeated_char_names;
+            text.suspicious_identifier_ratio = suspicious as f32 / identifiers.unique_count as f32;
         }
 
-        if let Some(strs) = strings {
-            if strs.total > 0 {
-                let encoded = strs.base64_candidates + strs.hex_strings + strs.url_encoded_strings;
-                text.encoded_string_ratio = encoded as f32 / strs.total as f32;
+        if strings.total > 0 {
+            let encoded =
+                strings.base64_candidates + strings.hex_strings + strings.url_encoded_strings;
+            text.encoded_string_ratio = encoded as f32 / strings.total as f32;
 
-                let suspicious =
-                    strs.embedded_code_candidates + strs.shell_command_strings + strs.sql_strings;
-                text.suspicious_string_ratio = suspicious as f32 / strs.total as f32;
+            let suspicious = strings.embedded_code_candidates
+                + strings.shell_command_strings
+                + strings.sql_strings;
+            text.suspicious_string_ratio = suspicious as f32 / strings.total as f32;
 
-                let dynamic =
-                    strs.concat_operations + strs.char_construction + strs.array_join_construction;
-                text.dynamic_string_ratio = dynamic as f32 / strs.total as f32;
-            }
+            let dynamic = strings.concat_operations
+                + strings.char_construction
+                + strings.array_join_construction;
+            text.dynamic_string_ratio = dynamic as f32 / strings.total as f32;
         }
 
-        if let Some(cmts) = comments {
-            if cmts.total > 0 {
-                let suspicious = cmts.high_entropy_comments + cmts.base64_in_comments;
-                text.suspicious_comment_ratio = suspicious as f32 / cmts.total as f32;
-            }
+        if comments.total > 0 {
+            let suspicious = comments.high_entropy_comments + comments.base64_in_comments;
+            text.suspicious_comment_ratio = suspicious as f32 / comments.total as f32;
         }
 
         if let Some(imps) = imports {
@@ -1389,11 +1374,22 @@ impl UnifiedSourceAnalyzer {
             }
         }
 
-        if let Some(funcs) = functions {
-            if funcs.total > 0 {
-                text.anonymous_function_ratio = funcs.anonymous as f32 / funcs.total as f32;
-            }
+        if functions.total > 0 {
+            text.anonymous_function_ratio = functions.anonymous as f32 / functions.total as f32;
         }
+    }
+}
+
+/// Flatten a `TextMetrics` builder into `report.expose_metrics` under
+/// the `text.*` prefix. `most_common_char` is not numeric, so we emit
+/// derived `text.most_common_char_codepoint` (u32) and
+/// `text.most_common_char_is_null` (bool-as-0/1) explicitly.
+fn emit_text_to_expose(text: &TextMetrics, report: &mut AnalysisReport) {
+    let flat = report.expose_metrics.get_or_insert_with(Default::default);
+    flatten_into_metrics(text, "text", flat);
+    if let Some(c) = text.most_common_char {
+        flat.set_u("text.most_common_char_codepoint", u64::from(c as u32));
+        flat.set_b("text.most_common_char_is_null", c == '\0');
     }
 }
 
@@ -1573,11 +1569,13 @@ if __name__ == "__main__":
             .any(|e| e.value.contains("indent_stack_depth=")
                 && e.value
                     .contains("tree_sitter_serialization_buffer_bytes=1024")));
+        // `text.*` lives in the flat metric map; analyze_text always
+        // emits `text.total_lines` (zero or otherwise) once content is
+        // non-empty, so presence of any `text.` key confirms emission.
         assert!(report
-            .metrics
+            .expose_metrics
             .as_ref()
-            .and_then(|m| m.text.as_ref())
-            .is_some());
+            .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
     }
 
     #[test]

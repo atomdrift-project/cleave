@@ -1,16 +1,19 @@
-//! VS Code extension manifest analyzer.
+//! VS Code / Visual Studio extension manifest analyzer.
 //!
-//! Analyzes .vsixmanifest files from VS Code extensions for suspicious patterns.
+//! Parsing (Identity / DisplayName / Properties / Dependencies /
+//! Assets) lives in `expose::formats::vsix`; this module is a thin
+//! dispatcher that drives the capability mapper. The dual-emission
+//! step in `evaluate_and_merge_findings` merges expose's `vsix.*`
+//! kv subtree into `report.kv_tree` before trait evaluation runs.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
+use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-/// VSCode extension.vsixmanifest analyzer
 #[derive(Debug)]
 pub(crate) struct VsixManifestAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
@@ -24,96 +27,31 @@ impl VsixManifestAnalyzer {
         }
     }
 
-    /// Create analyzer with pre-existing capability mapper (wraps in Arc)
     #[must_use]
     pub(crate) fn with_capability_mapper(mut self, mapper: CapabilityMapper) -> Self {
         self.capability_mapper = Arc::new(mapper);
         self
     }
 
-    /// Create analyzer with shared capability mapper (avoids cloning)
     #[must_use]
     pub(crate) fn with_capability_mapper_arc(mut self, mapper: Arc<CapabilityMapper>) -> Self {
         self.capability_mapper = mapper;
         self
     }
 
-    fn analyze_manifest(&self, file_path: &Path, content: &str) -> Result<AnalysisReport> {
-        let start = std::time::Instant::now();
-
-        // Strip UTF-8 BOM if present
-        let content = content.strip_prefix('\u{FEFF}').unwrap_or(content);
-
-        let doc =
-            roxmltree::Document::parse(content).context("Failed to parse .vsixmanifest XML")?;
-
-        let mut identity = String::new();
-        if let Some(node) = doc.descendants().find(|n| n.has_tag_name("Identity")) {
-            let id = node.attribute("Id").unwrap_or("unknown");
-            let publisher = node.attribute("Publisher").unwrap_or("unknown");
-            let version = node.attribute("Version").unwrap_or("unknown");
-            identity = format!("{}.{} v{}", publisher, id, version);
-        }
-
+    fn analyze_manifest(&self, file_path: &Path, data: &[u8]) -> AnalysisReport {
         let target = TargetInfo {
             path: file_path.display().to_string(),
             file_type: "vsix_manifest".to_string(),
-            size_bytes: content.len() as u64,
-            sha256: crate::analyzers::utils::calculate_sha256(content.as_bytes()),
+            size_bytes: data.len() as u64,
+            sha256: crate::analyzers::utils::calculate_sha256(data),
             architectures: None,
         };
-
         let mut report = AnalysisReport::new(target);
-
-        // Add structural feature
-        report.structure.push(StructuralFeature {
-            id: "manifest/vscode/vsixmanifest".to_string(),
-            desc: format!("VSCode extension manifest: {}", identity),
-            evidence: vec![Evidence {
-                method: "parser".to_string(),
-                source: "roxmltree".to_string(),
-                value: identity,
-                location: None,
-                ..Default::default()
-            }],
-        });
-
-        // Check for interesting properties
-        for property in doc.descendants().filter(|n| n.has_tag_name("Property")) {
-            if let (Some(id), Some(value)) = (property.attribute("Id"), property.attribute("Value"))
-            {
-                if id == "Microsoft.VisualStudio.Code.ExecutesCode" && value == "true" {
-                    report.add_finding(
-                        Finding::capability(
-                            "eco/vscode/manifest/executes-code".to_string(),
-                            "Extension explicitly marks that it executes code".to_string(),
-                            1.0,
-                        )
-                        .with_criticality(Criticality::Notable)
-                        .with_evidence(vec![Evidence {
-                            method: "xml_attr".to_string(),
-                            source: "vsixmanifest".to_string(),
-                            value: "ExecutesCode=true".to_string(),
-                            location: None,
-                            ..Default::default()
-                        }]),
-                    );
-                }
-            }
-        }
-
-        // Evaluate all rules (atomic + composite) and merge into report
-        self.capability_mapper.evaluate_and_merge_findings(
-            &mut report,
-            content.as_bytes(),
-            None,
-            None,
-        );
-
-        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = vec!["roxmltree".to_string()];
-
-        Ok(report)
+        report.metadata.tools_used.push("expose-vsix".to_string());
+        self.capability_mapper
+            .evaluate_and_merge_findings(&mut report, data, None, None);
+        report
     }
 }
 
@@ -125,14 +63,12 @@ impl Default for VsixManifestAnalyzer {
 
 impl Analyzer for VsixManifestAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        let content = String::from_utf8_lossy(input.data);
-        self.analyze_manifest(input.path, &content)
+        Ok(self.analyze_manifest(input.path, input.data))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let bytes = fs::read(file_path).context("Failed to read .vsixmanifest file")?;
-        let content = String::from_utf8_lossy(&bytes);
-        self.analyze_manifest(file_path, &content)
+        Ok(self.analyze_manifest(file_path, &bytes))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

@@ -16,7 +16,7 @@ use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, FileAnalysis, Finding, FindingCounts, FindingKind,
-    Metrics, ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
+    ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -25,8 +25,8 @@ use std::fs::{self};
 use std::path::Path;
 use std::sync::Arc;
 
-use ::zip::ZipArchive;
 use crate::composite_rules::SectionMap;
+use ::zip::ZipArchive;
 use guards::{
     sanitize_entry_path, ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE,
     MAX_TOTAL_SIZE,
@@ -742,33 +742,22 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // RPM packages embed strong build attribution in their header
-        // (BUILDHOST, PACKAGER, VENDOR, BUILDTIME). Surface as
-        // `rpm.*` kv before payload extraction — cheap header walk,
-        // no decompression needed.
-        if matches!(file_type, FileType::Rpm) {
-            if let Some(rpm_value) = crate::analyzers::rpm_kv::extract(data) {
-                report.merge_kv_subtree("rpm", rpm_value);
-            }
-        }
+        // `rpm.*` kv comes from expose's dual emission in the
+        // capability mapper — no synthesis needed here.
 
-        if matches!(file_type, FileType::Chm) {
-            if let Some(chm_value) = crate::analyzers::chm::chm_kv::extract(data) {
-                report.merge_kv_subtree("chm", chm_value);
-            }
-            if let Some(chm_metrics) = crate::analyzers::chm::chm_kv::metrics(data) {
-                let metrics = report.metrics.get_or_insert_with(Metrics::default);
-                metrics.chm = Some(chm_metrics);
-            }
-        }
+        // `chm.*` kv and metrics both come from expose's dual
+        // emission in the capability mapper — no synthesis here.
 
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
             if let Ok((mut seeded_entries, archive_metrics)) =
                 zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
             {
                 report.archive_contents.append(&mut seeded_entries);
-                let metrics = report.metrics.get_or_insert_with(Metrics::default);
-                metrics.archive = Some(archive_metrics);
+                // Flatten ArchiveMetrics into `archive.*` keys in
+                // the report's flat metric map (#41).
+                use crate::types::flatten_into_metrics;
+                let flat = report.expose_metrics.get_or_insert_with(Default::default);
+                flatten_into_metrics(&archive_metrics, "archive", flat);
             }
         }
 
@@ -1192,7 +1181,9 @@ fn merge_archive_member_metadata(
                 .map(|s| s.to_string())
         };
         let Some(key) = key else { continue };
-        let Some(meta) = by_path.remove(&key) else { continue };
+        let Some(meta) = by_path.remove(&key) else {
+            continue;
+        };
 
         if entry.compressed_size.is_none() {
             entry.compressed_size = meta.compressed_size;

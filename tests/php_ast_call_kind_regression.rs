@@ -66,7 +66,11 @@ fn fixture_with_traits(traits_yaml: &str) -> (TempDir, std::path::PathBuf) {
     let file = dir.path().join("Analytics.php");
     fs::write(&file, PHP_FIXTURE).unwrap();
 
-    let traits_dir = dir.path().join("traits").join("micro-behaviors").join("test");
+    let traits_dir = dir
+        .path()
+        .join("traits")
+        .join("micro-behaviors")
+        .join("test");
     fs::create_dir_all(&traits_dir).unwrap();
     fs::write(traits_dir.join("traits.yaml"), traits_yaml).unwrap();
 
@@ -227,7 +231,11 @@ fn scope_file_composite_fires_when_all_conditions_match_same_file() {
     let file = dir.path().join("scope.py");
     fs::write(&file, py_fixture).unwrap();
 
-    let traits_dir = dir.path().join("traits").join("micro-behaviors").join("test");
+    let traits_dir = dir
+        .path()
+        .join("traits")
+        .join("micro-behaviors")
+        .join("test");
     fs::create_dir_all(&traits_dir).unwrap();
     let traits = r#"
 defaults:
@@ -263,11 +271,7 @@ composite_rules:
 "#;
     fs::write(traits_dir.join("traits.yaml"), traits).unwrap();
 
-    let stdout = run_test_rules(
-        dir.path(),
-        &file,
-        "micro-behaviors/test::scope-file-pair",
-    );
+    let stdout = run_test_rules(dir.path(), &file, "micro-behaviors/test::scope-file-pair");
 
     // Sanity: both primitives should report ✓ in the breakdown.
     assert!(

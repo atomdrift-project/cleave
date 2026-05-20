@@ -22,6 +22,7 @@
 extern crate self as cleave;
 
 mod analysis_cache;
+pub mod analysis_context;
 pub mod cache;
 pub mod cancellation;
 pub mod decoders;
@@ -40,9 +41,6 @@ pub mod test_rules_filters_test;
 pub mod traits_repo;
 mod upx;
 pub(crate) mod validation_controls;
-
-// Standalone RTF parser (can be used independently)
-pub mod rtf;
 
 // Public modules
 pub mod analyzers;
@@ -149,17 +147,25 @@ fn is_generated_python_codec_unicode_escape(report: &types::AnalysisReport) -> b
         })
 }
 
-fn should_skip_unknown_xor_payload_for_source(
+fn should_skip_unknown_encoded_payload_for_text(
     file_type: &FileType,
     payload: &types::ExtractedPayload,
 ) -> bool {
-    file_type.is_source_code()
-        && payload
-            .encoding_chain
-            .iter()
-            .any(|encoding| encoding == "xor")
-        && payload.detected_type == FileType::Unknown
-        && !looks_like_actionable_payload_preview(&payload.preview)
+    if payload.detected_type != FileType::Unknown
+        || looks_like_actionable_payload_preview(&payload.preview)
+    {
+        return false;
+    }
+
+    let is_textual = file_type.is_source_code()
+        || matches!(
+            file_type,
+            FileType::Markdown | FileType::Text | FileType::Data
+        );
+    let is_noisy_text_encoding = payload.encoding_chain.len() == 1
+        && matches!(payload.encoding_chain[0].as_str(), "xor" | "url");
+
+    is_textual && is_noisy_text_encoding
 }
 
 fn smallest_section_for_offset(
@@ -1120,10 +1126,7 @@ fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::An
     report.syscalls = fa.syscalls;
     report.yara_matches = fa.yara_matches;
     report.metrics = fa.metrics;
-    report.binary_properties = fa.binary_properties;
-    report.code_metrics = fa.code_metrics;
-    report.source_code_metrics = fa.source_code_metrics;
-    report.overlay_metrics = fa.overlay_metrics;
+    report.expose_metrics = fa.expose_metrics;
     report.paths = fa.paths;
     report.directories = fa.directories;
     report.env_vars = fa.env_vars;
@@ -1368,10 +1371,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("macho");
-            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+            // Open expose on the preferred-arch slice so the Mach-O
+            // analyzer can pull dyld imports / export-trie entries
+            // from the typed view instead of re-walking goblin.
+            let ctx = crate::analysis_context::AnalysisContext::open(path, arch_data).ok();
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 arch_data,
                 input.sha256.clone(),
+                ctx.as_ref(),
             ));
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
@@ -1439,10 +1447,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
-            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+            // Open expose once and lend it to the ELF analyzer so
+            // it can pull imports/exports from the typed view
+            // instead of re-walking `.dynsym` with goblin.
+            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
                 input.sha256.clone(),
+                ctx.as_ref(),
             ));
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
@@ -1489,10 +1502,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural(
+            // Open expose once here and lend it to the PE analyzer so
+            // it can prefer expose's typed Imports view over a second
+            // goblin walk. The trait engine downstream opens its own
+            // context for the kv tree; consolidating those two
+            // parses is a follow-up.
+            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
                 input.sha256.clone(),
+                ctx.as_ref(),
             ));
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
@@ -1518,9 +1538,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             Ok(report)
         }
         FileType::JavaClass => analyzers::java_class::JavaClassAnalyzer::new()
-            .with_capability_mapper_arc(mapper_arc.clone())
-            .analyze_input(&input),
-        FileType::Lnk => analyzers::lnk::LnkAnalyzer::new()
             .with_capability_mapper_arc(mapper_arc.clone())
             .analyze_input(&input),
         FileType::OleDoc | FileType::Ooxml => analyzers::office::OfficeAnalyzer::new()
@@ -1705,9 +1722,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
             continue;
         }
-        if should_skip_unknown_xor_payload_for_source(&file_type, &payload) {
+        if should_skip_unknown_encoded_payload_for_text(&file_type, &payload) {
             tracing::debug!(
-                "Skipping unknown xor fragment in source file: {}",
+                "Skipping unknown encoded fragment in text/source file: {}",
                 payload.preview
             );
             continue;
@@ -2002,18 +2019,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         analysis_start.elapsed(),
     );
 
-    // Universal file-level metrics — guaranteed populated regardless of which
-    // analyzer ran, so consumers (cleave diff in particular) can rely on
-    // `metrics.file.size` for every analyzed file.
+    // Universal file-level metrics — guaranteed populated regardless of
+    // which analyzer ran, so consumers (cleave diff in particular) can
+    // rely on `file.size` for every analyzed file. Writes directly into
+    // the flat metric map; the typed `FileMetrics` struct is retired
+    // (#41).
     {
+        use crate::types::MetricsExt;
         let size = report.target.size_bytes;
-        let metrics = report
-            .metrics
-            .get_or_insert_with(types::scores::Metrics::default);
-        metrics
-            .file
-            .get_or_insert_with(types::file_metrics::FileMetrics::default)
-            .size = size;
+        report
+            .expose_metrics
+            .get_or_insert_with(Default::default)
+            .set_u("file.size", size);
     }
 
     // Collapse duplicate findings (same id) before anything downstream sees

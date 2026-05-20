@@ -511,14 +511,16 @@ impl ElfAnalyzer {
     ///
     /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
     /// Otherwise falls back to `self.preextracted_strings` or extracts with stng.
-    fn analyze_elf_core(
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_elf_core<'a>(
         &self,
         logical_path: &Path,
         analysis_path: &Path,
-        data: &[u8],
+        data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         let sha256 = precomputed_sha256
@@ -598,7 +600,7 @@ impl ElfAnalyzer {
                 let r2_inner = if on_rayon_worker {
                     let goblin_start = std::time::Instant::now();
                     self.analyze_structure(&elf, data, &mut report);
-                    self.analyze_dynamic_symbols(&elf, data, &mut report);
+                    self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
                     self.analyze_sections(&elf, data, &mut report);
                     goblin_ms = goblin_start.elapsed().as_millis();
                     if !allow_rizin || self.is_cancelled() || !Radare2Analyzer::is_available() {
@@ -644,7 +646,7 @@ impl ElfAnalyzer {
                         || {
                             let goblin_start = std::time::Instant::now();
                             self.analyze_structure(&elf, data, &mut report);
-                            self.analyze_dynamic_symbols(&elf, data, &mut report);
+                            self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
                             self.analyze_sections(&elf, data, &mut report);
                             goblin_ms = goblin_start.elapsed().as_millis();
                         },
@@ -1249,7 +1251,41 @@ impl ElfAnalyzer {
         elf: &Elf<'a>,
         _data: &[u8],
         report: &mut AnalysisReport,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) {
+        // When the shared expose-side parse is available, mirror its
+        // typed Imports/Exports views — expose's `elf-dynsym` source
+        // emits exactly the same SHN_UNDEF / STB_GLOBAL distinction
+        // this loop was doing, and st_value flows through as the
+        // export offset already. The legacy goblin path stays as the
+        // fallback when ctx is None.
+        if let Some(c) = ctx {
+            for imp in c.imports_from_expose() {
+                // Capability lookup still runs over whichever source
+                // produced the imports; lookup uses source only for
+                // evidence attribution.
+                if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
+                    if !report.findings.iter().any(|c| c.id == cap.id) {
+                        report.findings.push(cap);
+                    }
+                }
+                report.imports.push(imp);
+            }
+            // Exports flow through directly. Note: expose's typed
+            // view only carries dynsym-derived exports today; the
+            // legacy path also raked .symtab for additional STT_FUNC
+            // GLOBALs — that second pass is a follow-up (#65-ish).
+            // For stripped binaries (the common case) .symtab is
+            // empty and the two paths produce identical exports.
+            for exp in c.exports_from_expose() {
+                if report.exports.iter().any(|e| e.symbol == exp.symbol) {
+                    continue;
+                }
+                report.exports.push(exp);
+            }
+            return;
+        }
+
         for dynsym in &elf.dynsyms {
             let Some(name) = elf.dynstrtab.get_at(dynsym.st_name) else {
                 continue;
@@ -1853,6 +1889,24 @@ impl ElfAnalyzer {
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, None)
+    }
+
+    /// Same as [`Self::analyze_structural`] but accepts an
+    /// [`AnalysisContext`] borrowing the same bytes — mirrors the
+    /// PE analyzer's ctx-aware entry point. When provided, the
+    /// imports / exports loop reads from expose's typed views
+    /// rather than re-walking `.dynsym` with goblin. Pass `None`
+    /// to keep the legacy goblin-everywhere behaviour.
+    ///
+    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
+    pub(crate) fn analyze_structural_with_ctx<'a>(
+        &self,
+        file_path: &'a Path,
+        data: &'a [u8],
+        precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+    ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
@@ -1864,6 +1918,7 @@ impl ElfAnalyzer {
                 None,
                 true,
                 precomputed_sha256,
+                ctx,
             );
         }
 
@@ -1875,6 +1930,7 @@ impl ElfAnalyzer {
             None,
             true,
             precomputed_sha256.clone(),
+            ctx,
         );
 
         report.findings.push(
@@ -1909,12 +1965,17 @@ impl ElfAnalyzer {
                         let opts = crate::analyzers::stng_analysis_opts(4);
                         let unpacked_strings =
                             stng::extract_strings_with_options(&unpacked_data, &opts);
+                        // UPX-unpacked bytes are not what the outer
+                        // `ctx` borrows; pass `None` so the inner
+                        // analysis runs goblin afresh on the unpacked
+                        // payload.
                         let unpacked_report = self.analyze_elf_core(
                             temp_file.path(),
                             temp_file.path(),
                             &unpacked_data,
                             Some(&unpacked_strings),
                             true,
+                            None,
                             None,
                         );
                         let mut unpacked_report = unpacked_report;
@@ -2015,6 +2076,7 @@ impl Analyzer for ElfAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
+            None,
         );
 
         // Post-processing

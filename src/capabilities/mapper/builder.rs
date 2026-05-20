@@ -63,9 +63,7 @@ impl super::CapabilityMapper {
     pub(crate) fn new_without_validation() -> Self {
         // Keep unit tests hermetic by default. Tests that need real trait data should
         // provide it explicitly via CLEAVE_TRAITS_DIR or use from_yaml/from_directory.
-        if std::env::var_os("CLEAVE_TRAITS_DIR").is_none()
-            && !Self::skip_traits_requested()
-        {
+        if std::env::var_os("CLEAVE_TRAITS_DIR").is_none() && !Self::skip_traits_requested() {
             return Self::empty();
         }
 

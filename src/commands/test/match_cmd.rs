@@ -1670,11 +1670,8 @@ pub fn run(
                 out.push_str(&format!("\n{}\n", "MATCHED".green().bold()));
 
                 // Try to extract and display the actual metric value
-                if let Some(metrics) = &report.metrics {
-                    let value = types::scores::get_metric_value(metrics, field);
-                    if let Some(val) = value {
-                        out.push_str(&format!("  Current value: {:.2}\n", val));
-                    }
+                if let Some(val) = types::scores::get_metric_value(report, field) {
+                    out.push_str(&format!("  Current value: {:.2}\n", val));
                 }
 
                 out.push_str(&format!(
@@ -1692,8 +1689,8 @@ pub fn run(
                 out.push_str(&format!("\n{}\n", "NOT MATCHED".red().bold()));
 
                 // Show current value for debugging
-                if let Some(metrics) = &report.metrics {
-                    let value = types::scores::get_metric_value(metrics, field);
+                {
+                    let value = types::scores::get_metric_value(report, field);
                     if let Some(val) = value {
                         out.push_str(&format!("  Current value: {:.2}\n", val));
                         if let Some(min) = value_min {
@@ -1718,8 +1715,6 @@ pub fn run(
                             field
                         ));
                     }
-                } else {
-                    out.push_str("  No metrics available for this file\n");
                 }
 
                 // Show file size constraint failures
@@ -2090,18 +2085,26 @@ pub fn run(
                 output.push_str("  Use --pattern for field path (e.g., 'binary.avg_complexity')\n");
                 output.push_str("  Use --value-min/--value-max for thresholds\n");
                 output.push_str("  Use --min-size/--max-size for file size constraints\n");
-                if let Some(metrics) = &report.metrics {
+                let has_typed = report.metrics.is_some();
+                let flat_keys: Vec<&str> = report
+                    .expose_metrics
+                    .as_ref()
+                    .map(|m| m.keys().map(String::as_str).collect())
+                    .unwrap_or_default();
+                let has_prefix = |p: &str| flat_keys.iter().any(|k| k.starts_with(p));
+
+                if has_typed || !flat_keys.is_empty() {
                     output.push_str("\n  Available metric fields:\n");
-                    if metrics.binary.is_some() {
+                    if report.metrics.as_ref().is_some_and(|m| m.binary.is_some()) {
                         output.push_str("    binary.overall_entropy, binary.avg_complexity, binary.import_count, ...\n");
                     }
-                    if metrics.text.is_some() {
+                    if has_prefix("text.") {
                         output.push_str("    text.char_entropy, text.avg_line_length, ...\n");
                     }
-                    if metrics.functions.is_some() {
+                    if has_prefix("functions.") {
                         output.push_str("    functions.total, functions.avg_params, functions.max_nesting_depth, ...\n");
                     }
-                    if metrics.identifiers.is_some() {
+                    if has_prefix("identifiers.") {
                         output.push_str(
                             "    identifiers.avg_entropy, identifiers.reuse_ratio, ...\n",
                         );

@@ -37,12 +37,10 @@ pub(crate) fn eval_metrics<'a>(
         }
     }
 
-    let Some(metrics) = &ctx.report.metrics else {
-        return ConditionResult::no_match();
-    };
-
-    // Dynamic field lookup via serde — no hardcoded match needed
-    let value = get_metric_value(metrics, field);
+    // Dynamic field lookup — `get_metric_value` consults the typed
+    // `Metrics` struct first (cleave-native fields) then falls back
+    // to `report.expose_metrics` (expose's verbatim flat map).
+    let value = get_metric_value(ctx.report, field);
 
     let Some(value) = value else {
         return ConditionResult::no_match();

@@ -119,6 +119,22 @@ impl MachOAnalyzer {
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, None)
+    }
+
+    /// Same as [`Self::analyze_structural`] but accepts an
+    /// [`AnalysisContext`] borrowing the same bytes. When provided,
+    /// imports / exports come from expose's typed views instead of
+    /// re-walking goblin's dyld-bind / export-trie tables.
+    ///
+    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
+    pub(crate) fn analyze_structural_with_ctx<'a>(
+        &self,
+        file_path: &'a Path,
+        data: &'a [u8],
+        precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+    ) -> AnalysisReport {
         self.analyze_structural_with_strings(
             file_path,
             file_path,
@@ -126,18 +142,21 @@ impl MachOAnalyzer {
             None,
             true,
             precomputed_sha256,
+            ctx,
         )
     }
 
     /// Structural analysis with optional pre-extracted strings.
-    fn analyze_structural_with_strings(
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_structural_with_strings<'a>(
         &self,
         logical_path: &Path,
         analysis_path: &Path,
-        data: &[u8],
+        data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         let sha256 = precomputed_sha256
@@ -207,12 +226,12 @@ impl MachOAnalyzer {
 
         // Extract imports and map to capabilities
         let _t = std::time::Instant::now();
-        let _ = self.analyze_imports(&macho, &mut report);
+        let _ = self.analyze_imports(&macho, &mut report, ctx);
         let imports_ms = _t.elapsed().as_millis();
 
         // Extract exports
         let _t = std::time::Instant::now();
-        let _ = self.analyze_exports(&macho, &mut report);
+        let _ = self.analyze_exports(&macho, &mut report, ctx);
         let exports_ms = _t.elapsed().as_millis();
 
         // Analyze sections and entropy
@@ -877,7 +896,35 @@ impl MachOAnalyzer {
         }
     }
 
-    fn analyze_imports<'a>(&self, macho: &MachO<'a>, report: &mut AnalysisReport) -> Result<()> {
+    fn analyze_imports<'a>(
+        &self,
+        macho: &MachO<'a>,
+        report: &mut AnalysisReport,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+    ) -> Result<()> {
+        // When the shared expose-side parse is available, mirror
+        // its typed Imports view (source: "macho-bind") — same
+        // dyld bind-info walk goblin would do here, with dylib
+        // names already normalised to lowercase basenames.
+        // Falls back to the legacy goblin/symtab path when no
+        // ctx is provided (CLI direct paths, tests).
+        if let Some(c) = ctx {
+            let bridged = c.imports_from_expose();
+            if !bridged.is_empty() {
+                for imp in bridged {
+                    if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
+                        if !report.findings.iter().any(|c| c.id == cap.id) {
+                            report.findings.push(cap);
+                        }
+                    }
+                    report.imports.push(imp);
+                }
+                return Ok(());
+            }
+            // expose returned an empty Imports view — fall through
+            // to goblin's symtab-fallback path below.
+        }
+
         let imports = macho.imports()?;
 
         // Fallback: use symbol table if imports() is empty
@@ -917,7 +964,18 @@ impl MachOAnalyzer {
         Ok(())
     }
 
-    fn analyze_exports<'a>(&self, macho: &MachO<'a>, report: &mut AnalysisReport) -> Result<()> {
+    fn analyze_exports<'a>(
+        &self,
+        macho: &MachO<'a>,
+        report: &mut AnalysisReport,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+    ) -> Result<()> {
+        if let Some(c) = ctx {
+            for exp in c.exports_from_expose() {
+                report.exports.push(exp);
+            }
+            return Ok(());
+        }
         for exp in &macho.exports()? {
             report.exports.push(Export::new(
                 &exp.name,
@@ -1828,6 +1886,7 @@ impl Analyzer for MachOAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
+            None,
         );
         self.apply_fat_metadata(&mut report, input.data);
 

@@ -104,9 +104,11 @@ pub(super) fn diff_metrics(
 ) -> ScopeDiff<MetricChange> {
     // The analyze pipeline populates `metrics.file.size` for every file
     // regardless of analyzer, so size shows up here naturally without any
-    // diff-time synthesis.
-    let old_flat = flatten_metrics(old.metrics.as_ref());
-    let new_flat = flatten_metrics(new.metrics.as_ref());
+    // diff-time synthesis. As typed `*Metrics` sub-structs retire (#41),
+    // their values land in `expose_metrics` under the same dotted-path
+    // keys; the helper walks both surfaces.
+    let old_flat = flatten_metrics(old.metrics.as_ref(), old.expose_metrics.as_ref());
+    let new_flat = flatten_metrics(new.metrics.as_ref(), new.expose_metrics.as_ref());
     let mut diff = diff_flat_paths(
         &old_flat,
         &new_flat,
@@ -162,20 +164,38 @@ fn is_trivial_metric_change(old: &Value, new: &Value) -> bool {
     rel < 0.09 || format!("{a:.2}") == format!("{b:.2}")
 }
 
-fn flatten_metrics(m: Option<&crate::types::scores::Metrics>) -> Vec<(String, Value)> {
-    let Some(m) = m else { return Vec::new() };
-    let Ok(value) = serde_json::to_value(m) else {
-        return Vec::new();
-    };
-    let mut flat = flatten_dotted(&value);
-    // The metrics scope is for *digits*: counters, totals, ratios, bools.
-    // Raw data (strings, arrays of strings, objects) belongs in the kv
-    // scope, where the same fields are already carried via
-    // `flatten_kv_for_diff`. Drop non-scalar leaves so the metrics pane
-    // doesn't double-list values like `elf.needed[]=ld-linux-x86-64.so.2`
-    // or `elf.soname="libfoo.so.1"`.
-    flat.retain(|(_, v)| is_metric_scalar(v));
-    flat
+fn flatten_metrics(
+    typed: Option<&crate::types::scores::Metrics>,
+    flat_map: Option<&std::collections::BTreeMap<String, f64>>,
+) -> Vec<(String, Value)> {
+    let mut out: Vec<(String, Value)> = Vec::new();
+
+    // Typed-struct surface: serialize then walk for backward
+    // compat with sub-structs that haven't migrated to the flat
+    // map yet. Drops non-scalar leaves — strings/arrays belong in
+    // the kv scope.
+    if let Some(m) = typed {
+        if let Ok(value) = serde_json::to_value(m) {
+            let mut flat = flatten_dotted(&value);
+            flat.retain(|(_, v)| is_metric_scalar(v));
+            out.extend(flat);
+        }
+    }
+
+    // Flat-map surface: post-#41, format-specific metrics
+    // (`pdf.*`, `jpeg.*`, `png.*`, `image.*`, `lnk.*`, plus expose-
+    // emitted `pe.*` / `elf.*` / `macho.*` / `sections.*` / etc.)
+    // live here. Wrap each f64 as `Value::Number` for symmetry with
+    // the typed surface; later phases will drop the typed branch
+    // entirely.
+    if let Some(map) = flat_map {
+        for (k, &v) in map {
+            if let Some(n) = serde_json::Number::from_f64(v) {
+                out.push((k.clone(), Value::Number(n)));
+            }
+        }
+    }
+    out
 }
 
 /// `true` for value kinds that belong in the metrics scope: numbers and
@@ -783,27 +803,12 @@ mod tests {
 
     #[test]
     fn metrics_path_change() {
-        use crate::types::scores::Metrics;
-        use crate::types::text_metrics::TextMetrics;
+        use std::collections::BTreeMap;
 
         let mut old = unit();
         let mut new = unit();
-        let m_old = Metrics {
-            text: Some(TextMetrics {
-                total_lines: 100,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let m_new = Metrics {
-            text: Some(TextMetrics {
-                total_lines: 150,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        old.metrics = Some(m_old);
-        new.metrics = Some(m_new);
+        old.expose_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 100.0)]));
+        new.expose_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 150.0)]));
 
         let d = diff_metrics(&old, &new, 0);
         assert!(d.old_count > 0);

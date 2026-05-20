@@ -702,59 +702,99 @@ impl PEAnalyzer {
         features
     }
 
-    fn get_imports<'a>(&self, pe: &PE<'a>) -> (Vec<Import>, Vec<Finding>) {
-        let mut imports = Vec::new();
+    fn get_imports<'a>(
+        &self,
+        pe: &PE<'a>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+    ) -> (Vec<Import>, Vec<Finding>) {
+        // When the shared expose-side parse is available, mirror its
+        // typed Imports view rather than re-walking goblin's import
+        // table. Expose has already done the strict→permissive
+        // fallback and panic-safe extraction, so the data is at
+        // least as good as what get_imports would produce locally.
+        // Symbol names are pre-normalised; libraries arrive as the
+        // lowercase DLL stem.
+        let imports = if let Some(c) = ctx {
+            c.imports_from_expose()
+        } else {
+            let mut goblin_imports = Vec::with_capacity(pe.imports.len());
+            for import in &pe.imports {
+                goblin_imports.push(Import::new(
+                    import.name.as_ref(),
+                    Some(import.dll.to_string()),
+                    "goblin",
+                ));
+            }
+            goblin_imports
+        };
+
+        // Capability lookup runs over whichever source produced the
+        // imports — `lookup` only uses `source` as evidence provenance
+        // and doesn't gate the match, so both paths surface the same
+        // findings.
         let mut findings = Vec::new();
-
-        for import in &pe.imports {
-            imports.push(Import::new(
-                import.name.as_ref(),
-                Some(import.dll.to_string()),
-                "goblin",
-            ));
-
-            let normalized = crate::types::binary::normalize_symbol(import.name.as_ref());
-            if let Some(capability) = self.capability_mapper.lookup(&normalized, "goblin") {
+        for imp in &imports {
+            let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
+            if let Some(capability) = self.capability_mapper.lookup(&normalized, &imp.source) {
                 findings.push(capability);
             }
         }
         (imports, findings)
     }
 
-    fn get_exports<'a>(&self, pe: &PE<'a>, data: &[u8]) -> (Vec<Export>, Option<u32>) {
-        let mut exports = Vec::new();
-        for export in &pe.exports {
-            if let Some(name) = export.name {
-                match &export.reexport {
-                    Some(goblin::pe::export::Reexport::DLLName {
-                        export: target,
-                        lib,
-                    }) => {
-                        exports.push(Export::forwarded(
-                            name,
-                            format!("{}.{}", lib, target),
-                            "goblin",
-                        ));
-                    }
-                    Some(goblin::pe::export::Reexport::DLLOrdinal { ordinal, lib }) => {
-                        exports.push(Export::forwarded(
-                            name,
-                            format!("{}.#{}", lib, ordinal),
-                            "goblin",
-                        ));
-                    }
-                    None => {
-                        exports.push(Export::new(
-                            name,
-                            Some(format!("{:#x}", export.rva)),
-                            "goblin",
-                        ));
+    fn get_exports<'a>(
+        &self,
+        pe: &PE<'a>,
+        data: &[u8],
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+    ) -> (Vec<Export>, Option<u32>) {
+        // Prefer expose's typed Exports view when present — it
+        // already decodes PE's `Reexport::DLLName` /
+        // `Reexport::DLLOrdinal` into the same `forward_to` string
+        // shape cleave uses (`KERNEL32.LoadLibraryA`, `NTDLL.#123`).
+        // Symbol names come through cleave's `normalize_symbol`
+        // helper inside `exports_from_expose`.
+        let exports = if let Some(c) = ctx {
+            c.exports_from_expose()
+        } else {
+            let mut goblin_exports = Vec::new();
+            for export in &pe.exports {
+                if let Some(name) = export.name {
+                    match &export.reexport {
+                        Some(goblin::pe::export::Reexport::DLLName {
+                            export: target,
+                            lib,
+                        }) => {
+                            goblin_exports.push(Export::forwarded(
+                                name,
+                                format!("{}.{}", lib, target),
+                                "goblin",
+                            ));
+                        }
+                        Some(goblin::pe::export::Reexport::DLLOrdinal { ordinal, lib }) => {
+                            goblin_exports.push(Export::forwarded(
+                                name,
+                                format!("{}.#{}", lib, ordinal),
+                                "goblin",
+                            ));
+                        }
+                        None => {
+                            goblin_exports.push(Export::new(
+                                name,
+                                Some(format!("{:#x}", export.rva)),
+                                "goblin",
+                            ));
+                        }
                     }
                 }
             }
-        }
+            goblin_exports
+        };
 
-        // Detect export aliasing: multiple exports whose code jumps to the same target
+        // Aliased-export detection is disassembly-based and not in
+        // expose today, so we still need the goblin PE handle for
+        // this part regardless of whether `ctx` provided the export
+        // list itself.
         let aliased = if exports.len() >= 2 {
             let bitness = match pe.header.coff_header.machine {
                 0x8664 | 0xaa64 => 64,
@@ -769,7 +809,19 @@ impl PEAnalyzer {
         (exports, aliased)
     }
 
-    fn get_sections<'a>(&self, pe: &PE<'a>, data: &[u8]) -> Vec<Section> {
+    fn get_sections<'a>(
+        &self,
+        pe: &PE<'a>,
+        data: &[u8],
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
+    ) -> Vec<Section> {
+        // When the shared expose-side parse is available, mirror
+        // its typed Sections view — entropy is pre-computed in the
+        // metric map (`sections[N].entropy`), so this path avoids
+        // a second linear scan over the section bytes.
+        if let Some(c) = ctx {
+            return c.sections_from_expose();
+        }
         let mut sections = Vec::new();
         for section in &pe.sections {
             let name = String::from_utf8_lossy(&section.name)
@@ -894,6 +946,23 @@ impl PEAnalyzer {
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
+        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, None)
+    }
+
+    /// Same as [`Self::analyze_structural`] but accepts an
+    /// [`AnalysisContext`] borrowing the same bytes. When provided,
+    /// downstream extractors prefer expose's typed views over
+    /// goblin's where the data is already there — the long-term
+    /// path for eliminating the cleave-side goblin double-parse
+    /// (see task #43). Pass `None` to keep the legacy
+    /// goblin-everywhere behaviour.
+    pub(crate) fn analyze_structural_with_ctx<'a>(
+        &self,
+        file_path: &'a Path,
+        data: &'a [u8],
+        precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+    ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
 
@@ -905,6 +974,7 @@ impl PEAnalyzer {
                 None,
                 true,
                 precomputed_sha256,
+                ctx,
             );
         }
 
@@ -916,6 +986,7 @@ impl PEAnalyzer {
             None,
             true,
             precomputed_sha256.clone(),
+            ctx,
         );
 
         report.findings.push(
@@ -950,6 +1021,10 @@ impl PEAnalyzer {
                         let opts = crate::analyzers::stng_analysis_opts(4);
                         let unpacked_strings =
                             stng::extract_strings_with_options(&unpacked_data, &opts);
+                        // UPX-unpacked bytes differ from the caller's
+                        // bytes; the outer `ctx` no longer applies, so
+                        // pass `None` and let analyze_pe run goblin
+                        // afresh on the unpacked payload.
                         let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
                             temp_file.path(),
@@ -957,6 +1032,7 @@ impl PEAnalyzer {
                             Some(&unpacked_strings),
                             true,
                             None, // Hash will change after decompression
+                            None,
                         );
                         crate::analyzers::binary_kv::attach_to_report(&mut unpacked_report);
                         crate::analyzers::binary_extractors::augment_report(
@@ -1037,14 +1113,16 @@ impl PEAnalyzer {
     }
 
     /// Structural analysis with optional pre-extracted strings.
-    fn analyze_structural_with_strings(
+    #[allow(clippy::too_many_arguments)]
+    fn analyze_structural_with_strings<'a>(
         &self,
         logical_path: &Path,
         analysis_path: &Path,
-        data: &[u8],
+        data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
@@ -1056,6 +1134,13 @@ impl PEAnalyzer {
         // returned errors *and* caught panics through `GoblinOutcome`, so the
         // existing rizin-fallback path in `analyze_pe` handles them
         // identically.
+        //
+        // Note: this is currently the second goblin parse for any file
+        // that already went through expose's dispatcher. Task #43
+        // plumbs `ctx` here so individual extractors can prefer
+        // expose's typed views over re-parsing with goblin; deleting
+        // the redundant parse comes later, once every goblin consumer
+        // has migrated.
         let parse_outcome = goblin_safe::parse_pe(pe_data);
         let parse_failure = parse_outcome.failure_info();
         if let Some(ref f) = parse_failure {
@@ -1080,6 +1165,7 @@ impl PEAnalyzer {
             stng_strings,
             allow_rizin,
             precomputed_sha256,
+            ctx,
         )
     }
 
@@ -1089,20 +1175,25 @@ impl PEAnalyzer {
     /// and sections. When goblin fails, falls back to rizin for everything.
     /// When goblin partially succeeds (e.g., 0 sections/imports but rizin finds them),
     /// uses rizin as fallback and emits suspicious findings for the discrepancy.
+    ///
+    /// `ctx` (when provided) is the shared expose-side parse of the
+    /// same bytes; helpers that already have an expose equivalent
+    /// (imports / exports) prefer it over re-walking goblin's tables.
     #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
-    fn analyze_pe(
+    fn analyze_pe<'a>(
         &self,
         logical_path: &Path,
         analysis_path: &Path,
         original_data: &[u8],
-        pe_data: &[u8],
-        pe: Option<&PE<'_>>,
+        pe_data: &'a [u8],
+        pe: Option<&PE<'a>>,
         parse_failure: Option<&goblin_safe::GoblinFailureInfo>,
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
     ) -> AnalysisReport {
         let goblin_ok = pe.is_some();
 
@@ -1119,7 +1210,28 @@ impl PEAnalyzer {
             None => (None, false),
         };
         let file_size = original_data.len() as u64;
-        let goblin_code_size = pe.map_or(0, |pe| self.compute_code_size(pe, file_size));
+        // Prefer expose's already-computed section table when ctx is
+        // available — it carries the same `file_size` field plus an
+        // `executable` flag on the typed Section view, so the
+        // executable-code sum runs directly off `parsed.sections()`
+        // without a second goblin walk.
+        let goblin_code_size = if let Some(c) = ctx {
+            c.parsed
+                .sections()
+                .iter()
+                .filter(|s| s.flags.iter().any(|f| f == "executable"))
+                .map(|s| {
+                    let raw_end = s.file_offset.saturating_add(s.file_size);
+                    if raw_end > file_size {
+                        file_size.saturating_sub(s.file_offset)
+                    } else {
+                        s.file_size
+                    }
+                })
+                .sum()
+        } else {
+            pe.map_or(0, |pe| self.compute_code_size(pe, file_size))
+        };
 
         // Create target info
         let target = TargetInfo {
@@ -1215,9 +1327,9 @@ impl PEAnalyzer {
             if let Some(pe) = pe {
                 let goblin_start = std::time::Instant::now();
                 goblin_report_parts.0 = self.get_structure(pe);
-                goblin_report_parts.1 = self.get_imports(pe);
-                goblin_report_parts.2 = self.get_exports(pe, pe_data);
-                goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                goblin_report_parts.1 = self.get_imports(pe, ctx);
+                goblin_report_parts.2 = self.get_exports(pe, pe_data, ctx);
+                goblin_report_parts.3 = self.get_sections(pe, pe_data, ctx);
                 goblin_ms = goblin_start.elapsed().as_millis();
             }
             if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
@@ -1256,9 +1368,9 @@ impl PEAnalyzer {
                     if let Some(pe) = pe {
                         let goblin_start = std::time::Instant::now();
                         goblin_report_parts.0 = self.get_structure(pe);
-                        goblin_report_parts.1 = self.get_imports(pe);
-                        goblin_report_parts.2 = self.get_exports(pe, pe_data);
-                        goblin_report_parts.3 = self.get_sections(pe, pe_data);
+                        goblin_report_parts.1 = self.get_imports(pe, ctx);
+                        goblin_report_parts.2 = self.get_exports(pe, pe_data, ctx);
+                        goblin_report_parts.3 = self.get_sections(pe, pe_data, ctx);
                         goblin_ms = goblin_start.elapsed().as_millis();
                     }
                 },
@@ -1363,8 +1475,29 @@ impl PEAnalyzer {
                     }
                 }
 
-                // Prefer goblin section-header flags over r2 segment perms
-                let (exec, write, wx) = self.compute_section_permission_counts(pe);
+                // Prefer expose's section permission counts when the
+                // shared parse is available — `sections.executable_count`
+                // / `writable_count` / `executable_writable_count` are
+                // populated alongside the typed Sections view and avoid
+                // a second walk over goblin's section table here.
+                // Fall back to walking goblin directly when no ctx is
+                // provided (legacy call paths, tests).
+                let (exec, write, wx) = if let Some(c) = ctx {
+                    let m = c.parsed.metrics();
+                    (
+                        m.get("sections.executable_count")
+                            .map(|v| v as u32)
+                            .unwrap_or(0),
+                        m.get("sections.writable_count")
+                            .map(|v| v as u32)
+                            .unwrap_or(0),
+                        m.get("sections.executable_writable_count")
+                            .map(|v| v as u32)
+                            .unwrap_or(0),
+                    )
+                } else {
+                    self.compute_section_permission_counts(pe)
+                };
                 binary_metrics.executable_section_count = exec;
                 binary_metrics.writable_section_count = write;
                 binary_metrics.wx_section_count = wx;
@@ -3270,6 +3403,7 @@ impl Analyzer for PEAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
+            None,
         );
 
         // Post-processing
@@ -4813,6 +4947,132 @@ mod tests {
 
         let report = analyzer.analyze(&test_file).unwrap();
         assert!(!report.imports.is_empty());
+    }
+
+    /// `analyze_structural_with_ctx` produces equivalent
+    /// `report.imports` to the legacy goblin path. When the
+    /// AnalysisContext is provided, the bridge tags entries with
+    /// `source: "pe"` (from expose's typed view); when it's `None`,
+    /// the legacy path tags them `source: "goblin"`. Both should
+    /// populate the same symbol names.
+    #[test]
+    fn analyze_structural_with_ctx_matches_legacy_imports() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+        if !test_file.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&test_file).unwrap();
+
+        // Legacy path: no context, imports tagged "goblin".
+        let legacy = analyzer.analyze_structural(&test_file, &bytes, None);
+        // Bridged path: AnalysisContext provided, imports tagged "pe".
+        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
+        let bridged = analyzer.analyze_structural_with_ctx(&test_file, &bytes, None, Some(&ctx));
+
+        // Both paths populate imports.
+        assert!(!legacy.imports.is_empty());
+        assert!(!bridged.imports.is_empty());
+
+        // Source tags differ between the two paths — that's the
+        // observable signal that the bridge is actually engaged.
+        let legacy_sources: std::collections::HashSet<&str> =
+            legacy.imports.iter().map(|i| i.source.as_str()).collect();
+        let bridged_sources: std::collections::HashSet<&str> =
+            bridged.imports.iter().map(|i| i.source.as_str()).collect();
+        assert!(legacy_sources.contains("goblin"));
+        assert!(bridged_sources.contains("pe"));
+
+        // The symbol *names* should match (modulo cleave's
+        // normalize_symbol leading-underscore strip, which both
+        // paths apply uniformly).
+        let legacy_names: std::collections::BTreeSet<String> =
+            legacy.imports.iter().map(|i| i.symbol.clone()).collect();
+        let bridged_names: std::collections::BTreeSet<String> =
+            bridged.imports.iter().map(|i| i.symbol.clone()).collect();
+        assert_eq!(legacy_names, bridged_names);
+
+        // Exports parity — names, offsets (RVA), and forward_to
+        // semantics must match between the two paths. The source
+        // tag differs (`"goblin"` vs `"pe"`); everything else is
+        // the same.
+        let legacy_export_names: std::collections::BTreeSet<String> =
+            legacy.exports.iter().map(|e| e.symbol.clone()).collect();
+        let bridged_export_names: std::collections::BTreeSet<String> =
+            bridged.exports.iter().map(|e| e.symbol.clone()).collect();
+        assert_eq!(legacy_export_names, bridged_export_names);
+
+        // RVA-derived offsets must match byte-for-byte. Pair on
+        // symbol name so order doesn't matter.
+        let legacy_offsets: std::collections::BTreeMap<String, Option<String>> = legacy
+            .exports
+            .iter()
+            .map(|e| (e.symbol.clone(), e.offset.clone()))
+            .collect();
+        let bridged_offsets: std::collections::BTreeMap<String, Option<String>> = bridged
+            .exports
+            .iter()
+            .map(|e| (e.symbol.clone(), e.offset.clone()))
+            .collect();
+        assert_eq!(legacy_offsets, bridged_offsets);
+
+        // Sections parity — names, sizes, addresses, and permission
+        // flags must match. Per-section entropy comes from a single
+        // entropy computation in either path, so the values are
+        // byte-identical too.
+        assert_eq!(legacy.sections.len(), bridged.sections.len());
+        let legacy_section_names: std::collections::BTreeSet<&str> =
+            legacy.sections.iter().map(|s| s.name.as_str()).collect();
+        let bridged_section_names: std::collections::BTreeSet<&str> =
+            bridged.sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(legacy_section_names, bridged_section_names);
+        // Permissions and sizes by name.
+        let legacy_perms: std::collections::BTreeMap<String, (u64, Option<String>)> = legacy
+            .sections
+            .iter()
+            .map(|s| (s.name.clone(), (s.size, s.permissions.clone())))
+            .collect();
+        let bridged_perms: std::collections::BTreeMap<String, (u64, Option<String>)> = bridged
+            .sections
+            .iter()
+            .map(|s| (s.name.clone(), (s.size, s.permissions.clone())))
+            .collect();
+        assert_eq!(legacy_perms, bridged_perms);
+
+        // BinaryMetrics-level section permission counts must match
+        // between the two paths — bridged reads from
+        // `sections.executable_count` / `writable_count` /
+        // `executable_writable_count` metrics emitted by expose;
+        // legacy walks goblin's section characteristics directly.
+        let legacy_bin = legacy
+            .metrics
+            .as_ref()
+            .and_then(|m| m.binary.as_ref())
+            .expect("legacy binary metrics present");
+        let bridged_bin = bridged
+            .metrics
+            .as_ref()
+            .and_then(|m| m.binary.as_ref())
+            .expect("bridged binary metrics present");
+        assert_eq!(
+            legacy_bin.executable_section_count, bridged_bin.executable_section_count,
+            "executable_section_count diverged",
+        );
+        assert_eq!(
+            legacy_bin.writable_section_count, bridged_bin.writable_section_count,
+            "writable_section_count diverged",
+        );
+        assert_eq!(
+            legacy_bin.wx_section_count, bridged_bin.wx_section_count,
+            "wx_section_count diverged",
+        );
+        // code_size derives from the executable-section sum on both
+        // paths — bridged sums expose's typed Section.file_size,
+        // legacy sums goblin's size_of_raw_data. Same value.
+        assert_eq!(
+            legacy_bin.code_size, bridged_bin.code_size,
+            "code_size diverged between bridged and legacy paths",
+        );
     }
 
     #[test]

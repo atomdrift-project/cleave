@@ -107,7 +107,7 @@ traits:
     fs::write(&target_file, "#!/bin/bash\n# dummy\n").unwrap();
 
     // Should NOT show warning for SUSPICIOUS traits anymore
-    
+
     assert_cmd::cargo_bin_cmd!("cleave")
         .env("CLEAVE_SKIP_YARA", "1") // Skip YARA - only testing trait strictness
         .args(["analyze", target_file.to_str().unwrap()])

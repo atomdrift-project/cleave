@@ -19,21 +19,9 @@
 
 use crate::analyzers;
 use crate::analyzers::binary_kv;
-use crate::analyzers::class_kv;
-use crate::analyzers::jar_kv;
-use crate::analyzers::jpeg_kv;
-use crate::analyzers::office::office_kv;
-use crate::analyzers::pdf::pdf_kv;
-use crate::analyzers::pickle_kv;
-use crate::analyzers::png_kv;
-use crate::analyzers::pyc_kv;
-use crate::analyzers::rpm_kv;
 use crate::analyzers::FileType;
 use crate::cli;
-use crate::composite_rules::evaluators::kv::{
-    detect_format, navigate, parse_path, parse_structured_content, StructuredFormat,
-};
-use crate::rtf::rtf_kv;
+use crate::composite_rules::evaluators::kv::{navigate, parse_path, parse_structured_content};
 use anyhow::Result;
 use serde::Serialize;
 use serde_json::Value;
@@ -47,6 +35,18 @@ struct KvEntry {
 }
 
 /// Dump the parsed key/value structure of a manifest-style file.
+///
+/// Dispatch order:
+/// 1. `expose::open_with_path` — single source of truth for format-native
+///    kv (`lnk.*`, `pe.*`, `pdf.*`, `chm.*`, …). One call covers every
+///    format expose has an extractor for.
+/// 2. Office (OLE2 / OOXML) — cleave-owned until expose Phase 2 lands.
+/// 3. Binary cross-format kv — cleave's `binary_kv` / `binary_extractors`
+///    layers add `build.*` / `signing.*` / `hash.*` over expose's
+///    `pe|elf|macho.*` until Phase 11/12.
+/// 4. Source code analyzer — `source.*` / `metrics.*` are cleave-side.
+/// 5. Generic structured fallback — JSON / YAML / TOML / plist /
+///    PKG-INFO / systemd / desktop / XML manifests.
 pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
@@ -55,37 +55,19 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
 
     let content = fs::read(path)?;
 
-    // Try the dispatch table first — each probe checks magic /
-    // extension cheaply and parses on hit, wrapping the result in
-    // its top-level kv namespace (`png`, `jpeg`, `class`, …).
-    // Office / RTF / PDF return pre-namespaced trees so they're
-    // tried first as standalone parsers.
-    let (detected, parsed) = if let Some(office_value) =
-        office_kv::extract_office_kv(path, &content)
-    {
-        (StructuredFormat::Json, office_value)
-    } else if let Some(rtf_value) = rtf_kv::extract_rtf_kv(&content) {
-        (StructuredFormat::Json, rtf_value)
-    } else if let Some(pdf_value) = pdf_kv::extract_pdf_kv(&content) {
-        (StructuredFormat::Json, pdf_value)
-    } else if let Some(probe_value) = run_kv_probes(path, &content) {
-        (StructuredFormat::Json, probe_value)
+    let parsed = if let Some(value) = expose_values(path, &content) {
+        value
     } else if let Some(binary_value) = extract_binary_kv_via_analyzer(path, &content) {
-        (StructuredFormat::Json, binary_value)
+        binary_value
     } else if let Some(source_value) = extract_source_kv_via_analyzer(path, &content) {
-        (StructuredFormat::Json, source_value)
+        source_value
+    } else if let Some((_, structured_value)) = parse_structured_content(path, &content) {
+        structured_value
     } else {
-        let Some((detected, parsed)) = parse_structured_content(path, &content) else {
-            let format = detect_format(path, &content);
-            if format == StructuredFormat::Unknown {
-                anyhow::bail!(
-                    "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/LNK/systemd manifest, OLE2/OOXML office document, RTF, PDF, PE/ELF/Mach-O binary, or tree-sitter–supported source code): {}",
-                    target
-                );
-            }
-            anyhow::bail!("Detected {:?} but failed to parse: {}", format, target);
-        };
-        (detected, parsed)
+        anyhow::bail!(
+            "File is not a recognized structured format (expected JSON/YAML/TOML/plist/PKG-INFO/systemd/desktop manifest, OLE2/OOXML office document, or a format with an expose extractor — LNK, PE/ELF/Mach-O, PDF, RTF, JPEG/PNG, JAR, CHM, …): {}",
+            target
+        );
     };
 
     let roots: Vec<(&Value, String)> = if let Some(filter) = path_filter {
@@ -108,7 +90,7 @@ pub fn run(target: &str, path_filter: Option<&str>, format: &cli::OutputFormat) 
     }
     entries.sort_by(|a, b| a.path.cmp(&b.path));
 
-    format_output(&entries, target, &detected, format)
+    format_output(&entries, target, format)
 }
 
 /// Flatten a JSON value into `path: leaf` entries using kv-path syntax.
@@ -142,12 +124,7 @@ fn flatten(value: &Value, prefix: &str, entries: &mut Vec<KvEntry>) {
     }
 }
 
-fn format_output(
-    entries: &[KvEntry],
-    target: &str,
-    detected: &StructuredFormat,
-    format: &cli::OutputFormat,
-) -> Result<String> {
+fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) -> Result<String> {
     match format {
         cli::OutputFormat::Json | cli::OutputFormat::Jsonl => {
             Ok(serde_json::to_string_pretty(entries)?)
@@ -155,10 +132,9 @@ fn format_output(
         cli::OutputFormat::Terminal | cli::OutputFormat::Tiny => {
             let mut out = String::new();
             out.push_str(&format!(
-                "Extracted {} key/value pairs from {} ({:?})\n\n",
+                "Extracted {} key/value pairs from {}\n\n",
                 entries.len(),
                 target,
-                detected
             ));
             out.push_str("# Paths use kv-path syntax (type: kv, path: <path>)\n\n");
             let width = entries.iter().map(|e| e.path.len()).max().unwrap_or(0);
@@ -175,133 +151,15 @@ fn format_output(
     }
 }
 
-/// Run the appropriate binary analyzer (PE / ELF / Mach-O) end-to-
-/// end and return the synthesized kv tree from `report.kv_tree`.
-/// Returns `None` for non-binary input or when the analyzer fails.
+/// Pull the structured values tree from the shared [`AnalysisContext`].
 ///
-/// This is heavier than the document kv extractors because the
-/// binary metrics need a structural analysis pass to populate the
-/// fields the kv builder reads — the analyzer crate doesn't yet
-/// expose a metrics-only fast path.  Acceptable for `cleave kv`
-/// (interactive trait-authoring tool); real analysis flows
-/// already go through the same path and pay the cost once.
-/// One probe in the kv-format dispatch table. `matches` runs first
-/// (cheap magic / extension check); on hit, `parse` is invoked and
-/// the resulting tree is wrapped as `{ namespace: tree }` so kv-paths
-/// always read `<namespace>.<...>`.
-struct KvProbe {
-    namespace: &'static str,
-    matches: fn(&Path, &[u8]) -> bool,
-    parse: fn(&[u8]) -> Option<Value>,
-}
-
-/// Probes are tried in order; first match wins. Cheap magic checks
-/// come before parsers that need extension help (pickle), so the hot
-/// non-matching path stays a few byte comparisons.
-const KV_PROBES: &[KvProbe] = &[
-    KvProbe {
-        namespace: "png",
-        matches: starts_with_png,
-        parse: parse_png,
-    },
-    KvProbe {
-        namespace: "jpeg",
-        matches: starts_with_jpeg,
-        parse: parse_jpeg,
-    },
-    KvProbe {
-        namespace: "class",
-        matches: starts_with_class,
-        parse: class_kv::extract,
-    },
-    KvProbe {
-        namespace: "pyc",
-        matches: looks_like_pyc,
-        parse: pyc_kv::extract,
-    },
-    KvProbe {
-        namespace: "rpm",
-        matches: starts_with_rpm,
-        parse: rpm_kv::extract,
-    },
-    KvProbe {
-        namespace: "jar",
-        matches: looks_like_jar,
-        parse: jar_kv::extract_jar_kv,
-    },
-    KvProbe {
-        namespace: "pickle",
-        matches: looks_like_pickle,
-        parse: pickle_kv::extract,
-    },
-];
-
-fn run_kv_probes(path: &Path, content: &[u8]) -> Option<Value> {
-    let probe = KV_PROBES.iter().find(|p| (p.matches)(path, content))?;
-    let inner = (probe.parse)(content)?;
-    let mut root = serde_json::Map::new();
-    root.insert(probe.namespace.into(), inner);
-    Some(Value::Object(root))
-}
-
-fn starts_with_png(_: &Path, content: &[u8]) -> bool {
-    content.starts_with(b"\x89PNG\r\n\x1a\n")
-}
-fn starts_with_jpeg(_: &Path, content: &[u8]) -> bool {
-    content.starts_with(&[0xFF, 0xD8])
-}
-fn starts_with_class(_: &Path, content: &[u8]) -> bool {
-    content.starts_with(&[0xCA, 0xFE, 0xBA, 0xBE])
-}
-fn starts_with_rpm(_: &Path, content: &[u8]) -> bool {
-    content.starts_with(&[0xED, 0xAB, 0xEE, 0xDB])
-}
-/// `.pyc` files start with a 2-byte magic word followed by `\r\n`;
-/// the magic word varies per Python version (3-byte detection covers
-/// every release we map in `pyc_kv`).
-fn looks_like_pyc(path: &Path, content: &[u8]) -> bool {
-    let ext_match = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("pyc"));
-    let magic_match = content.len() >= 4 && content[2] == 0x0D && content[3] == 0x0A;
-    ext_match && magic_match
-}
-/// JAR / WAR / EAR are all ZIPs — accept either the magic + filename
-/// hint or the analyzer's positive type detection.
-fn looks_like_jar(path: &Path, content: &[u8]) -> bool {
-    if !content.starts_with(b"PK\x03\x04") {
-        return false;
-    }
-    let ext_match = path
-        .extension()
-        .and_then(|s| s.to_str())
-        .is_some_and(|s| matches!(s.to_ascii_lowercase().as_str(), "jar" | "war" | "ear"));
-    ext_match
-        || matches!(
-            analyzers::detect_file_type_from_data(path, content),
-            FileType::Jar
-        )
-}
-/// Pickle has no robust magic (protocol 0 is plain ASCII), so we gate
-/// on extension only. Misclassified inputs are still handled cleanly
-/// by `pickle_kv::extract` returning `None`.
-fn looks_like_pickle(path: &Path, _: &[u8]) -> bool {
-    path.extension().and_then(|s| s.to_str()).is_some_and(|e| {
-        matches!(
-            e.to_ascii_lowercase().as_str(),
-            "pkl" | "pickle" | "joblib" | "pt"
-        )
-    })
-}
-
-/// Adapter: png_kv returns `(Value, StructuralCounts)`; the kv
-/// command only wants the value.
-fn parse_png(content: &[u8]) -> Option<Value> {
-    png_kv::extract(content).map(|(v, _)| v)
-}
-fn parse_jpeg(content: &[u8]) -> Option<Value> {
-    jpeg_kv::extract(content).map(|(v, _)| v)
+/// This is the only place the `cleave kv` command touches expose —
+/// every format expose owns (PE, ELF, Mach-O, LNK, PDF, RTF, JPEG,
+/// PNG, JAR, CHM, RPM, pyc, pickle, class, VSIX, source code, …)
+/// flows through this single helper.
+fn expose_values(path: &Path, content: &[u8]) -> Option<Value> {
+    let ctx = crate::analysis_context::AnalysisContext::open(path, content).ok()?;
+    ctx.values_tree_if_nonempty()
 }
 
 fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
@@ -311,12 +169,18 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     }
     let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
     let mut report = analyzer.analyze(path).ok()?;
-    // The analyzer's `analyze()` trait method is shorter than the
-    // full lib.rs pipeline — it doesn't run the binary_kv +
-    // binary_extractors hooks.  Invoke them here so `cleave kv`
-    // returns the same kv tree that `cleave analyze` would emit
-    // (including the augmenting `.comment` / sanitizer detections
-    // layered onto the metrics-derived base).
+    // `pe.*` / `elf.*` / `macho.*` come exclusively from expose
+    // (single source of truth); `binary_kv::attach_to_report` fills
+    // the cleave-derived cross-format namespaces (`build`, `signing`,
+    // `debug`, `hash`, `binary`, `archive`) and `binary_extractors`
+    // augments with `.comment`/sanitizer detections.
+    if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, content) {
+        if let Value::Object(map) = ctx.values_tree() {
+            for (namespace, subtree) in map {
+                report.merge_kv_subtree(&namespace, subtree);
+            }
+        }
+    }
     binary_kv::attach_to_report(&mut report);
     analyzers::binary_extractors::augment_report(&mut report, content);
     report.kv_tree.as_deref().cloned()

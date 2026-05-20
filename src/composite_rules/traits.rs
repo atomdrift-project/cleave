@@ -873,18 +873,21 @@ impl TraitDefinition {
         // Check entropy constraints (from if: block)
         // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
         if self.entropy_min.is_some() || self.entropy_max.is_some() {
-            let file_entropy = ctx
+            // Try binary entropy first, fall back to text char entropy.
+            // Binary lives on the typed `Metrics` until #41d; text lives
+            // in the flat `expose_metrics` map under `text.char_entropy`.
+            let binary_entropy = ctx
                 .report
                 .metrics
                 .as_ref()
-                .and_then(|m| {
-                    // Try binary entropy first, fall back to text char entropy
-                    m.binary
-                        .as_ref()
-                        .map(|b| f64::from(b.overall_entropy))
-                        .or_else(|| m.text.as_ref().map(|t| f64::from(t.char_entropy)))
-                })
-                .unwrap_or(0.0);
+                .and_then(|m| m.binary.as_ref())
+                .map(|b| f64::from(b.overall_entropy));
+            let text_entropy = ctx
+                .report
+                .expose_metrics
+                .as_ref()
+                .and_then(|m| m.get("text.char_entropy").copied());
+            let file_entropy = binary_entropy.or(text_entropy).unwrap_or(0.0);
 
             if let Some(min) = self.entropy_min {
                 if file_entropy < min {
@@ -3410,7 +3413,10 @@ mod scope_tests {
             Scope::File.key(Some("Analytics.php:10:5")),
             "Analytics.php:10:5"
         );
-        assert_eq!(Scope::File.key(Some("src/main.rs:42:1")), "src/main.rs:42:1");
+        assert_eq!(
+            Scope::File.key(Some("src/main.rs:42:1")),
+            "src/main.rs:42:1"
+        );
         assert_eq!(Scope::File.key(Some("file:foo")), "file:foo");
         // Edge cases that look numeric but aren't `row:col`.
         assert_eq!(Scope::File.key(Some("1:")), "1:");
@@ -3427,7 +3433,10 @@ mod scope_tests {
         // when fixing the file-scope bug.
         assert_eq!(Scope::Leaf.key(Some("6:14")), "6:14");
         assert_eq!(Scope::Leaf.key(Some("7:1")), "7:1");
-        assert_eq!(Scope::Leaf.key(Some("Analytics.php:10:5")), "Analytics.php:10:5");
+        assert_eq!(
+            Scope::Leaf.key(Some("Analytics.php:10:5")),
+            "Analytics.php:10:5"
+        );
     }
 
     #[test]

@@ -5,7 +5,6 @@
 //! for analysis through the standard pipeline, and detects Office-specific
 //! malware techniques (template injection, DDE, embedded executables).
 
-pub(crate) mod office_kv;
 pub(crate) mod ole2;
 pub(crate) mod ooxml;
 pub(crate) mod vba;
@@ -148,6 +147,17 @@ impl OfficeAnalyzer {
             report.kv_tree = Some(Box::new(kv_tree));
         }
 
+        // Open the shared expose-side parse for this document so the
+        // VBA symbol surface comes from `parsed.imports()` /
+        // `parsed.functions()` instead of a second regex pass.
+        // Expose already pre-decompressed each VBA module and ran
+        // the extractor across all of them; the typed views carry
+        // every Declare / CreateObject / GetObject / Sub|Function
+        // expose found, tagged `source: "vba-*"`. Returns `None`
+        // for files expose can't open (cleave still falls back to
+        // emitting per-module shape stats only).
+        let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+
         // Surface VBA-extracted imports/functions on the parent report
         // BEFORE the capability mapper runs, so `type: symbol` traits with
         // `for: [oledoc, ooxml]` see the Declare-imported APIs and
@@ -157,6 +167,7 @@ impl OfficeAnalyzer {
             data.len() as u64,
             file_path,
             &vba_modules,
+            office_ctx.as_ref(),
         );
 
         // Stash the OLE2 / OOXML / XLM structural sub-metrics into
@@ -221,11 +232,18 @@ impl OfficeAnalyzer {
     }
 
     /// Pull `Declare`-imported APIs, `CreateObject`/`GetObject` ProgIDs,
-    /// and Sub/Function declarations out of every VBA module and attach
-    /// them to the parent report's `imports`/`functions` lists. Folds
-    /// per-module aggregates into `OfficeMetrics::vba` and sets the
-    /// cross-format `office.*` flags (has_macros, vba_module_count,
+    /// and Sub/Function declarations from expose's typed views and
+    /// attach them to the parent report's `imports`/`functions` lists.
+    /// Folds aggregates into `OfficeMetrics::vba` and sets the cross-
+    /// format `office.*` flags (has_macros, vba_module_count,
     /// vba_source_size, doc_type).
+    ///
+    /// The symbol surface flows entirely through
+    /// [`crate::analysis_context::AnalysisContext`] — expose already
+    /// ran the regex extractor across every VBA module while building
+    /// the typed `Imports`/`Functions` views. Per-module shape stats
+    /// (logical lines, comments, random-name heuristic) stay
+    /// cleave-side because they aren't symbol extraction.
     ///
     /// Runs before the capability mapper so `type: symbol` traits keyed
     /// on the document type fire on the populated symbol set.
@@ -235,34 +253,52 @@ impl OfficeAnalyzer {
         file_size: u64,
         file_path: &Path,
         modules: &[vba::VbaModule],
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) {
         // Always seed `office.doc_type` and the macro-enabled-extension
         // flag, regardless of whether VBA modules were recovered. The
         // sub-struct slots stay None when no VBA project is present so
         // the empty-doc JSON output is undisturbed.
-        let metrics = report.metrics.get_or_insert_with(Default::default);
-        let office = metrics.office.get_or_insert_with(Default::default);
-        if office.doc_type.is_empty() {
+        use crate::types::{flatten_into_metrics, kv_set_path, MetricsExt};
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        // `office.doc_type` is a string — goes to kv_tree, not the
+        // numeric metric map. Only seed it on the first pass.
+        let doc_type_seeded = report
+            .kv_tree
+            .as_deref()
+            .and_then(|t| t.as_object())
+            .and_then(|o| o.get("office"))
+            .and_then(|o| o.as_object())
+            .and_then(|o| o.get("doc_type"))
+            .is_some();
+        if !doc_type_seeded {
             if let Some(ext) = file_path
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(str::to_ascii_lowercase)
             {
-                office.is_macro_enabled_extension = matches!(
-                    ext.as_str(),
-                    "docm"
-                        | "xlsm"
-                        | "pptm"
-                        | "dotm"
-                        | "xltm"
-                        | "potm"
-                        | "xla"
-                        | "xlam"
-                        | "xll"
-                        | "xlsb"
-                        | "ppam"
+                flat.set_b(
+                    "office.is_macro_enabled_extension",
+                    matches!(
+                        ext.as_str(),
+                        "docm"
+                            | "xlsm"
+                            | "pptm"
+                            | "dotm"
+                            | "xltm"
+                            | "potm"
+                            | "xla"
+                            | "xlam"
+                            | "xll"
+                            | "xlsb"
+                            | "ppam"
+                    ),
                 );
-                office.doc_type = ext;
+                kv_set_path(
+                    &mut report.kv_tree,
+                    "office.doc_type",
+                    serde_json::Value::String(ext),
+                );
             }
         }
 
@@ -270,34 +306,47 @@ impl OfficeAnalyzer {
             return;
         }
 
-        office.has_macros = true;
-        office.vba_module_count = office.vba_module_count.saturating_add(modules.len() as u32);
+        flat.set_b("office.has_macros", true);
+        let prev_module_count = flat.get_u("office.vba_module_count").unwrap_or(0);
+        flat.set_u(
+            "office.vba_module_count",
+            prev_module_count.saturating_add(modules.len() as u64),
+        );
 
         let mut vba_source_size: u64 = 0;
         let mut agg = crate::types::office_metrics::VbaMetrics::default();
-        let mut distinct_libs = std::collections::BTreeSet::<String>::new();
-        let mut distinct_progids = std::collections::BTreeSet::<String>::new();
-        let mut distinct_triggers = std::collections::BTreeSet::<String>::new();
-        let mut ident_stats = vba_symbols::IdentifierStats::default();
 
+        // Per-module shape stats are NOT symbol extraction — keep
+        // them cleave-side. Logical lines, comments, and the
+        // random-named-module heuristic only need the raw module
+        // source plus the module name.
         for module in modules {
             vba_source_size = vba_source_size.saturating_add(module.source_code.len() as u64);
-
-            // Module-name shape: random-looking names are a strong
-            // obfuscation signal. Heuristic in `looks_random_module_name`.
             if vba_symbols::looks_random_module_name(&module.name) {
                 agg.random_named_module_count = agg.random_named_module_count.saturating_add(1);
             }
-
-            // Per-module logical-line / comment-line counts.
             let shape = vba_symbols::compute_module_shape(&module.source_code);
             agg.total_logical_lines = agg.total_logical_lines.saturating_add(shape.logical_lines);
             agg.comment_lines = agg.comment_lines.saturating_add(shape.comment_lines);
+        }
 
-            let extracted = vba_symbols::extract_vba_symbols(&module.source_code);
+        // Symbol surface comes from expose's typed views — one pass
+        // over each, filtered by the `vba-*` source-tag family.
+        // When ctx is unavailable (rare; only if expose fails to
+        // open the document), the symbol-driven aggregates stay at
+        // their defaults and the shape stats above are the only
+        // signal we surface.
+        if let Some(c) = ctx {
+            let mut distinct_libs = std::collections::BTreeSet::<String>::new();
+            let mut distinct_progids = std::collections::BTreeSet::<String>::new();
+            let mut distinct_triggers = std::collections::BTreeSet::<String>::new();
+            let mut ident_stats = vba_symbols::IdentifierStats::default();
 
-            // Bump per-DLL counters (high-risk subset only).
-            for imp in &extracted.imports {
+            for imp in c
+                .imports_from_expose()
+                .into_iter()
+                .filter(|i| i.source.starts_with("vba-"))
+            {
                 if let Some(lib) = &imp.library {
                     // distinct_dll_count tracks Declare-imported native
                     // DLLs only; CreateObject's pseudo-library `com` is
@@ -338,53 +387,51 @@ impl OfficeAnalyzer {
                         distinct_progids.insert(imp.symbol.clone());
                     }
                 }
+                ident_stats.record(&imp.symbol);
+                report.imports.push(imp);
             }
 
-            for func in &extracted.functions {
+            for func in c
+                .functions_from_expose()
+                .into_iter()
+                .filter(|f| f.source.starts_with("vba-"))
+            {
                 if vba_symbols::is_trigger_handler(&func.name) {
                     distinct_triggers.insert(func.name.clone());
                 }
                 ident_stats.record(&func.name);
-            }
-            for imp in &extracted.imports {
-                ident_stats.record(&imp.symbol);
+                report.functions.push(func);
             }
 
-            agg.declare_count = agg
-                .declare_count
-                .saturating_add(extracted.stats.declare_count);
-            agg.declare_non_literal_count = agg
-                .declare_non_literal_count
-                .saturating_add(extracted.stats.declare_non_literal_count);
-            agg.createobject_count = agg
-                .createobject_count
-                .saturating_add(extracted.stats.createobject_count);
-            agg.createobject_non_literal_count = agg
-                .createobject_non_literal_count
-                .saturating_add(extracted.stats.createobject_non_literal_count);
-            agg.getobject_count = agg
-                .getobject_count
-                .saturating_add(extracted.stats.getobject_count);
-            agg.getobject_non_literal_count = agg
-                .getobject_non_literal_count
-                .saturating_add(extracted.stats.getobject_non_literal_count);
-            agg.trigger_handler_count = agg
-                .trigger_handler_count
-                .saturating_add(extracted.stats.trigger_handler_count);
+            agg.distinct_dll_count = distinct_libs.len() as u32;
+            agg.distinct_progid_count = distinct_progids.len() as u32;
+            agg.distinct_trigger_count = distinct_triggers.len() as u32;
+            agg.mean_identifier_length = ident_stats.mean_length();
+            agg.identifier_entropy = ident_stats.entropy_bits();
 
-            report.imports.extend(extracted.imports);
-            report.functions.extend(extracted.functions);
+            // Aggregate counts come straight from expose's metric
+            // map — they were folded across modules during the
+            // expose-side regex pass.
+            let m = c.parsed.metrics();
+            let counter = |key: &str| -> u32 { m.get(key).map(|v| v as u32).unwrap_or(0) };
+            agg.declare_count = counter("office.vba.declare_count");
+            agg.declare_non_literal_count = counter("office.vba.declare_non_literal_count");
+            agg.createobject_count = counter("office.vba.createobject_count");
+            agg.createobject_non_literal_count =
+                counter("office.vba.createobject_non_literal_count");
+            agg.getobject_count = counter("office.vba.getobject_count");
+            agg.getobject_non_literal_count = counter("office.vba.getobject_non_literal_count");
+            agg.trigger_handler_count = counter("office.vba.trigger_handler_count");
         }
 
-        agg.distinct_dll_count = distinct_libs.len() as u32;
-        agg.distinct_progid_count = distinct_progids.len() as u32;
-        agg.distinct_trigger_count = distinct_triggers.len() as u32;
-        agg.mean_identifier_length = ident_stats.mean_length();
-        agg.identifier_entropy = ident_stats.entropy_bits();
-
-        office.vba_source_size = office.vba_source_size.saturating_add(vba_source_size);
+        let prev_source_size = flat.get_u("office.vba_source_size").unwrap_or(0);
+        flat.set_u(
+            "office.vba_source_size",
+            prev_source_size.saturating_add(vba_source_size),
+        );
         let _ = file_size; // Reserved for size-ratio metrics in a later phase.
-        office.vba = Some(agg);
+                           // Flatten the VbaMetrics aggregator into `office.vba.*`.
+        flatten_into_metrics(&agg, "office.vba", flat);
     }
 
     /// Stash structure-level metrics produced by `analyze_ole2` /
@@ -405,8 +452,8 @@ impl OfficeAnalyzer {
         cross: OfficeCrossCounts,
         embedded_executable_count: u32,
     ) {
-        let metrics = report.metrics.get_or_insert_with(Default::default);
-        let office = metrics.office.get_or_insert_with(Default::default);
+        use crate::types::{flatten_into_metrics, MetricsExt};
+        let flat = report.expose_metrics.get_or_insert_with(Default::default);
 
         // Cross-format counts derived from the parsed doc.  The
         // `embedded_executable_count` argument is what the office
@@ -414,41 +461,56 @@ impl OfficeAnalyzer {
         // exemption / size limits), and overrides the raw doc count
         // captured in `cross.embedded_executable_count` so the metric
         // reflects the *analyzed* payload count.
-        if embedded_executable_count > 0 {
-            office.embedded_executable_count = office
-                .embedded_executable_count
-                .saturating_add(embedded_executable_count);
-        } else if cross.embedded_executable_count > 0 {
-            office.embedded_executable_count = office
-                .embedded_executable_count
-                .saturating_add(cross.embedded_executable_count);
+        let exec_count = if embedded_executable_count > 0 {
+            embedded_executable_count
+        } else {
+            cross.embedded_executable_count
+        };
+        if exec_count > 0 {
+            let prev = flat.get_u("office.embedded_executable_count").unwrap_or(0) as u32;
+            flat.set_u(
+                "office.embedded_executable_count",
+                prev.saturating_add(exec_count).into(),
+            );
         }
-        office.external_ref_count = office
-            .external_ref_count
-            .saturating_add(cross.external_ref_count);
-        office.external_template_count = office
-            .external_template_count
-            .saturating_add(cross.external_template_count);
-        office.external_oleobject_count = office
-            .external_oleobject_count
-            .saturating_add(cross.external_oleobject_count);
-        office.external_frame_count = office
-            .external_frame_count
-            .saturating_add(cross.external_frame_count);
-        office.external_image_count = office
-            .external_image_count
-            .saturating_add(cross.external_image_count);
-        office.dde_link_count = office.dde_link_count.saturating_add(cross.dde_link_count);
-        office.is_encrypted = office.is_encrypted || cross.is_encrypted;
+        for (key, value) in [
+            ("office.external_ref_count", cross.external_ref_count),
+            (
+                "office.external_template_count",
+                cross.external_template_count,
+            ),
+            (
+                "office.external_oleobject_count",
+                cross.external_oleobject_count,
+            ),
+            ("office.external_frame_count", cross.external_frame_count),
+            ("office.external_image_count", cross.external_image_count),
+            ("office.dde_link_count", cross.dde_link_count),
+        ] {
+            if value > 0 {
+                let prev = flat.get_u(key).unwrap_or(0) as u32;
+                flat.set_u(key, prev.saturating_add(value).into());
+            }
+        }
+        // Boolean is_encrypted ORs in across format passes — emit
+        // the count-style bool only when at least one side flagged it.
+        let already_encrypted = flat.get_b("office.is_encrypted").unwrap_or(false);
+        if cross.is_encrypted || already_encrypted {
+            flat.set_b("office.is_encrypted", true);
+        }
 
+        // Flatten sub-struct typed carriers (ole/ooxml/xlm) directly
+        // into `office.<sub>.*` keys. Producers still build the
+        // typed structs internally; this is the seam where they
+        // collapse into the flat map.
         if let Some(om) = ole_metrics {
-            office.ole = Some(om);
+            flatten_into_metrics(&om, "office.ole", flat);
         }
         if let Some(om) = ooxml_metrics {
-            office.ooxml = Some(om);
+            flatten_into_metrics(&om, "office.ooxml", flat);
         }
         if let Some(xm) = xlm_metrics {
-            office.xlm = Some(xm);
+            flatten_into_metrics(&xm, "office.xlm", flat);
         }
     }
 
@@ -889,10 +951,13 @@ impl OfficeAnalyzer {
             ..Default::default()
         };
 
-        // Synthesize the office kv tree before consuming `doc`. Trait
-        // authors target this tree via `type: kv` matchers — see
-        // `office_kv.rs` for the schema.
-        let kv = office_kv::build_ole_kv(&doc);
+        // Synthetic kv-tree population is retired — expose's
+        // `ole2::extract` populates `office.*` via the AnalysisContext
+        // dual-emit, and trait rules target the unified schema there
+        // (`office.kind`, `office.core.*`, `office.vba.modules[]`, …).
+        // We hand back `Value::Null` so the caller's `is_null` guard
+        // skips overwriting `report.kv_tree`.
+        let kv = serde_json::Value::Null;
 
         (
             type_str,
@@ -1402,8 +1467,9 @@ impl OfficeAnalyzer {
         cross.embedded_executable_count = doc.embedded_executables.len() as u32;
         cross.is_encrypted = doc.has_encryption;
 
-        // Synthesize the office kv tree before moving doc fields out.
-        let kv = office_kv::build_ooxml_kv(&doc);
+        // See OLE2 path: synthetic kv emission is retired (expose's
+        // `ooxml::extract` populates the canonical `office.*` shape).
+        let kv = serde_json::Value::Null;
 
         (
             type_str,
@@ -1518,14 +1584,13 @@ mod tests {
         assert!(!analyzer.can_analyze(Path::new("test.txt")));
     }
 
-    /// Drive `populate_vba_symbols_and_metrics` with synthetic VBA
-    /// modules and assert that imports, functions, and `office.vba.*`
-    /// aggregates land on the report. This is the end-to-end seam
-    /// between the symbol extractor and the metrics container —
-    /// breaks here mean a trait keyed on `type: symbol` or
-    /// `type: metrics field: office.vba.*` would silently miss.
+    /// Per-module shape stats (logical-line count, random-name
+    /// heuristic) thread through `populate_vba_symbols_and_metrics`
+    /// even when no `AnalysisContext` is provided — symbol-side
+    /// aggregates require expose, but the shape side is cleave-only
+    /// and runs from raw module source.
     #[test]
-    fn populate_vba_symbols_threads_to_report() {
+    fn populate_vba_threads_shape_stats_without_ctx() {
         let analyzer = OfficeAnalyzer::new();
         let target = TargetInfo {
             path: "evil.docm".into(),
@@ -1539,84 +1604,49 @@ mod tests {
         let modules = vec![
             vba::VbaModule {
                 name: "ThisDocument".into(),
-                source_code: r#"
-                    Sub Document_Open()
-                        Dim sh As Object
-                        Set sh = CreateObject("WScript.Shell")
-                        sh.Run "calc.exe"
-                    End Sub
-                    Declare PtrSafe Function vAlloc Lib "kernel32" _
-                        Alias "VirtualAlloc" (ByVal a As LongPtr) As LongPtr
-                "#
-                .into(),
+                source_code: "Sub Document_Open()\n  ' comment\n  x = 1\nEnd Sub\n".into(),
                 module_type: vba::VbaModuleType::Document,
             },
             vba::VbaModule {
-                name: "Loader".into(),
-                source_code: r#"
-                    Declare Function f Lib dllName () As Long
-                    Set x = CreateObject(progName)
-                "#
-                .into(),
+                name: "qWeRty12Ab".into(), // matches random-name heuristic
+                source_code: "Sub Helper()\n  y = 2\nEnd Sub\n".into(),
                 module_type: vba::VbaModuleType::Standard,
             },
         ];
 
+        // No AnalysisContext — symbol-side aggregates stay default
+        // but the shape pass still runs.
         analyzer.populate_vba_symbols_and_metrics(
             &mut report,
             8192,
             Path::new("evil.docm"),
             &modules,
+            None,
         );
 
-        // Imports surface on the parent report so type:symbol traits hit.
-        let imp_names: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
-        assert!(imp_names.contains(&"VirtualAlloc"));
-        assert!(imp_names.contains(&"WScript.Shell"));
-        // f's Alias is missing → its declared name is used as the symbol.
-        assert!(imp_names.contains(&"f"));
+        use crate::types::MetricsExt;
+        let flat = report
+            .expose_metrics
+            .as_ref()
+            .expect("expose_metrics populated");
+        let doc_type = report
+            .kv_tree
+            .as_deref()
+            .and_then(|t| t.pointer("/office/doc_type"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        assert_eq!(doc_type, "docm");
+        assert_eq!(flat.get_b("office.is_macro_enabled_extension"), Some(true));
+        assert_eq!(flat.get_b("office.has_macros"), Some(true));
+        assert_eq!(flat.get_u("office.vba_module_count"), Some(2));
 
-        // Functions surface so trigger-handler `type: symbol` traits hit.
-        let fn_names: Vec<&str> = report.functions.iter().map(|f| f.name.as_str()).collect();
-        assert!(fn_names.contains(&"Document_Open"));
-
-        // OfficeMetrics is populated and threaded under metrics.office.
-        let metrics = report.metrics.as_ref().expect("metrics present");
-        let office = metrics.office.as_ref().expect("office metrics present");
-        assert_eq!(office.doc_type, "docm");
-        assert!(office.is_macro_enabled_extension);
-        assert!(office.has_macros);
-        assert_eq!(office.vba_module_count, 2);
-
-        let vba = office.vba.as_ref().expect("vba aggregates present");
-        assert_eq!(vba.declare_count, 2);
-        assert_eq!(vba.declare_non_literal_count, 1);
-        assert_eq!(vba.createobject_count, 2);
-        assert_eq!(vba.createobject_non_literal_count, 1);
-        assert!(vba.kernel32_ref_count >= 1);
+        assert!(flat.get_u("office.vba.total_logical_lines").unwrap_or(0) >= 6);
+        assert!(flat.get_u("office.vba.comment_lines").unwrap_or(0) >= 1);
         assert_eq!(
-            vba.distinct_dll_count, 1,
-            "kernel32 only — non-literal lib excluded"
+            flat.get_u("office.vba.random_named_module_count"),
+            Some(1),
+            "qWeRty12Ab should match the random-name heuristic",
         );
-        assert_eq!(vba.distinct_progid_count, 1, "WScript.Shell only");
-        assert_eq!(vba.distinct_trigger_count, 1, "Document_Open only");
-        assert!(vba.trigger_handler_count >= 1);
-
-        // Shape metrics — the synthetic modules above include
-        // `Document_Open` (a trigger handler) plus declared funcs `vAlloc`
-        // and `f`, plus CreateObject ProgIDs `WScript.Shell` and
-        // `<non-literal>`. mean_identifier_length should be a positive
-        // float; identifier_entropy should be in the 3-5 bit range.
-        assert!(vba.mean_identifier_length > 0.0);
-        assert!(
-            vba.identifier_entropy > 0.0 && vba.identifier_entropy < 8.0,
-            "entropy {} out of range",
-            vba.identifier_entropy
-        );
-        // Both modules have a few logical lines and zero comments.
-        assert!(vba.total_logical_lines > 0);
-        // Module names ("ThisDocument", "Loader") aren't randomized.
-        assert_eq!(vba.random_named_module_count, 0);
     }
 
     /// Verify `populate_structure_metrics` threads sub-struct metrics
@@ -1667,20 +1697,23 @@ mod tests {
             /* embedded_executable_count = */ 2,
         );
 
-        let metrics = report.metrics.as_ref().expect("metrics");
-        let office = metrics.office.as_ref().expect("office metrics");
-        assert_eq!(office.embedded_executable_count, 2);
-        assert_eq!(office.external_ref_count, 4);
-        assert_eq!(office.external_template_count, 1);
-        assert_eq!(office.external_oleobject_count, 1);
-        assert_eq!(office.external_frame_count, 1);
-        assert_eq!(office.external_image_count, 1);
-        assert_eq!(office.dde_link_count, 2);
-        assert!(office.is_encrypted);
-        // Sub-struct slots populated.
-        assert_eq!(office.ole.as_ref().map(|m| m.stream_count), Some(9));
-        assert_eq!(office.ooxml.as_ref().map(|m| m.entry_count), Some(18));
-        assert_eq!(office.xlm.as_ref().map(|m| m.char_count), Some(250));
+        use crate::types::MetricsExt;
+        let flat = report
+            .expose_metrics
+            .as_ref()
+            .expect("expose_metrics populated");
+        assert_eq!(flat.get_u("office.embedded_executable_count"), Some(2));
+        assert_eq!(flat.get_u("office.external_ref_count"), Some(4));
+        assert_eq!(flat.get_u("office.external_template_count"), Some(1));
+        assert_eq!(flat.get_u("office.external_oleobject_count"), Some(1));
+        assert_eq!(flat.get_u("office.external_frame_count"), Some(1));
+        assert_eq!(flat.get_u("office.external_image_count"), Some(1));
+        assert_eq!(flat.get_u("office.dde_link_count"), Some(2));
+        assert_eq!(flat.get_b("office.is_encrypted"), Some(true));
+        // Sub-struct fields flattened into dotted keys.
+        assert_eq!(flat.get_u("office.ole.stream_count"), Some(9));
+        assert_eq!(flat.get_u("office.ooxml.entry_count"), Some(18));
+        assert_eq!(flat.get_u("office.xlm.char_count"), Some(250));
     }
 
     #[test]

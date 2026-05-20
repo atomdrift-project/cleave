@@ -931,7 +931,10 @@ fn test_eval_raw_regex_dollar_matches_line_end_ascii() {
         None,
     );
 
-    assert!(result.matched, "`;$` must match end-of-line in raw-text mode");
+    assert!(
+        result.matched,
+        "`;$` must match end-of-line in raw-text mode"
+    );
 }
 
 #[test]

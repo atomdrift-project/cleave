@@ -84,12 +84,8 @@ impl PickleAnalyzer {
             });
         }
 
-        // Structural kv subtree (`pickle.*`) — protocol + modules +
-        // distinct opcode set. Cheap; complementary to the
-        // import/string extraction above.
-        if let Some(kv) = super::pickle_kv::extract(data) {
-            report.merge_kv_subtree("pickle", kv);
-        }
+        // `pickle.*` kv comes from expose's dual emission in the
+        // capability mapper — no synthesis needed here.
 
         // Evaluate trait rules
         self.capability_mapper

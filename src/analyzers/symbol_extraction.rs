@@ -517,7 +517,10 @@ fn extract_calls<'a>(
 /// for call-kind nodes — without that, `type: ast kind: call exact: <name>`
 /// can never match because the cache otherwise compares the pattern against
 /// `<name>(<args>)`.
-pub(crate) fn extract_function_name<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
+pub(crate) fn extract_function_name<'a>(
+    node: &tree_sitter::Node<'a>,
+    source: &[u8],
+) -> Option<String> {
     let kind = node.kind();
 
     if kind == "assignment_expression" {

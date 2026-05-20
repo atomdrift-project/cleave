@@ -37,7 +37,6 @@
 //! ```
 
 use super::types::{PdfAction, PdfActionKind, PdfDocument};
-use crate::types::PdfMetrics;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -247,8 +246,13 @@ pub(crate) fn build_pdf_kv(doc: &PdfDocument) -> Value {
     Value::Object(root)
 }
 
-#[must_use]
-pub(crate) fn build_pdf_metrics(doc: &PdfDocument) -> PdfMetrics {
+/// Push PDF-derived numeric metrics into the report's flat metric
+/// map under `pdf.*` keys. Replaces the old typed `PdfMetrics`
+/// struct — each former field maps 1:1 to a dotted key.
+pub(crate) fn populate_pdf_metrics(
+    doc: &PdfDocument,
+    metrics: &mut std::collections::BTreeMap<String, f64>,
+) {
     let page_count = doc.structural.page_count;
     let uri_action_count = doc
         .actions
@@ -257,69 +261,156 @@ pub(crate) fn build_pdf_metrics(doc: &PdfDocument) -> PdfMetrics {
         .count() as u32;
     let javascript_action_count = action_count_by_kind(&doc.actions, PdfActionKind::JavaScript);
     let embedded_file_count = doc.embedded_files.len() as u32;
-
-    PdfMetrics {
-        visible_object_count: doc.structural.visible_object_count,
-        object_count: doc.objects.len() as u32,
-        object_stream_inner_object_count: doc.structural.object_stream_inner_object_count,
-        page_count,
-        annotation_count: doc.structural.annotation_count,
-        xobject_count: doc.structural.xobject_count,
-        font_count: doc.structural.font_count,
-        metadata_count: doc.structural.metadata_count,
-        objstm_count: doc.structural.objstm_count,
-        xref_stream_count: doc.structural.xref_stream_count,
-        unreferenced_object_count: doc.structural.unreferenced_object_count,
-        trailing_bytes_after_eof: doc.structural.trailing_bytes_after_eof,
-        leading_bytes_before_header: doc.structural.leading_bytes_before_header,
-        trailer_count: doc.structural.trailer_count,
-        startxref_count: doc.structural.startxref_count,
-        stream_count: doc.structural.stream_count,
-        stream_missing_length_count: doc.structural.stream_missing_length_count,
-        stream_invalid_length_count: doc.structural.stream_invalid_length_count,
-        stream_length_mismatch_count: doc.structural.stream_length_mismatch_count,
-        stream_bad_delimiter_count: doc.structural.stream_bad_delimiter_count,
-        stream_missing_endstream_count: doc.structural.stream_missing_endstream_count,
-        streams_with_unusual_filter_count: doc.structural.streams_with_unusual_filter_count,
-        signature_object_count: doc.structural.signature_object_count,
-        byte_range_count: doc.structural.byte_range_count,
-        signed_incremental_update_count: if doc.structural.byte_range_count > 0 && doc.eof_count > 1
-        {
+    let signed_incremental_update_count =
+        if doc.structural.byte_range_count > 0 && doc.eof_count > 1 {
             doc.eof_count.saturating_sub(1)
         } else {
             0
-        },
-        jbig2_filter_count: doc.structural.jbig2_filter_count,
-        three_d_object_count: doc.structural.three_d_object_count,
-        embedded_file_count,
-        form_field_count: doc.form_fields.len() as u32,
-        hidden_zero_rect_field_count: doc
-            .form_fields
-            .iter()
-            .filter(|f| is_zero_rect(&f.rect))
-            .count() as u32,
-        duplicate_form_name_count: duplicate_form_name_count(doc),
-        duplicate_form_rect_count: duplicate_form_rect_count(doc),
-        duplicate_form_name_rect_count: duplicate_form_name_rect_count(doc),
-        overlapping_form_field_pair_count: overlapping_form_field_pair_count(doc),
-        decoded_form_value_max_len: doc
-            .form_fields
-            .iter()
-            .map(|f| f.decoded_value_length)
-            .max()
-            .unwrap_or(0),
-        action_count: doc.actions.len() as u32,
-        uri_action_count,
-        javascript_action_count,
-        risky_feature_score: pdf_risky_feature_score(
+        };
+    let hidden_zero_rect_field_count = doc
+        .form_fields
+        .iter()
+        .filter(|f| is_zero_rect(&f.rect))
+        .count() as u32;
+    let decoded_form_value_max_len = doc
+        .form_fields
+        .iter()
+        .map(|f| f.decoded_value_length)
+        .max()
+        .unwrap_or(0);
+
+    use crate::types::MetricsExt;
+    metrics.set_u(
+        "pdf.visible_object_count",
+        doc.structural.visible_object_count.into(),
+    );
+    metrics.set_u("pdf.object_count", doc.objects.len() as u64);
+    metrics.set_u(
+        "pdf.object_stream_inner_object_count",
+        doc.structural.object_stream_inner_object_count.into(),
+    );
+    metrics.set_u("pdf.page_count", page_count.into());
+    metrics.set_u(
+        "pdf.annotation_count",
+        doc.structural.annotation_count.into(),
+    );
+    metrics.set_u("pdf.xobject_count", doc.structural.xobject_count.into());
+    metrics.set_u("pdf.font_count", doc.structural.font_count.into());
+    metrics.set_u("pdf.metadata_count", doc.structural.metadata_count.into());
+    metrics.set_u("pdf.objstm_count", doc.structural.objstm_count.into());
+    metrics.set_u(
+        "pdf.xref_stream_count",
+        doc.structural.xref_stream_count.into(),
+    );
+    metrics.set_u(
+        "pdf.unreferenced_object_count",
+        doc.structural.unreferenced_object_count.into(),
+    );
+    metrics.set_u(
+        "pdf.trailing_bytes_after_eof",
+        doc.structural.trailing_bytes_after_eof.into(),
+    );
+    metrics.set_u(
+        "pdf.leading_bytes_before_header",
+        doc.structural.leading_bytes_before_header.into(),
+    );
+    metrics.set_u("pdf.trailer_count", doc.structural.trailer_count.into());
+    metrics.set_u("pdf.startxref_count", doc.structural.startxref_count.into());
+    metrics.set_u("pdf.stream_count", doc.structural.stream_count.into());
+    metrics.set_u(
+        "pdf.stream_missing_length_count",
+        doc.structural.stream_missing_length_count.into(),
+    );
+    metrics.set_u(
+        "pdf.stream_invalid_length_count",
+        doc.structural.stream_invalid_length_count.into(),
+    );
+    metrics.set_u(
+        "pdf.stream_length_mismatch_count",
+        doc.structural.stream_length_mismatch_count.into(),
+    );
+    metrics.set_u(
+        "pdf.stream_bad_delimiter_count",
+        doc.structural.stream_bad_delimiter_count.into(),
+    );
+    metrics.set_u(
+        "pdf.stream_missing_endstream_count",
+        doc.structural.stream_missing_endstream_count.into(),
+    );
+    metrics.set_u(
+        "pdf.streams_with_unusual_filter_count",
+        doc.structural.streams_with_unusual_filter_count.into(),
+    );
+    metrics.set_u(
+        "pdf.signature_object_count",
+        doc.structural.signature_object_count.into(),
+    );
+    metrics.set_u(
+        "pdf.byte_range_count",
+        doc.structural.byte_range_count.into(),
+    );
+    metrics.set_u(
+        "pdf.signed_incremental_update_count",
+        signed_incremental_update_count.into(),
+    );
+    metrics.set_u(
+        "pdf.jbig2_filter_count",
+        doc.structural.jbig2_filter_count.into(),
+    );
+    metrics.set_u(
+        "pdf.three_d_object_count",
+        doc.structural.three_d_object_count.into(),
+    );
+    metrics.set_u("pdf.embedded_file_count", embedded_file_count.into());
+    metrics.set_u("pdf.form_field_count", doc.form_fields.len() as u64);
+    metrics.set_u(
+        "pdf.hidden_zero_rect_field_count",
+        hidden_zero_rect_field_count.into(),
+    );
+    metrics.set_u(
+        "pdf.duplicate_form_name_count",
+        duplicate_form_name_count(doc).into(),
+    );
+    metrics.set_u(
+        "pdf.duplicate_form_rect_count",
+        duplicate_form_rect_count(doc).into(),
+    );
+    metrics.set_u(
+        "pdf.duplicate_form_name_rect_count",
+        duplicate_form_name_rect_count(doc).into(),
+    );
+    metrics.set_u(
+        "pdf.overlapping_form_field_pair_count",
+        overlapping_form_field_pair_count(doc).into(),
+    );
+    metrics.set_u(
+        "pdf.decoded_form_value_max_len",
+        decoded_form_value_max_len.into(),
+    );
+    metrics.set_u("pdf.action_count", doc.actions.len() as u64);
+    metrics.set_u("pdf.uri_action_count", uri_action_count.into());
+    metrics.set_u(
+        "pdf.javascript_action_count",
+        javascript_action_count.into(),
+    );
+    metrics.set_u(
+        "pdf.risky_feature_score",
+        pdf_risky_feature_score(
             doc,
             embedded_file_count,
             unique_action_count_by_kind(&doc.actions, PdfActionKind::JavaScript),
             unique_action_count_by_kind(&doc.actions, PdfActionKind::Launch),
-        ),
-        annotations_per_page: ratio(doc.structural.annotation_count, page_count),
-        uri_actions_per_page: ratio(uri_action_count, page_count),
-    }
+        )
+        .into(),
+    );
+    metrics.set_f(
+        "pdf.annotations_per_page",
+        ratio(doc.structural.annotation_count, page_count).into(),
+    );
+    metrics.set_f(
+        "pdf.uri_actions_per_page",
+        ratio(uri_action_count, page_count).into(),
+    );
 }
 
 fn pdf_risky_feature_score(
@@ -593,14 +684,35 @@ trailer\n<<>>\n%%EOF\n";
 trailer\n<< /Root 1 0 R >>\nstartxref\n0\n%%EOF\n\
 xref\n0 1\n0000000000 65535 f\ntrailer\n<< /Root 1 0 R /Prev 0 >>\nstartxref\n1\n%%EOF\n";
         let doc = parser::parse(pdf);
-        let metrics = build_pdf_metrics(&doc);
-        assert_eq!(metrics.signature_object_count, 1);
-        assert_eq!(metrics.byte_range_count, 1);
-        assert_eq!(metrics.signed_incremental_update_count, 1);
-        assert_eq!(metrics.duplicate_form_name_count, 1);
-        assert_eq!(metrics.duplicate_form_rect_count, 1);
-        assert_eq!(metrics.duplicate_form_name_rect_count, 1);
-        assert_eq!(metrics.overlapping_form_field_pair_count, 1);
+        let mut metrics = std::collections::BTreeMap::new();
+        populate_pdf_metrics(&doc, &mut metrics);
+        assert_eq!(
+            metrics.get("pdf.signature_object_count").copied(),
+            Some(1.0)
+        );
+        assert_eq!(metrics.get("pdf.byte_range_count").copied(), Some(1.0));
+        assert_eq!(
+            metrics.get("pdf.signed_incremental_update_count").copied(),
+            Some(1.0)
+        );
+        assert_eq!(
+            metrics.get("pdf.duplicate_form_name_count").copied(),
+            Some(1.0)
+        );
+        assert_eq!(
+            metrics.get("pdf.duplicate_form_rect_count").copied(),
+            Some(1.0)
+        );
+        assert_eq!(
+            metrics.get("pdf.duplicate_form_name_rect_count").copied(),
+            Some(1.0)
+        );
+        assert_eq!(
+            metrics
+                .get("pdf.overlapping_form_field_pair_count")
+                .copied(),
+            Some(1.0)
+        );
     }
 
     #[test]
@@ -611,9 +723,13 @@ xref\n0 1\n0000000000 65535 f\ntrailer\n<< /Root 1 0 R /Prev 0 >>\nstartxref\n1\
 3 0 obj\n<< /Type /ObjStm /N 0 /First 0 /Length 0 >>\nstream\nendstream\nendobj\n\
 trailer\n<< /Root 1 0 R >>\n%%EOF\n";
         let doc = parser::parse(pdf);
-        let metrics = build_pdf_metrics(&doc);
-        assert_eq!(metrics.javascript_action_count, 2);
-        assert_eq!(metrics.objstm_count, 1);
-        assert_eq!(metrics.risky_feature_score, 83);
+        let mut metrics = std::collections::BTreeMap::new();
+        populate_pdf_metrics(&doc, &mut metrics);
+        assert_eq!(
+            metrics.get("pdf.javascript_action_count").copied(),
+            Some(2.0)
+        );
+        assert_eq!(metrics.get("pdf.objstm_count").copied(), Some(1.0));
+        assert_eq!(metrics.get("pdf.risky_feature_score").copied(), Some(83.0));
     }
 }

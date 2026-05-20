@@ -661,12 +661,12 @@ impl ArchiveAnalyzer {
             // symlink branch below; non-symlink/non-dir entries record here.
             let entry_compressed_size = entry.compressed_size();
             let entry_compression = super::zip::format_zip_compression(entry.compression());
-            let entry_mtime = entry.last_modified().and_then(super::zip::zip_datetime_to_unix);
+            let entry_mtime = entry
+                .last_modified()
+                .and_then(super::zip::zip_datetime_to_unix);
             let entry_mode_octal = entry.unix_mode();
             let entry_is_dir = entry.is_dir();
-            let entry_is_symlink = entry
-                .unix_mode()
-                .is_some_and(|m| m & 0o170000 == 0o120000);
+            let entry_is_symlink = entry.unix_mode().is_some_and(|m| m & 0o170000 == 0o120000);
             let entry_type_label = if entry_is_dir {
                 "directory"
             } else if entry_is_symlink {
@@ -692,22 +692,20 @@ impl ArchiveAnalyzer {
                             }
                         }
                     }
-                    guard.record_member_metadata(
-                        super::guards::ExtractedMemberMetadata {
-                            archive_path: relative_path.clone(),
-                            compressed_size: Some(entry_compressed_size),
-                            compression_method: Some(entry_compression),
-                            mtime_unix: entry_mtime,
-                            mode_octal: entry_mode_octal,
-                            uid: None,
-                            gid: None,
-                            uname: None,
-                            gname: None,
-                            entry_type: Some(entry_type_label.to_string()),
-                            linkname: linkname_capture,
-                            host_os: None,
-                        },
-                    );
+                    guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                        archive_path: relative_path.clone(),
+                        compressed_size: Some(entry_compressed_size),
+                        compression_method: Some(entry_compression),
+                        mtime_unix: entry_mtime,
+                        mode_octal: entry_mode_octal,
+                        uid: None,
+                        gid: None,
+                        uname: None,
+                        gname: None,
+                        entry_type: Some(entry_type_label.to_string()),
+                        linkname: linkname_capture,
+                        host_os: None,
+                    });
                     continue;
                 }
             }
@@ -1308,9 +1306,8 @@ impl ArchiveAnalyzer {
             debug!("Main-Class: {}", mc);
         }
 
-        // JAR kv subtree (manifest attribution + structural signals).
-        // Cheap single walk; surfaces `jar.*` paths for trait authors.
-        crate::analyzers::jar_kv::attach_to_report(report, temp_dir);
+        // `jar.*` kv comes from expose's dual emission in the
+        // capability mapper — no temp-dir walk needed here.
 
         // Collect all files
         let all_files: Vec<_> = walkdir::WalkDir::new(temp_dir)

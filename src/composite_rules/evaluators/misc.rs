@@ -22,6 +22,8 @@ use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 ///   e.g., "anti-static/obfuscation" matches "anti-static/obfuscation::python-hex"
 #[must_use]
 pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> ConditionResult {
+    let id = id.trim_end_matches('/');
+
     // Check if this is a specific trait reference (contains ::)
     let is_specific = id.contains("::");
 

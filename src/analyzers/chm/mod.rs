@@ -16,8 +16,6 @@
 //! it were a member of a ZIP. Evidence locations naturally come out as
 //! `archive:foo.chm!help.html`.
 
-pub(crate) mod chm_kv;
-
 use anyhow::{bail, Context, Result};
 use lzx::{Lzxd, WindowSize};
 

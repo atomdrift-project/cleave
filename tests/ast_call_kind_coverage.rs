@@ -36,7 +36,11 @@ fn run_with_traits(
     let file = dir.path().join(fixture_name);
     fs::write(&file, fixture).unwrap();
 
-    let traits_dir = dir.path().join("traits").join("micro-behaviors").join("test");
+    let traits_dir = dir
+        .path()
+        .join("traits")
+        .join("micro-behaviors")
+        .join("test");
     fs::create_dir_all(&traits_dir).unwrap();
     fs::write(traits_dir.join("traits.yaml"), traits_yaml).unwrap();
 

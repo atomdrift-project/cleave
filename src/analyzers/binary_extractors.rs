@@ -1907,9 +1907,11 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             pe_extra.insert("tls_callback_count".into(), Value::Array(arr));
         }
 
-        if !pe_extra.is_empty() {
-            augment.insert("pe".into(), Value::Object(pe_extra));
-        }
+        // `pe.*` kv now comes from expose exclusively. The
+        // `pe_extra` accumulator above retains its side-effects on
+        // `report.metrics` (max_section_inflation_ratio, tls counts,
+        // etc.) but its contents are no longer merged into kv_tree.
+        let _ = pe_extra;
         if !hashes_extra.is_empty() {
             augment.insert("hash".into(), Value::Object(hashes_extra));
         }
@@ -2209,9 +2211,10 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
         }
 
-        if !elf_extra.is_empty() {
-            augment.insert("elf".into(), Value::Object(elf_extra));
-        }
+        // `elf.*` kv comes from expose exclusively; the
+        // accumulator is retained for any side-effects but its
+        // contents are no longer written to kv_tree.
+        let _ = elf_extra;
         if !build_extra.is_empty() {
             augment.insert("build".into(), Value::Object(build_extra));
         }
@@ -2524,9 +2527,11 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 }
             }
 
-            if !macho_extra.is_empty() {
-                augment.insert("macho".into(), Value::Object(macho_extra));
-            }
+            // `macho.*` kv comes from expose exclusively; the
+            // accumulator is retained for any side-effects (metric
+            // population, swift_section_count, etc.) but its contents
+            // are no longer written to kv_tree.
+            let _ = macho_extra;
 
             // Notarized is a derived bool — store on metric only.
             if codesign_notarized {

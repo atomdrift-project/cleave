@@ -1879,6 +1879,12 @@ impl Analyzer for MachOAnalyzer {
         } else {
             Some(input.strings)
         };
+        // Open expose-side parse so downstream helpers source structural
+        // data from expose's typed views rather than re-walking goblin.
+        // Falls through to legacy goblin paths when expose can't open
+        // (corrupted Mach-O / unknown shape).
+        let ctx =
+            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
@@ -1886,7 +1892,7 @@ impl Analyzer for MachOAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
-            None,
+            ctx.as_ref(),
         );
         self.apply_fat_metadata(&mut report, input.data);
 

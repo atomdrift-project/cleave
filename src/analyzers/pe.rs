@@ -3396,6 +3396,12 @@ impl Analyzer for PEAnalyzer {
         } else {
             Some(input.strings)
         };
+        // Open expose-side parse so structural helpers (sections,
+        // imports, exports, signature verification) source from
+        // expose's typed view rather than re-walking goblin. Falls
+        // through to legacy goblin paths when expose can't open
+        // (tampered PE / unknown shape).
+        let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
@@ -3403,7 +3409,7 @@ impl Analyzer for PEAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
-            None,
+            ctx.as_ref(),
         );
 
         // Post-processing

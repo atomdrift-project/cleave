@@ -771,6 +771,7 @@ traits:
         size: 100,
         entropy: 5.5,
         permissions: Some("rx".to_string()),
+        flags: Vec::new(),
     });
 
     let binary_data = b"some code_pattern in text section";

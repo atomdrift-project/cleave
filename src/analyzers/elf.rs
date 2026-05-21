@@ -168,6 +168,37 @@ fn parse_gnu_property_note(desc: &[u8], summary: &mut ElfNoteSummary) {
 /// processor- or OS-specific types.
 /// True when `name` resolves to one of the well-known dynamic loader
 /// SO-names (`ld-linux-*`, `ld-musl-*`, `ld.so`, `ld64.so`).
+/// Decompose `sh_flags` bits into the conventional name vocabulary
+/// (`alloc`, `write`, `executable`, `merge`, `strings`, `info_link`,
+/// `tls`). Matches expose's ELF flag vocabulary so trait rules that
+/// key on `sections[*].flags` see the same values whether the data
+/// came from cleave's legacy ELF parse or expose's typed view.
+fn elf_sh_flag_names(flags: u64) -> Vec<String> {
+    let mut out = Vec::new();
+    if flags & 0x1 != 0 {
+        out.push("write".into());
+    }
+    if flags & 0x2 != 0 {
+        out.push("alloc".into());
+    }
+    if flags & 0x4 != 0 {
+        out.push("executable".into());
+    }
+    if flags & 0x10 != 0 {
+        out.push("merge".into());
+    }
+    if flags & 0x20 != 0 {
+        out.push("strings".into());
+    }
+    if flags & 0x40 != 0 {
+        out.push("info_link".into());
+    }
+    if flags & 0x100 != 0 {
+        out.push("tls".into());
+    }
+    out
+}
+
 fn is_dynamic_loader_soname(name: &str) -> bool {
     let base = name.rsplit('/').next().unwrap_or(name);
     base.starts_with("ld-linux")
@@ -1514,12 +1545,8 @@ impl ElfAnalyzer {
                 offset: Some(section.file_offset),
                 size: section.file_size,
                 entropy,
-                // Permissions stay a hex-formatted sh_flags string for
-                // backward compat with existing cleave traits that read
-                // `permissions`. Once #73 retires `permissions` in favour
-                // of `flags[]` membership checks, this slot can be
-                // emitted as the expose-style array instead.
-                permissions: Some(format!("{}", section.flags.join(","))),
+                permissions: Some(section.flags.join(",")),
+                flags: section.flags.clone(),
             });
 
             let level = EntropyLevel::from_value(entropy);
@@ -1556,6 +1583,7 @@ impl ElfAnalyzer {
                         size: section.sh_size,
                         entropy,
                         permissions: Some(format!("{:x}", section.sh_flags)),
+                        flags: elf_sh_flag_names(section.sh_flags),
                     });
 
                     // Add entropy-based structural features

@@ -973,6 +973,7 @@ mod tests {
             size,
             entropy,
             permissions: perms.map(str::to_string),
+            flags: Vec::new(),
         }
     }
 

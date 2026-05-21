@@ -163,6 +163,7 @@ impl<'a> AnalysisContext<'a> {
                     size: s.file_size,
                     entropy,
                     permissions: Some(permissions),
+                    flags: s.flags.clone(),
                 }
             })
             .collect()

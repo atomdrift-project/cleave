@@ -328,6 +328,7 @@ fn test_section_creation() {
         size: 4096,
         entropy: 6.5,
         permissions: Some("r-x".to_string()),
+        flags: Vec::new(),
     };
 
     assert_eq!(section.name, ".text");

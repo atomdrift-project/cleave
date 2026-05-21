@@ -850,6 +850,16 @@ impl PEAnalyzer {
                 0.0
             };
 
+            let mut flag_tokens = Vec::new();
+            if is_readable {
+                flag_tokens.push("readable".to_string());
+            }
+            if is_writable {
+                flag_tokens.push("writable".to_string());
+            }
+            if is_executable {
+                flag_tokens.push("executable".to_string());
+            }
             sections.push(Section {
                 name: name.clone(),
                 address: Some(section.virtual_address as u64),
@@ -857,6 +867,7 @@ impl PEAnalyzer {
                 size,
                 entropy,
                 permissions: Some(permissions.clone()),
+                flags: flag_tokens,
             });
         }
         sections
@@ -1536,6 +1547,18 @@ impl PEAnalyzer {
                     batched.sections.len()
                 );
                 for section in &batched.sections {
+                    let mut flag_tokens = Vec::new();
+                    if let Some(perm) = section.perm.as_deref() {
+                        if perm.contains('r') {
+                            flag_tokens.push("readable".to_string());
+                        }
+                        if perm.contains('w') {
+                            flag_tokens.push("writable".to_string());
+                        }
+                        if perm.contains('x') {
+                            flag_tokens.push("executable".to_string());
+                        }
+                    }
                     report.sections.push(Section {
                         name: section.name.clone(),
                         address: None,
@@ -1543,6 +1566,7 @@ impl PEAnalyzer {
                         size: section.size,
                         entropy: section.entropy,
                         permissions: section.perm.clone(),
+                        flags: flag_tokens,
                     });
                 }
                 if goblin_ok {

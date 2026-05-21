@@ -239,9 +239,20 @@ pub struct Section {
     pub size: u64,
     /// Shannon entropy of section contents (0.0 to 8.0)
     pub entropy: f64,
-    /// Permission flags (e.g., "r-x", "rw-")
+    /// Permission flags as a `rwx`-style string (e.g., "r-x", "rw-")
+    /// or a comma-joined flag list (e.g., "alloc,executable") when
+    /// the source format uses a discrete flag vocabulary. Kept for
+    /// backward compat; prefer `flags` membership checks for trait
+    /// rules.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub permissions: Option<String>,
+    /// Format-native flag tokens (e.g., `["alloc", "executable",
+    /// "merge"]` on ELF; `["readable", "writable"]` on PE). Lets
+    /// `type: kv` rules match by membership without parsing the
+    /// `permissions` string. Empty for sections without recognised
+    /// flags.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub flags: Vec<String>,
 }
 
 /// Normalize a symbol name by stripping leading underscores.
@@ -730,6 +741,7 @@ mod tests {
             size: 4096,
             entropy: 6.5,
             permissions: Some("r-x".to_string()),
+            flags: Vec::new(),
         };
         assert_eq!(section.name, ".text");
         assert_eq!(section.size, 4096);
@@ -745,6 +757,7 @@ mod tests {
             size: 1024,
             entropy: 3.2,
             permissions: None,
+            flags: Vec::new(),
         };
         assert!(section.permissions.is_none());
     }

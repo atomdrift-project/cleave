@@ -1028,6 +1028,16 @@ impl MachOAnalyzer {
                     let section_data = &data[section_offset..section_offset + section_size];
                     let entropy = calculate_entropy(section_data);
 
+                    let mut flag_tokens = Vec::new();
+                    if segment_perm.contains('r') {
+                        flag_tokens.push("readable".to_string());
+                    }
+                    if segment_perm.contains('w') {
+                        flag_tokens.push("writable".to_string());
+                    }
+                    if segment_perm.contains('x') {
+                        flag_tokens.push("executable".to_string());
+                    }
                     report.sections.push(Section {
                         name: section_name.clone(),
                         address: Some(section.addr),
@@ -1035,6 +1045,7 @@ impl MachOAnalyzer {
                         size: section.size,
                         entropy,
                         permissions: Some(segment_perm.clone()), // Use segment permissions
+                        flags: flag_tokens,
                     });
 
                     // Add entropy-based structural features

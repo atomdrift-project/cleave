@@ -37,6 +37,7 @@ fn test_eval_section_regex() {
         size: 1000,
         entropy: 7.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -78,6 +79,7 @@ fn test_eval_section_contains() {
         size: 1000,
         entropy: 7.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -118,6 +120,7 @@ fn test_eval_section_no_match() {
         size: 1000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -158,6 +161,7 @@ fn test_eval_section_multiple_matches() {
         size: 500,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".text.plt".to_string(),
@@ -166,6 +170,7 @@ fn test_eval_section_multiple_matches() {
         size: 100,
         entropy: 6.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -207,6 +212,7 @@ fn test_eval_section_exact() {
         size: 500,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".text.plt".to_string(),
@@ -215,6 +221,7 @@ fn test_eval_section_exact() {
         size: 100,
         entropy: 6.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -256,6 +263,7 @@ fn test_eval_section_case_insensitive() {
         size: 500,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -440,6 +448,7 @@ fn test_eval_section_entropy_min() {
         size: 1000,
         entropy: 7.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".data".to_string(),
@@ -448,6 +457,7 @@ fn test_eval_section_entropy_min() {
         size: 500,
         entropy: 3.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -491,6 +501,7 @@ fn test_eval_section_entropy_max() {
         size: 1000,
         entropy: 7.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".data".to_string(),
@@ -499,6 +510,7 @@ fn test_eval_section_entropy_max() {
         size: 500,
         entropy: 3.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -541,6 +553,7 @@ fn test_eval_section_combined_constraints() {
         size: 5000,
         entropy: 7.9,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: "UPX1".to_string(),
@@ -549,6 +562,7 @@ fn test_eval_section_combined_constraints() {
         size: 500,
         entropy: 7.8,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".text".to_string(),
@@ -557,6 +571,7 @@ fn test_eval_section_combined_constraints() {
         size: 10000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -602,6 +617,7 @@ fn test_eval_section_precision_scoring() {
         size: 1000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -713,6 +729,7 @@ fn test_eval_section_length_min() {
         size: 5000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".data".to_string(),
@@ -721,6 +738,7 @@ fn test_eval_section_length_min() {
         size: 200,
         entropy: 4.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -764,6 +782,7 @@ fn test_eval_section_length_min_no_match() {
         size: 500,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -804,6 +823,7 @@ fn test_eval_section_length_max() {
         size: 5000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".data".to_string(),
@@ -812,6 +832,7 @@ fn test_eval_section_length_max() {
         size: 200,
         entropy: 4.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -855,6 +876,7 @@ fn test_eval_section_length_range() {
         size: 50,
         entropy: 4.0,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".medium".to_string(),
@@ -863,6 +885,7 @@ fn test_eval_section_length_range() {
         size: 500,
         entropy: 5.0,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".large".to_string(),
@@ -871,6 +894,7 @@ fn test_eval_section_length_range() {
         size: 50000,
         entropy: 7.0,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -913,6 +937,7 @@ fn test_eval_section_length_with_name_pattern() {
         size: 10000,
         entropy: 7.9,
         permissions: None,
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: "UPX1".to_string(),
@@ -921,6 +946,7 @@ fn test_eval_section_length_with_name_pattern() {
         size: 200,
         entropy: 7.8,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -964,6 +990,7 @@ fn test_eval_section_length_precision_boost() {
         size: 1000,
         entropy: 6.5,
         permissions: None,
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -1017,6 +1044,7 @@ fn test_eval_section_executable_flag() {
         size: 1000,
         entropy: 6.5,
         permissions: Some("rx".to_string()),
+        flags: Vec::new(),
     });
     report.sections.push(Section {
         name: ".data".to_string(),
@@ -1025,6 +1053,7 @@ fn test_eval_section_executable_flag() {
         size: 500,
         entropy: 4.0,
         permissions: Some("rw".to_string()),
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -1096,6 +1125,7 @@ fn test_eval_section_permission_no_match() {
         size: 1000,
         entropy: 6.5,
         permissions: None, // No permissions info
+        flags: Vec::new(),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -1175,6 +1205,7 @@ fn make_section(name: &str, entropy: f64) -> Section {
         size: 0x1000,
         entropy,
         permissions: None,
+        flags: Vec::new(),
     }
 }
 

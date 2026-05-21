@@ -2505,6 +2505,12 @@ impl Analyzer for ElfAnalyzer {
         } else {
             Some(input.strings)
         };
+        // Open expose-side parse once so analyze_elf_core's helpers
+        // (analyze_sections, summarize_elf_notes, compute_elf_metrics)
+        // can read structural data straight from expose instead of
+        // walking goblin a second time. Falls back gracefully when
+        // expose can't open the bytes (corrupted ELF / unknown shape).
+        let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
         let mut report = self.analyze_elf_core(
             input.path,
             input.backing_path(),
@@ -2512,7 +2518,7 @@ impl Analyzer for ElfAnalyzer {
             strings,
             !input.skip_rizin,
             input.sha256.clone(),
-            None,
+            ctx.as_ref(),
         );
 
         // Post-processing
@@ -2544,11 +2550,14 @@ impl Analyzer for ElfAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Ok(data) = fs::read(file_path) {
-            goblin_safe::parse_elf(&data).is_ok()
-        } else {
-            false
-        }
+        // ELF magic: `\x7fELF` (`7f 45 4c 46`). Read 4 bytes — full
+        // goblin parse runs once we commit to analyze().
+        let Ok(mut file) = fs::File::open(file_path) else {
+            return false;
+        };
+        use std::io::Read;
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic).is_ok() && magic == [0x7f, b'E', b'L', b'F']
     }
 }
 

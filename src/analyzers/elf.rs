@@ -563,10 +563,28 @@ impl ElfAnalyzer {
         ) = match elf_opt {
             Some(elf) => {
                 tools_used.push("goblin".to_string());
-                let is_core_dump = elf.header.e_type == goblin::elf::header::ET_CORE;
+                // Source structural facts from ctx when available — the
+                // ELF type ("core" string), arch name, and symbol-table
+                // presence all live in expose's emitted view.
+                let is_core_dump = ctx
+                    .and_then(|c| {
+                        c.parsed
+                            .values()
+                            .get("elf.type")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s == "core")
+                    })
+                    .unwrap_or_else(|| elf.header.e_type == goblin::elf::header::ET_CORE);
 
-                // Update architecture now that we have parsed the header
-                report.target.architectures = Some(vec![self.arch_name(&elf)]);
+                report.target.architectures = Some(vec![ctx
+                    .and_then(|c| {
+                        c.parsed
+                            .values()
+                            .get("elf.machine")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string)
+                    })
+                    .unwrap_or_else(|| self.arch_name(&elf))]);
 
                 let note_summary = if let Some(c) = ctx {
                     self.summarize_elf_notes_from_ctx(c)
@@ -580,7 +598,9 @@ impl ElfAnalyzer {
                 } else {
                     self.compute_elf_metrics(&elf, &note_summary, data)
                 };
-                let symbols_found = !elf.syms.is_empty();
+                let symbols_found = ctx
+                    .map(|c| c.parsed.metrics().get("elf.symtab_count").unwrap_or(0.0) > 0.0)
+                    .unwrap_or_else(|| !elf.syms.is_empty());
 
                 // Calculate code_size from executable section sizes
                 // (more accurate than radare2's function discovery).

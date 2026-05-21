@@ -1573,10 +1573,7 @@ impl MachOAnalyzer {
                 .get("file_offset")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0) as usize;
-            let size = slice
-                .get("file_size")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
+            let size = slice.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
             if size > 0 && off.saturating_add(size) <= data.len() {
                 return off..off + size;
             }
@@ -1781,34 +1778,35 @@ impl MachOAnalyzer {
         // entry carries a `cpu_type` string ("x86_64" / "arm64" / etc).
         // Falls back to a goblin walk only when expose can't open the
         // bytes (extremely unusual for valid fat Mach-O).
-        let arch_names: Vec<String> = match expose::open_with_path(report.target.path.as_ref(), data) {
-            Ok(parsed) => parsed
-                .values()
-                .get("macho.slices")
-                .and_then(|v| v.as_array())
-                .map(|arr| {
-                    arr.iter()
-                        .filter_map(|entry| {
-                            entry
-                                .get("cpu_type")
-                                .and_then(|c| c.as_str())
-                                .map(str::to_string)
-                        })
-                        .collect()
-                })
-                .unwrap_or_default(),
-            Err(_) => goblin_safe::parse_mach(data)
-                .ok()
-                .and_then(|m| match m {
-                    Mach::Fat(fat) => fat.arches().ok().map(|a| {
-                        a.iter()
-                            .map(|arch| self.arch_name_from_cputype(arch.cputype))
+        let arch_names: Vec<String> =
+            match expose::open_with_path(report.target.path.as_ref(), data) {
+                Ok(parsed) => parsed
+                    .values()
+                    .get("macho.slices")
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|entry| {
+                                entry
+                                    .get("cpu_type")
+                                    .and_then(|c| c.as_str())
+                                    .map(str::to_string)
+                            })
                             .collect()
-                    }),
-                    _ => None,
-                })
-                .unwrap_or_default(),
-        };
+                    })
+                    .unwrap_or_default(),
+                Err(_) => goblin_safe::parse_mach(data)
+                    .ok()
+                    .and_then(|m| match m {
+                        Mach::Fat(fat) => fat.arches().ok().map(|a| {
+                            a.iter()
+                                .map(|arch| self.arch_name_from_cputype(arch.cputype))
+                                .collect()
+                        }),
+                        _ => None,
+                    })
+                    .unwrap_or_default(),
+            };
         if arch_names.is_empty() {
             return;
         }
@@ -1944,8 +1942,7 @@ impl Analyzer for MachOAnalyzer {
         // data from expose's typed views rather than re-walking goblin.
         // Falls through to legacy goblin paths when expose can't open
         // (corrupted Mach-O / unknown shape).
-        let ctx =
-            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
+        let ctx = crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
@@ -2027,7 +2024,7 @@ impl Analyzer for MachOAnalyzer {
                 | [0xca, 0xfe, 0xba, 0xbe]    // fat 32-bit
                 | [0xbe, 0xba, 0xfe, 0xca]    // fat 32-bit, byte-swapped
                 | [0xca, 0xfe, 0xba, 0xbf]    // fat 64-bit
-                | [0xbf, 0xba, 0xfe, 0xca]    // fat 64-bit, byte-swapped
+                | [0xbf, 0xba, 0xfe, 0xca] // fat 64-bit, byte-swapped
         )
     }
 }

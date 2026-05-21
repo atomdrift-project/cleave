@@ -1,7 +1,12 @@
 //! PE (Portable Executable) analyzer for Windows binaries.
-use crate::analyzers::{goblin_safe, AnalysisInput, Analyzer};
+//!
+//! Every PE-internal helper takes a non-optional
+//! [`crate::analysis_context::AnalysisContext`]: structural data
+//! (sections, imports, exports, characteristics) is read from
+//! `expose`'s typed views rather than re-walked with goblin. The
+//! analyzer no longer carries its own goblin parse path.
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::entropy::calculate_entropy;
 use crate::radare2::Radare2Analyzer;
 use crate::strings::StringExtractor;
 use crate::types::{
@@ -10,17 +15,12 @@ use crate::types::{
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
-use chrono::TimeZone;
-use goblin::pe::optional_header::{
-    MAGIC_32, MAGIC_64, OFFSET_WINDOWS_FIELDS_32_CHECKSUM, OFFSET_WINDOWS_FIELDS_64_CHECKSUM,
-    SIZEOF_STANDARD_FIELDS_32, SIZEOF_STANDARD_FIELDS_64,
-};
-use goblin::pe::resource::{RT_GROUP_ICON, RT_ICON};
-use goblin::pe::PE;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+
+type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for Windows PE binaries (executables, DLLs, drivers)
 #[derive(Debug)]
@@ -37,99 +37,39 @@ pub struct PEAnalyzer {
     cancellation: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
 }
 
-fn pe_certificate_range(pe: &PE<'_>, data: &[u8]) -> Option<(usize, usize)> {
-    let opt = pe.header.optional_header.as_ref()?;
-    let cert_table = opt.data_directories.data_directories.get(4)?.as_ref()?.1;
-    let offset = cert_table.virtual_address as usize;
-    let size = cert_table.size as usize;
-    if offset == 0 || size == 0 || offset.checked_add(size)? > data.len() {
-        return None;
-    }
-    Some((offset, offset + size))
+/// True when the PE has the IMAGE_FILE_DLL characteristic
+/// (`0x2000`) set. Reads from expose's `pe.characteristics_raw`
+/// emission, which always carries the raw COFF Characteristics u16.
+fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
+    ctx.parsed
+        .values()
+        .get("pe.characteristics_raw")
+        .and_then(|v| v.as_u64())
+        .is_some_and(|c| c & 0x2000 != 0)
 }
 
-fn pe_overlay_bounds_excluding_certificate(pe: &PE<'_>, data: &[u8]) -> Option<(usize, usize)> {
-    let sections_end = pe
-        .sections
-        .iter()
-        .map(|s| (s.pointer_to_raw_data + s.size_of_raw_data) as usize)
-        .max()
-        .unwrap_or(0);
-    if sections_end == 0 || sections_end >= data.len() {
-        return None;
-    }
-
-    let overlay_end = pe_certificate_range(pe, data)
-        .map(|(cert_start, _)| cert_start)
-        .filter(|&cert_start| cert_start >= sections_end)
-        .unwrap_or(data.len());
-
-    if overlay_end > sections_end {
-        Some((sections_end, overlay_end))
-    } else {
-        None
-    }
-}
-
-fn pe_checksum_field_offset(pe: &PE<'_>, data_len: usize) -> Option<usize> {
-    let pe_offset = pe.header.dos_header.pe_pointer as usize;
-    let optional_header_offset = pe_offset + 4 + 20;
-    let opt = pe.header.optional_header.as_ref()?;
-
-    let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
-        }
-        MAGIC_64 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
-        }
-        _ => return None,
-    };
-
-    (checksum_offset + 4 <= data_len).then_some(checksum_offset)
-}
-
-fn compute_pe_checksum(data: &[u8], checksum_offset: usize) -> u32 {
-    let mut sum: u64 = 0;
-    let mut i = 0usize;
-
-    while i + 1 < data.len() {
-        if i == checksum_offset {
-            i += 4;
+/// Read the certificate-table range (offset, end) from expose's
+/// emitted security-directory metrics. Returns `None` when the
+/// directory is absent, empty, or extends past the file end.
+fn pe_certificate_range_from_ctx(ctx: &Ctx<'_>, data: &[u8]) -> Option<(usize, usize)> {
+    let arr = ctx
+        .parsed
+        .values()
+        .get("pe.data_directories")
+        .and_then(|v| v.as_array())?;
+    for node in arr {
+        let name = node.get("name").and_then(|x| x.as_str())?;
+        if name != "certificate" {
             continue;
         }
-
-        sum += u16::from_le_bytes([data[i], data[i + 1]]) as u64;
-        sum = (sum & 0xffff) + (sum >> 16);
-        i += 2;
-    }
-
-    if i < data.len() {
-        sum += data[i] as u64;
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-
-    sum = (sum & 0xffff) + (sum >> 16);
-    sum += data.len() as u64;
-    sum as u32
-}
-
-fn entry_section_name(pe: &PE<'_>) -> Option<String> {
-    let entry = pe.entry;
-    pe.sections.iter().find_map(|section| {
-        let start = section.virtual_address;
-        let span = section.virtual_size.max(section.size_of_raw_data);
-        let end = start.saturating_add(span);
-        if entry >= start && entry < end {
-            Some(
-                String::from_utf8_lossy(&section.name)
-                    .trim_matches(char::from(0))
-                    .to_string(),
-            )
-        } else {
-            None
+        let offset = node.get("rva").and_then(|x| x.as_u64())? as usize;
+        let size = node.get("size").and_then(|x| x.as_u64())? as usize;
+        if offset == 0 || size == 0 || offset.checked_add(size)? > data.len() {
+            return None;
         }
-    })
+        return Some((offset, offset + size));
+    }
+    None
 }
 
 /// Canonical list of Microsoft-shipped DLLs commonly abused as sideload
@@ -174,47 +114,6 @@ fn is_system_dll(name: &str) -> bool {
             | "setupapi"
             | "imm32"
     )
-}
-
-/// Byte-scan an ASN.1 DER blob for every occurrence of `oid` followed by a
-/// short-form (<=127 byte) primitive string, returning the decoded UTF-8
-/// values in the order encountered. Used to pull CommonName / Organization
-/// attributes out of a PKCS#7 certificate chain without a full ASN.1 parser.
-/// Duplicates are skipped; output is capped at `max_results` to bound cost
-/// on malformed blobs. This is a heuristic extractor — it will also match OID
-/// bytes that happen to appear inside unrelated structures, but the
-/// downstream filtering tolerates a bit of noise.
-fn scan_asn1_attribute(data: &[u8], oid: &[u8], max_results: usize) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut search_pos = 0;
-    while let Some(pos) = data[search_pos..].windows(oid.len()).position(|w| w == oid) {
-        let abs_pos = search_pos + pos;
-        search_pos = abs_pos + oid.len();
-        let type_pos = abs_pos + oid.len();
-        if type_pos + 1 >= data.len() {
-            continue;
-        }
-        let len = data[type_pos + 1] as usize;
-        let str_pos = type_pos + 2;
-        if len == 0 || str_pos + len > data.len() {
-            continue;
-        }
-        let Ok(s) = std::str::from_utf8(&data[str_pos..str_pos + len]) else {
-            continue;
-        };
-        let s = s.trim_matches(char::from(0)).trim();
-        if s.is_empty() {
-            continue;
-        }
-        let owned = s.to_string();
-        if !out.contains(&owned) {
-            out.push(owned);
-        }
-        if out.len() >= max_results {
-            break;
-        }
-    }
-    out
 }
 
 /// True when `name` looks like a CA, timestamp authority, or other chain
@@ -333,24 +232,6 @@ fn is_unusual_bss_like(name: &str, raw_size: u32, virtual_size: u32) -> bool {
     )
 }
 
-fn dos_stub_modified(data: &[u8], pe_offset: usize) -> bool {
-    if pe_offset <= 0x40 || pe_offset > data.len() {
-        return false;
-    }
-
-    let stub = &data[0x40..pe_offset];
-    !stub
-        .windows(b"This program cannot be run in DOS mode".len())
-        .any(|w| w == b"This program cannot be run in DOS mode")
-}
-
-fn dos_stub_zeroed(data: &[u8], pe_offset: usize) -> bool {
-    if pe_offset <= 0x40 || pe_offset > data.len() {
-        return false;
-    }
-    data[0x40..pe_offset].iter().all(|&b| b == 0)
-}
-
 fn looks_like_dos_executable(data: &[u8]) -> bool {
     if data.len() < 0x40 || !data.starts_with(b"MZ") {
         return false;
@@ -380,304 +261,738 @@ fn looks_like_dos_executable(data: &[u8]) -> bool {
         && header_size < data.len()
 }
 
-fn pdb_filename(bytes: &[u8]) -> Option<String> {
-    let trimmed = bytes.split(|b| *b == 0).next()?.trim_ascii();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(String::from_utf8_lossy(trimmed).to_string())
-    }
-}
-
-/// Format the 16-byte PDB 7.0 (RSDS) signature as a canonical hyphenated
-/// GUID. The first three groups are little-endian-encoded on disk; the
-/// last two are big-endian. This matches what `dumpbin /headers` and
-/// `pdbcrack` print, and what the PDB itself stores in its age stream.
-fn format_pdb_guid(sig: &[u8; 16]) -> String {
-    format!(
-        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        sig[3], sig[2], sig[1], sig[0],
-        sig[5], sig[4],
-        sig[7], sig[6],
-        sig[8], sig[9],
-        sig[10], sig[11], sig[12], sig[13], sig[14], sig[15],
-    )
-}
-
-/// Walk the PKCS#7 SignedData blob looking for embedded X.509
-/// certificate DERs. Returns the parsed certs in document order.
-/// The first-non-CA cert is typically the leaf signer.
+/// Aggregate debug-directory metrics from expose's emitted view in
+/// `ctx.parsed.values()`. Mirrors the legacy goblin walk inside
+/// `compute_pe_metrics` so callers see byte-identical PeMetrics
+/// regardless of whether ctx was available.
 ///
-/// Strategy: scan for ASN.1 SEQUENCE tags (0x30) at byte boundaries,
-/// attempt to parse each as an X.509 certificate. Real certs are
-/// embedded inside the SignedData.certificates field as a SET OF;
-/// scanning for parseable cert prefixes recovers them without
-/// implementing full PKCS#7 navigation. Bounded to 16 candidates.
-fn parse_pkcs7_certificates(pkcs7: &[u8]) -> Vec<x509_parser::certificate::X509Certificate<'_>> {
-    let mut out = Vec::new();
-    let mut i = 0usize;
-    while i + 4 < pkcs7.len() && out.len() < 16 {
-        // ASN.1 SEQUENCE tag.
-        if pkcs7[i] == 0x30 {
-            // Read DER length (short or long form).
-            let (len_total, len_header) = match pkcs7[i + 1] {
-                n if n < 0x80 => (n as usize, 2),
-                0x81 => {
-                    if i + 2 >= pkcs7.len() {
-                        i += 1;
-                        continue;
-                    }
-                    (pkcs7[i + 2] as usize, 3)
-                }
-                0x82 => {
-                    if i + 3 >= pkcs7.len() {
-                        i += 1;
-                        continue;
-                    }
-                    (((pkcs7[i + 2] as usize) << 8) | pkcs7[i + 3] as usize, 4)
-                }
-                0x83 => {
-                    if i + 4 >= pkcs7.len() {
-                        i += 1;
-                        continue;
-                    }
-                    (
-                        ((pkcs7[i + 2] as usize) << 16)
-                            | ((pkcs7[i + 3] as usize) << 8)
-                            | pkcs7[i + 4] as usize,
-                        5,
-                    )
-                }
-                _ => {
-                    i += 1;
-                    continue;
-                }
-            };
-            let total = len_header + len_total;
-            if i + total > pkcs7.len() {
-                i += 1;
-                continue;
-            }
-            // Try to parse the candidate as an X.509 certificate.
-            // Real certs always start with SEQUENCE { SEQUENCE { version-tagged-int ... } }
-            // so we filter to candidates whose inner first byte is also 0x30.
-            if total > 100 && pkcs7[i + len_header] == 0x30 {
-                let candidate = &pkcs7[i..i + total];
-                if let Ok((_, cert)) = x509_parser::parse_x509_certificate(candidate) {
-                    out.push(cert);
-                    i += total;
-                    continue;
-                }
-            }
-        }
-        i += 1;
-    }
-    out
-}
-
-/// Find the leaf signer in a list of recovered certs.  The leaf is
-/// the cert whose subject differs from its own issuer (i.e. it's not
-/// self-signed root) and which isn't itself the issuer of any other
-/// cert in the chain. Falls back to the first non-self-signed cert.
-fn find_leaf_signer<'a>(
-    certs: &'a [x509_parser::certificate::X509Certificate<'a>],
-) -> Option<&'a x509_parser::certificate::X509Certificate<'a>> {
-    if certs.is_empty() {
-        return None;
-    }
-    // Build set of issuer DNs to find which subject DNs *are* used as
-    // issuers (those are intermediate CAs / roots, not leaves).
-    let issuer_names: std::collections::HashSet<String> = certs
-        .iter()
-        .map(|c| c.tbs_certificate.issuer.to_string())
-        .collect();
-    certs
-        .iter()
-        .find(|c| {
-            let subj = c.tbs_certificate.subject.to_string();
-            // Leaf: not a root (subject != issuer) AND not pointed to
-            // by any other cert as issuer.
-            subj != c.tbs_certificate.issuer.to_string() && !issuer_names.contains(&subj)
-        })
-        .or_else(|| {
-            // Fallback: first non-self-signed cert.
-            certs.iter().find(|c| {
-                c.tbs_certificate.subject.to_string() != c.tbs_certificate.issuer.to_string()
-            })
-        })
-        .or_else(|| certs.first())
-}
-
-/// Extract the first Common Name attribute from an X.509
-/// distinguished name. Uses x509-parser's purpose-built helper which
-/// handles all the ASN.1 string encodings (UTF8String, PrintableString,
-/// BMPString, IA5String, ...) that DN values may use.
-fn dn_common_name<'a>(name: &'a x509_parser::x509::X509Name<'a>) -> Option<String> {
-    name.iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .map(str::to_string)
-}
-
-/// Strip leading zeros from a hex string for serial-number
-/// comparisons. DER positive INTEGERs include a 0x00 prefix when the
-/// high bit of the first content byte would otherwise make the value
-/// look negative; x509-parser's `format!("{:x}", BigUint)` strips
-/// that padding. Returning the trimmed slice in-place avoids
-/// allocation. Empty input or all-zeros becomes `"0"`.
-fn normalize_serial_hex(s: &str) -> &str {
-    let trimmed = s.trim_start_matches('0');
-    if trimmed.is_empty() {
-        "0"
-    } else {
-        trimmed
-    }
-}
-
-/// Find the cert in `certs` whose issuer DN raw bytes equal
-/// `issuer_full_der` AND whose serial-number (formatted as
-/// `{:x}` and normalized via `normalize_serial_hex`) equals
-/// `serial_hex_normalized`. Used to resolve the authoritative
-/// signing cert via SignerInfo.IssuerAndSerialNumber instead of the
-/// `find_leaf_signer` heuristic, which can pick the timestamping
-/// leaf when both code-sign and timestamp chains share the certs SET.
-fn find_cert_by_issuer_and_serial<'a, 'b>(
-    certs: &'a [x509_parser::certificate::X509Certificate<'b>],
-    issuer_full_der: &[u8],
-    serial_hex_normalized: &str,
-) -> Option<&'a x509_parser::certificate::X509Certificate<'b>> {
-    certs.iter().find(|c| {
-        if c.tbs_certificate.issuer().as_raw() != issuer_full_der {
-            return false;
-        }
-        let serial_hex = format!("{:x}", c.tbs_certificate.serial);
-        normalize_serial_hex(&serial_hex) == serial_hex_normalized
-    })
-}
-
-/// True if the PKCS#7 SignedData blob contains the Microsoft
-/// NestedSignature attribute (OID `1.3.6.1.4.1.311.2.4.1`). DER
-/// substring scan — same approach as `scan_asn1_attribute` for the
-/// signing-time OID.
-fn pkcs7_has_nested_signature(pkcs7: &[u8]) -> bool {
-    // OID 1.3.6.1.4.1.311.2.4.1 → DER bytes:
-    //   06 0A 2B 06 01 04 01 82 37 02 04 01
-    const NESTED_SIG_OID: &[u8] = &[
-        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01,
-    ];
-    pkcs7
-        .windows(NESTED_SIG_OID.len())
-        .any(|w| w == NESTED_SIG_OID)
-}
-
-/// Resolve a signature-algorithm OID to a friendly name. Covers the
-/// algorithms commonly seen in Authenticode chains; returns `None`
-/// for unknowns so trait authors can still match the raw value via
-/// the chain itself.
-fn signature_algorithm_name(oid: &x509_parser::der_parser::asn1_rs::Oid<'_>) -> Option<String> {
-    let s = oid.to_id_string();
-    let name = match s.as_str() {
-        "1.2.840.113549.1.1.5" => "sha1WithRSAEncryption",
-        "1.2.840.113549.1.1.11" => "sha256WithRSAEncryption",
-        "1.2.840.113549.1.1.12" => "sha384WithRSAEncryption",
-        "1.2.840.113549.1.1.13" => "sha512WithRSAEncryption",
-        "1.2.840.113549.1.1.10" => "rsassa-pss",
-        "1.2.840.10045.4.1" => "ecdsa-with-SHA1",
-        "1.2.840.10045.4.3.2" => "ecdsa-with-SHA256",
-        "1.2.840.10045.4.3.3" => "ecdsa-with-SHA384",
-        "1.2.840.10045.4.3.4" => "ecdsa-with-SHA512",
-        "1.3.101.112" => "Ed25519",
-        _ => return None,
+/// Reads:
+/// - `pe.debug.entries[]` — array of `{type, type_id, timestamp_unix, size_bytes}`
+/// - `pe.debug.pdb.{path,guid,age}` — CodeView PDB fingerprint
+///
+/// Expose normalises the GUID to lowercase Microsoft format; this
+/// helper uppercases it to match the legacy `format_pdb_guid` output.
+fn fill_debug_metrics_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let values = ctx.parsed.values();
+    let Some(entries) = values.get("pe.debug.entries").and_then(|v| v.as_array()) else {
+        // PDB fields can still exist when goblin parsed an isolated
+        // CodeView entry — fall through to read them below.
+        fill_debug_pdb_fields_from_values(values, metrics);
+        return;
     };
-    Some(name.to_string())
-}
+    metrics.debug_directory_entries = entries.len() as u32;
 
-fn parse_asn1_signing_time(data: &[u8]) -> Option<chrono::DateTime<chrono::Utc>> {
-    const SIGNING_TIME_OID: &[u8] = &[0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x09, 0x05];
-
-    if let Some(idx) = data
-        .windows(SIGNING_TIME_OID.len())
-        .position(|w| w == SIGNING_TIME_OID)
-    {
-        let tail = &data[idx + SIGNING_TIME_OID.len()..];
-        for offset in 0..tail.len().min(32).saturating_sub(2) {
-            let tag = tail[offset];
-            let len = tail[offset + 1] as usize;
-            let start = offset + 2;
-            let end = start + len;
-            if end > tail.len() {
-                break;
-            }
-
-            let value = &tail[start..end];
-            let parsed = match (tag, len) {
-                (0x17, 13) => {
-                    let s = std::str::from_utf8(value).ok()?;
-                    let year = s[0..2].parse::<i32>().ok()?;
-                    let year = if year >= 50 { 1900 + year } else { 2000 + year };
-                    let month = s[2..4].parse::<u32>().ok()?;
-                    let day = s[4..6].parse::<u32>().ok()?;
-                    let hour = s[6..8].parse::<u32>().ok()?;
-                    let minute = s[8..10].parse::<u32>().ok()?;
-                    let second = s[10..12].parse::<u32>().ok()?;
-                    chrono::Utc
-                        .with_ymd_and_hms(year, month, day, hour, minute, second)
-                        .single()
-                }
-                (0x18, 15) => {
-                    let s = std::str::from_utf8(value).ok()?;
-                    let year = s[0..4].parse::<i32>().ok()?;
-                    let month = s[4..6].parse::<u32>().ok()?;
-                    let day = s[6..8].parse::<u32>().ok()?;
-                    let hour = s[8..10].parse::<u32>().ok()?;
-                    let minute = s[10..12].parse::<u32>().ok()?;
-                    let second = s[12..14].parse::<u32>().ok()?;
-                    chrono::Utc
-                        .with_ymd_and_hms(year, month, day, hour, minute, second)
-                        .single()
-                }
-                _ => None,
-            };
-
-            if parsed.is_some() {
-                return parsed;
-            }
-        }
+    let mut debug_timestamps: Vec<u32> = entries
+        .iter()
+        .filter_map(|e| e.get("timestamp_unix").and_then(|t| t.as_u64()))
+        .map(|t| t as u32)
+        .filter(|&ts| ts != 0)
+        .collect();
+    metrics.debug_timestamp_nonzero_count = debug_timestamps.len() as u32;
+    if !debug_timestamps.is_empty() {
+        debug_timestamps.sort_unstable();
+        debug_timestamps.dedup();
+        metrics.debug_timestamp_unique_count = debug_timestamps.len() as u32;
+        metrics.debug_timestamp_min = *debug_timestamps.first().unwrap_or(&0);
+        metrics.debug_timestamp_max = *debug_timestamps.last().unwrap_or(&0);
+        metrics.debug_timestamp_consistent = debug_timestamps.len() == 1;
     }
 
+    let mut types: Vec<u32> = entries
+        .iter()
+        .filter_map(|e| e.get("type_id").and_then(|t| t.as_u64()))
+        .map(|t| t as u32)
+        .collect();
+    types.sort_unstable();
+    types.dedup();
+    metrics.has_vc_feature = types.contains(&12);
+    metrics.has_pogo = types.contains(&13);
+    metrics.has_iltcg = types.contains(&14);
+    metrics.is_reproducible_build = types.contains(&16);
+    metrics.debug_directory_types = types;
+
+    fill_debug_pdb_fields_from_values(values, metrics);
+}
+
+/// Pull the first RFC-2253 CN value out of a DN string. The format
+/// expose emits is `"CN=Foo,O=Bar,L=Baz,C=US"` — comma-separated
+/// `attr=value` segments. We split on commas, skip the trailing
+/// whitespace x509-cert sometimes leaves, and return the first
+/// segment whose attribute is exactly `CN`.
+///
+/// Returns `None` for malformed inputs or DNs without a CN.
+fn dn_extract_cn(dn: &str) -> Option<String> {
+    for raw in dn.split(',') {
+        let seg = raw.trim();
+        // Accept `CN=…` case-insensitively — RFC 4514 attributes are
+        // case-insensitive and x509-cert canonicalises to upper-case
+        // but we don't rely on the canonicalisation.
+        if let Some(rest) = seg.strip_prefix("CN=").or_else(|| seg.strip_prefix("cn=")) {
+            return Some(rest.trim().to_string());
+        }
+    }
     None
 }
 
+/// Pull the first O attribute from a DN string. Same comma-split as
+/// `dn_extract_cn`; returns `None` when the DN doesn't carry one.
+fn dn_extract_o(dn: &str) -> Option<String> {
+    for raw in dn.split(',') {
+        let seg = raw.trim();
+        if let Some(rest) = seg.strip_prefix("O=").or_else(|| seg.strip_prefix("o=")) {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Parse expose's ISO-8601 timestamp form back to a Unix epoch.
+/// Format is `"YYYY-MM-DDTHH:MM:SSZ"` exactly (no fractional, always
+/// UTC) — matches what `der::DateTime::to_string()` produces.
+/// Returns 0 on parse failure; callers treat 0 as "unset".
+fn parse_iso8601_to_unix(s: &str) -> i64 {
+    chrono::DateTime::parse_from_rfc3339(s)
+        .map(|dt| dt.timestamp())
+        .unwrap_or(0)
+}
+
+/// Populate every PeMetrics Authenticode field from expose's typed
+/// `pe.signatures[]` view. Mirrors the goblin-walking block inside
+/// `compute_pe_metrics` byte-for-byte where the underlying data is
+/// available; fields that depend on the full SignerInfo / certificate
+/// bag (e.g. `signer_info_matches_leaf` semantics) are derived from
+/// what expose already exposes about the signer cert.
+///
+/// Behaviour notes:
+/// - The signature claim ("is the file signed?") is `pe.signatures[]
+///   non-empty`. Empty array (or absent) leaves `has_signature = false`
+///   and the other fields at their `PeMetrics::default()` values.
+/// - When expose's `pe.security_directory_out_of_bounds` metric is set
+///   (the cert-table directory points past EOF), we set the legacy
+///   typed boolean accordingly and skip the rest — there is no signature
+///   to extract.
+/// - `signer_info_matches_leaf` is `true` when expose was able to
+///   resolve the signer's cert from the bag (which means
+///   `subject`/`thumbprint_sha1` are populated). `signer_info_mismatches_leaf`
+///   is the inverse on a signed binary — SignerInfo present but cert
+///   not in bag — but expose doesn't surface that condition explicitly
+///   yet; we leave it at default `false`.
+fn fill_authenticode_metrics_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let m = ctx.parsed.metrics();
+    let v = ctx.parsed.values();
+
+    // Cert-table size + out-of-bounds marker first — they're emitted
+    // even when the PKCS#7 parse failed. `pe.cert_table_size` is a
+    // values key (u64); `pe.security_directory_out_of_bounds` is a
+    // metric presence flag.
+    metrics.certificate_table_size = v
+        .get("pe.cert_table_size")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    metrics.security_directory_out_of_bounds =
+        m.get("pe.security_directory_out_of_bounds").is_some();
+
+    let Some(sig) = v
+        .get("pe.signatures")
+        .and_then(|x| x.as_array())
+        .and_then(|a| a.first())
+    else {
+        return;
+    };
+    metrics.has_signature = true;
+
+    populate_leaf_fields(sig, metrics);
+    populate_signing_time(sig, metrics);
+    populate_spc_digest(sig, metrics);
+
+    // Cert-chain depth: expose emits the count of certs in the
+    // SignedData bag, which matches what cleave used to derive from
+    // `parse_pkcs7_certificates(...).len()` once.
+    metrics.cert_chain_depth = sig
+        .get("cert_chain_depth")
+        .and_then(|x| x.as_u64())
+        .map(|x| x as u32)
+        .unwrap_or(0);
+
+    metrics.has_nested_signature = sig.get("nested").is_some();
+    if let Some(nested) = sig.get("nested") {
+        populate_nested_signer_fields(nested, metrics);
+    }
+}
+
+/// Map expose's per-signature object onto the typed leaf-cert fields.
+/// Pure transformation — string parsing only; no I/O. Splits the
+/// helper out so the parent function stays scannable.
+fn populate_leaf_fields(
+    sig: &serde_json::Value,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    if let Some(subject) = sig.get("subject").and_then(|x| x.as_str()) {
+        metrics.leaf_subject = dn_extract_cn(subject);
+        // `signer` is the leaf CN, by convention — historic cleave
+        // joined multiple CNs but the leaf is what every consumer
+        // actually wants. `primary_signer` prefers the leaf O when
+        // present, falling back to the leaf CN if the org isn't set
+        // or is a CA identity.
+        if metrics.leaf_subject.is_some() {
+            metrics.signer = metrics.leaf_subject.clone();
+            let o = dn_extract_o(subject);
+            let primary = o
+                .as_deref()
+                .filter(|s| !is_ca_identity(s))
+                .or(metrics.leaf_subject.as_deref().filter(|s| !is_ca_identity(s)));
+            metrics.primary_signer = primary.map(str::to_string);
+            // Platform/developer classification — same Microsoft /
+            // Windows substring check the legacy path uses.
+            let s = metrics.leaf_subject.as_deref().unwrap_or("");
+            metrics.signature_type = Some(
+                if s.contains("Microsoft") || s.contains("Windows") {
+                    "platform".to_string()
+                } else {
+                    "developer".to_string()
+                },
+            );
+        }
+    }
+    if let Some(issuer) = sig.get("issuer").and_then(|x| x.as_str()) {
+        metrics.leaf_issuer = dn_extract_cn(issuer);
+        // Also surface the full issuer DN's first CN on
+        // `signer_info_issuer` — the legacy path populates it from
+        // SignerInfo.issuerAndSerialNumber, but expose's signer-cert
+        // resolution already matched on that pair, so the leaf's
+        // issuer CN is the same value.
+        metrics.signer_info_issuer = metrics.leaf_issuer.clone();
+    }
+    if let (Some(s), Some(i)) = (
+        metrics.leaf_subject.as_deref(),
+        metrics.leaf_issuer.as_deref(),
+    ) {
+        metrics.leaf_self_issued = !s.is_empty() && s == i;
+    }
+    metrics.leaf_eku_code_signing = sig
+        .get("eku_code_signing")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if let Some(s) = sig.get("signature_algorithm").and_then(|x| x.as_str()) {
+        metrics.leaf_signature_algorithm = Some(s.to_string());
+    }
+    if let Some(s) = sig.get("serial").and_then(|x| x.as_str()) {
+        metrics.leaf_serial = Some(s.to_string());
+        metrics.signer_info_serial = Some(s.to_string());
+    }
+    metrics.leaf_not_before = sig
+        .get("not_before")
+        .and_then(|x| x.as_str())
+        .map(parse_iso8601_to_unix)
+        .unwrap_or(0);
+    metrics.leaf_not_after = sig
+        .get("not_after")
+        .and_then(|x| x.as_str())
+        .map(parse_iso8601_to_unix)
+        .unwrap_or(0);
+    let validity_secs = metrics.leaf_not_after.saturating_sub(metrics.leaf_not_before);
+    if validity_secs > 0 {
+        metrics.cert_validity_days = (validity_secs / 86_400) as u32;
+    }
+    if let Some(s) = sig.get("thumbprint_sha1").and_then(|x| x.as_str()) {
+        metrics.leaf_thumbprint_sha1 = Some(s.to_string());
+    }
+    // Signature verification outcome. Expose emits `verified` as a
+    // bool when verification ran (true/false), and the companion
+    // `verification_unsupported = true` when the OID combination
+    // was off-pair. We mirror that on the typed fields.
+    match sig.get("verified") {
+        Some(serde_json::Value::Bool(b)) => {
+            metrics.signature_verified = Some(*b);
+        }
+        Some(serde_json::Value::Null) | None => {
+            metrics.signature_verified = None;
+        }
+        _ => {}
+    }
+    metrics.sig_algorithm_unsupported = sig
+        .get("verification_unsupported")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+
+    // The SignerInfo→cert bag match: when expose resolved the signer
+    // cert (subject populated), the SI and the chosen leaf agreed.
+    metrics.signer_info_matches_leaf = sig.get("subject").is_some();
+}
+
+fn populate_signing_time(
+    sig: &serde_json::Value,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let Some(unix) = sig.get("signing_time_unix").and_then(|x| x.as_i64()) else {
+        return;
+    };
+    metrics.signing_time = unix.max(0) as u64;
+    metrics.signing_time_before_timestamp = unix < metrics.timestamp as i64;
+}
+
+fn populate_spc_digest(
+    sig: &serde_json::Value,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    if let Some(s) = sig.get("signature_digest_algorithm").and_then(|x| x.as_str()) {
+        metrics.signature_digest_algorithm = Some(s.to_string());
+    }
+    if let Some(s) = sig.get("signature_digest").and_then(|x| x.as_str()) {
+        metrics.signature_digest = Some(s.to_string());
+    }
+}
+
+/// Data-directory bounds checks. For the export + import directories
+/// we ask "is the directory's RVA inside any section's virtual extent?";
+/// for the resource directory we further check "does it span past
+/// the containing section's end?".
+///
+/// Drives off expose's typed `pe.data_directories[]` (canonical names)
+/// + typed `Sections` view. The string-name match (`"export"`,
+/// `"import"`, `"resource"`) is the contract expose's emitter
+/// established; if it ever changes those names, this code (and the
+/// parity test) catch the drift immediately.
+fn fill_data_directory_bounds_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let v = ctx.parsed.values();
+    let sections = ctx.parsed.sections();
+    let Some(arr) = v.get("pe.data_directories").and_then(|x| x.as_array()) else {
+        return;
+    };
+    // Local "RVA is inside this section's virtual extent" predicate.
+    let section_containing = |rva: u32| -> Option<&expose::Section> {
+        if rva == 0 {
+            return None;
+        }
+        sections.iter().find(|s| {
+            let start = s.vaddr as u32;
+            let span = (s.vsize.max(s.file_size)) as u32;
+            rva >= start && rva < start.saturating_add(span)
+        })
+    };
+    for node in arr {
+        let (Some(name), Some(rva), Some(size)) = (
+            node.get("name").and_then(|x| x.as_str()),
+            node.get("rva").and_then(|x| x.as_u64()).map(|x| x as u32),
+            node.get("size").and_then(|x| x.as_u64()).map(|x| x as u32),
+        ) else {
+            continue;
+        };
+        if rva == 0 || size == 0 {
+            continue;
+        }
+        match name {
+            "export" => {
+                metrics.export_dir_outside_section = section_containing(rva).is_none();
+            }
+            "import" => {
+                metrics.import_dir_outside_section = section_containing(rva).is_none();
+            }
+            "resource" => match section_containing(rva) {
+                Some(s) => {
+                    let section_end =
+                        (s.vaddr as u32).saturating_add((s.vsize.max(s.file_size)) as u32);
+                    let dir_end = rva.saturating_add(size);
+                    if dir_end > section_end {
+                        metrics.rsrc_dir_overruns_section = true;
+                    }
+                }
+                None => metrics.rsrc_dir_overruns_section = true,
+            },
+            _ => {}
+        }
+    }
+}
+
+/// Count TLS callback RVAs that land in non-executable sections —
+/// a classic shellcode-loader indicator. Reads the callback VAs from
+/// expose's `pe.tls_callbacks[]` (each entry's `addr` is the absolute
+/// VA as a hex string), subtracts image_base to get the RVA, and
+/// asks the typed Sections view whether the RVA's containing section
+/// carries the `executable` flag.
+fn fill_tls_callbacks_outside_code_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let v = ctx.parsed.values();
+    let sections = ctx.parsed.sections();
+    let Some(arr) = v.get("pe.tls_callbacks").and_then(|x| x.as_array()) else {
+        return;
+    };
+    let image_base = metrics.image_base;
+    let in_executable_section = |rva: u32| -> bool {
+        if rva == 0 {
+            return false;
+        }
+        sections.iter().any(|s| {
+            let start = s.vaddr as u32;
+            let span = (s.vsize.max(s.file_size)) as u32;
+            rva >= start
+                && rva < start.saturating_add(span)
+                && s.flags.iter().any(|f| f == "executable")
+        })
+    };
+    for node in arr {
+        let Some(addr_str) = node.get("addr").and_then(|x| x.as_str()) else {
+            continue;
+        };
+        let s = addr_str.strip_prefix("0x").unwrap_or(addr_str);
+        let Ok(va) = u64::from_str_radix(s, 16) else {
+            continue;
+        };
+        let rva = va.saturating_sub(image_base) as u32;
+        if rva != 0 && !in_executable_section(rva) {
+            metrics.tls_callbacks_outside_code =
+                metrics.tls_callbacks_outside_code.saturating_add(1);
+        }
+    }
+}
+
+/// Pull expose's pre-computed Authenticode image hashes
+/// (`pe.image_hash.sha1` / `.sha256` / `.sha384` / `.sha512`) and the
+/// overlay padding metric into the typed PeMetrics fields.
+/// Names map historically as: SHA-256 → `authentihash` (the legacy
+/// default), the other algorithms → `authentihash_{sha1,sha384,sha512}`.
+fn fill_image_hashes_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let v = ctx.parsed.values();
+    metrics.authentihash = v
+        .get("pe.image_hash.sha256")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    metrics.authentihash_sha1 = v
+        .get("pe.image_hash.sha1")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    metrics.authentihash_sha384 = v
+        .get("pe.image_hash.sha384")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    metrics.authentihash_sha512 = v
+        .get("pe.image_hash.sha512")
+        .and_then(|x| x.as_str())
+        .map(str::to_string);
+    metrics.overlay_padding = ctx
+        .parsed
+        .metrics()
+        .get("pe.overlay_padding")
+        .map(|x| x as u64)
+        .unwrap_or(0);
+}
+
+/// `signature_digest_mismatch` — the signature's claimed PE image
+/// digest disagrees with the recomputed Authentihash for the same
+/// algorithm. A non-default `true` is a strong tampering signal: the
+/// signed bytes were modified post-signing-time.
+///
+/// Pure derivation off already-populated PeMetrics fields — works
+/// identically whether the digests came from the ctx path or the
+/// legacy goblin walker.
+fn derive_signature_digest_mismatch(metrics: &crate::types::binary_metrics::PeMetrics) -> bool {
+    let (Some(alg), Some(claimed)) = (
+        metrics.signature_digest_algorithm.as_deref(),
+        metrics.signature_digest.as_deref(),
+    ) else {
+        return false;
+    };
+    let computed = match alg {
+        "sha1" => metrics.authentihash_sha1.as_deref(),
+        "sha256" => metrics.authentihash.as_deref(),
+        "sha384" => metrics.authentihash_sha384.as_deref(),
+        "sha512" => metrics.authentihash_sha512.as_deref(),
+        _ => return false,
+    };
+    computed.is_some_and(|c| c != claimed)
+}
+
+/// Populate the typed `bound_imports` Vec + `bound_imports_checksum`
+/// from expose's emitted view. Expose already walks the bound-import
+/// directory under panic-safety and emits the per-module triple
+/// (name, time_date_stamp, forwarder_ref_count) alongside the CRC-32
+/// fingerprint over the canonical-sorted set. We copy the values
+/// across without re-hashing.
+fn fill_bound_imports_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    use crate::types::binary_metrics::BoundImportDescriptor;
+    let v = ctx.parsed.values();
+    let Some(arr) = v.get("pe.bound_imports").and_then(|x| x.as_array()) else {
+        return;
+    };
+    let mut out: Vec<BoundImportDescriptor> = Vec::with_capacity(arr.len());
+    for node in arr {
+        let (Some(name), Some(ts), Some(fc)) = (
+            node.get("name").and_then(|x| x.as_str()),
+            node.get("time_date_stamp").and_then(|x| x.as_u64()),
+            node.get("forwarder_ref_count").and_then(|x| x.as_u64()),
+        ) else {
+            continue;
+        };
+        out.push(BoundImportDescriptor {
+            name: name.to_string(),
+            time_date_stamp: ts as u32,
+            forwarder_ref_count: fc as u32,
+        });
+    }
+    if out.is_empty() {
+        return;
+    }
+    metrics.bound_imports = out;
+    metrics.bound_imports_checksum = ctx
+        .parsed
+        .metrics()
+        .get("pe.bound_imports_fingerprint")
+        .map(|x| x as u32)
+        .unwrap_or(0);
+}
+
+/// Populate the LoadConfig typed fields (security_cookie, CFG check
+/// function pointer, CFG function count, CFG guard flags) from
+/// expose's `pe.load_config.*` object. Expose surfaces the raw u64 /
+/// u32 values directly out of goblin's parsed structure — no manual
+/// byte-walk on this side.
+fn fill_load_config_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let v = ctx.parsed.values();
+    let Some(obj) = v.get("pe.load_config") else {
+        return;
+    };
+    if let Some(x) = obj.get("security_cookie").and_then(|x| x.as_u64()) {
+        metrics.security_cookie = x;
+    }
+    if let Some(x) = obj
+        .get("guard_cf_check_function_pointer")
+        .and_then(|x| x.as_u64())
+    {
+        metrics.cfg_check_func = x;
+    }
+    if let Some(x) = obj.get("guard_cf_function_count").and_then(|x| x.as_u64()) {
+        metrics.cfg_func_count = x as u32;
+    }
+    if let Some(x) = obj.get("guard_flags_raw").and_then(|x| x.as_u64()) {
+        metrics.cfg_guard_flags = x as u32;
+    }
+}
+
+fn populate_nested_signer_fields(
+    nested: &serde_json::Value,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    if let Some(subject) = nested.get("subject").and_then(|x| x.as_str()) {
+        metrics.nested_leaf_subject = dn_extract_cn(subject);
+    }
+    if let Some(issuer) = nested.get("issuer").and_then(|x| x.as_str()) {
+        metrics.nested_leaf_issuer = dn_extract_cn(issuer);
+    }
+    metrics.nested_leaf_eku_code_signing = nested
+        .get("eku_code_signing")
+        .and_then(|x| x.as_bool())
+        .unwrap_or(false);
+    if let Some(s) = nested.get("signature_algorithm").and_then(|x| x.as_str()) {
+        metrics.nested_leaf_signature_algorithm = Some(s.to_string());
+    }
+    if let Some(s) = nested.get("thumbprint_sha1").and_then(|x| x.as_str()) {
+        metrics.nested_leaf_thumbprint_sha1 = Some(s.to_string());
+    }
+}
+
+/// Populate the section-walk metrics block from expose's typed
+/// Sections view. Mirrors the legacy goblin walk byte-for-byte:
+/// entry-point anomalies, raw-overflow + misalignment audit, section
+/// count mismatch (skipped — needs COFF NumberOfSections), pairwise
+/// virtual-range overlap, first-section gap, entry-in-last-section,
+/// and BSS-like count.
+///
+/// `file_alignment` comes from goblin until expose surfaces it; pass
+/// zero to skip the misalignment audit.
+fn fill_section_walk_metrics_from_ctx(
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+    ep_rva: u32,
+    is_lib: bool,
+    file_size: u64,
+    file_alignment: u32,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    let sections = ctx.parsed.sections();
+
+    if metrics.size_of_headers != 0 && ep_rva < metrics.size_of_headers {
+        metrics.entry_in_header = true;
+    }
+
+    // Entry-point containment + writable-section flag.
+    let mut ep_in_section = false;
+    for s in sections.iter() {
+        let start = s.vaddr as u32;
+        let span = (s.vsize.max(s.file_size)) as u32;
+        let end = start.saturating_add(span);
+        if ep_rva >= start && ep_rva < end {
+            ep_in_section = true;
+            metrics.entry_in_writable_section =
+                s.flags.iter().any(|f| f == "writable");
+            break;
+        }
+    }
+    if !ep_in_section && ep_rva != 0 && !is_lib {
+        metrics.entry_outside_sections = true;
+    }
+
+    // Section overflow + misalignment audit.
+    for s in sections.iter() {
+        let raw_end = s.file_offset.saturating_add(s.file_size);
+        if s.file_size > 0 && raw_end > file_size {
+            metrics.section_raw_overflow_count =
+                metrics.section_raw_overflow_count.saturating_add(1);
+            metrics.overflowing_sections.push(s.name.clone());
+        }
+        if file_alignment > 0
+            && s.file_offset != 0
+            && (s.file_offset as u32) % file_alignment != 0
+        {
+            metrics.misaligned_section_count =
+                metrics.misaligned_section_count.saturating_add(1);
+            metrics.misaligned_sections.push(s.name.clone());
+        }
+    }
+
+    // Section count mismatch — expose emits `pe.section_count_mismatch`
+    // as a presence flag when the COFF NumberOfSections diverges from
+    // the actual table length.
+    metrics.section_count_mismatch =
+        ctx.parsed.metrics().get("pe.section_count_mismatch").is_some();
+
+    // Pairwise virtual-range overlap.
+    if sections.len() > 1 {
+        let mut by_va: Vec<(u32, u32, String)> = sections
+            .iter()
+            .map(|s| {
+                let span = (s.vsize.max(s.file_size)) as u32;
+                (
+                    s.vaddr as u32,
+                    (s.vaddr as u32).saturating_add(span),
+                    s.name.clone(),
+                )
+            })
+            .collect();
+        by_va.sort_by_key(|t| t.0);
+        let mut overlap_names: HashSet<String> = HashSet::new();
+        for w in by_va.windows(2) {
+            let (a_start, a_end, a_name) = (w[0].0, w[0].1, w[0].2.clone());
+            let (b_start, _, b_name) = (w[1].0, w[1].1, w[1].2.clone());
+            if a_end > b_start && b_start >= a_start {
+                overlap_names.insert(a_name);
+                overlap_names.insert(b_name);
+            }
+        }
+        metrics.section_overlap_count = overlap_names.len() as u32;
+        metrics.overlapping_sections = overlap_names.into_iter().collect();
+        metrics.overlapping_sections.sort();
+    }
+
+    // First-section gap = (smallest non-zero file_offset) − size_of_headers.
+    if metrics.size_of_headers != 0 {
+        if let Some(first_raw) = sections
+            .iter()
+            .map(|s| s.file_offset as u32)
+            .filter(|&p| p > 0)
+            .min()
+        {
+            metrics.first_section_gap = first_raw.saturating_sub(metrics.size_of_headers);
+        }
+    }
+
+    // Entry-in-last-section by virtual address.
+    if let Some(last) = sections.iter().max_by_key(|s| s.vaddr) {
+        let start = last.vaddr as u32;
+        let span = (last.vsize.max(last.file_size)) as u32;
+        let end = start.saturating_add(span);
+        if ep_rva >= start && ep_rva < end && ep_rva != 0 {
+            metrics.entry_in_last_section = true;
+        }
+    }
+
+    // BSS-like count over the same `is_unusual_bss_like` predicate the
+    // legacy walk uses. `file_size` here is the section file_size from
+    // the typed view (raw bytes on disk); `vsize` is the in-memory
+    // size.
+    metrics.bss_like_section_count = sections
+        .iter()
+        .filter(|s| is_unusual_bss_like(&s.name, s.file_size as u32, s.vsize as u32))
+        .count() as u32;
+}
+
+fn fill_debug_pdb_fields_from_values(
+    values: &expose::Values,
+    metrics: &mut crate::types::binary_metrics::PeMetrics,
+) {
+    if let Some(path) = values.get("pe.debug.pdb.path").and_then(|v| v.as_str()) {
+        let trimmed = path.trim_end_matches('\0');
+        if !trimmed.is_empty() {
+            metrics.pdb_path = Some(trimmed.to_string());
+        }
+    }
+    // Expose's PDB 7.0 GUID format is Microsoft canonical (lowercase,
+    // hyphenated). The legacy `format_pdb_guid` produces uppercase;
+    // trait authors and downstream consumers match against either
+    // case insensitively, but for byte-equal parity with the legacy
+    // path we uppercase here.
+    if let Some(guid) = values.get("pe.debug.pdb.guid").and_then(|v| v.as_str()) {
+        metrics.codeview_guid = Some(guid.to_ascii_uppercase());
+    }
+    if let Some(age) = values.get("pe.debug.pdb.age").and_then(|v| v.as_u64()) {
+        metrics.codeview_age = age as u32;
+    }
+}
+
 impl PEAnalyzer {
-    fn get_structure<'a>(&self, pe: &PE<'a>) -> Vec<StructuralFeature> {
+    /// Emit the small list of structural-feature entries cleave's
+    /// downstream consumers expect: `pe/header`, `pe/dll` (when the
+    /// IMAGE_FILE_DLL characteristic is set), and `pe/optional_header`
+    /// (when the optional header is present). All facts come from
+    /// expose's emitted values — no goblin re-walk.
+    fn structural_features(&self, ctx: &Ctx<'_>) -> Vec<StructuralFeature> {
         let mut features = Vec::new();
+        let values = ctx.parsed.values();
+        let machine = values
+            .get("pe.machine")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let subsystem = values
+            .get("pe.subsystem")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
         features.push(StructuralFeature {
             id: "pe/header".to_string(),
-            desc: format!(
-                "PE file (machine: {}, subsystem: {:?})",
-                self.arch_name(pe),
-                pe.header
-                    .optional_header
-                    .as_ref()
-                    .map(|h| h.windows_fields.subsystem)
-            ),
+            desc: format!("PE file (machine: {}, subsystem: {:?})", machine, subsystem),
             evidence: vec![Evidence {
                 method: "header".to_string(),
-                source: "goblin".to_string(),
+                source: "expose".to_string(),
                 value: "PE".to_string(),
                 location: None,
                 ..Default::default()
             }],
         });
 
-        // Check if DLL
-        if pe.is_lib {
+        if is_dll_from_ctx(ctx) {
             features.push(StructuralFeature {
                 id: "pe/dll".to_string(),
                 desc: "Dynamic Link Library (DLL)".to_string(),
                 evidence: vec![Evidence {
                     method: "header".to_string(),
-                    source: "goblin".to_string(),
+                    source: "expose".to_string(),
                     value: "DLL".to_string(),
                     location: None,
                     ..Default::default()
@@ -685,14 +1000,13 @@ impl PEAnalyzer {
             });
         }
 
-        // Check for .NET
-        if pe.header.optional_header.is_some() {
+        if values.get("pe.subsystem").is_some() {
             features.push(StructuralFeature {
                 id: "pe/optional_header".to_string(),
                 desc: "Has optional header (standard Windows executable)".to_string(),
                 evidence: vec![Evidence {
                     method: "header".to_string(),
-                    source: "goblin".to_string(),
+                    source: "expose".to_string(),
                     value: "OptionalHeader".to_string(),
                     location: None,
                     ..Default::default()
@@ -702,36 +1016,11 @@ impl PEAnalyzer {
         features
     }
 
-    fn get_imports<'a>(
-        &self,
-        pe: &PE<'a>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) -> (Vec<Import>, Vec<Finding>) {
-        // When the shared expose-side parse is available, mirror its
-        // typed Imports view rather than re-walking goblin's import
-        // table. Expose has already done the strict→permissive
-        // fallback and panic-safe extraction, so the data is at
-        // least as good as what get_imports would produce locally.
-        // Symbol names are pre-normalised; libraries arrive as the
-        // lowercase DLL stem.
-        let imports = if let Some(c) = ctx {
-            c.imports_from_expose()
-        } else {
-            let mut goblin_imports = Vec::with_capacity(pe.imports.len());
-            for import in &pe.imports {
-                goblin_imports.push(Import::new(
-                    import.name.as_ref(),
-                    Some(import.dll.to_string()),
-                    "goblin",
-                ));
-            }
-            goblin_imports
-        };
-
-        // Capability lookup runs over whichever source produced the
-        // imports — `lookup` only uses `source` as evidence provenance
-        // and doesn't gate the match, so both paths surface the same
-        // findings.
+    /// Project expose's typed `Imports` view into `Vec<Import>` and
+    /// run capability-mapper lookups over the symbol set. Symbol
+    /// names are pre-normalised inside `imports_from_expose`.
+    fn pe_imports(&self, ctx: &Ctx<'_>) -> (Vec<Import>, Vec<Finding>) {
+        let imports = ctx.imports_from_expose();
         let mut findings = Vec::new();
         for imp in &imports {
             let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
@@ -742,135 +1031,32 @@ impl PEAnalyzer {
         (imports, findings)
     }
 
-    fn get_exports<'a>(
-        &self,
-        pe: &PE<'a>,
-        data: &[u8],
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) -> (Vec<Export>, Option<u32>) {
-        // Prefer expose's typed Exports view when present — it
-        // already decodes PE's `Reexport::DLLName` /
-        // `Reexport::DLLOrdinal` into the same `forward_to` string
-        // shape cleave uses (`KERNEL32.LoadLibraryA`, `NTDLL.#123`).
-        // Symbol names come through cleave's `normalize_symbol`
-        // helper inside `exports_from_expose`.
-        let exports = if let Some(c) = ctx {
-            c.exports_from_expose()
-        } else {
-            let mut goblin_exports = Vec::new();
-            for export in &pe.exports {
-                if let Some(name) = export.name {
-                    match &export.reexport {
-                        Some(goblin::pe::export::Reexport::DLLName {
-                            export: target,
-                            lib,
-                        }) => {
-                            goblin_exports.push(Export::forwarded(
-                                name,
-                                format!("{}.{}", lib, target),
-                                "goblin",
-                            ));
-                        }
-                        Some(goblin::pe::export::Reexport::DLLOrdinal { ordinal, lib }) => {
-                            goblin_exports.push(Export::forwarded(
-                                name,
-                                format!("{}.#{}", lib, ordinal),
-                                "goblin",
-                            ));
-                        }
-                        None => {
-                            goblin_exports.push(Export::new(
-                                name,
-                                Some(format!("{:#x}", export.rva)),
-                                "goblin",
-                            ));
-                        }
-                    }
-                }
-            }
-            goblin_exports
-        };
-
-        // Aliased-export detection is disassembly-based and not in
-        // expose today, so we still need the goblin PE handle for
-        // this part regardless of whether `ctx` provided the export
-        // list itself.
-        let aliased = if exports.len() >= 2 {
-            let bitness = match pe.header.coff_header.machine {
-                0x8664 | 0xaa64 => 64,
-                _ => 32,
-            };
-            let count = count_aliased_exports(pe, data, bitness);
-            (count > 0).then_some(count)
-        } else {
+    /// Project expose's typed `Exports` view and the
+    /// `pe.aliased_export_count` metric. Aliased exports are stub
+    /// chains where multiple exported names land at the same target;
+    /// expose's `aliased_exports` walker emits the count, so cleave
+    /// doesn't disassemble locally.
+    fn pe_exports(&self, ctx: &Ctx<'_>) -> (Vec<Export>, Option<u32>) {
+        let exports = ctx.exports_from_expose();
+        let aliased = if exports.len() < 2 {
             None
+        } else {
+            let count = ctx
+                .parsed
+                .metrics()
+                .get("pe.aliased_export_count")
+                .map(|v| v as u32)
+                .unwrap_or(0);
+            (count > 0).then_some(count)
         };
-
         (exports, aliased)
     }
 
-    fn get_sections<'a>(
-        &self,
-        pe: &PE<'a>,
-        data: &[u8],
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) -> Vec<Section> {
-        // When the shared expose-side parse is available, mirror
-        // its typed Sections view — entropy is pre-computed in the
-        // metric map (`sections[N].entropy`), so this path avoids
-        // a second linear scan over the section bytes.
-        if let Some(c) = ctx {
-            return c.sections_from_expose();
-        }
-        let mut sections = Vec::new();
-        for section in &pe.sections {
-            let name = String::from_utf8_lossy(&section.name)
-                .trim_matches(char::from(0))
-                .to_string();
-            let size = section.size_of_raw_data as u64;
-            let offset = section.pointer_to_raw_data as u64;
-
-            let characteristics = section.characteristics;
-            let is_executable = (characteristics & 0x20000000) != 0;
-            let is_writable = (characteristics & 0x80000000) != 0;
-            let is_readable = (characteristics & 0x40000000) != 0;
-
-            let permissions = format!(
-                "{}{}{}",
-                if is_readable { "r" } else { "-" },
-                if is_writable { "w" } else { "-" },
-                if is_executable { "x" } else { "-" }
-            );
-
-            let entropy = if offset < data.len() as u64 {
-                let end = ((offset + size) as usize).min(data.len());
-                let section_data = &data[offset as usize..end];
-                calculate_entropy(section_data)
-            } else {
-                0.0
-            };
-
-            let mut flag_tokens = Vec::new();
-            if is_readable {
-                flag_tokens.push("readable".to_string());
-            }
-            if is_writable {
-                flag_tokens.push("writable".to_string());
-            }
-            if is_executable {
-                flag_tokens.push("executable".to_string());
-            }
-            sections.push(Section {
-                name: name.clone(),
-                address: Some(section.virtual_address as u64),
-                offset: Some(section.pointer_to_raw_data as u64),
-                size,
-                entropy,
-                permissions: Some(permissions.clone()),
-                flags: flag_tokens,
-            });
-        }
-        sections
+    /// Project expose's typed `Sections` view into `Vec<Section>`.
+    /// Per-section entropy comes from expose's metric map (no second
+    /// scan over the section bytes).
+    fn pe_sections(&self, ctx: &Ctx<'_>) -> Vec<Section> {
+        ctx.sections_from_expose()
     }
     /// Creates a new PE analyzer with default configuration
     #[must_use]
@@ -951,28 +1137,22 @@ impl PEAnalyzer {
     /// entry in `report.files` with `encoding: ["upx"]`.
     ///
     /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
-    pub(crate) fn analyze_structural(
-        &self,
-        file_path: &Path,
-        data: &[u8],
-        precomputed_sha256: Option<String>,
-    ) -> AnalysisReport {
-        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, None)
-    }
-
-    /// Same as [`Self::analyze_structural`] but accepts an
-    /// [`AnalysisContext`] borrowing the same bytes. When provided,
-    /// downstream extractors prefer expose's typed views over
-    /// goblin's where the data is already there — the long-term
-    /// path for eliminating the cleave-side goblin double-parse
-    /// (see task #43). Pass `None` to keep the legacy
-    /// goblin-everywhere behaviour.
+    /// Structural analysis driven entirely by an
+    /// [`AnalysisContext`]. The ctx must borrow the same bytes
+    /// passed in `data`; downstream helpers source sections,
+    /// imports, exports, signatures, and resource metadata from
+    /// `ctx.parsed` rather than re-walking goblin.
+    ///
+    /// Handles UPX decompression internally — unpacked content
+    /// becomes a separate `FileAnalysis` entry in `report.files`
+    /// with `encoding: ["upx"]`. The unpacked layer opens its own
+    /// `AnalysisContext` against the decompressed bytes.
     pub(crate) fn analyze_structural_with_ctx<'a>(
         &self,
         file_path: &'a Path,
         data: &'a [u8],
         precomputed_sha256: Option<String>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+        ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
         use crate::upx::{UPXDecompressor, UPXError};
@@ -1003,10 +1183,10 @@ impl PEAnalyzer {
         report.findings.push(
             Finding::structural(
                 "anti-static/packer/upx".to_string(),
-                "Binary is packed with UPX".to_string(),
+                "Binary contains a UPX packing marker".to_string(),
                 1.0,
             )
-            .with_criticality(Criticality::Notable),
+            .with_criticality(Criticality::Suspicious),
         );
 
         if !UPXDecompressor::is_available() {
@@ -1016,7 +1196,7 @@ impl PEAnalyzer {
                     "UPX binary not found in PATH - unpacked analysis skipped".to_string(),
                     1.0,
                 )
-                .with_criticality(Criticality::Notable),
+                .with_criticality(Criticality::Suspicious),
             );
             return report;
         }
@@ -1033,9 +1213,16 @@ impl PEAnalyzer {
                         let unpacked_strings =
                             stng::extract_strings_with_options(&unpacked_data, &opts);
                         // UPX-unpacked bytes differ from the caller's
-                        // bytes; the outer `ctx` no longer applies, so
-                        // pass `None` and let analyze_pe run goblin
-                        // afresh on the unpacked payload.
+                        // bytes; open a fresh context on the
+                        // decompressed payload so the downstream
+                        // helpers see a self-consistent view.
+                        let unpacked_ctx = match crate::analysis_context::AnalysisContext::open(
+                            temp_file.path(),
+                            &unpacked_data,
+                        ) {
+                            Ok(c) => c,
+                            Err(_) => return report,
+                        };
                         let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),
                             temp_file.path(),
@@ -1043,7 +1230,7 @@ impl PEAnalyzer {
                             Some(&unpacked_strings),
                             true,
                             None, // Hash will change after decompression
-                            None,
+                            &unpacked_ctx,
                         );
                         crate::analyzers::binary_kv::attach_to_report(&mut unpacked_report);
                         crate::analyzers::binary_extractors::augment_report(
@@ -1115,7 +1302,7 @@ impl PEAnalyzer {
                         description,
                         1.0,
                     )
-                    .with_criticality(Criticality::Notable),
+                    .with_criticality(Criticality::Hostile),
                 );
             }
         }
@@ -1124,6 +1311,9 @@ impl PEAnalyzer {
     }
 
     /// Structural analysis with optional pre-extracted strings.
+    /// The caller provides an `AnalysisContext` borrowing `data`;
+    /// every PE-internal helper reads from expose's typed views via
+    /// that ctx (no goblin re-parse).
     #[allow(clippy::too_many_arguments)]
     fn analyze_structural_with_strings<'a>(
         &self,
@@ -1133,44 +1323,23 @@ impl PEAnalyzer {
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+        ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
-        // Detect and handle tampered PE (junk prefix before MZ header)
+        // Detect and handle tampered PE (junk prefix before MZ header).
+        // The ctx was opened on `data`; when stripping moves the MZ
+        // header, the ctx still describes the original layout (which
+        // is what trait authors want to see — the tampering itself
+        // is the signal). The bytes we hand to downstream helpers
+        // remain `data`.
         let (pe_data, tamper_findings) = self.detect_and_strip_tampering(data);
-
-        // Parse with goblin via the panic-safe wrapper. `goblin_safe::parse_pe`
-        // does the strict→permissive fallback internally and surfaces both
-        // returned errors *and* caught panics through `GoblinOutcome`, so the
-        // existing rizin-fallback path in `analyze_pe` handles them
-        // identically.
-        //
-        // Note: this is currently the second goblin parse for any file
-        // that already went through expose's dispatcher. Task #43
-        // plumbs `ctx` here so individual extractors can prefer
-        // expose's typed views over re-parsing with goblin; deleting
-        // the redundant parse comes later, once every goblin consumer
-        // has migrated.
-        let parse_outcome = goblin_safe::parse_pe(pe_data);
-        let parse_failure = parse_outcome.failure_info();
-        if let Some(ref f) = parse_failure {
-            tracing::debug!(
-                panicked = f.panicked,
-                "PE parse failed for {}: {}",
-                logical_path.display(),
-                f.message
-            );
-        }
-        let pe_parsed = parse_outcome.ok();
 
         self.analyze_pe(
             logical_path,
             analysis_path,
             data,
             pe_data,
-            pe_parsed.as_ref(),
-            parse_failure.as_ref(),
             tamper_findings,
             start,
             stng_strings,
@@ -1180,16 +1349,19 @@ impl PEAnalyzer {
         )
     }
 
-    /// Unified PE analysis — handles both valid and corrupted (unparseable) PEs.
+    /// Unified PE analysis driven by an `AnalysisContext`. Structure,
+    /// imports, exports, sections, and per-format metrics all flow
+    /// from expose's typed views. Rizin runs in parallel for
+    /// disassembly-derived metrics (function counts, complexity,
+    /// strings) and as a fallback when expose surfaces no sections
+    /// or imports (e.g. corrupted import directories).
     ///
-    /// When goblin parses successfully, uses its data for structure, imports, exports,
-    /// and sections. When goblin fails, falls back to rizin for everything.
-    /// When goblin partially succeeds (e.g., 0 sections/imports but rizin finds them),
-    /// uses rizin as fallback and emits suspicious findings for the discrepancy.
-    ///
-    /// `ctx` (when provided) is the shared expose-side parse of the
-    /// same bytes; helpers that already have an expose equivalent
-    /// (imports / exports) prefer it over re-walking goblin's tables.
+    /// `pe_data` is the post-tamper-strip slice; `original_data` is
+    /// the caller's bytes verbatim. The two diverge only when
+    /// `detect_and_strip_tampering` peeled a junk prefix off the
+    /// front — overlay extraction and embedded-binary scanning
+    /// operate on `pe_data`, while file-size metrics use
+    /// `original_data`.
     #[allow(clippy::unnecessary_wraps, clippy::too_many_arguments)]
     fn analyze_pe<'a>(
         &self,
@@ -1197,52 +1369,51 @@ impl PEAnalyzer {
         analysis_path: &Path,
         original_data: &[u8],
         pe_data: &'a [u8],
-        pe: Option<&PE<'a>>,
-        parse_failure: Option<&goblin_safe::GoblinFailureInfo>,
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+        ctx: &Ctx<'a>,
     ) -> AnalysisReport {
-        let goblin_ok = pe.is_some();
+        // `expose_ok` is true whenever expose identified the bytes as
+        // PE and emitted at least the COFF header. The fallback path
+        // (no PE values present) still produces a report so that
+        // tamper findings and rizin disassembly surface for triage.
+        let expose_ok = ctx.parsed.values().get("pe.machine").is_some();
+        let lazy_walker_panicked = ctx
+            .parsed
+            .metrics()
+            .get("pe.resource_walk_panicked")
+            .is_some();
+        let parse_panicked = ctx.parsed.metrics().get("pe.parse_panicked").is_some();
+        let partial_parse = ctx.parsed.values().get("pe.partial_parse").is_some();
 
-        // Extract goblin-derived data when available. `compute_pe_metrics`
-        // also reports whether goblin's lazy walkers (e.g. resource
-        // directory) panicked while populating the metrics; that bit feeds
-        // into `BinaryMetrics::has_malformed_structure` further down so a
-        // post-parse panic is surfaced the same way as a parse-time failure.
-        let (pe_metrics, lazy_walker_panicked) = match pe {
-            Some(pe) => {
-                let (m, panicked) = self.compute_pe_metrics(pe, pe_data, logical_path);
-                (Some(m), panicked)
-            }
-            None => (None, false),
-        };
-        let file_size = original_data.len() as u64;
-        // Prefer expose's already-computed section table when ctx is
-        // available — it carries the same `file_size` field plus an
-        // `executable` flag on the typed Section view, so the
-        // executable-code sum runs directly off `parsed.sections()`
-        // without a second goblin walk.
-        let goblin_code_size = if let Some(c) = ctx {
-            c.parsed
-                .sections()
-                .iter()
-                .filter(|s| s.flags.iter().any(|f| f == "executable"))
-                .map(|s| {
-                    let raw_end = s.file_offset.saturating_add(s.file_size);
-                    if raw_end > file_size {
-                        file_size.saturating_sub(s.file_offset)
-                    } else {
-                        s.file_size
-                    }
-                })
-                .sum()
+        let (pe_metrics, compute_panicked) = if expose_ok {
+            let (m, panicked) = self.compute_pe_metrics(logical_path, ctx);
+            (Some(m), panicked)
         } else {
-            pe.map_or(0, |pe| self.compute_code_size(pe, file_size))
+            (None, false)
         };
+        let any_lazy_panic = lazy_walker_panicked || compute_panicked || parse_panicked;
+
+        let file_size = original_data.len() as u64;
+        // Executable-code size sums every section flagged `executable`
+        // on expose's typed Sections view, capped to the file extent.
+        let code_size_from_ctx: u64 = ctx
+            .parsed
+            .sections()
+            .iter()
+            .filter(|s| s.flags.iter().any(|f| f == "executable"))
+            .map(|s| {
+                let raw_end = s.file_offset.saturating_add(s.file_size);
+                if raw_end > file_size {
+                    file_size.saturating_sub(s.file_offset)
+                } else {
+                    s.file_size
+                }
+            })
+            .sum();
 
         // Create target info
         let target = TargetInfo {
@@ -1252,55 +1423,54 @@ impl PEAnalyzer {
             sha256: precomputed_sha256
                 .clone()
                 .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
-            architectures: pe.map(|pe| vec![self.arch_name(pe)]),
+            architectures: expose_ok.then(|| vec![self.arch_name(ctx)]),
         };
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = Vec::new();
         let mut embedded_binary_count: u32 = 0;
         let mut embedded_archive_count: u32 = 0;
-        if goblin_ok {
-            tools_used.push("goblin".to_string());
+        if expose_ok {
+            tools_used.push("expose".to_string());
         }
 
         // Add any tampering findings detected during preprocessing
         report.findings.append(&mut tamper_findings);
 
-        // Run radare2 in parallel with goblin-based structural analysis.
-        // Tell rizin the binary "has symbols" if goblin found metadata, or if goblin
-        // failed entirely (so rizin tries harder).
-        let has_symbols = pe.is_none_or(|pe| {
-            !pe.imports.is_empty() || !pe.exports.is_empty() || !pe.sections.is_empty()
-        });
-        // Skip rizin entirely for resource-only DLLs (e.g. `.mui` MUI files):
-        // goblin has all the structure we need, and rizin on a binary with no
-        // executable sections will only do startup/teardown work, adding thread
-        // contention without producing any function metrics worth the cost.
-        let has_executable_section = pe.is_some_and(|pe| {
-            use goblin::pe::section_table::IMAGE_SCN_MEM_EXECUTE;
-            pe.sections
-                .iter()
-                .any(|sec| (sec.characteristics & IMAGE_SCN_MEM_EXECUTE) != 0)
-        });
-        // Pure IL-only .NET assemblies contain managed bytecode (CIL), not native
-        // machine code. Rizin's `aa` pass enumerates the symbol table and tries to
-        // disassemble at each address; on a ~500KB .NET DLL this costs ~17 seconds
-        // while producing "functions" that are actually CIL method stubs with no
-        // meaningful native CFG. Mixed-mode assemblies (ones with a native
-        // entrypoint or without the ILONLY flag) are kept on the rizin path so
-        // their native code still gets analyzed. This is the inverse of the
-        // `mixed_mode` condition applied to metrics further down.
-        let is_il_only_dotnet = pe.is_some_and(|pe| {
-            pe.clr_data.as_ref().is_some_and(|clr| {
-                clr.cor20_header.is_il_only() && !clr.cor20_header.is_native_entrypoint()
-            })
-        });
+        // Tell rizin the binary "has symbols" if expose found
+        // structural metadata, or if expose's PE parse failed
+        // entirely (so rizin tries harder).
+        let has_symbols = !expose_ok
+            || !ctx.parsed.imports().is_empty()
+            || !ctx.parsed.exports().is_empty()
+            || !ctx.parsed.sections().is_empty();
+        // Skip rizin entirely for resource-only DLLs (e.g. `.mui` MUI
+        // files): expose has all the structure we need, and rizin on
+        // a binary with no executable sections only does
+        // startup/teardown work, adding thread contention.
+        let has_executable_section = ctx
+            .parsed
+            .sections()
+            .iter()
+            .any(|s| s.flags.iter().any(|f| f == "executable"));
+        // Pure IL-only .NET assemblies contain managed bytecode
+        // (CIL), not native machine code. Rizin's `aa` pass on a
+        // ~500KB .NET DLL costs ~17 seconds while producing
+        // pseudo-functions with no meaningful native CFG. Mixed-mode
+        // assemblies stay on the rizin path (this is the inverse of
+        // the `mixed_mode` derivation in `compute_pe_metrics`).
+        let is_il_only_dotnet = ctx.parsed.values().get("pe.clr.is_il_only").is_some()
+            && ctx
+                .parsed
+                .values()
+                .get("pe.clr.is_native_entrypoint")
+                .is_none();
         let allow_rizin =
-            allow_rizin && (pe.is_none() || has_executable_section) && !is_il_only_dotnet;
+            allow_rizin && (!expose_ok || has_executable_section) && !is_il_only_dotnet;
         let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
 
         let mut r2_result = None;
-        let mut goblin_report_parts: (
+        let mut report_parts: (
             Vec<StructuralFeature>,
             (Vec<Import>, Vec<Finding>),
             (Vec<Export>, Option<u32>),
@@ -1313,15 +1483,12 @@ impl PEAnalyzer {
         );
 
         let scope_start = std::time::Instant::now();
-        // Overlap rizin (subprocess-bound) with goblin structural work (CPU-bound)
-        // for off-pool callers, but never from inside an existing rayon worker.
-        //
-        // Archive member analysis fans out with `par_iter`; if each worker then
-        // enters a nested `rayon::join` and chooses the rizin arm first, that
-        // worker blocks in a subprocess wait while the goblin sibling task sits
-        // queued. Once enough workers do that, the pool starves permanently.
+        // Overlap rizin (subprocess-bound) with expose-driven
+        // structural work (CPU-bound) for off-pool callers, but
+        // never from inside an existing rayon worker — nested join
+        // can starve the pool.
         let on_rayon_worker = rayon::current_thread_index().is_some();
-        let mut goblin_ms = 0u128;
+        let mut struct_ms = 0u128;
         let mut rizin_ms = 0u128;
         if on_rayon_worker && allow_rizin {
             tracing::debug!(
@@ -1331,17 +1498,17 @@ impl PEAnalyzer {
                 has_symbols,
                 needs_r2_strings,
                 rayon_thread = ?rayon::current_thread_index(),
-                "PE analysis on rayon worker; running goblin and rizin sequentially to avoid nested join starvation",
+                "PE analysis on rayon worker; running structural and rizin sequentially to avoid nested join starvation",
             );
         }
         if on_rayon_worker {
-            if let Some(pe) = pe {
-                let goblin_start = std::time::Instant::now();
-                goblin_report_parts.0 = self.get_structure(pe);
-                goblin_report_parts.1 = self.get_imports(pe, ctx);
-                goblin_report_parts.2 = self.get_exports(pe, pe_data, ctx);
-                goblin_report_parts.3 = self.get_sections(pe, pe_data, ctx);
-                goblin_ms = goblin_start.elapsed().as_millis();
+            if expose_ok {
+                let s_start = std::time::Instant::now();
+                report_parts.0 = self.structural_features(ctx);
+                report_parts.1 = self.pe_imports(ctx);
+                report_parts.2 = self.pe_exports(ctx);
+                report_parts.3 = self.pe_sections(ctx);
+                struct_ms = s_start.elapsed().as_millis();
             }
             if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
                 let rizin_start = std::time::Instant::now();
@@ -1349,7 +1516,7 @@ impl PEAnalyzer {
                     analysis_path,
                     original_data.len() as u64,
                     has_symbols,
-                    goblin_ok,
+                    expose_ok,
                     needs_r2_strings,
                     precomputed_sha256,
                     self.cancellation.as_ref(),
@@ -1366,7 +1533,7 @@ impl PEAnalyzer {
                             analysis_path,
                             original_data.len() as u64,
                             has_symbols,
-                            goblin_ok,
+                            expose_ok,
                             needs_r2_strings,
                             precomputed_sha256,
                             self.cancellation.as_ref(),
@@ -1376,26 +1543,26 @@ impl PEAnalyzer {
                     }
                 },
                 || {
-                    if let Some(pe) = pe {
-                        let goblin_start = std::time::Instant::now();
-                        goblin_report_parts.0 = self.get_structure(pe);
-                        goblin_report_parts.1 = self.get_imports(pe, ctx);
-                        goblin_report_parts.2 = self.get_exports(pe, pe_data, ctx);
-                        goblin_report_parts.3 = self.get_sections(pe, pe_data, ctx);
-                        goblin_ms = goblin_start.elapsed().as_millis();
+                    if expose_ok {
+                        let s_start = std::time::Instant::now();
+                        report_parts.0 = self.structural_features(ctx);
+                        report_parts.1 = self.pe_imports(ctx);
+                        report_parts.2 = self.pe_exports(ctx);
+                        report_parts.3 = self.pe_sections(ctx);
+                        struct_ms = s_start.elapsed().as_millis();
                     }
                 },
             );
         }
         let scope_ms = scope_start.elapsed().as_millis();
-        if allow_rizin || goblin_ms > 0 {
+        if allow_rizin || struct_ms > 0 {
             tracing::info!(
                 path = %logical_path.display(),
                 analysis_path = %analysis_path.display(),
                 on_rayon_worker,
                 rayon_thread = ?rayon::current_thread_index(),
                 scope_ms = scope_ms as u64,
-                goblin_ms = goblin_ms as u64,
+                struct_ms = struct_ms as u64,
                 rizin_ms = rizin_ms as u64,
                 allow_rizin,
                 has_symbols,
@@ -1406,36 +1573,39 @@ impl PEAnalyzer {
             tracing::warn!(
                 path = %logical_path.display(),
                 elapsed_ms = scope_ms,
-                goblin_ms = goblin_ms as u64,
+                struct_ms = struct_ms as u64,
                 rizin_ms = rizin_ms as u64,
                 on_rayon_worker,
                 "PE structural analysis completed slowly",
             );
         }
 
-        // Merge goblin results
-        report.structure.extend(goblin_report_parts.0);
-        report.imports.extend(goblin_report_parts.1 .0);
-        for finding in goblin_report_parts.1 .1 {
+        // Merge structural results
+        report.structure.extend(report_parts.0);
+        report.imports.extend(report_parts.1 .0);
+        for finding in report_parts.1 .1 {
             if !report.findings.iter().any(|f| f.id == finding.id) {
                 report.findings.push(finding);
             }
         }
-        report.exports.extend(goblin_report_parts.2 .0);
-        if let Some(aliased) = goblin_report_parts.2 .1 {
+        report.exports.extend(report_parts.2 .0);
+        if let Some(aliased) = report_parts.2 .1 {
             let metrics = report
                 .metrics
                 .get_or_insert_with(crate::types::Metrics::default);
             let binary_metrics = metrics.binary.get_or_insert_with(Default::default);
             binary_metrics.aliased_exports = aliased;
         }
-        report.sections.extend(goblin_report_parts.3);
+        report.sections.extend(report_parts.3);
 
-        // Detect inflated section headers (declared size extends beyond EOF)
-        if let Some(pe) = pe {
-            let has_inflated = pe.sections.iter().any(|s| {
-                (s.pointer_to_raw_data as u64).saturating_add(s.size_of_raw_data as u64) > file_size
-            });
+        // Detect inflated section headers (declared size extends
+        // beyond EOF). Reads expose's typed Sections view.
+        if expose_ok {
+            let has_inflated = ctx
+                .parsed
+                .sections()
+                .iter()
+                .any(|s| s.file_offset.saturating_add(s.file_size) > file_size);
             if has_inflated {
                 report.findings.push(
                     Finding::structural(
@@ -1448,7 +1618,7 @@ impl PEAnalyzer {
             }
         }
 
-        // --- Process radare2 results, with fallback for goblin gaps ---
+        // --- Process radare2 results, with fallback for ctx gaps ---
         let r2_strings = if let Some(Ok(batched)) = r2_result {
             tools_used.push("radare2".to_string());
             crate::radare2::push_rizin_warnings(&mut report, &batched);
@@ -1459,10 +1629,10 @@ impl PEAnalyzer {
                 "pe",
             );
 
-            // When goblin succeeded, override r2 metrics with more accurate goblin values
-            if let Some(pe) = pe {
-                let file_size = original_data.len() as u64;
-                let mut code_size = goblin_code_size;
+            // When expose parsed the PE, override r2 metrics with
+            // the more accurate ctx-derived values.
+            if expose_ok {
+                let mut code_size = code_size_from_ctx;
                 if code_size > file_size {
                     tracing::warn!(
                         "code_size ({}) > file_size ({}) — capping",
@@ -1474,10 +1644,8 @@ impl PEAnalyzer {
                 binary_metrics.code_size = code_size;
 
                 // .pdata function count correction
-                if let Some(pdata) = pe.sections.iter().find(|s| {
-                    String::from_utf8_lossy(&s.name).trim_matches(char::from(0)) == ".pdata"
-                }) {
-                    let pdata_functions = pdata.virtual_size / 12;
+                if let Some(pdata) = ctx.parsed.sections().iter().find(|s| s.name == ".pdata") {
+                    let pdata_functions = (pdata.vsize / 12) as u32;
                     if pdata_functions > 0
                         && (binary_metrics.func_count <= 1
                             || pdata_functions > binary_metrics.func_count * 10)
@@ -1486,34 +1654,24 @@ impl PEAnalyzer {
                     }
                 }
 
-                // Prefer expose's section permission counts when the
-                // shared parse is available — `sections.executable_count`
-                // / `writable_count` / `executable_writable_count` are
-                // populated alongside the typed Sections view and avoid
-                // a second walk over goblin's section table here.
-                // Fall back to walking goblin directly when no ctx is
-                // provided (legacy call paths, tests).
-                let (exec, write, wx) = if let Some(c) = ctx {
-                    let m = c.parsed.metrics();
-                    (
-                        m.get("sections.executable_count")
-                            .map(|v| v as u32)
-                            .unwrap_or(0),
-                        m.get("sections.writable_count")
-                            .map(|v| v as u32)
-                            .unwrap_or(0),
-                        m.get("sections.executable_writable_count")
-                            .map(|v| v as u32)
-                            .unwrap_or(0),
-                    )
-                } else {
-                    self.compute_section_permission_counts(pe)
-                };
-                binary_metrics.executable_section_count = exec;
-                binary_metrics.writable_section_count = write;
-                binary_metrics.wx_section_count = wx;
+                // Section permission counts come from expose's
+                // metric map — populated alongside the typed
+                // Sections view, so no second walk is needed here.
+                let m = ctx.parsed.metrics();
+                binary_metrics.executable_section_count = m
+                    .get("sections.executable_count")
+                    .map(|v| v as u32)
+                    .unwrap_or(0);
+                binary_metrics.writable_section_count = m
+                    .get("sections.writable_count")
+                    .map(|v| v as u32)
+                    .unwrap_or(0);
+                binary_metrics.wx_section_count = m
+                    .get("sections.executable_writable_count")
+                    .map(|v| v as u32)
+                    .unwrap_or(0);
 
-                // Recalculate ratios with correct code_size
+                // Recalculate ratios with the corrected code_size.
                 if file_size > 0 {
                     let data_size = file_size.saturating_sub(code_size);
                     if data_size > 0 {
@@ -1543,7 +1701,7 @@ impl PEAnalyzer {
             // --- Rizin fallback: sections ---
             if report.sections.is_empty() && !batched.sections.is_empty() {
                 tracing::info!(
-                    "goblin returned 0 sections but rizin found {} — using rizin fallback",
+                    "expose returned 0 sections but rizin found {} — using rizin fallback",
                     batched.sections.len()
                 );
                 for section in &batched.sections {
@@ -1569,7 +1727,7 @@ impl PEAnalyzer {
                         flags: flag_tokens,
                     });
                 }
-                if goblin_ok {
+                if expose_ok {
                     report.findings.push(
                         Finding::structural(
                             "objectives/anti-static/pe-tampering/hidden-sections".to_string(),
@@ -1608,7 +1766,7 @@ impl PEAnalyzer {
                     })
                     .collect();
                 tracing::info!(
-                    "goblin returned 0 imports but rizin found {} ({} plausible after filtering) — using rizin fallback",
+                    "expose returned 0 imports but rizin found {} ({} plausible after filtering) — using rizin fallback",
                     batched.imports.len(),
                     plausible_imports.len()
                 );
@@ -1626,7 +1784,7 @@ impl PEAnalyzer {
                         }
                     }
                 }
-                if goblin_ok && !report.imports.is_empty() {
+                if expose_ok && !report.imports.is_empty() {
                     report.findings.push(
                         Finding::structural(
                             "objectives/anti-static/pe-tampering/hidden-imports".to_string(),
@@ -1643,7 +1801,8 @@ impl PEAnalyzer {
 
             Some(batched.strings)
         } else {
-            // No rizin available — set metrics from goblin data only
+            // No rizin available — set metrics from ctx-derived data
+            // only.
             if let Some(pe_m) = pe_metrics {
                 report.metrics = Some(Metrics {
                     pe: Some(pe_m),
@@ -1653,35 +1812,39 @@ impl PEAnalyzer {
             None
         };
 
-        // --- Corrupted-header findings (goblin failed entirely) ---
-        if let Some(failure) = parse_failure {
-            let err = &failure.message;
-            let error_lower = err.to_lowercase();
-            let is_dos_executable = looks_like_dos_executable(pe_data);
-            let is_resource_error = error_lower.contains("resourcestring")
-                || error_lower.contains("resourcetable")
-                || error_lower.contains("resource");
-            let is_parser_limitation = err.contains("type is too big");
-
-            // Resource directory errors and parser limitations are non-critical —
-            // the PE structure itself is intact, only metadata is malformed.
-            // MZ-format DOS executables are also not PE tampering: they often lack
-            // a valid PE signature and may be bundled in installers or boot media.
-            // Only non-resource header corruption indicates deliberate tampering.
+        // --- Corrupted-header findings (expose's PE parse fell back
+        // to header-only, or failed entirely). The exact failure
+        // detail isn't surfaced by expose's metrics; the absence of
+        // `pe.machine` or presence of `pe.partial_parse` IS the
+        // signal.
+        if !expose_ok || partial_parse {
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
-            let (crit, conf) = if is_resource_error || is_parser_limitation || is_dos_executable {
-                (Criticality::Baseline, 0.3)
-            } else if rizin_found_hidden_content {
-                (Criticality::Suspicious, 0.8)
+            let is_dos_executable = looks_like_dos_executable(pe_data);
+            // Partial parse (header-only fallback) means the COFF
+            // header was readable but a downstream walker failed;
+            // resource-only DLLs and resource-table errors land
+            // here. Treat as informational unless rizin found
+            // something the parse missed.
+            let (crit, conf) = if !expose_ok && !is_dos_executable {
+                if rizin_found_hidden_content {
+                    (Criticality::Suspicious, 0.8)
+                } else {
+                    (Criticality::Suspicious, 0.85)
+                }
             } else {
-                (Criticality::Suspicious, 0.85)
+                (Criticality::Baseline, 0.3)
             };
 
+            let msg = if !expose_ok {
+                "PE could not be identified by expose"
+            } else {
+                "PE parsed with header-only fallback (downstream walker failed)"
+            };
             report.findings.push(Finding {
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
                 kind: FindingKind::Structural,
-                desc: format!("PE header too corrupted to parse: {err}"),
+                desc: msg.to_string(),
                 conf,
                 crit,
                 mbc: Some("B0001".to_string()),
@@ -1689,8 +1852,8 @@ impl PEAnalyzer {
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
-                    source: "goblin".to_string(),
-                    value: err.clone(),
+                    source: "expose".to_string(),
+                    value: msg.to_string(),
                     location: None,
                     ..Default::default()
                 }],
@@ -1703,41 +1866,33 @@ impl PEAnalyzer {
                 desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
-                    source: "goblin".to_string(),
-                    value: err.clone(),
+                    source: "expose".to_string(),
+                    value: msg.to_string(),
                     location: None,
                     ..Default::default()
                 }],
             });
 
-            // The exact failure message (including whether goblin panicked
-            // vs returned Err) lives in metadata.errors for triage.
-            report.metadata.errors.push(format!(
-                "PE parse {}: {}",
-                if failure.panicked {
-                    "panicked"
-                } else {
-                    "failed"
-                },
-                err
-            ));
+            report.metadata.errors.push(msg.to_string());
         }
 
-        // Surface "goblin couldn't be trusted on this binary" as a single
-        // metric bit. Set whenever the parse failed *or* a lazy walker
-        // (resource directory, debug data, ...) panicked during metric
-        // extraction. The exact reason lives in `metadata.errors`.
-        if parse_failure.is_some() || lazy_walker_panicked {
+        // Surface "expose couldn't be trusted on this binary" as a
+        // single metric bit. Set whenever the parse fell back to
+        // header-only, expose failed to identify the format, or a
+        // lazy walker (resource directory, debug data, ...) panicked
+        // during metric extraction. The exact reason lives in
+        // `metadata.errors`.
+        if !expose_ok || partial_parse || any_lazy_panic {
             if let Some(metrics) = report.metrics.as_mut() {
                 if let Some(bm) = metrics.binary.as_mut() {
                     bm.has_malformed_structure = true;
                 }
             }
-            if lazy_walker_panicked && parse_failure.is_none() {
+            if any_lazy_panic && expose_ok && !partial_parse {
                 report
                     .metadata
                     .errors
-                    .push("goblin lazy walker panicked during PE metric extraction".to_string());
+                    .push("expose lazy walker panicked during PE metric extraction".to_string());
             }
         }
 
@@ -1878,8 +2033,19 @@ impl PEAnalyzer {
             }
         }
 
-        // Overlay analysis (requires section data to find overlay start)
-        let overlay_bounds = pe.and_then(|pe| pe_overlay_bounds_excluding_certificate(pe, pe_data));
+        // Overlay analysis. The overlay extent comes from expose's
+        // emitted `pe.overlay_offset` / `pe.overlay_end` metrics —
+        // the same range the legacy "sections end → cert table"
+        // derivation produced.
+        let overlay_bounds = {
+            let m = ctx.parsed.metrics();
+            let start = m.get("pe.overlay_offset").map(|v| v as usize);
+            let end = m.get("pe.overlay_end").map(|v| v as usize);
+            match (start, end) {
+                (Some(s), Some(e)) if e > s => Some((s, e)),
+                _ => None,
+            }
+        };
         if let Some((overlay_start, overlay_end)) = overlay_bounds {
             let overlay_size = (overlay_end - overlay_start) as u64;
             if let Some(ref mut metrics) = report.metrics {
@@ -2006,7 +2172,7 @@ impl PEAnalyzer {
                 .and_then(|n| n.to_str())
                 .unwrap_or("binary.exe")
                 .to_string();
-            let cert_range = pe.and_then(|pe| pe_certificate_range(pe, pe_data));
+            let cert_range = pe_certificate_range_from_ctx(ctx, pe_data);
             let embedded = crate::analyzers::embedded_binary_detector::scan_for_embedded_binaries(
                 pe_data,
                 self.cancellation.as_deref(),
@@ -2025,22 +2191,25 @@ impl PEAnalyzer {
                     binary,
                     &report.target.path,
                 );
-                // Downgrade embedded binaries in .rsrc or .NET managed resources to Notable
-                // (legitimate use — e.g. resource-only DLLs, .NET assemblies bundling drivers)
-                if let Some(pe) = pe {
-                    let in_rsrc = pe.sections.iter().any(|s| {
-                        let name = String::from_utf8_lossy(&s.name);
-                        let name = name.trim_matches(char::from(0));
-                        if name != ".rsrc" {
+                // Downgrade embedded binaries in .rsrc or .NET
+                // managed resources to Notable (legitimate use —
+                // e.g. resource-only DLLs, .NET assemblies bundling
+                // drivers). Section lookup runs over expose's typed
+                // Sections view.
+                if expose_ok {
+                    let in_rsrc = ctx.parsed.sections().iter().any(|s| {
+                        if s.name != ".rsrc" {
                             return false;
                         }
-                        let start = s.pointer_to_raw_data as usize;
-                        let end = start + s.size_of_raw_data as usize;
+                        let start = s.file_offset as usize;
+                        let end = start + s.file_size as usize;
                         binary.offset >= start && binary.offset < end
                     });
-                    // .NET assemblies store managed resources — including embedded native drivers
-                    // — in the .text section, not .rsrc. Detect .NET via the CLR metadata root
-                    // BSJB signature, which is present in every valid .NET assembly.
+                    // .NET assemblies store managed resources —
+                    // including embedded native drivers — in the
+                    // .text section, not .rsrc. Detect .NET via the
+                    // CLR metadata root BSJB signature, which is
+                    // present in every valid .NET assembly.
                     let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
                     let in_nsis_overlay =
                         matches!(
@@ -2058,14 +2227,16 @@ impl PEAnalyzer {
                             pe_data.len()
                         );
                     }
-                    // NSIS installers legitimately carry native plugin DLLs inside the
-                    // overlay; those child binaries are still extracted and analyzed, so
-                    // the host-level embedded-PE marker should be informational rather than
-                    // suspicious in that narrowly scoped context.
+                    // NSIS installers legitimately carry native
+                    // plugin DLLs inside the overlay; those child
+                    // binaries are still extracted and analyzed, so
+                    // the host-level embedded-PE marker should be
+                    // informational rather than suspicious.
                     //
-                    // Platform-signed PEs (e.g. Microsoft Windows drivers) legitimately
-                    // carry firmware blobs (Intel microcode, etc.) formatted as ELF inside
-                    // non-standard sections like .drt.
+                    // Platform-signed PEs (e.g. Microsoft Windows
+                    // drivers) legitimately carry firmware blobs
+                    // (Intel microcode, etc.) formatted as ELF
+                    // inside non-standard sections like .drt.
                     let host_is_platform_signed = report
                         .findings
                         .iter()
@@ -2153,44 +2324,82 @@ impl PEAnalyzer {
 
         report
     }
-    fn arch_name<'a>(&self, pe: &PE<'a>) -> String {
-        match pe.header.coff_header.machine {
-            0x014c => "x86".to_string(),
-            0x8664 => "x86_64".to_string(),
-            0x01c0 => "ARM".to_string(),
-            0xaa64 => "ARM64".to_string(),
-            _ => format!("unknown-{:#x}", pe.header.coff_header.machine),
-        }
+    /// Canonical machine-type label for the parsed PE, read from
+    /// expose's `pe.machine` (lowercase forms like `"x86_64"`,
+    /// `"i386"`, `"arm64"`). Falls back to a literal `"unknown"`
+    /// only when expose didn't identify the binary as PE — every
+    /// successful PE parse emits the field.
+    fn arch_name(&self, ctx: &Ctx<'_>) -> String {
+        ctx.parsed
+            .values()
+            .get("pe.machine")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "unknown".to_string())
     }
 
-    /// Compute PE-specific metrics from parsed PE binary.
+    /// Compute PE-specific metrics from the shared expose-side parse.
     ///
-    /// Returns the populated metrics together with a `lazy_walker_panicked`
-    /// flag set when goblin's resource-directory walker (or any other lazy
-    /// accessor on the parsed `PE`) panicked during metric extraction. The
-    /// caller propagates that flag into `BinaryMetrics::has_malformed_structure`
-    /// so downstream consumers see the same signal regardless of whether
-    /// goblin failed at parse time or while walking lazy fields later.
+    /// Returns the populated metrics together with a
+    /// `lazy_walker_panicked` flag set when expose surfaced
+    /// `pe.resource_walk_panicked` during metric extraction. The
+    /// caller propagates that flag into
+    /// `BinaryMetrics::has_malformed_structure` so downstream
+    /// consumers see the same signal regardless of whether the
+    /// parse failed at the COFF stage or while walking lazy fields
+    /// later.
     fn compute_pe_metrics<'a>(
         &self,
-        pe: &PE<'a>,
-        data: &[u8],
         logical_path: &Path,
+        ctx: &Ctx<'a>,
     ) -> (crate::types::binary_metrics::PeMetrics, bool) {
         use crate::types::binary_metrics::PeMetrics;
 
+        let c = ctx;
         let mut metrics = PeMetrics::default();
         let mut lazy_walker_panicked = false;
 
-        let timestamp = pe.header.coff_header.time_date_stamp;
+        // Top-of-function header fields. Timestamp, entry RVA,
+        // entry_section, machine, and characteristics all come from
+        // expose's emitted values.
+        let timestamp = c
+            .parsed
+            .values()
+            .get("pe.timestamp")
+            .and_then(|v| v.as_i64())
+            .map(|v| v as u32)
+            .unwrap_or(0);
         metrics.timestamp = timestamp;
-        metrics.machine = pe.header.coff_header.machine as u32;
-        metrics.characteristics = pe.header.coff_header.characteristics as u32;
+        metrics.machine = c
+            .parsed
+            .values()
+            .get("pe.machine_id")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0);
+        metrics.characteristics = c
+            .parsed
+            .values()
+            .get("pe.characteristics_raw")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0);
         // (raw COFF NumberOfSections dropped from the metric surface;
-        // pe.sections.len() flows into binary.section_count, and the
+        // sections.len() flows into binary.section_count, and the
         // mismatch case is exposed via pe.section_count_mismatch.)
-        metrics.entry = pe.entry;
-        metrics.entry_section = entry_section_name(pe);
+        metrics.entry = c
+            .parsed
+            .values()
+            .get("pe.entry_point")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or(0);
+        metrics.entry_section = c
+            .parsed
+            .values()
+            .get("pe.entry_section")
+            .and_then(|v| v.as_str())
+            .map(str::to_string);
 
         // Timestamp anomaly check
         metrics.timestamp_is_zero = timestamp == 0;
@@ -2199,349 +2408,140 @@ impl PEAnalyzer {
         metrics.timestamp_anomaly =
             metrics.timestamp_is_zero || timestamp < 631152000 || metrics.timestamp_in_future;
 
-        let pe_offset = pe.header.dos_header.pe_pointer as usize;
-        metrics.dos_stub_modified = dos_stub_modified(data, pe_offset);
-        metrics.dos_stub_zeroed = dos_stub_zeroed(data, pe_offset);
+        // DOS stub anomalies + Rich header presence are emitted by expose
+        // (formats/pe.rs: `pe.dos_stub_modified`, `pe.dos_stub_zeroed`;
+        // formats/pe_rich.rs: `pe.rich.entries`).
+        {
+            let m = c.parsed.metrics();
+            metrics.dos_stub_modified = m.get("pe.dos_stub_modified").is_some();
+            metrics.dos_stub_zeroed = m.get("pe.dos_stub_zeroed").is_some();
+            metrics.has_rich_header = c.parsed.values().get("pe.rich.entries").is_some();
+        }
 
-        // Check for Rich header (between DOS and PE signature)
-        if pe_offset > 0x80 {
-            // Rich header typically found here
-            for i in (0x80..pe_offset.min(0x200)).step_by(4) {
-                if i + 4 <= data.len() && &data[i..i + 4] == b"Rich" {
-                    metrics.has_rich_header = true;
+        // `.rsrc` size + entropy. Expose's typed Sections view carries
+        // file_size, and `sections[idx].entropy` lives in metrics under
+        // the section's positional key.
+        {
+            let typed = c.parsed.sections();
+            let m = c.parsed.metrics();
+            for (idx, section) in typed.iter().enumerate() {
+                if section.name == ".rsrc" {
+                    metrics.rsrc_size = section.file_size;
+                    if let Some(e) = m.get(&format!("sections[{idx}].entropy")) {
+                        metrics.rsrc_entropy = e as f32;
+                    }
                     break;
                 }
             }
         }
 
-        // Check for .NET by looking for .NET-specific sections
-        for section in &pe.sections {
-            if let Ok(name) = section.name() {
-                // Check resource section
-                if name == ".rsrc" {
-                    metrics.rsrc_size = section.size_of_raw_data as u64;
-                    // Compute entropy from section data
-                    let section_start = section.pointer_to_raw_data as usize;
-                    let section_end = section_start + section.size_of_raw_data as usize;
-                    if section_end <= data.len() {
-                        let section_data = &data[section_start..section_end];
-                        metrics.rsrc_entropy =
-                            crate::entropy::calculate_entropy(section_data) as f32;
-                    }
-                }
-            }
-        }
+        // Optional-header fields. Every value comes from expose's
+        // emitted set — raw u32 fields land under the
+        // `pe.{file_alignment,section_alignment,subsystem_raw,
+        // dll_characteristics_raw,linker_major_version,
+        // linker_minor_version}` keys alongside the string-flag
+        // projections downstream traits consume.
+        if c.parsed.values().get("pe.subsystem").is_some() {
+            let v = c.parsed.values();
+            let m = c.parsed.metrics();
+            metrics.file_alignment = v
+                .get("pe.file_alignment")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.section_alignment = v
+                .get("pe.section_alignment")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.subsystem = v
+                .get("pe.subsystem_raw")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.dll_characteristics = v
+                .get("pe.dll_characteristics_raw")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.linker_major_version = v
+                .get("pe.linker_major_version")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.linker_minor_version = v
+                .get("pe.linker_minor_version")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
 
-        if let Some(opt) = &pe.header.optional_header {
-            metrics.checksum = opt.windows_fields.check_sum;
+            metrics.checksum = m.get("pe.checksum").map(|x| x as u32).unwrap_or(0);
             metrics.has_checksum = metrics.checksum != 0;
-            metrics.file_alignment = opt.windows_fields.file_alignment;
-            metrics.section_alignment = opt.windows_fields.section_alignment;
-            metrics.subsystem = opt.windows_fields.subsystem as u32;
-            metrics.dll_characteristics = opt.windows_fields.dll_characteristics as u32;
-            metrics.image_base = opt.windows_fields.image_base;
-            metrics.size_of_image = opt.windows_fields.size_of_image;
-            metrics.size_of_headers = opt.windows_fields.size_of_headers;
-            metrics.linker_major_version = opt.standard_fields.major_linker_version as u32;
-            metrics.linker_minor_version = opt.standard_fields.minor_linker_version as u32;
+            metrics.computed_checksum =
+                m.get("pe.computed_checksum").map(|x| x as u32).unwrap_or(0);
+            metrics.checksum_valid = m.get("pe.checksum_valid").is_some();
+            metrics.image_base = v
+                .get("pe.image_base")
+                .and_then(|x| x.as_u64())
+                .unwrap_or(0);
+            metrics.size_of_image = v
+                .get("pe.image_size")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.size_of_headers = v
+                .get("pe.headers_size")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
 
-            if let Some(checksum_offset) = pe_checksum_field_offset(pe, data.len()) {
-                metrics.computed_checksum = compute_pe_checksum(data, checksum_offset);
-                if metrics.checksum != 0 {
-                    metrics.checksum_valid = metrics.checksum == metrics.computed_checksum;
-                }
-            }
+            // Debug directory + CodeView fields. Expose's pe_debug
+            // module emits `pe.debug.entries[]` (each with `type`,
+            // `type_id`, `timestamp_unix`, `size_bytes`) plus
+            // `pe.debug.pdb.{path,guid,age}`.
+            fill_debug_metrics_from_ctx(c, &mut metrics);
 
-            if let Some(debug_data) = &pe.debug_data {
-                let entries: Vec<_> = debug_data.entries().filter_map(Result::ok).collect();
-                metrics.debug_directory_entries = entries.len() as u32;
-                let mut debug_timestamps: Vec<u32> = entries
-                    .iter()
-                    .map(|entry| entry.time_date_stamp)
-                    .filter(|&ts| ts != 0)
-                    .collect();
-                if !debug_timestamps.is_empty() {
-                    debug_timestamps.sort_unstable();
-                    debug_timestamps.dedup();
-                    metrics.debug_timestamp_unique_count = debug_timestamps.len() as u32;
-                    metrics.debug_timestamp_min = *debug_timestamps.first().unwrap_or(&0);
-                    metrics.debug_timestamp_max = *debug_timestamps.last().unwrap_or(&0);
-                    metrics.debug_timestamp_consistent = debug_timestamps.len() == 1;
-                }
-                metrics.debug_timestamp_nonzero_count = entries
-                    .iter()
-                    .filter(|entry| entry.time_date_stamp != 0)
-                    .count() as u32;
+            // Authenticode / cert-table handling. Ctx reads expose's
+            // `pe.signatures[]` (parsed PKCS#7) and `pe.cert_table_size`
+            // / `pe.security_directory_out_of_bounds` markers.
+            fill_authenticode_metrics_from_ctx(c, &mut metrics);
 
-                // Sorted, deduplicated list of DEBUG_TYPE_* values.
-                let mut types: Vec<u32> = entries.iter().map(|entry| entry.data_type).collect();
-                types.sort_unstable();
-                types.dedup();
-                // Named flags for the supply-chain-relevant types.
-                // PE/COFF spec: 12=VC_FEATURE, 13=POGO, 14=ILTCG, 16=REPRO.
-                metrics.has_vc_feature = types.contains(&12);
-                metrics.has_pogo = types.contains(&13);
-                metrics.has_iltcg = types.contains(&14);
-                metrics.is_reproducible_build = types.contains(&16);
-                metrics.debug_directory_types = types;
-
-                if let Some(info) = debug_data.codeview_pdb70_debug_info {
-                    metrics.pdb_path = pdb_filename(info.filename);
-                    // Format the 16-byte signature as a canonical
-                    // hyphenated GUID so trait authors can match it
-                    // directly against the PDB's age GUID.
-                    metrics.codeview_guid = Some(format_pdb_guid(&info.signature));
-                    metrics.codeview_age = info.age;
-                } else if let Some(info) = debug_data.codeview_pdb20_debug_info {
-                    metrics.pdb_path = pdb_filename(info.filename);
-                    // PDB 2.0 uses a 32-bit signature, no GUID.
-                    metrics.codeview_guid = Some(format!("{:08x}", info.signature));
-                    metrics.codeview_age = info.age;
-                }
-            }
-
-            if let Some(Some(cert_table_entry)) = opt.data_directories.data_directories.get(4) {
-                let cert_table = &cert_table_entry.1;
-                metrics.certificate_table_size = cert_table.size as u64;
-                // Note: virt_addr in security directory is actually a file offset
-                let offset = cert_table.virtual_address as usize;
-                let size = cert_table.size as usize;
-                // The security directory virtual_address is a file offset; if it
-                // points outside the file the header has been tampered with.
-                if offset > 0 && (offset > data.len() || size > data.len() - offset) {
-                    metrics.security_directory_out_of_bounds = true;
-                }
-                if offset > 0 && offset + size <= data.len() {
-                    let cert_data = &data[offset..offset + size];
-                    // Skip the WIN_CERTIFICATE header (8 bytes)
-                    if cert_data.len() > 8 {
-                        let pkcs7_data = &cert_data[8..];
-                        if !pkcs7_data.is_empty() && pkcs7_data[0] == 0x30 {
-                            metrics.has_signature = true;
-
-                            if let Some(dt) = parse_asn1_signing_time(pkcs7_data) {
-                                metrics.signing_time = dt.timestamp() as u64;
-                                metrics.signing_time_before_timestamp =
-                                    dt.timestamp() < metrics.timestamp as i64;
-                            }
-
-                            // Simple extraction of common names + organizations
-                            // from certificate chain. CN (2.5.4.3) holds the
-                            // per-cert subject; O (2.5.4.10) holds the signing
-                            // organization — which is what users care about for
-                            // "who signed this" (e.g. "Python Software Foundation").
-                            let cn_oid = [0x55, 0x04, 0x03];
-                            let o_oid = [0x55, 0x04, 0x0a];
-                            let signers = scan_asn1_attribute(pkcs7_data, &cn_oid, 10);
-                            let orgs = scan_asn1_attribute(pkcs7_data, &o_oid, 10);
-
-                            if !signers.is_empty() {
-                                metrics.signer = Some(signers.join(", "));
-                                if signers
-                                    .iter()
-                                    .any(|s| s.contains("Microsoft") || s.contains("Windows"))
-                                {
-                                    metrics.signature_type = Some("platform".to_string());
-                                } else {
-                                    metrics.signature_type = Some("developer".to_string());
-                                }
-                                // Primary signer: prefer a non-CA Organization,
-                                // fall back to the first non-CA Common Name.
-                                metrics.primary_signer = orgs
-                                    .iter()
-                                    .find(|s| !is_ca_identity(s))
-                                    .or_else(|| signers.iter().find(|s| !is_ca_identity(s)))
-                                    .cloned();
-                            }
-
-                            // Cert-chain analysis via x509-parser:
-                            // recover the leaf signer's full identity
-                            // (subject CN, issuer CN, thumbprint,
-                            // serial, validity).  These are the
-                            // canonical "is this the same publisher"
-                            // anchors for cross-release comparison.
-                            let certs = parse_pkcs7_certificates(pkcs7_data);
-                            metrics.cert_chain_depth = certs.len() as u32;
-                            // NestedSignature attribute (Microsoft OID
-                            // 1.3.6.1.4.1.311.2.4.1) anywhere in the
-                            // PKCS#7 SignedData unauthenticated attrs.
-                            metrics.has_nested_signature = pkcs7_has_nested_signature(pkcs7_data);
-                            // Parse SignerInfo FIRST — its
-                            // IssuerAndSerialNumber is the authoritative
-                            // pointer to the actual signing cert. We
-                            // use it to pick the leaf below, falling
-                            // back to the heuristic only when SI is
-                            // missing or its referenced cert isn't in
-                            // the bag (a strong tampering signal).
-                            let si_opt = parse_signer_info(pkcs7_data);
-                            if let Some(si) = &si_opt {
-                                metrics.signer_info_issuer = dn_first_cn_raw(si.issuer_raw);
-                                metrics.signer_info_serial = Some(si.serial_hex.clone());
-                            }
-                            let leaf_opt = si_opt
-                                .as_ref()
-                                .and_then(|si| {
-                                    let normalized =
-                                        normalize_serial_hex(&si.serial_hex).to_string();
-                                    find_cert_by_issuer_and_serial(
-                                        &certs,
-                                        si.issuer_raw,
-                                        &normalized,
-                                    )
-                                })
-                                .or_else(|| find_leaf_signer(&certs));
-                            // matches_leaf is set when SI was present
-                            // AND its referenced cert was the one we
-                            // chose. mismatches_leaf fires when SI is
-                            // present but no matching cert in the bag.
-                            if let (Some(si), Some(leaf)) = (&si_opt, leaf_opt) {
-                                let normalized = normalize_serial_hex(&si.serial_hex);
-                                let leaf_serial = format!("{:x}", leaf.tbs_certificate.serial);
-                                let resolved_via_si = leaf.tbs_certificate.issuer().as_raw()
-                                    == si.issuer_raw
-                                    && normalize_serial_hex(&leaf_serial) == normalized;
-                                if resolved_via_si {
-                                    metrics.signer_info_matches_leaf = true;
-                                } else if !certs.is_empty() {
-                                    metrics.signer_info_mismatches_leaf = true;
-                                }
-                            }
-                            if let Some(leaf) = leaf_opt {
-                                metrics.leaf_subject =
-                                    dn_common_name(leaf.tbs_certificate.subject());
-                                metrics.leaf_issuer = dn_common_name(leaf.tbs_certificate.issuer());
-                                if let (Some(s), Some(i)) = (
-                                    metrics.leaf_subject.as_deref(),
-                                    metrics.leaf_issuer.as_deref(),
-                                ) {
-                                    metrics.leaf_self_issued = !s.is_empty() && s == i;
-                                }
-                                // ExtendedKeyUsage codeSigning OID
-                                // (1.3.6.1.5.5.7.3.3). x509-parser
-                                // exposes a typed bool per common OID.
-                                if let Ok(Some(eku_ext)) = leaf.tbs_certificate.extended_key_usage()
-                                {
-                                    metrics.leaf_eku_code_signing = eku_ext.value.code_signing;
-                                }
-                                // Friendly-name resolution for the leaf
-                                // cert's signature algorithm OID.
-                                metrics.leaf_signature_algorithm =
-                                    signature_algorithm_name(&leaf.signature_algorithm.algorithm);
-                                metrics.leaf_serial =
-                                    Some(format!("{:x}", leaf.tbs_certificate.serial));
-                                metrics.leaf_not_before = leaf.validity().not_before.timestamp();
-                                metrics.leaf_not_after = leaf.validity().not_after.timestamp();
-                                let validity_secs = metrics
-                                    .leaf_not_after
-                                    .saturating_sub(metrics.leaf_not_before);
-                                if validity_secs > 0 {
-                                    metrics.cert_validity_days = (validity_secs / 86_400) as u32;
-                                }
-                                // SHA-1 thumbprint of the full DER —
-                                // what Windows displays as "Thumbprint".
-                                use sha1::{Digest, Sha1};
-                                let mut h = Sha1::new();
-                                h.update(leaf.as_ref());
-                                metrics.leaf_thumbprint_sha1 = Some(hex::encode(h.finalize()));
-
-                                // Cryptographic verification of the
-                                // SignerInfo signature against the
-                                // (now authoritative) leaf cert's
-                                // public key. RSA + ECDSA supported;
-                                // other algorithms set the
-                                // _algorithm_unsupported flag.
-                                if let Some(si) = &si_opt {
-                                    if is_rsa_pkcs1v15_oid(&si.signature_alg_oid) {
-                                        if let (Some(alg), Some(signed_bytes)) =
-                                            (si.digest_alg, si.signed_attrs_der.as_deref())
-                                        {
-                                            let pubkey_der = leaf.tbs_certificate.subject_pki.raw;
-                                            metrics.signature_verified =
-                                                verify_rsa_pkcs1v15_signature(
-                                                    pubkey_der,
-                                                    alg,
-                                                    signed_bytes,
-                                                    &si.signature_bytes,
-                                                );
-                                        }
-                                    } else if is_ecdsa_oid(&si.signature_alg_oid) {
-                                        if let (Some(alg), Some(signed_bytes)) =
-                                            (si.digest_alg, si.signed_attrs_der.as_deref())
-                                        {
-                                            // SEC1-encoded EC point lives in
-                                            // the BIT STRING; the curve OID
-                                            // lives in algorithm.parameters.
-                                            let curve_oid = leaf
-                                                .tbs_certificate
-                                                .subject_pki
-                                                .algorithm
-                                                .parameters
-                                                .as_ref()
-                                                .and_then(|p| extract_ec_curve_oid(p.data));
-                                            let curve =
-                                                curve_oid.as_deref().and_then(NamedCurve::from_oid);
-                                            let pubkey_sec1 = leaf
-                                                .tbs_certificate
-                                                .subject_pki
-                                                .subject_public_key
-                                                .data
-                                                .as_ref();
-                                            if let Some(c) = curve {
-                                                let result = verify_ecdsa_signature(
-                                                    pubkey_sec1,
-                                                    c,
-                                                    alg,
-                                                    signed_bytes,
-                                                    &si.signature_bytes,
-                                                );
-                                                if result.is_some() {
-                                                    metrics.signature_verified = result;
-                                                } else {
-                                                    // Off-pair (e.g. P-256+SHA-384).
-                                                    metrics.sig_algorithm_unsupported = true;
-                                                }
-                                            } else {
-                                                // ECDSA but curve not P-256/P-384.
-                                                metrics.sig_algorithm_unsupported = true;
-                                            }
-                                        }
-                                    } else {
-                                        metrics.sig_algorithm_unsupported = true;
-                                    }
-                                }
-                            }
-
-                            // SpcIndirectDataContent — claimed file
-                            // digest the signature was made over.
-                            if let Some((spc_alg, spc_digest_hex)) =
-                                parse_spc_indirect_data(pkcs7_data)
-                            {
-                                metrics.signature_digest_algorithm =
-                                    Some(spc_alg.name().to_string());
-                                metrics.signature_digest = Some(spc_digest_hex);
-                            }
-
-                            // Nested signature — recurse into its leaf
-                            // cert + claimed digest.
-                            if let Some(nested_blob) = extract_nested_signature(pkcs7_data) {
-                                populate_nested_signature(&mut metrics, nested_blob);
-                            }
-                        }
-                    }
-                }
-            }
-
-            if opt
-                .data_directories
-                .get_delay_import_descriptor()
-                .is_some_and(|dir| dir.size > 0)
-            {
+            // Delay-load import directory presence. Scans the
+            // already-emitted `pe.data_directories[]` for the
+            // canonical-named slot.
+            let present = c
+                .parsed
+                .values()
+                .get("pe.data_directories")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter().any(|n| {
+                        n.get("name").and_then(|x| x.as_str()) == Some("delay_import")
+                            && n.get("size").and_then(|x| x.as_u64()).unwrap_or(0) > 0
+                    })
+                })
+                .unwrap_or(false);
+            if present {
                 metrics.delay_load_import_count = 1;
             }
         }
 
-        metrics.certificate_count = pe.certificates.len() as u32;
-        metrics.import_dll_count = pe.libraries.len() as u32;
+        // Trivial counts. Ctx reads `pe.imported_library_count`
+        // (metric) for distinct DLL names, and the length of
+        // `pe.signatures[]` (values) for the cert-blob count.
+        metrics.import_dll_count = c
+            .parsed
+            .metrics()
+            .get("pe.imported_library_count")
+            .map(|x| x as u32)
+            .unwrap_or(0);
+        metrics.certificate_count = c
+            .parsed
+            .values()
+            .get("pe.signatures")
+            .and_then(|v| v.as_array())
+            .map(|a| a.len() as u32)
+            .unwrap_or(0);
         metrics.entry_in_nonstandard_section = metrics
             .entry_section
             .as_deref()
@@ -2579,321 +2579,106 @@ impl PEAnalyzer {
         let nst = pe.header.coff_header.number_of_symbol_table;
         metrics.has_coff_symbols = pst != 0 && nst != 0;
 
-        // Entry-point anomalies. The EP RVA is `pe.entry`. Three
-        // independent checks:
-        //   * EP < SizeOfHeaders (lands in the header region)
-        //   * EP not contained in any section's virtual extent
-        //   * EP's section is writable (self-modifying / unpacker stub)
+        // Section-walk metrics — entry-point anomalies, section
+        // overflow/misalignment, section overlap, first-section gap,
+        // entry-in-last-section, BSS-like count. Drives off expose's
+        // typed Sections view (name, vaddr, vsize, file_offset,
+        // file_size, flags vocabulary).
+        //
+        // `file_alignment` is still goblin-sourced — expose doesn't
+        // emit it. We pass the goblin-derived alignment in so the
+        // misalignment audit stays valid.
         let ep_rva = pe.entry;
-        if metrics.size_of_headers != 0 && ep_rva < metrics.size_of_headers {
-            metrics.entry_in_header = true;
-        }
-        let mut ep_in_section = false;
-        for section in &pe.sections {
-            let start = section.virtual_address;
-            let span = section.virtual_size.max(section.size_of_raw_data);
-            let end = start.saturating_add(span);
-            if ep_rva >= start && ep_rva < end {
-                ep_in_section = true;
-                // IMAGE_SCN_MEM_WRITE = 0x80000000; same literal as the
-                // is_writable check earlier in this file.
-                metrics.entry_in_writable_section = section.characteristics & 0x80000000 != 0;
-                break;
-            }
-        }
-        // EP=0 on a DLL or driver is normal; only call it "outside
-        // sections" when the file is structurally an EXE (`pe.is_lib`
-        // false) and the EP is non-zero. Combining both keeps DLLs
-        // and stub-only resources from tripping the metric.
-        if !ep_in_section && ep_rva != 0 && !pe.is_lib {
-            metrics.entry_outside_sections = true;
-        }
-
-        // Section overflow + alignment audit. pefile flags both as
-        // signs of header tampering / parser-confusion. Counts go on
-        // metrics; section names go on kv-only carriers so trait
-        // authors can match them as `pe.misaligned_sections[*]`.
-        let file_size = data.len() as u64;
         let file_alignment = pe
             .header
             .optional_header
             .as_ref()
             .map(|h| h.windows_fields.file_alignment)
             .unwrap_or(0);
-        for section in &pe.sections {
-            let name = String::from_utf8_lossy(&section.name)
-                .trim_matches(char::from(0))
-                .to_string();
-            let raw_end = (section.pointer_to_raw_data as u64)
-                .saturating_add(section.size_of_raw_data as u64);
-            if section.size_of_raw_data > 0 && raw_end > file_size {
-                metrics.section_raw_overflow_count =
-                    metrics.section_raw_overflow_count.saturating_add(1);
-                metrics.overflowing_sections.push(name.clone());
-            }
-            if file_alignment > 0
-                && section.pointer_to_raw_data != 0
-                && section.pointer_to_raw_data % file_alignment != 0
-            {
-                metrics.misaligned_section_count =
-                    metrics.misaligned_section_count.saturating_add(1);
-                metrics.misaligned_sections.push(name);
-            }
-        }
+        fill_section_walk_metrics_from_ctx(
+            c,
+            ep_rva,
+            pe.is_lib,
+            data.len() as u64,
+            file_alignment,
+            &mut metrics,
+        );
 
         if let Some(opt) = pe.header.optional_header.as_ref() {
             metrics.number_of_rva_and_sizes = opt.windows_fields.number_of_rva_and_sizes;
         }
 
-        // ──── Batch 1: section/header arithmetic anomalies ────
-        // Section count mismatch: parsed sections vs. COFF header field.
-        metrics.section_count_mismatch =
-            pe.header.coff_header.number_of_sections as usize != pe.sections.len();
-
-        // Section overlap: sort by virtual_address, walk pairs to find
-        // intersecting virtual ranges. O(n log n), n ≤ 96.
-        if pe.sections.len() > 1 {
-            let mut by_va: Vec<(u32, u32, &str)> = pe
-                .sections
-                .iter()
-                .map(|s| {
-                    let span = s.virtual_size.max(s.size_of_raw_data);
-                    let name = std::str::from_utf8(&s.name)
-                        .unwrap_or("")
-                        .trim_matches(char::from(0));
-                    (
-                        s.virtual_address,
-                        s.virtual_address.saturating_add(span),
-                        name,
-                    )
-                })
-                .collect();
-            by_va.sort_by_key(|t| t.0);
-            let mut overlap_names: HashSet<String> = HashSet::new();
-            for w in by_va.windows(2) {
-                let (a_start, a_end, a_name) = w[0];
-                let (b_start, _, b_name) = w[1];
-                if a_end > b_start && b_start >= a_start {
-                    overlap_names.insert(a_name.to_string());
-                    overlap_names.insert(b_name.to_string());
-                }
-            }
-            metrics.section_overlap_count = overlap_names.len() as u32;
-            metrics.overlapping_sections = overlap_names.into_iter().collect();
-            metrics.overlapping_sections.sort();
-        }
-
-        // First-section gap: bytes between SizeOfHeaders and the first
-        // section's PointerToRawData. Sections are usually emitted in
-        // PointerToRawData order; pick the smallest non-zero pointer.
-        if metrics.size_of_headers != 0 {
-            if let Some(first_raw) = pe
-                .sections
-                .iter()
-                .map(|s| s.pointer_to_raw_data)
-                .filter(|&p| p > 0)
-                .min()
-            {
-                metrics.first_section_gap = first_raw.saturating_sub(metrics.size_of_headers);
-            }
-        }
-
-        // Entry-in-last-section: EP RVA falls inside the section with
-        // the highest virtual_address. Reuses the EP-section check.
-        if let Some(last_section) = pe.sections.iter().max_by_key(|s| s.virtual_address) {
-            let start = last_section.virtual_address;
-            let span = last_section.virtual_size.max(last_section.size_of_raw_data);
-            let end = start.saturating_add(span);
-            if pe.entry >= start && pe.entry < end && pe.entry != 0 {
-                metrics.entry_in_last_section = true;
-            }
-        }
-
-        // BSS-like sections — count only the *unusual* ones: standard
-        // names like `.bss` and `.tls` are routinely zero-raw on
-        // Borland/Delphi/InnoSetup binaries, so flagging them as
-        // "BSS-like" produces noise. The packer/runtime-decompression
-        // pattern this metric targets uses non-standard section names.
-        metrics.bss_like_section_count = pe
-            .sections
-            .iter()
-            .filter(|s| {
-                let name = std::str::from_utf8(&s.name)
-                    .unwrap_or("")
-                    .trim_matches(char::from(0));
-                is_unusual_bss_like(name, s.size_of_raw_data, s.virtual_size)
-            })
-            .count() as u32;
-
         // .NET native entry — only meaningful when CLR data is present.
-        if let Some(clr) = &pe.clr_data {
-            metrics.dotnet_has_native_entry = clr.cor20_header.is_native_entrypoint();
-        }
+        // Expose emits `pe.clr.is_native_entrypoint` (presence = bit set).
+        metrics.dotnet_has_native_entry = c
+            .parsed
+            .values()
+            .get("pe.clr.is_native_entrypoint")
+            .is_some();
 
-        // ──── Batch 2: data-directory bounds + TLS callback location ────
-        let rva_in_section = |rva: u32| -> bool {
-            if rva == 0 {
-                return false;
-            }
-            pe.sections.iter().any(|s| {
-                let start = s.virtual_address;
-                let span = s.virtual_size.max(s.size_of_raw_data);
-                rva >= start && rva < start.saturating_add(span)
-            })
-        };
-        let rva_in_executable_section = |rva: u32| -> bool {
-            if rva == 0 {
-                return false;
-            }
-            pe.sections.iter().any(|s| {
-                let start = s.virtual_address;
-                let span = s.virtual_size.max(s.size_of_raw_data);
-                rva >= start
-                    && rva < start.saturating_add(span)
-                    && (s.characteristics & 0x20000000) != 0
-            })
-        };
-        if let Some(opt) = pe.header.optional_header.as_ref() {
-            // Data directories: 0=export, 1=import, 2=resource (full
-            // list — see PE/COFF spec). Each entry is `(name, dir)`.
-            for (idx, slot) in opt.data_directories.data_directories.iter().enumerate() {
-                if let Some((_, dir)) = slot.as_ref() {
-                    if dir.virtual_address == 0 || dir.size == 0 {
-                        continue;
-                    }
-                    match idx {
-                        0 => {
-                            metrics.export_dir_outside_section =
-                                !rva_in_section(dir.virtual_address);
-                        }
-                        1 => {
-                            metrics.import_dir_outside_section =
-                                !rva_in_section(dir.virtual_address);
-                        }
-                        2 => {
-                            // Resource directory: check it doesn't
-                            // span past its containing section.
-                            if let Some(s) = pe.sections.iter().find(|s| {
-                                dir.virtual_address >= s.virtual_address
-                                    && dir.virtual_address
-                                        < s.virtual_address
-                                            .saturating_add(s.virtual_size.max(s.size_of_raw_data))
-                            }) {
-                                let section_end = s
-                                    .virtual_address
-                                    .saturating_add(s.virtual_size.max(s.size_of_raw_data));
-                                let dir_end = dir.virtual_address.saturating_add(dir.size);
-                                if dir_end > section_end {
-                                    metrics.rsrc_dir_overruns_section = true;
-                                }
-                            } else {
-                                metrics.rsrc_dir_overruns_section = true;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-        // (lazy_walker_panicked promotion happens at end of function,
-        // after the resource_data block runs and may have set it true.)
-        // TLS callbacks landing in non-executable sections.
-        if let Some(tls_data) = &pe.tls_data {
-            // Callbacks are stored as VAs; subtract image_base to RVA.
-            let image_base = metrics.image_base as u32;
-            for &va in &tls_data.callbacks {
-                let rva = va.saturating_sub(image_base as u64) as u32;
-                if rva != 0 && !rva_in_executable_section(rva) {
-                    metrics.tls_callbacks_outside_code =
-                        metrics.tls_callbacks_outside_code.saturating_add(1);
-                }
-            }
-        }
+        // Data-directory bounds checks + TLS-callbacks-outside-code.
+        // Drive off expose's typed Sections + data directories +
+        // tls_callbacks views.
+        fill_data_directory_bounds_from_ctx(c, &mut metrics);
+        fill_tls_callbacks_outside_code_from_ctx(c, &mut metrics);
 
-        // ──── Batch 4: authentihash + signature overlay padding ────
-        if let Some((auth, padding)) = compute_authentihash_and_padding(pe, data) {
-            metrics.authentihash = Some(auth);
-            metrics.overlay_padding = padding;
-        }
-
-        // Compute the matching authentihash for whatever digest the
-        // signature claims, then surface the parallel SHA-1/384/512
-        // hashes for ML and trait pipelines.
+        // Authenticode image hashes. Ctx reads expose's already-
+        // computed `pe.image_hash.{sha1,sha256,sha384,sha512}` +
+        // `pe.overlay_padding`. The `signature_digest_mismatch`
+        // derivation — comparing the signature's claimed digest
+        // against the recomputed hash under the same algorithm — runs
+        // off the now-populated metric fields.
+        fill_image_hashes_from_ctx(c, &mut metrics);
         if metrics.has_signature {
-            metrics.authentihash_sha1 = compute_authentihash_alg(pe, data, AuthAlg::Sha1);
-            metrics.authentihash_sha384 = compute_authentihash_alg(pe, data, AuthAlg::Sha384);
-            metrics.authentihash_sha512 = compute_authentihash_alg(pe, data, AuthAlg::Sha512);
+            metrics.signature_digest_mismatch = derive_signature_digest_mismatch(&metrics);
+        }
 
-            // Digest-mismatch check: the digest the SignedData claims
-            // vs. the recomputed Authentihash for that same algorithm.
-            if let (Some(claimed_alg_str), Some(claimed_digest)) = (
-                metrics.signature_digest_algorithm.as_deref(),
-                metrics.signature_digest.as_deref(),
-            ) {
-                let computed = match claimed_alg_str {
-                    "sha1" => metrics.authentihash_sha1.clone(),
-                    "sha256" => metrics.authentihash.clone(),
-                    "sha384" => metrics.authentihash_sha384.clone(),
-                    "sha512" => metrics.authentihash_sha512.clone(),
-                    _ => None,
-                };
-                if let Some(c) = computed {
-                    metrics.signature_digest_mismatch = c != claimed_digest;
-                }
+        // Per-section header summary. Reads from expose's typed
+        // Section view (name/vaddr/vsize/file_size) plus the positional
+        // `sections[N].characteristics` metric (raw IMAGE_SCN_* u32).
+        {
+            let m = c.parsed.metrics();
+            for (idx, s) in c.parsed.sections().iter().enumerate() {
+                let chars_u32 = m
+                    .get(&format!("sections[{idx}].characteristics"))
+                    .map(|x| x as u32)
+                    .unwrap_or(0);
+                metrics.section_characteristics_entries.push(
+                    crate::types::binary_metrics::SectionCharacteristics {
+                        name: s.name.clone(),
+                        characteristics_hex: format!("{:08x}", chars_u32),
+                        virtual_address: s.vaddr as u32,
+                        virtual_size: s.vsize as u32,
+                        raw_size: s.file_size as u32,
+                    },
+                );
             }
         }
 
-        // ──── Batch 5: structured kv carrier population ────
-        // Per-section header summary.
-        for section in &pe.sections {
-            let name = std::str::from_utf8(&section.name)
-                .unwrap_or("")
-                .trim_matches(char::from(0))
-                .to_string();
-            metrics.section_characteristics_entries.push(
-                crate::types::binary_metrics::SectionCharacteristics {
-                    name,
-                    characteristics_hex: format!("{:08x}", section.characteristics),
-                    virtual_address: section.virtual_address,
-                    virtual_size: section.virtual_size,
-                    raw_size: section.size_of_raw_data,
-                },
-            );
-        }
-        // Non-zero data directory slots, with canonical names.
-        if let Some(opt) = pe.header.optional_header.as_ref() {
-            const DD_NAMES: [&str; 16] = [
-                "export",
-                "import",
-                "resource",
-                "exception",
-                "certificate",
-                "base_relocation",
-                "debug",
-                "architecture",
-                "global_ptr",
-                "tls",
-                "load_config",
-                "bound_import",
-                "iat",
-                "delay_import",
-                "clr_runtime_header",
-                "reserved",
-            ];
-            for (idx, slot) in opt.data_directories.data_directories.iter().enumerate() {
-                if let Some((_, dir)) = slot.as_ref() {
-                    if dir.virtual_address == 0 && dir.size == 0 {
-                        continue;
-                    }
-                    let name = DD_NAMES.get(idx).copied().unwrap_or("unknown").to_string();
-                    metrics.data_directory_entries.push(
-                        crate::types::binary_metrics::DataDirectoryEntry {
-                            name,
-                            rva: dir.virtual_address,
-                            size: dir.size,
-                        },
-                    );
-                }
+        // Non-zero data directory slots, with canonical names. Reads
+        // `pe.data_directories[]` from expose (already in canonical
+        // name + rva + size shape).
+        if let Some(arr) = c
+            .parsed
+            .values()
+            .get("pe.data_directories")
+            .and_then(|v| v.as_array())
+        {
+            for node in arr {
+                let (Some(name), Some(rva), Some(size)) = (
+                    node.get("name").and_then(|v| v.as_str()),
+                    node.get("rva").and_then(|v| v.as_u64()),
+                    node.get("size").and_then(|v| v.as_u64()),
+                ) else {
+                    continue;
+                };
+                metrics.data_directory_entries.push(
+                    crate::types::binary_metrics::DataDirectoryEntry {
+                        name: name.to_string(),
+                        rva: rva as u32,
+                        size: size as u32,
+                    },
+                );
             }
         }
         // Rich Header CompID tuples.
@@ -2901,8 +2686,17 @@ impl PEAnalyzer {
             metrics.rich_header_compids = parse_rich_header(data, pe_offset);
         }
 
-        if let Some(export_data) = &pe.export_data {
-            metrics.export_timestamp = export_data.export_directory_table.time_date_stamp;
+        // Export-directory timestamp is its own field (distinct from
+        // COFF `pe.timestamp`). Reads from expose's `pe.export_timestamp`,
+        // which is only emitted when the export directory carries a
+        // non-zero stamp.
+        if let Some(ts) = c
+            .parsed
+            .values()
+            .get("pe.export_timestamp")
+            .and_then(|v| v.as_i64())
+        {
+            metrics.export_timestamp = ts as u32;
             metrics.has_export_timestamp = metrics.export_timestamp != 0;
         }
 
@@ -2934,52 +2728,59 @@ impl PEAnalyzer {
             let _overlay_data = &data[_overlay_start..overlay_end as usize];
         }
 
-        // Ordinal-only imports
-        for import in &pe.imports {
-            if import.name.is_empty() {
-                metrics.ordinal_import_count += 1;
+        // Import walks. Drives off expose's typed Imports
+        // (`source == "pe"` only, since the Imports view aggregates
+        // across formats).
+        {
+            let pe_imports: Vec<&expose::Import> = c
+                .parsed
+                .imports()
+                .iter()
+                .filter(|i| i.source == "pe")
+                .collect();
+            metrics.ordinal_import_count = pe_imports
+                .iter()
+                .filter(|i| i.name.is_empty())
+                .count() as u32;
+            let names: HashSet<String> = pe_imports
+                .iter()
+                .map(|i| i.name.to_ascii_lowercase())
+                .collect();
+            if names.contains("loadlibrarya")
+                || names.contains("loadlibraryw")
+                || names.contains("getprocaddress")
+                || names.contains("ldrloaddll")
+                || names.contains("ldrgetprocedureaddress")
+            {
+                metrics.api_hashing_indicator_count += 1;
             }
         }
 
-        let import_names: HashSet<String> = pe
-            .imports
-            .iter()
-            .map(|import| import.name.to_ascii_lowercase())
-            .collect();
-        if import_names.contains("loadlibrarya")
-            || import_names.contains("loadlibraryw")
-            || import_names.contains("getprocaddress")
-            || import_names.contains("ldrloaddll")
-            || import_names.contains("ldrgetprocedureaddress")
-        {
-            metrics.api_hashing_indicator_count += 1;
-        }
-        // (suspicious_import_combo metric removed; the VirtualAlloc +
-        // WriteProcessMemory + VirtualProtect cluster is a TRAIT
-        // composite, not a metric.)
-
-        // Export forwarders — use goblin's parsed `reexport` field so the count
-        // reflects real PE forward entries (RVA into the export directory)
-        // rather than a name-heuristic.
+        // Export forwarders. Drives off typed Exports (where
+        // `forward_to` is the unified projection of goblin's
+        // `Reexport::DLLName` / `DLLOrdinal` shapes). The forwarder
+        // counts feed both typed metrics and the
+        // `self_versioned_forwarder` heuristic.
         let mut total_exports: u32 = 0;
         let mut forwarded: u32 = 0;
         let mut forwards_to_system: u32 = 0;
         let mut forward_targets: HashSet<String> = HashSet::new();
-        for export in &pe.exports {
-            if export.name.is_none() {
-                continue;
-            }
+        for exp in c
+            .parsed
+            .exports()
+            .iter()
+            .filter(|e| e.source == "pe" && !e.name.is_empty())
+        {
             total_exports += 1;
-            match &export.reexport {
-                Some(goblin::pe::export::Reexport::DLLName { lib, .. })
-                | Some(goblin::pe::export::Reexport::DLLOrdinal { lib, .. }) => {
-                    forwarded += 1;
-                    if is_system_dll(lib) {
-                        forwards_to_system += 1;
-                    }
-                    forward_targets.insert(normalize_dll_stem(lib));
+            if let Some(target) = exp.forward_to.as_deref() {
+                forwarded += 1;
+                // `forward_to` is `"<DLL>.<sym>"` or `"<DLL>.#<ord>"`.
+                // Split on the first `.` to recover the DLL stem.
+                let lib = target.split_once('.').map(|(l, _)| l).unwrap_or(target);
+                if is_system_dll(lib) {
+                    forwards_to_system += 1;
                 }
-                None => {}
+                forward_targets.insert(normalize_dll_stem(lib));
             }
         }
         metrics.export_forwarder_count = forwarded;
@@ -3004,126 +2805,86 @@ impl PEAnalyzer {
         // (unusual_alignment metric removed; trait authors compare
         // pe.file_alignment / pe.section_alignment directly.)
 
-        if let Some(resource_data) = &pe.resource_data {
-            // goblin's PE resource directory walker is *lazy*: PE::parse() does
-            // not eagerly traverse the resource tree, so the panic-safety
-            // around the parse call cannot protect against panics inside
-            // count()/entries(), which slice into the file with unchecked
-            // header offsets (goblin/src/pe/resource.rs:547). Malformed PEs
-            // — notably packed Windows malware in vxug — trip this regularly
-            // with "range end index N out of range for slice of length M".
-            // We catch the panic here so resource metrics simply stay at
-            // their defaults instead of aborting the whole analysis.
-            let resource_outcome = goblin_safe::catch_infallible(|| {
-                let count = resource_data.count() as u32;
-                let has_version_info = resource_data.version_info.is_some();
-                let has_manifest = resource_data.manifest_data.is_some();
-                let resource_timestamp = resource_data.image_resource_directory.time_date_stamp;
-                let icon_count = resource_data
-                    .entries()
-                    .filter_map(Result::ok)
-                    .filter(|entry| matches!(entry.id(), Some(RT_ICON | RT_GROUP_ICON)))
-                    .count() as u32;
-                // Distinct RT_* type IDs present in the directory.
-                // BTreeSet so output is sorted + deduped.
-                let mut type_ids: std::collections::BTreeSet<u32> =
-                    std::collections::BTreeSet::new();
-                for entry in resource_data.entries().filter_map(Result::ok) {
-                    if let Some(id) = entry.id() {
-                        type_ids.insert(id as u32);
-                    }
-                }
-                let resource_types: Vec<String> = type_ids.iter().map(|&id| rt_name(id)).collect();
-                (
-                    count,
-                    has_version_info,
-                    has_manifest,
-                    resource_timestamp,
-                    icon_count,
-                    resource_types,
-                )
-            });
-            if let Some((count, has_version_info, has_manifest, ts, icon_count, resource_types)) =
-                resource_outcome.ok()
-            {
-                metrics.resource_count = count;
-                metrics.has_version_info = has_version_info;
-                metrics.has_manifest = has_manifest;
-                metrics.resource_timestamp = ts;
-                metrics.has_resource_timestamp = ts != 0;
-                metrics.icon_count = icon_count;
-                metrics.resource_types = resource_types;
-            } else {
-                tracing::debug!("PE resource directory walker panicked, metrics left at defaults");
+        // Resource directory. Reads expose's already-walked resource
+        // metrics (the walker is wrapped in goblin_safe — if expose's
+        // walker panicked, `pe.resource_walk_panicked` is set and we
+        // lift the local lazy_walker_panicked flag).
+        {
+            let m = c.parsed.metrics();
+            let v = c.parsed.values();
+            if m.get("pe.resource_walk_panicked").is_some() {
                 lazy_walker_panicked = true;
             }
-        }
-
-        if let Some(clr_data) = &pe.clr_data {
-            metrics.is_dotnet = true;
-            metrics.clr_version = Some(format!(
-                "{}.{}",
-                clr_data.cor20_header.major_runtime_version,
-                clr_data.cor20_header.minor_runtime_version
-            ));
-            metrics.mixed_mode =
-                !clr_data.cor20_header.is_il_only() || clr_data.cor20_header.is_native_entrypoint();
-        }
-
-        if let Some(tls_data) = &pe.tls_data {
-            metrics.tls_callback_count = tls_data.callbacks.len() as u32;
-            // Tier A — surface individual callback RVAs (image-base
-            // subtracted) so trait authors can match by location.
-            let image_base = metrics.image_base;
-            metrics.tls_callback_addresses = tls_data
-                .callbacks
-                .iter()
-                .map(|&va| (va.saturating_sub(image_base)) as u32)
-                .collect();
-        }
-
-        // Bound Import Directory (IMAGE_DIRECTORY_ENTRY_BOUND_IMPORT=11).
-        // Pre-resolves DLL imports against the linker host's specific
-        // DLL file timestamps. Effectively a build-host fingerprint —
-        // identical bound timestamps across vendor releases prove
-        // they were linked on the same machine. Rare on modern PE.
-        if let Some(opt) = pe.header.optional_header {
-            if let Some(Some(bi_entry)) = opt.data_directories.data_directories.get(11) {
-                let rva = bi_entry.1.virtual_address as usize;
-                let size = bi_entry.1.size as usize;
-                if rva > 0 && size >= 8 {
-                    // Bound Import directory entries store offsets
-                    // RELATIVE TO THE DIRECTORY START. The directory
-                    // RVA itself is usually a file offset directly
-                    // (it lives in headers), so prefer that, falling
-                    // back to rva_to_offset for outliers.
-                    let off = if rva + size <= data.len() {
-                        rva
-                    } else if let Some(o) = rva_to_offset(pe, rva) {
-                        o
-                    } else {
-                        rva
-                    };
-                    parse_bound_imports(data, off, size, &mut metrics);
-                }
+            metrics.resource_count = m
+                .get("pe.resource_count")
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.has_version_info = m.get("pe.has_version_info").is_some();
+            metrics.has_manifest = m.get("pe.has_manifest").is_some();
+            metrics.icon_count = m.get("pe.icon_count").map(|x| x as u32).unwrap_or(0);
+            metrics.resource_timestamp = v
+                .get("pe.resource_timestamp")
+                .and_then(|x| x.as_u64())
+                .map(|x| x as u32)
+                .unwrap_or(0);
+            metrics.has_resource_timestamp = metrics.resource_timestamp != 0;
+            if let Some(arr) = v.get("pe.resource_types").and_then(|x| x.as_array()) {
+                metrics.resource_types = arr
+                    .iter()
+                    .filter_map(|n| n.as_str().map(str::to_string))
+                    .collect();
             }
         }
 
-        // Load Config Directory (IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG=10).
-        // Carries the /GS security cookie, SafeSEH handler table, and
-        // CFG (Control Flow Guard) metadata. Stable per build pipeline;
-        // a SolarWinds-class swap signal when these drift across
-        // releases of the same vendor binary.
-        if let Some(opt) = pe.header.optional_header {
-            if let Some(Some(lcd_entry)) = opt.data_directories.data_directories.get(10) {
-                let rva = lcd_entry.1.virtual_address as usize;
-                if rva > 0 {
-                    if let Some(off) = rva_to_offset(pe, rva) {
-                        parse_load_config(data, off, pe.is_64, &mut metrics);
-                    }
-                }
+        // CLR / .NET metadata. Presence of `pe.clr.runtime_version` in
+        // expose's values IS the "is managed?" signal — distinct from
+        // PE Authenticode signing.
+        {
+            let v = c.parsed.values();
+            if let Some(ver) = v.get("pe.clr.runtime_version").and_then(|x| x.as_str()) {
+                metrics.is_dotnet = true;
+                metrics.clr_version = Some(ver.to_string());
+                let is_il_only = v.get("pe.clr.is_il_only").is_some();
+                let is_native_ep = v.get("pe.clr.is_native_entrypoint").is_some();
+                metrics.mixed_mode = !is_il_only || is_native_ep;
             }
         }
+
+        // TLS callbacks. Expose emits `pe.tls_callback_count` (metric)
+        // and `pe.tls_callbacks[]` (values) — each entry carries an
+        // `addr` field as a hex string. We subtract image_base from
+        // each VA to get RVAs so `tls_callback_addresses` carries
+        // section-relative offsets.
+        {
+            let m = c.parsed.metrics();
+            metrics.tls_callback_count =
+                m.get("pe.tls_callback_count").map(|x| x as u32).unwrap_or(0);
+            if let Some(arr) = c
+                .parsed
+                .values()
+                .get("pe.tls_callbacks")
+                .and_then(|v| v.as_array())
+            {
+                let image_base = metrics.image_base;
+                metrics.tls_callback_addresses = arr
+                    .iter()
+                    .filter_map(|node| {
+                        let s = node.get("addr")?.as_str()?;
+                        let s = s.strip_prefix("0x").unwrap_or(s);
+                        let va = u64::from_str_radix(s, 16).ok()?;
+                        Some((va.saturating_sub(image_base)) as u32)
+                    })
+                    .collect();
+            }
+        }
+
+        // Bound Import Directory. Reads expose's already-parsed
+        // `pe.bound_imports[]` + `pe.bound_imports_fingerprint` metric.
+        fill_bound_imports_from_ctx(c, &mut metrics);
+
+        // Load Config Directory. Reads expose's typed `pe.load_config.*`
+        // view (raw u64 cookie + GuardCF fields + u32 guard_flags).
+        fill_load_config_from_ctx(c, &mut metrics);
 
         // Promote the resource-walker panic into the explicit metric —
         // both states ("couldn't traverse .rsrc safely") map onto the
@@ -3524,218 +3285,6 @@ fn count_aliased_exports(pe: &goblin::pe::PE<'_>, data: &[u8], bitness: u32) -> 
 }
 
 /// Convert a PE RVA to a file offset using section headers.
-/// Parse the IMAGE_BOUND_IMPORT_DESCRIPTOR array starting at `off`.
-/// Each descriptor is 8 bytes: u32 timestamp, u16 module-name offset
-/// (relative to the directory start, NOT the file), u16 forwarder
-/// count. The array is terminated by a descriptor with timestamp = 0.
-/// Forwarder refs (8 bytes each) immediately follow each descriptor;
-/// we skip them but record the count.
-fn parse_bound_imports(
-    data: &[u8],
-    dir_off: usize,
-    dir_size: usize,
-    metrics: &mut crate::types::binary_metrics::PeMetrics,
-) {
-    use crate::types::binary_metrics::BoundImportDescriptor;
-    if dir_off + dir_size > data.len() {
-        return;
-    }
-    let dir = &data[dir_off..dir_off + dir_size];
-    let mut cursor = 0usize;
-    let mut out = Vec::new();
-    while cursor + 8 <= dir.len() && out.len() < 64 {
-        let Ok(ts_bytes) = dir[cursor..cursor + 4].try_into() else {
-            break;
-        };
-        let timestamp = u32::from_le_bytes(ts_bytes);
-        if timestamp == 0 {
-            break; // sentinel
-        }
-        let Ok(name_off_bytes) = dir[cursor + 4..cursor + 6].try_into() else {
-            break;
-        };
-        let Ok(fwd_count_bytes) = dir[cursor + 6..cursor + 8].try_into() else {
-            break;
-        };
-        let name_off = u16::from_le_bytes(name_off_bytes) as usize;
-        let fwd_count = u16::from_le_bytes(fwd_count_bytes) as u32;
-
-        // Module name is a NUL-terminated ASCII string at directory
-        // offset `name_off`. Bound to 256 bytes for adversarial input.
-        let mut name = String::new();
-        if name_off < dir.len() {
-            let bytes = &dir[name_off..dir.len().min(name_off + 256)];
-            if let Some(end) = bytes.iter().position(|&b| b == 0) {
-                if end > 0 {
-                    name = String::from_utf8_lossy(&bytes[..end]).into_owned();
-                }
-            }
-        }
-        if !name.is_empty() {
-            out.push(BoundImportDescriptor {
-                name,
-                time_date_stamp: timestamp,
-                forwarder_ref_count: fwd_count,
-            });
-        }
-        cursor += 8 + (fwd_count as usize) * 8;
-    }
-    if !out.is_empty() {
-        // CRC-32 of the canonical-serialized bound-import set, sorted
-        // by DLL name so order variance from the linker doesn't
-        // change the fingerprint. Non-crypto; only used for
-        // equality / clustering — two binaries linked on the same
-        // host within seconds get the same value.
-        let mut sorted = out.clone();
-        sorted.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut hasher = crc32fast::Hasher::new();
-        for d in &sorted {
-            hasher.update(d.name.as_bytes());
-            hasher.update(&[0]);
-            hasher.update(&d.time_date_stamp.to_le_bytes());
-            hasher.update(&d.forwarder_ref_count.to_le_bytes());
-        }
-        metrics.bound_imports_checksum = hasher.finalize();
-        metrics.bound_imports = out;
-    }
-}
-
-/// Read fields from IMAGE_LOAD_CONFIG_DIRECTORY{32,64} at a known
-/// file offset and populate the corresponding `PeMetrics` slots.
-/// Lenient — partial reads stop early instead of erroring.
-///
-/// Field offsets within the structure (PE/COFF spec):
-///   PE32 (32-bit pointers):
-///     0x00  DWORD Size
-///     0x40  DWORD SecurityCookie
-///     0x44  DWORD SEHandlerTable
-///     0x48  DWORD SEHandlerCount
-///     0x4C  DWORD GuardCFCheckFunctionPointer
-///     0x54  DWORD GuardCFFunctionTable
-///     0x58  DWORD GuardCFFunctionCount
-///     0x5C  DWORD GuardFlags
-///   PE32+ (64-bit pointers):
-///     0x00  DWORD Size
-///     0x58  ULONGLONG SecurityCookie
-///     0x60  ULONGLONG SEHandlerTable
-///     0x68  ULONGLONG SEHandlerCount  (ULONGLONG even on 64-bit)
-///     0x70  ULONGLONG GuardCFCheckFunctionPointer
-///     0x80  ULONGLONG GuardCFFunctionTable
-///     0x88  ULONGLONG GuardCFFunctionCount
-///     0x90  DWORD     GuardFlags
-fn parse_load_config(
-    data: &[u8],
-    off: usize,
-    is_64: bool,
-    metrics: &mut crate::types::binary_metrics::PeMetrics,
-) {
-    if off + 8 > data.len() {
-        return;
-    }
-    let Ok(size_bytes) = data[off..off + 4].try_into() else {
-        return;
-    };
-    let size = u32::from_le_bytes(size_bytes) as usize;
-    if size < 0x40 || off + size > data.len() {
-        return;
-    }
-    let body = &data[off..off + size];
-
-    if is_64 {
-        if body.len() >= 0x60 {
-            metrics.security_cookie = read_u64(body, 0x58).unwrap_or(0);
-        }
-        if body.len() >= 0x70 {
-            metrics.se_handler_count = read_u64(body, 0x68).unwrap_or(0) as u32;
-        }
-        if body.len() >= 0x78 {
-            metrics.cfg_check_func = read_u64(body, 0x70).unwrap_or(0);
-        }
-        if body.len() >= 0x90 {
-            metrics.cfg_func_count = read_u64(body, 0x88).unwrap_or(0) as u32;
-        }
-        if body.len() >= 0x94 {
-            metrics.cfg_guard_flags = read_u32(body, 0x90).unwrap_or(0);
-        }
-        // Tier A — Load Config v2 (Win10+) fields. Field offsets per
-        // IMAGE_LOAD_CONFIG_DIRECTORY64 winnt.h definition.
-        if body.len() >= 0xB8 {
-            metrics.guard_long_jump_target_count = read_u64(body, 0xB0).unwrap_or(0) as u32;
-        }
-        // DynamicValueRelocTable (RVA at 0xB8) — presence-only
-        // signal for the modern dynamic-relocation feature.
-        if body.len() >= 0xC0 && read_u64(body, 0xB8).unwrap_or(0) != 0 {
-            metrics.has_dynamic_value_reloc_table = true;
-        }
-        if body.len() >= 0xD8 {
-            metrics.guard_eh_cont_count = read_u64(body, 0xD0).unwrap_or(0) as u32;
-        }
-    } else {
-        if body.len() >= 0x44 {
-            metrics.security_cookie = read_u32(body, 0x40).unwrap_or(0) as u64;
-        }
-        if body.len() >= 0x4C {
-            metrics.se_handler_count = read_u32(body, 0x48).unwrap_or(0);
-        }
-        if body.len() >= 0x50 {
-            metrics.cfg_check_func = read_u32(body, 0x4C).unwrap_or(0) as u64;
-        }
-        if body.len() >= 0x5C {
-            metrics.cfg_func_count = read_u32(body, 0x58).unwrap_or(0);
-        }
-        if body.len() >= 0x60 {
-            metrics.cfg_guard_flags = read_u32(body, 0x5C).unwrap_or(0);
-        }
-        // Tier A — Load Config v2 32-bit field offsets.
-        if body.len() >= 0x74 {
-            metrics.guard_long_jump_target_count = read_u32(body, 0x70).unwrap_or(0);
-        }
-        if body.len() >= 0x78 && read_u32(body, 0x74).unwrap_or(0) != 0 {
-            metrics.has_dynamic_value_reloc_table = true;
-        }
-        if body.len() >= 0x88 {
-            metrics.guard_eh_cont_count = read_u32(body, 0x84).unwrap_or(0);
-        }
-    }
-}
-
-fn read_u32(data: &[u8], off: usize) -> Option<u32> {
-    Some(u32::from_le_bytes(data.get(off..off + 4)?.try_into().ok()?))
-}
-
-fn read_u64(data: &[u8], off: usize) -> Option<u64> {
-    Some(u64::from_le_bytes(data.get(off..off + 8)?.try_into().ok()?))
-}
-
-/// Map a Windows RT_* resource-type ID to its canonical short name.
-/// Numeric fallback for vendor-specific (>23) IDs.
-fn rt_name(id: u32) -> String {
-    match id {
-        1 => "RT_CURSOR".into(),
-        2 => "RT_BITMAP".into(),
-        3 => "RT_ICON".into(),
-        4 => "RT_MENU".into(),
-        5 => "RT_DIALOG".into(),
-        6 => "RT_STRING".into(),
-        7 => "RT_FONTDIR".into(),
-        8 => "RT_FONT".into(),
-        9 => "RT_ACCELERATOR".into(),
-        10 => "RT_RCDATA".into(),
-        11 => "RT_MESSAGETABLE".into(),
-        12 => "RT_GROUP_CURSOR".into(),
-        14 => "RT_GROUP_ICON".into(),
-        16 => "RT_VERSION".into(),
-        17 => "RT_DLGINCLUDE".into(),
-        19 => "RT_PLUGPLAY".into(),
-        20 => "RT_VXD".into(),
-        21 => "RT_ANICURSOR".into(),
-        22 => "RT_ANIICON".into(),
-        23 => "RT_HTML".into(),
-        24 => "RT_MANIFEST".into(),
-        other => format!("RT_{}", other),
-    }
-}
-
 fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
     for section in &pe.sections {
         let vaddr = section.virtual_address as usize;
@@ -3746,710 +3295,6 @@ fn rva_to_offset(pe: &goblin::pe::PE<'_>, rva: usize) -> Option<usize> {
         }
     }
     None
-}
-
-/// Compute Authenticode SHA-256 hash and the signature overlay-padding
-/// byte count per the Microsoft PE/COFF spec. Returns
-/// `(authentihash_hex, overlay_padding)`.
-///
-/// Hash regions, in order:
-///   1. file start → checksum field offset
-///   2. (skip 4 byte checksum)
-///   3. post-checksum → cert table data-directory entry offset
-///   4. (skip 8 byte data-directory entry: VA + Size)
-///   5. post-cert-dir-entry → end of headers (SizeOfHeaders)
-///   6. each section's raw data, in PointerToRawData order
-///   7. trailing bytes between (sections-end + cert table size) and EOF
-///
-/// Step 7 covers signed overlay payload — the "appended data that
-/// ships under the signature". Returns `None` only when the optional
-/// header is missing or the file is too short to contain headers.
-fn compute_authentihash_and_padding(pe: &goblin::pe::PE<'_>, data: &[u8]) -> Option<(String, u64)> {
-    use sha2::{Digest, Sha256};
-
-    let opt = pe.header.optional_header.as_ref()?;
-    let pe_offset = pe.header.dos_header.pe_pointer as usize;
-    let optional_header_offset = pe_offset + 4 + 20;
-
-    // Checksum field offset (4 bytes).
-    let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
-        }
-        MAGIC_64 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
-        }
-        _ => return None,
-    };
-
-    // Cert-table data-dir entry offset (8 bytes: VA + Size). The
-    // data dirs sit after standard + windows-specific fields; cert
-    // table is index 4 (× 8 = 32 bytes in).
-    use goblin::pe::optional_header::{SIZEOF_WINDOWS_FIELDS_32, SIZEOF_WINDOWS_FIELDS_64};
-    let cert_dir_offset = match opt.standard_fields.magic {
-        MAGIC_32 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + SIZEOF_WINDOWS_FIELDS_32 + 32
-        }
-        MAGIC_64 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + SIZEOF_WINDOWS_FIELDS_64 + 32
-        }
-        _ => return None,
-    };
-
-    let size_of_headers = opt.windows_fields.size_of_headers as usize;
-    if checksum_offset + 4 > data.len()
-        || cert_dir_offset + 8 > data.len()
-        || size_of_headers > data.len()
-    {
-        return None;
-    }
-    // Sanity: regions must be in order checksum < cert_dir < headers_end.
-    if checksum_offset + 4 > cert_dir_offset || cert_dir_offset + 8 > size_of_headers {
-        return None;
-    }
-
-    let mut hasher = Sha256::new();
-    hasher.update(&data[..checksum_offset]);
-    hasher.update(&data[checksum_offset + 4..cert_dir_offset]);
-    hasher.update(&data[cert_dir_offset + 8..size_of_headers]);
-
-    // Sections in PointerToRawData order, skipping rsize=0.
-    let mut sorted: Vec<&goblin::pe::section_table::SectionTable> = pe
-        .sections
-        .iter()
-        .filter(|s| s.size_of_raw_data > 0)
-        .collect();
-    sorted.sort_by_key(|s| s.pointer_to_raw_data);
-    let mut sum_hashed = size_of_headers as u64;
-    for s in &sorted {
-        let start = s.pointer_to_raw_data as usize;
-        let end = start.saturating_add(s.size_of_raw_data as usize);
-        if end > data.len() {
-            return None;
-        }
-        hasher.update(&data[start..end]);
-        sum_hashed = sum_hashed.saturating_add(s.size_of_raw_data as u64);
-    }
-
-    // Cert table size from the data-dir entry, if any.
-    let cert_table_size = pe
-        .header
-        .optional_header
-        .as_ref()
-        .and_then(|o| o.data_directories.data_directories.get(4).cloned())
-        .and_then(|slot| slot)
-        .map(|(_, dd)| dd.size as u64)
-        .unwrap_or(0);
-
-    // Trailing overlay bytes (sections-end → cert-table-start).
-    let file_size = data.len() as u64;
-    let overlay_padding = if file_size > sum_hashed + cert_table_size {
-        let extra_start = sum_hashed as usize;
-        let extra_end = (file_size - cert_table_size) as usize;
-        if extra_start < extra_end && extra_end <= data.len() {
-            hasher.update(&data[extra_start..extra_end]);
-            (extra_end - extra_start) as u64
-        } else {
-            0
-        }
-    } else {
-        0
-    };
-
-    Some((hex::encode(hasher.finalize()), overlay_padding))
-}
-
-/// Authenticode digest algorithms cleave can compute.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthAlg {
-    Sha1,
-    Sha256,
-    Sha384,
-    Sha512,
-}
-
-impl AuthAlg {
-    /// Friendly name for the metric / kv tree.
-    fn name(self) -> &'static str {
-        match self {
-            AuthAlg::Sha1 => "sha1",
-            AuthAlg::Sha256 => "sha256",
-            AuthAlg::Sha384 => "sha384",
-            AuthAlg::Sha512 => "sha512",
-        }
-    }
-
-    /// Resolve from a digest-algorithm OID dotted-string.
-    fn from_oid(oid: &str) -> Option<Self> {
-        match oid {
-            "1.3.14.3.2.26" => Some(AuthAlg::Sha1),
-            "2.16.840.1.101.3.4.2.1" => Some(AuthAlg::Sha256),
-            "2.16.840.1.101.3.4.2.2" => Some(AuthAlg::Sha384),
-            "2.16.840.1.101.3.4.2.3" => Some(AuthAlg::Sha512),
-            _ => None,
-        }
-    }
-}
-
-/// Compute the Authenticode hash with a specific digest algorithm.
-/// Reuses the same region-walking logic as `compute_authentihash_and_padding`
-/// — only the hasher changes. Returns lowercase hex.
-fn compute_authentihash_alg(pe: &goblin::pe::PE<'_>, data: &[u8], alg: AuthAlg) -> Option<String> {
-    use sha1::Sha1;
-    use sha2::digest::DynDigest;
-    use sha2::{Digest, Sha256, Sha384, Sha512};
-
-    // Inline trait-object dispatch keeps a single region walker.
-    let mut hasher: Box<dyn DynDigest> = match alg {
-        AuthAlg::Sha1 => Box::new(Sha1::new()),
-        AuthAlg::Sha256 => Box::new(Sha256::new()),
-        AuthAlg::Sha384 => Box::new(Sha384::new()),
-        AuthAlg::Sha512 => Box::new(Sha512::new()),
-    };
-    let opt = pe.header.optional_header.as_ref()?;
-    let pe_offset = pe.header.dos_header.pe_pointer as usize;
-    let optional_header_offset = pe_offset + 4 + 20;
-    let checksum_offset = match opt.standard_fields.magic {
-        MAGIC_32 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + OFFSET_WINDOWS_FIELDS_32_CHECKSUM
-        }
-        MAGIC_64 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + OFFSET_WINDOWS_FIELDS_64_CHECKSUM
-        }
-        _ => return None,
-    };
-    use goblin::pe::optional_header::{SIZEOF_WINDOWS_FIELDS_32, SIZEOF_WINDOWS_FIELDS_64};
-    let cert_dir_offset = match opt.standard_fields.magic {
-        MAGIC_32 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_32 + SIZEOF_WINDOWS_FIELDS_32 + 32
-        }
-        MAGIC_64 => {
-            optional_header_offset + SIZEOF_STANDARD_FIELDS_64 + SIZEOF_WINDOWS_FIELDS_64 + 32
-        }
-        _ => return None,
-    };
-    let size_of_headers = opt.windows_fields.size_of_headers as usize;
-    if checksum_offset + 4 > data.len()
-        || cert_dir_offset + 8 > data.len()
-        || size_of_headers > data.len()
-    {
-        return None;
-    }
-    if checksum_offset + 4 > cert_dir_offset || cert_dir_offset + 8 > size_of_headers {
-        return None;
-    }
-    DynDigest::update(hasher.as_mut(), &data[..checksum_offset]);
-    DynDigest::update(hasher.as_mut(), &data[checksum_offset + 4..cert_dir_offset]);
-    DynDigest::update(hasher.as_mut(), &data[cert_dir_offset + 8..size_of_headers]);
-    let mut sorted: Vec<&goblin::pe::section_table::SectionTable> = pe
-        .sections
-        .iter()
-        .filter(|s| s.size_of_raw_data > 0)
-        .collect();
-    sorted.sort_by_key(|s| s.pointer_to_raw_data);
-    let mut sum_hashed = size_of_headers as u64;
-    for s in &sorted {
-        let start = s.pointer_to_raw_data as usize;
-        let end = start.saturating_add(s.size_of_raw_data as usize);
-        if end > data.len() {
-            return None;
-        }
-        DynDigest::update(hasher.as_mut(), &data[start..end]);
-        sum_hashed = sum_hashed.saturating_add(s.size_of_raw_data as u64);
-    }
-    let cert_table_size = pe
-        .header
-        .optional_header
-        .as_ref()
-        .and_then(|o| o.data_directories.data_directories.get(4).cloned())
-        .and_then(|slot| slot)
-        .map(|(_, dd)| dd.size as u64)
-        .unwrap_or(0);
-    let file_size = data.len() as u64;
-    if file_size > sum_hashed + cert_table_size {
-        let extra_start = sum_hashed as usize;
-        let extra_end = (file_size - cert_table_size) as usize;
-        if extra_start < extra_end && extra_end <= data.len() {
-            DynDigest::update(hasher.as_mut(), &data[extra_start..extra_end]);
-        }
-    }
-    Some(hex::encode(hasher.finalize()))
-}
-
-/// Parse `SpcIndirectDataContent.messageDigest` from a PKCS#7
-/// SignedData blob and return `(digest_alg_friendly_name, digest_hex)`.
-///
-/// SpcIndirectDataContent ::= SEQUENCE {
-///     data SpcAttributeTypeAndOptionalValue,
-///     messageDigest DigestInfo
-/// }
-/// DigestInfo ::= SEQUENCE { digestAlgorithm, digest OCTET STRING }
-///
-/// We locate the SPC_INDIRECT_DATA_OBJID (`1.3.6.1.4.1.311.2.1.4`)
-/// inside the SignedData encapContentInfo, then walk the immediate
-/// `[0] EXPLICIT OCTET STRING` that wraps the SpcIndirectDataContent.
-fn parse_spc_indirect_data(pkcs7: &[u8]) -> Option<(AuthAlg, String)> {
-    // OID 1.3.6.1.4.1.311.2.1.4 → DER bytes (06 0A prefix + value).
-    const SPC_INDIRECT_DATA_OID: &[u8] = &[
-        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x01, 0x04,
-    ];
-    let oid_pos = pkcs7
-        .windows(SPC_INDIRECT_DATA_OID.len())
-        .position(|w| w == SPC_INDIRECT_DATA_OID)?;
-    let mut cursor = oid_pos + SPC_INDIRECT_DATA_OID.len();
-
-    // Expect [0] EXPLICIT (tag 0xA0) wrapping the content.
-    let (after_a0, _len) = parse_asn1_tag(pkcs7, cursor, 0xA0)?;
-    cursor = after_a0;
-
-    // Inner: OCTET STRING (tag 0x04) wrapping the SpcIndirectDataContent SEQUENCE,
-    // OR directly the SEQUENCE (depending on encoding variant).
-    if let Some((after, _)) = parse_asn1_tag(pkcs7, cursor, 0x04) {
-        cursor = after;
-    }
-    // SpcIndirectDataContent SEQUENCE.
-    let (after_seq, seq_end) = parse_asn1_tag(pkcs7, cursor, 0x30)?;
-    let seq_slice = &pkcs7[after_seq..seq_end];
-
-    // Inside: SpcAttributeTypeAndOptionalValue (SEQUENCE) then DigestInfo (SEQUENCE).
-    let mut p = 0;
-    let (after1, end1) = parse_asn1_tag_at(seq_slice, p, 0x30)?;
-    p = end1; // skip the SpcAttributeTypeAndOptionalValue
-    let _ = after1;
-
-    // Now DigestInfo SEQUENCE.
-    let (after2, end2) = parse_asn1_tag_at(seq_slice, p, 0x30)?;
-    let di = &seq_slice[after2..end2];
-
-    // DigestInfo: digestAlgorithm SEQUENCE { OID, NULL }, digest OCTET STRING.
-    let mut q = 0;
-    let (alg_seq_after, alg_seq_end) = parse_asn1_tag_at(di, q, 0x30)?;
-    let alg_slice = &di[alg_seq_after..alg_seq_end];
-    q = alg_seq_end;
-
-    // First element of the algorithm SEQUENCE: OID.
-    let (oid_after, oid_end) = parse_asn1_tag_at(alg_slice, 0, 0x06)?;
-    let oid_str = oid_dotted(&alg_slice[oid_after..oid_end]);
-    let alg = AuthAlg::from_oid(&oid_str)?;
-
-    // digest OCTET STRING.
-    let (digest_after, digest_end) = parse_asn1_tag_at(di, q, 0x04)?;
-    let digest_bytes = &di[digest_after..digest_end];
-    Some((alg, hex::encode(digest_bytes)))
-}
-
-/// Parse the first SignerInfo from a PKCS#7 SignedData blob.
-/// Returns the issuer-DN raw bytes plus the serial-number hex.
-///
-/// SignedData ::= SEQUENCE {
-///   version, digestAlgorithms SET, encapContentInfo,
-///   certificates [0] OPTIONAL, crls [1] OPTIONAL,
-///   signerInfos SET OF SignerInfo
-/// }
-/// SignerInfo ::= SEQUENCE { version, sid SignerIdentifier, ... }
-/// SignerIdentifier ::= CHOICE { issuerAndSerialNumber, subjectKeyIdentifier [0] }
-/// IssuerAndSerialNumber ::= SEQUENCE { issuer Name, serialNumber INTEGER }
-///
-/// We locate the SignerInfo SET as the last top-level element of the
-/// SignedData SEQUENCE — it's always the trailing element per spec.
-fn parse_signer_info(pkcs7: &[u8]) -> Option<SignerInfoRef<'_>> {
-    // Outer ContentInfo SEQUENCE.
-    let (after_outer, outer_end) = parse_asn1_tag_at(pkcs7, 0, 0x30)?;
-    let outer = &pkcs7[after_outer..outer_end];
-    // contentType OID (skip), then [0] EXPLICIT wrapping SignedData.
-    let (after_oid, oid_end) = parse_asn1_tag_at(outer, 0, 0x06)?;
-    let _ = (after_oid, oid_end);
-    let (after_a0, a0_end) = parse_asn1_tag_at(outer, oid_end, 0xA0)?;
-    let signed_data_wrapped = &outer[after_a0..a0_end];
-    // Inner SignedData SEQUENCE.
-    let (sd_inner_after, sd_inner_end) = parse_asn1_tag_at(signed_data_wrapped, 0, 0x30)?;
-    let sd = &signed_data_wrapped[sd_inner_after..sd_inner_end];
-
-    // Walk the SignedData elements; the last SET (tag 0x31) is the
-    // signerInfos. Skip optional [0] certificates and [1] crls.
-    let mut p = 0;
-    let mut last_set_range: Option<(usize, usize)> = None;
-    while p < sd.len() {
-        let tag = sd[p];
-        let (val_start, val_end) = parse_asn1_tag_at(sd, p, tag)?;
-        if tag == 0x31 {
-            last_set_range = Some((val_start, val_end));
-        }
-        p = val_end;
-    }
-    let (si_set_start, si_set_end) = last_set_range?;
-    let si_set = &sd[si_set_start..si_set_end];
-
-    // First SignerInfo SEQUENCE.
-    let (si_after, si_end) = parse_asn1_tag_at(si_set, 0, 0x30)?;
-    let si = &si_set[si_after..si_end];
-
-    // SignerInfo: version INTEGER, sid SignerIdentifier, digestAlgorithm,
-    // [0] signedAttrs OPTIONAL, signatureAlgorithm, signature OCTET STRING,
-    // [1] unsignedAttrs OPTIONAL.
-    let mut q = 0;
-    // version
-    let (_, v_end) = parse_asn1_tag_at(si, q, 0x02)?;
-    q = v_end;
-    // sid: typically IssuerAndSerialNumber (SEQUENCE 0x30).
-    let (sid_inner, sid_end) = parse_asn1_tag_at(si, q, 0x30)?;
-    let sid = &si[sid_inner..sid_end];
-    // IssuerAndSerialNumber: issuer Name (SEQUENCE), serialNumber INTEGER.
-    // Capture the *full* DER of the issuer Name (tag+len+body) so the
-    // bytes parse as a top-level X509Name when re-fed to x509-parser.
-    let issuer_full_start;
-    let issuer_end;
-    {
-        // parse_asn1_tag_at returns body offsets; we also need the
-        // tag byte that preceded it. The issuer SEQUENCE starts at
-        // sid[0], so its full bytes are sid[0..issuer_end].
-        let (_inner, end) = parse_asn1_tag_at(sid, 0, 0x30)?;
-        issuer_full_start = 0;
-        issuer_end = end;
-    }
-    let issuer_full_der = &sid[issuer_full_start..issuer_end];
-    let (serial_inner, serial_end) = parse_asn1_tag_at(sid, issuer_end, 0x02)?;
-    // DER positive INTEGERs prefix a 0x00 when the high bit of the
-    // first content byte would otherwise make the value look negative.
-    // x509-parser's `format!("{:x}", BigUint)` strips that padding,
-    // so we strip it here too for apples-to-apples comparison.
-    let serial_bytes = {
-        let raw = &sid[serial_inner..serial_end];
-        if raw.first() == Some(&0x00) && raw.len() > 1 {
-            &raw[1..]
-        } else {
-            raw
-        }
-    };
-    q = sid_end;
-
-    // digestAlgorithm SEQUENCE { OID, NULL }
-    let (di_inner, di_end) = parse_asn1_tag_at(si, q, 0x30)?;
-    let (di_oid_inner, di_oid_end) = parse_asn1_tag_at(si, di_inner, 0x06)?;
-    let _ = di_oid_end;
-    let digest_oid = oid_dotted(&si[di_oid_inner..di_oid_end]);
-    let digest_alg = AuthAlg::from_oid(&digest_oid);
-    q = di_end;
-
-    // [0] IMPLICIT signedAttrs OPTIONAL — tag 0xA0. Per CMS, the
-    // bytes signed are the *re-encoded* SET (tag 0x31), not the
-    // [0]-tagged form on the wire.
-    let mut signed_attrs_der: Option<Vec<u8>> = None;
-    if let Some((sa_inner, sa_end)) = parse_asn1_tag_at(si, q, 0xA0) {
-        let attrs_body = &si[sa_inner..sa_end];
-        // Re-encode as SET (0x31) with the same body.
-        let mut reenc = encode_asn1_tag(0x31, attrs_body);
-        signed_attrs_der = Some(std::mem::take(&mut reenc));
-        q = sa_end;
-    }
-
-    // signatureAlgorithm SEQUENCE — read OID for unsupported-flag tracking.
-    let (sa_inner2, sa_end2) = parse_asn1_tag_at(si, q, 0x30)?;
-    let (sa_oid_inner, sa_oid_end) = parse_asn1_tag_at(si, sa_inner2, 0x06)?;
-    let sig_oid = oid_dotted(&si[sa_oid_inner..sa_oid_end]);
-    q = sa_end2;
-
-    // signature OCTET STRING.
-    let (sig_inner, sig_end) = parse_asn1_tag_at(si, q, 0x04)?;
-    let signature_bytes = si[sig_inner..sig_end].to_vec();
-
-    Some(SignerInfoRef {
-        issuer_raw: issuer_full_der,
-        serial_hex: hex::encode(serial_bytes),
-        digest_alg,
-        signed_attrs_der,
-        signature_alg_oid: sig_oid,
-        signature_bytes,
-    })
-}
-
-struct SignerInfoRef<'a> {
-    /// Full DER (tag + length + body) of the IssuerAndSerialNumber's
-    /// `issuer Name` SEQUENCE. Parses as a top-level X509Name.
-    issuer_raw: &'a [u8],
-    serial_hex: String,
-    digest_alg: Option<AuthAlg>,
-    signed_attrs_der: Option<Vec<u8>>,
-    signature_alg_oid: String,
-    signature_bytes: Vec<u8>,
-}
-
-/// Encode a TLV with the given single-byte tag and body.
-/// Length encoding follows DER short/long form rules.
-fn encode_asn1_tag(tag: u8, body: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(body.len() + 6);
-    out.push(tag);
-    let len = body.len();
-    if len < 0x80 {
-        out.push(len as u8);
-    } else {
-        // Long form: how many bytes the length itself takes.
-        let mut len_bytes = Vec::with_capacity(8);
-        let mut v = len;
-        while v > 0 {
-            len_bytes.push((v & 0xFF) as u8);
-            v >>= 8;
-        }
-        len_bytes.reverse();
-        out.push(0x80 | len_bytes.len() as u8);
-        out.extend_from_slice(&len_bytes);
-    }
-    out.extend_from_slice(body);
-    out
-}
-
-/// Parse the leaf CN from raw DN DER bytes. Returns the first
-/// CommonName attribute's UTF-8 value, or None when DER is malformed.
-fn dn_first_cn_raw(der: &[u8]) -> Option<String> {
-    // Re-parse the DN as an X509Name. asn1-rs / x509-parser exposes
-    // X509Name parsing via `from_der` (FromDer trait). The borrow
-    // lifetime requires saving the result before the iterator drops.
-    use x509_parser::prelude::FromDer;
-    use x509_parser::x509::X509Name;
-    let (_, name) = X509Name::from_der(der).ok()?;
-    let cn = name
-        .iter_common_name()
-        .next()
-        .and_then(|cn| cn.as_str().ok())
-        .map(str::to_string);
-    cn
-}
-
-/// Populate the `nested_*` PE metrics from an inner SignedData blob
-/// (the value of the Microsoft NestedSignature attribute).
-fn populate_nested_signature(
-    metrics: &mut crate::types::binary_metrics::PeMetrics,
-    nested_blob: &[u8],
-) {
-    let certs = parse_pkcs7_certificates(nested_blob);
-    if let Some(leaf) = find_leaf_signer(&certs) {
-        metrics.nested_leaf_subject = dn_common_name(leaf.tbs_certificate.subject());
-        metrics.nested_leaf_issuer = dn_common_name(leaf.tbs_certificate.issuer());
-        if let Ok(Some(eku_ext)) = leaf.tbs_certificate.extended_key_usage() {
-            metrics.nested_leaf_eku_code_signing = eku_ext.value.code_signing;
-        }
-        metrics.nested_leaf_signature_algorithm =
-            signature_algorithm_name(&leaf.signature_algorithm.algorithm);
-        use sha1::{Digest, Sha1};
-        let mut h = Sha1::new();
-        h.update(leaf.as_ref());
-        metrics.nested_leaf_thumbprint_sha1 = Some(hex::encode(h.finalize()));
-    }
-}
-
-/// Find a Microsoft NestedSignature attribute (OID
-/// `1.3.6.1.4.1.311.2.4.1`) in the PKCS#7 unauthenticatedAttributes
-/// and return the inner SignedData blob (full ContentInfo bytes).
-///
-/// Layout of the attribute:
-///   SEQUENCE {
-///     OID 1.3.6.1.4.1.311.2.4.1
-///     SET {
-///       SEQUENCE { contentType OID, [0] EXPLICIT signedData }  -- nested ContentInfo
-///       ...
-///     }
-///   }
-fn extract_nested_signature(pkcs7: &[u8]) -> Option<&[u8]> {
-    const NESTED_SIG_OID: &[u8] = &[
-        0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04, 0x01,
-    ];
-    let oid_pos = pkcs7
-        .windows(NESTED_SIG_OID.len())
-        .position(|w| w == NESTED_SIG_OID)?;
-    let cursor = oid_pos + NESTED_SIG_OID.len();
-    // Expect SET tag 0x31, then SEQUENCE 0x30 (the inner ContentInfo).
-    let (set_inner, set_end) = parse_asn1_tag(pkcs7, cursor, 0x31)?;
-    let set_slice = &pkcs7[set_inner..set_end];
-    let (_seq_inner, seq_end) = parse_asn1_tag_at(set_slice, 0, 0x30)?;
-    // Return the full SEQUENCE (tag + length + body) so the slice
-    // parses as a top-level ContentInfo when handed to downstream
-    // PKCS#7 helpers. The SEQUENCE starts at offset 0 of `set_slice`.
-    Some(&set_slice[0..seq_end])
-}
-
-/// True if the SignatureAlgorithm OID names an RSA-PKCS1v15 variant
-/// (rsaEncryption itself or one of the sha*WithRSAEncryption OIDs).
-fn is_rsa_pkcs1v15_oid(oid: &str) -> bool {
-    matches!(
-        oid,
-        "1.2.840.113549.1.1.1"   // rsaEncryption
-            | "1.2.840.113549.1.1.5"  // sha1WithRSAEncryption
-            | "1.2.840.113549.1.1.11" // sha256WithRSAEncryption
-            | "1.2.840.113549.1.1.12" // sha384WithRSAEncryption
-            | "1.2.840.113549.1.1.13" // sha512WithRSAEncryption
-    )
-}
-
-/// True if the SignatureAlgorithm OID names an ECDSA variant.
-fn is_ecdsa_oid(oid: &str) -> bool {
-    matches!(
-        oid,
-        "1.2.840.10045.4.1"      // ecdsa-with-SHA1
-            | "1.2.840.10045.4.3.1" // ecdsa-with-SHA224
-            | "1.2.840.10045.4.3.2" // ecdsa-with-SHA256
-            | "1.2.840.10045.4.3.3" // ecdsa-with-SHA384
-            | "1.2.840.10045.4.3.4" // ecdsa-with-SHA512
-    )
-}
-
-/// Named elliptic curve cleave can verify ECDSA signatures over.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum NamedCurve {
-    P256,
-    P384,
-}
-
-impl NamedCurve {
-    fn from_oid(oid: &str) -> Option<Self> {
-        match oid {
-            "1.2.840.10045.3.1.7" => Some(NamedCurve::P256), // secp256r1 / NIST P-256
-            "1.3.132.0.34" => Some(NamedCurve::P384),        // secp384r1 / NIST P-384
-            _ => None,
-        }
-    }
-}
-
-/// Extract the named-curve OID from a SubjectPublicKeyInfo's
-/// `algorithm.parameters` raw bytes. The SPKI structure is:
-///   SubjectPublicKeyInfo ::= SEQUENCE {
-///     algorithm AlgorithmIdentifier { algorithm OID, parameters ANY OPTIONAL },
-///     subjectPublicKey BIT STRING
-///   }
-/// For EC keys, `parameters` is an OBJECT IDENTIFIER naming the curve.
-fn extract_ec_curve_oid(spki_params: &[u8]) -> Option<String> {
-    // params is the raw `parameters` value — should be just an OID.
-    let (start, end) = parse_asn1_tag_at(spki_params, 0, 0x06)?;
-    Some(oid_dotted(&spki_params[start..end]))
-}
-
-/// Verify an ECDSA SignerInfo signature against the leaf cert's
-/// public key. Supports the conventional curve+hash pairs only:
-/// P-256 + SHA-256, P-384 + SHA-384. Off-pairs (e.g. P-256 + SHA-384)
-/// are extremely rare in PE Authenticode and return `None` so the
-/// caller can flag them as unsupported.
-fn verify_ecdsa_signature(
-    leaf_pubkey_sec1: &[u8],
-    curve: NamedCurve,
-    digest_alg: AuthAlg,
-    signed_message: &[u8],
-    signature: &[u8],
-) -> Option<bool> {
-    match (curve, digest_alg) {
-        (NamedCurve::P256, AuthAlg::Sha256) => {
-            use p256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-            let vk = VerifyingKey::from_sec1_bytes(leaf_pubkey_sec1).ok()?;
-            let sig = Signature::from_der(signature).ok()?;
-            Some(vk.verify(signed_message, &sig).is_ok())
-        }
-        (NamedCurve::P384, AuthAlg::Sha384) => {
-            use p384::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-            let vk = VerifyingKey::from_sec1_bytes(leaf_pubkey_sec1).ok()?;
-            let sig = Signature::from_der(signature).ok()?;
-            Some(vk.verify(signed_message, &sig).is_ok())
-        }
-        _ => None,
-    }
-}
-
-/// Verify a SignerInfo's RSA-PKCS1v15 signature against the leaf
-/// cert's public key. Returns:
-///   * `Some(true)` — signature mathematically valid
-///   * `Some(false)` — signature verification failed
-///   * `None` — couldn't extract the parts needed for verification
-fn verify_rsa_pkcs1v15_signature(
-    leaf_pubkey_der: &[u8],
-    digest_alg: AuthAlg,
-    signed_message: &[u8],
-    signature: &[u8],
-) -> Option<bool> {
-    use rsa::pkcs1v15::{Signature as RsaSignature, VerifyingKey};
-    use rsa::signature::Verifier;
-    use rsa::RsaPublicKey;
-    use sha1::Sha1;
-    use sha2::{Sha256, Sha384, Sha512};
-
-    let public_key = RsaPublicKey::from_pkcs1_der(leaf_pubkey_der)
-        .or_else(|_| {
-            // Some certs encode SubjectPublicKeyInfo with RSAES wrapper —
-            // try the SPKI form via x509-parser bytes.
-            use rsa::pkcs8::DecodePublicKey;
-            RsaPublicKey::from_public_key_der(leaf_pubkey_der).map_err(|_e| ())
-        })
-        .ok()?;
-    use rsa::pkcs1::DecodeRsaPublicKey;
-
-    let sig = RsaSignature::try_from(signature).ok()?;
-    let verified = match digest_alg {
-        AuthAlg::Sha1 => VerifyingKey::<Sha1>::new(public_key)
-            .verify(signed_message, &sig)
-            .is_ok(),
-        AuthAlg::Sha256 => VerifyingKey::<Sha256>::new(public_key)
-            .verify(signed_message, &sig)
-            .is_ok(),
-        AuthAlg::Sha384 => VerifyingKey::<Sha384>::new(public_key)
-            .verify(signed_message, &sig)
-            .is_ok(),
-        AuthAlg::Sha512 => VerifyingKey::<Sha512>::new(public_key)
-            .verify(signed_message, &sig)
-            .is_ok(),
-    };
-    Some(verified)
-}
-
-// ──── Minimal ASN.1 helpers (manual length-prefix walker) ────
-
-/// Parse an ASN.1 tag at the given offset; returns
-/// `(value_start, value_end)`. `value_end` is one past the last byte.
-fn parse_asn1_tag(data: &[u8], offset: usize, expected_tag: u8) -> Option<(usize, usize)> {
-    parse_asn1_tag_at(data, offset, expected_tag)
-}
-
-fn parse_asn1_tag_at(data: &[u8], offset: usize, expected_tag: u8) -> Option<(usize, usize)> {
-    if offset >= data.len() || data[offset] != expected_tag {
-        return None;
-    }
-    let len_byte = *data.get(offset + 1)?;
-    let (len, len_size) = if len_byte & 0x80 == 0 {
-        (len_byte as usize, 1usize)
-    } else {
-        let n = (len_byte & 0x7F) as usize;
-        if n == 0 || n > 4 {
-            return None; // indefinite length / oversized
-        }
-        let mut len = 0usize;
-        for i in 0..n {
-            len = (len << 8) | (*data.get(offset + 2 + i)? as usize);
-        }
-        (len, 1 + n)
-    };
-    let value_start = offset + 1 + len_size;
-    let value_end = value_start.checked_add(len)?;
-    if value_end > data.len() {
-        return None;
-    }
-    Some((value_start, value_end))
-}
-
-/// Decode an ASN.1 OID's value bytes into dotted-string form.
-fn oid_dotted(bytes: &[u8]) -> String {
-    if bytes.is_empty() {
-        return String::new();
-    }
-    let mut out = String::new();
-    let first = bytes[0];
-    let arc1 = (first / 40) as u32;
-    let arc2 = (first % 40) as u32;
-    out.push_str(&format!("{arc1}.{arc2}"));
-    let mut value: u64 = 0;
-    for &b in &bytes[1..] {
-        value = (value << 7) | ((b & 0x7F) as u64);
-        if b & 0x80 == 0 {
-            out.push('.');
-            out.push_str(&value.to_string());
-            value = 0;
-        }
-    }
-    out
 }
 
 /// Resolve a Rich Header product ID (low 16 bits of CompID) to a
@@ -4593,39 +3438,6 @@ mod tests {
     }
 
     #[test]
-    fn test_signature_algorithm_name_known() {
-        let oid =
-            x509_parser::der_parser::asn1_rs::Oid::from(&[1, 2, 840, 113549, 1, 1, 11]).unwrap();
-        assert_eq!(
-            signature_algorithm_name(&oid).as_deref(),
-            Some("sha256WithRSAEncryption")
-        );
-    }
-
-    #[test]
-    fn test_signature_algorithm_name_unknown() {
-        let oid = x509_parser::der_parser::asn1_rs::Oid::from(&[1, 2, 999, 999]).unwrap();
-        assert_eq!(signature_algorithm_name(&oid), None);
-    }
-
-    #[test]
-    fn test_pkcs7_has_nested_signature_detects_oid() {
-        // OID 1.3.6.1.4.1.311.2.4.1 surrounded by junk bytes.
-        let blob: Vec<u8> = [
-            0x00, 0x99, 0xAA, 0x06, 0x0A, 0x2B, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x04,
-            0x01, 0xFF,
-        ]
-        .into();
-        assert!(pkcs7_has_nested_signature(&blob));
-    }
-
-    #[test]
-    fn test_pkcs7_has_nested_signature_negative() {
-        let blob: Vec<u8> = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05].into();
-        assert!(!pkcs7_has_nested_signature(&blob));
-    }
-
-    #[test]
     fn test_rich_product_name_resolution() {
         assert_eq!(rich_product_name(0x0002), Some("Linker (LINK)"));
         assert_eq!(rich_product_name(0x0040), Some("MSVC 14.0 C compiler"));
@@ -4636,152 +3448,6 @@ mod tests {
     fn test_parse_rich_header_empty_when_no_marker() {
         let data = vec![0u8; 0x200];
         assert!(parse_rich_header(&data, 0x100).is_empty());
-    }
-
-    #[test]
-    fn test_dn_first_cn_raw_extracts_cn() {
-        // Manually construct a tiny X509 Name DER:
-        //   SEQUENCE {
-        //     SET { SEQUENCE { OID 2.5.4.3 (CN), UTF8String "Test" } }
-        //   }
-        let der = [
-            0x30, 0x10, // SEQUENCE len 16
-            0x31, 0x0E, // SET len 14
-            0x30, 0x0C, // SEQUENCE len 12
-            0x06, 0x03, 0x55, 0x04, 0x03, // OID 2.5.4.3
-            0x0C, 0x05, b'X', b'Y', b'Z', b'1', b'2', // UTF8String "XYZ12"
-        ];
-        // Pad string to length 5: actually we wrote "XYZ12" which is 5 chars.
-        // The SEQUENCE inner is 12 bytes (5 OID + 7 UTF8String header+data).
-        // Our header values may need adjusting, but we mostly care that the
-        // function doesn't panic and parses something.
-        let cn = dn_first_cn_raw(&der);
-        // We accept any Some result here; main goal is no panic on valid DER.
-        assert!(cn.is_some() || cn.is_none());
-    }
-
-    #[test]
-    fn test_auth_alg_from_oid() {
-        assert_eq!(
-            AuthAlg::from_oid("2.16.840.1.101.3.4.2.1"),
-            Some(AuthAlg::Sha256)
-        );
-        assert_eq!(AuthAlg::from_oid("1.3.14.3.2.26"), Some(AuthAlg::Sha1));
-        assert_eq!(
-            AuthAlg::from_oid("2.16.840.1.101.3.4.2.2"),
-            Some(AuthAlg::Sha384)
-        );
-        assert_eq!(
-            AuthAlg::from_oid("2.16.840.1.101.3.4.2.3"),
-            Some(AuthAlg::Sha512)
-        );
-        assert_eq!(AuthAlg::from_oid("9.9.9.9"), None);
-    }
-
-    #[test]
-    fn test_auth_alg_friendly_names() {
-        assert_eq!(AuthAlg::Sha1.name(), "sha1");
-        assert_eq!(AuthAlg::Sha256.name(), "sha256");
-        assert_eq!(AuthAlg::Sha384.name(), "sha384");
-        assert_eq!(AuthAlg::Sha512.name(), "sha512");
-    }
-
-    #[test]
-    fn test_is_rsa_pkcs1v15_oid() {
-        assert!(is_rsa_pkcs1v15_oid("1.2.840.113549.1.1.1"));
-        assert!(is_rsa_pkcs1v15_oid("1.2.840.113549.1.1.11"));
-        assert!(is_rsa_pkcs1v15_oid("1.2.840.113549.1.1.5"));
-        assert!(!is_rsa_pkcs1v15_oid("1.2.840.10045.4.3.2")); // ECDSA-SHA256
-    }
-
-    #[test]
-    fn test_is_ecdsa_oid() {
-        assert!(is_ecdsa_oid("1.2.840.10045.4.1"));
-        assert!(is_ecdsa_oid("1.2.840.10045.4.3.2"));
-        assert!(is_ecdsa_oid("1.2.840.10045.4.3.3"));
-        assert!(is_ecdsa_oid("1.2.840.10045.4.3.4"));
-        assert!(!is_ecdsa_oid("1.2.840.113549.1.1.11"));
-    }
-
-    #[test]
-    fn test_normalize_serial_hex_strips_leading_zeros() {
-        // DER positive INTEGERs prefix 0x00 when high bit set.
-        assert_eq!(normalize_serial_hex("00d0461b529f"), "d0461b529f");
-        assert_eq!(normalize_serial_hex("02c1c6d6"), "2c1c6d6");
-        // No leading zeros — passthrough.
-        assert_eq!(normalize_serial_hex("d0461b529f"), "d0461b529f");
-    }
-
-    #[test]
-    fn test_normalize_serial_hex_preserves_zero() {
-        // Pure-zero serial: don't strip everything away.
-        assert_eq!(normalize_serial_hex("0"), "0");
-        assert_eq!(normalize_serial_hex("00"), "0");
-        assert_eq!(normalize_serial_hex(""), "0");
-    }
-
-    #[test]
-    fn test_normalize_serial_hex_idempotent() {
-        // Apply twice → same result.
-        let once = normalize_serial_hex("00d0461b529f");
-        let twice = normalize_serial_hex(once);
-        assert_eq!(once, twice);
-    }
-
-    #[test]
-    fn test_find_cert_by_issuer_and_serial_picks_match() {
-        // Two real self-signed test certs with distinct subjects+serials.
-        // Verify: targeting Cert B's issuer+serial returns Cert B,
-        // not Cert A.
-        use x509_parser::prelude::FromDer;
-        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
-        const CERT_B: &[u8] = include_bytes!("../../tests/fixtures/cert_b.der");
-        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
-        let (_, b) = x509_parser::certificate::X509Certificate::from_der(CERT_B).unwrap();
-        let certs = vec![a, b];
-        // Build the target from cert_b's actual fields.
-        let b_issuer = certs[1].tbs_certificate.issuer().as_raw();
-        let b_serial = format!("{:x}", certs[1].tbs_certificate.serial);
-        let b_serial_norm = normalize_serial_hex(&b_serial);
-        let found = find_cert_by_issuer_and_serial(&certs, b_issuer, b_serial_norm)
-            .expect("should find cert B");
-        assert_eq!(
-            dn_common_name(found.tbs_certificate.subject()).as_deref(),
-            Some("TestCertB")
-        );
-    }
-
-    #[test]
-    fn test_find_cert_by_issuer_and_serial_returns_none_on_mismatch() {
-        // Target an issuer that doesn't match any cert in the bag.
-        use x509_parser::prelude::FromDer;
-        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
-        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
-        let certs = vec![a];
-        let bogus_issuer =
-            b"\x30\x10\x31\x0e\x30\x0c\x06\x03\x55\x04\x03\x0c\x05\x4f\x74\x68\x65\x72";
-        let result = find_cert_by_issuer_and_serial(&certs, bogus_issuer, "deadbeef");
-        assert!(result.is_none());
-    }
-
-    #[test]
-    fn test_find_cert_by_issuer_and_serial_handles_padded_serial() {
-        // The function compares using normalized serial, so a DER-padded
-        // serial ("00d0461..." vs "d0461...") must match equivalent
-        // BigUint-formatted serials.
-        use x509_parser::prelude::FromDer;
-        const CERT_A: &[u8] = include_bytes!("../../tests/fixtures/cert_a.der");
-        let (_, a) = x509_parser::certificate::X509Certificate::from_der(CERT_A).unwrap();
-        let certs = vec![a];
-        let issuer = certs[0].tbs_certificate.issuer().as_raw();
-        let raw_serial = format!("{:x}", certs[0].tbs_certificate.serial);
-        // Manually prepend "00" to simulate DER padding on a positive int.
-        let padded = format!("00{}", raw_serial);
-        let normalized = normalize_serial_hex(&padded);
-        assert!(
-            find_cert_by_issuer_and_serial(&certs, issuer, normalized).is_some(),
-            "padded serial should still match after normalization"
-        );
     }
 
     #[test]
@@ -4817,87 +3483,6 @@ mod tests {
     fn test_is_unusual_bss_like_requires_nonzero_virtual() {
         // Both raw and virtual zero is just an empty section, not BSS.
         assert!(!is_unusual_bss_like(".upx0", 0, 0));
-    }
-
-    #[test]
-    fn test_named_curve_from_oid() {
-        assert_eq!(
-            NamedCurve::from_oid("1.2.840.10045.3.1.7"),
-            Some(NamedCurve::P256)
-        );
-        assert_eq!(NamedCurve::from_oid("1.3.132.0.34"), Some(NamedCurve::P384));
-        assert_eq!(NamedCurve::from_oid("1.3.132.0.35"), None); // P-521 unsupported
-        assert_eq!(NamedCurve::from_oid("9.9.9.9"), None);
-    }
-
-    #[test]
-    fn test_extract_ec_curve_oid() {
-        // SPKI parameters with just a curve OID: P-256 = 1.2.840.10045.3.1.7
-        let der_oid: [u8; 10] = [
-            0x06, 0x08, // OID, len 8
-            0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07,
-        ];
-        assert_eq!(
-            extract_ec_curve_oid(&der_oid).as_deref(),
-            Some("1.2.840.10045.3.1.7")
-        );
-    }
-
-    #[test]
-    fn test_verify_ecdsa_off_pair_returns_none() {
-        // Garbage inputs: we just want to confirm off-pair (P-256 + SHA-384)
-        // returns None so the caller flags algorithm_unsupported.
-        let garbage = vec![0u8; 65];
-        let result = verify_ecdsa_signature(
-            &garbage,
-            NamedCurve::P256,
-            AuthAlg::Sha384,
-            &[1, 2, 3],
-            &[0; 70],
-        );
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn test_oid_dotted_basic() {
-        // OID 1.2.840.113549.1.1.11 → DER body bytes after tag+len.
-        let body = [0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x01, 0x0B];
-        assert_eq!(oid_dotted(&body), "1.2.840.113549.1.1.11");
-    }
-
-    #[test]
-    fn test_parse_asn1_tag_short_form() {
-        // SEQUENCE (0x30) of length 3 with body [0x01, 0x02, 0x03].
-        let data = [0x30, 0x03, 0x01, 0x02, 0x03];
-        let (start, end) = parse_asn1_tag_at(&data, 0, 0x30).unwrap();
-        assert_eq!(&data[start..end], &[0x01, 0x02, 0x03]);
-    }
-
-    #[test]
-    fn test_parse_asn1_tag_long_form_length() {
-        // SEQUENCE with length 0x0102 (long form: 0x82 0x01 0x02).
-        let mut data = vec![0x30, 0x82, 0x01, 0x02];
-        data.extend(std::iter::repeat_n(0xAA, 0x102));
-        let (start, end) = parse_asn1_tag_at(&data, 0, 0x30).unwrap();
-        assert_eq!(end - start, 0x102);
-    }
-
-    #[test]
-    fn test_encode_asn1_tag_round_trip_short() {
-        let body = [1u8, 2, 3];
-        let out = encode_asn1_tag(0x31, &body);
-        assert_eq!(out, vec![0x31, 0x03, 1, 2, 3]);
-    }
-
-    #[test]
-    fn test_encode_asn1_tag_round_trip_long() {
-        let body = vec![0xAAu8; 0x102];
-        let out = encode_asn1_tag(0x31, &body);
-        assert_eq!(out[0], 0x31);
-        assert_eq!(out[1], 0x82);
-        assert_eq!(out[2], 0x01);
-        assert_eq!(out[3], 0x02);
-        assert_eq!(out.len(), 0x102 + 4);
     }
 
     #[test]
@@ -4958,9 +3543,43 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report.target.architectures.is_some());
-        let archs = report.target.architectures.unwrap();
-        assert!(!archs.is_empty());
+        let archs = report
+            .target
+            .architectures
+            .expect("PE analyzer should detect at least one architecture");
+        // test.exe is a 64-bit MSVC build. The canonical label is
+        // `"x86_64"` — what expose emits and what every analyst-facing
+        // tool (objdump, file(1), LIEF) reports. The ctx-fed path
+        // returns this verbatim; the legacy fallback maps 0x8664 to
+        // the same string.
+        assert_eq!(
+            archs,
+            vec!["x86_64".to_string()],
+            "test.exe arch label drifted from canonical x86_64",
+        );
+    }
+
+    /// Verify `arch_name` returns expose's canonical lowercase label
+    /// when ctx is available, and the legacy mapping otherwise. The
+    /// two agree for x86_64 but diverge for i386 / arm64 — this test
+    /// pins both branches.
+    #[test]
+    fn arch_name_prefers_expose_canonical_label() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+        if !test_file.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&test_file).unwrap();
+        let pe = PE::parse(&bytes).expect("test.exe parses");
+
+        let legacy = analyzer.arch_name(&pe, None);
+        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
+        let bridged = analyzer.arch_name(&pe, Some(&ctx));
+
+        // test.exe is x86_64; both paths agree on this fixture.
+        assert_eq!(legacy, "x86_64");
+        assert_eq!(bridged, "x86_64");
     }
 
     #[test]
@@ -5410,10 +4029,10 @@ mod tests {
         assert!(upx_finding.is_some(), "Should have UPX finding");
         let finding = upx_finding.unwrap();
 
-        // UPX packing alone is packaging evidence, not a hostile conclusion.
-        assert_eq!(finding.crit, Criticality::Notable);
+        // UPX materially changes static visibility even when otherwise legitimate.
+        assert_eq!(finding.crit, Criticality::Suspicious);
         assert_eq!(finding.conf, 1.0);
-        assert_eq!(finding.desc, "Binary is packed with UPX");
+        assert_eq!(finding.desc, "Binary contains a UPX packing marker");
     }
 
     #[test]
@@ -5454,39 +4073,270 @@ mod tests {
         );
     }
 
+    // ──── Pure-function helpers ────────────────────────────────────
+
     #[test]
-    fn test_dos_stub_zeroed_all_zeros() {
-        let pe_offset = 0x80;
-        let mut data = vec![0u8; pe_offset + 4];
-        data[0..2].copy_from_slice(b"MZ");
-        // 0x40..0x80 is already 0x00 from vec initialization
-        assert!(dos_stub_zeroed(&data, pe_offset));
+    fn dn_extract_cn_handles_canonical_dn() {
+        let dn = "CN=Microsoft Corporation,O=Microsoft Corporation,L=Redmond,ST=Washington,C=US";
+        assert_eq!(
+            super::dn_extract_cn(dn).as_deref(),
+            Some("Microsoft Corporation"),
+        );
+        assert_eq!(
+            super::dn_extract_o(dn).as_deref(),
+            Some("Microsoft Corporation"),
+        );
+        // Empty input → None, not a panic.
+        assert_eq!(super::dn_extract_cn(""), None);
+        // DN with no CN attribute returns None.
+        assert_eq!(super::dn_extract_cn("OU=Engineering"), None);
+        // RFC 4514 attributes are case-insensitive.
+        assert_eq!(
+            super::dn_extract_cn("cn=acme corp").as_deref(),
+            Some("acme corp"),
+        );
     }
 
     #[test]
-    fn test_dos_stub_zeroed_with_content() {
-        let pe_offset = 0x80;
-        let mut data = vec![0u8; pe_offset + 4];
-        data[0..2].copy_from_slice(b"MZ");
-        data[0x40..0x40 + 38].copy_from_slice(b"This program cannot be run in DOS mode");
-        assert!(!dos_stub_zeroed(&data, pe_offset));
+    fn parse_iso8601_to_unix_handles_known_values() {
+        assert_eq!(super::parse_iso8601_to_unix("1970-01-01T00:00:00Z"), 0);
+        assert_eq!(
+            super::parse_iso8601_to_unix("2022-05-12T20:45:59Z"),
+            1_652_388_359,
+        );
+        // Malformed input → 0, not a panic.
+        assert_eq!(super::parse_iso8601_to_unix("not-a-timestamp"), 0);
     }
 
     #[test]
-    fn test_dos_stub_zeroed_partial_nonzero() {
-        let pe_offset = 0x80;
-        let mut data = vec![0u8; pe_offset + 4];
-        data[0..2].copy_from_slice(b"MZ");
-        data[0x60] = 0x01; // one non-zero byte in the stub region
-        assert!(!dos_stub_zeroed(&data, pe_offset));
+    fn derive_signature_digest_mismatch_flags_real_divergence() {
+        use crate::types::binary_metrics::PeMetrics;
+        let mut m = PeMetrics::default();
+        m.signature_digest_algorithm = Some("sha256".into());
+        m.signature_digest = Some("deadbeef".into());
+        m.authentihash = Some("cafebabe".into());
+        assert!(super::derive_signature_digest_mismatch(&m));
+        m.authentihash = Some("deadbeef".into());
+        assert!(!super::derive_signature_digest_mismatch(&m));
     }
 
     #[test]
-    fn test_dos_stub_zeroed_pe_offset_too_small() {
-        // pe_offset <= 0x40 means there's no stub region
-        let data = vec![0u8; 0x80];
-        assert!(!dos_stub_zeroed(&data, 0x40));
-        assert!(!dos_stub_zeroed(&data, 0x20));
-        assert!(!dos_stub_zeroed(&data, 0));
+    fn derive_signature_digest_mismatch_is_false_when_fields_missing() {
+        use crate::types::binary_metrics::PeMetrics;
+        let mut m = PeMetrics::default();
+        // No claimed digest → not a mismatch (no claim to disagree with).
+        assert!(!super::derive_signature_digest_mismatch(&m));
+        // Algorithm we don't recognise → not a mismatch (can't compare).
+        m.signature_digest_algorithm = Some("blake2b".into());
+        m.signature_digest = Some("deadbeef".into());
+        assert!(!super::derive_signature_digest_mismatch(&m));
+    }
+
+    // ──── compute_pe_metrics integration tests ─────────────────────
+    //
+    // Each test runs `compute_pe_metrics` once against a real fixture
+    // and asserts the produced fields directly. Together they cover
+    // every block in the function: header fields, DOS stub, Rich
+    // header, sections, debug directory, image hashes, .NET, TLS,
+    // bound imports, load config, data directories, resources, and
+    // Authenticode (when the fixture is signed).
+
+    /// `compute_pe_metrics` on the in-repo `test.exe` (64-bit MSVC,
+    /// unsigned, with CFG + Rich header + debug directory). The
+    /// expected values below are stable properties of the fixture —
+    /// regenerate by running `cleave inspect values tests/fixtures/test.exe`
+    /// if the fixture itself is ever replaced.
+    #[test]
+    fn compute_pe_metrics_test_exe() {
+        let analyzer = PEAnalyzer::new();
+        let test_file = test_pe_path();
+        if !test_file.exists() {
+            return;
+        }
+        let bytes = std::fs::read(&test_file).unwrap();
+        let pe = PE::parse(&bytes).expect("test.exe parses");
+        let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
+        let (m, _) = analyzer.compute_pe_metrics(&pe, &bytes, &test_file, &ctx);
+
+        // Header fields.
+        assert_eq!(m.timestamp, 1_720_640_421);
+        assert_eq!(m.entry, 4784);
+        assert_eq!(m.entry_section.as_deref(), Some(".text"));
+        assert_eq!(m.machine, 0x8664);
+        assert_eq!(m.image_base, 0x1_4000_0000);
+        assert_eq!(m.size_of_image, 28_672);
+        assert_eq!(m.size_of_headers, 1024);
+
+        // DOS stub + Rich header — clean MSVC build, no anomalies.
+        assert!(!m.dos_stub_modified);
+        assert!(!m.dos_stub_zeroed);
+        assert!(m.has_rich_header);
+        assert_eq!(m.rich_header_compids.len(), 10);
+
+        // Sections — `.text` is the entry section, `.rsrc` carries
+        // a non-empty resource directory. No anomalies.
+        assert!(!m.entry_in_header);
+        assert!(!m.entry_outside_sections);
+        assert!(!m.entry_in_writable_section);
+        assert_eq!(m.section_raw_overflow_count, 0);
+        assert_eq!(m.misaligned_section_count, 0);
+        assert_eq!(m.section_overlap_count, 0);
+        assert!(!m.section_count_mismatch);
+        // `.rsrc` has a small icon group.
+        assert!(m.rsrc_size > 0);
+        assert!(m.rsrc_entropy > 0.0);
+
+        // Debug directory + PDB.
+        assert_eq!(m.debug_directory_entries, 4);
+        assert_eq!(
+            m.pdb_path.as_deref(),
+            Some("C:\\Users\\forveined\\Documents\\nil\\x64\\Release\\Nil.pdb"),
+        );
+        assert!(m.codeview_guid.is_some());
+
+        // Checksum: stored = 0 on this fixture (linker left it
+        // unfilled, which is common for non-production builds). The
+        // computed checksum is still non-zero — that's how `editbin
+        // /release` would fill it later if it ever ran.
+        assert_eq!(m.checksum, 0);
+        assert!(!m.has_checksum);
+        assert!(m.computed_checksum > 0);
+        // checksum_valid stays false when stored is 0 (it requires a
+        // non-zero stored value matching the computed one).
+        assert!(!m.checksum_valid);
+
+        // Image hashes — all four lengths.
+        assert_eq!(m.authentihash.as_deref().map(str::len), Some(64));
+        assert_eq!(m.authentihash_sha1.as_deref().map(str::len), Some(40));
+        assert_eq!(m.authentihash_sha384.as_deref().map(str::len), Some(96));
+        assert_eq!(m.authentihash_sha512.as_deref().map(str::len), Some(128));
+
+        // Load Config (CFG flags set; CFG function table empty for this build).
+        assert!(m.security_cookie != 0);
+        assert!(m.cfg_check_func != 0);
+        assert_eq!(m.cfg_func_count, 0);
+        assert_eq!(m.cfg_guard_flags & 0x100, 0x100); // cf_instrumented
+
+        // No signature, no nested signature, no delay imports.
+        assert!(!m.has_signature);
+        assert!(!m.has_nested_signature);
+        assert_eq!(m.delay_load_import_count, 0);
+
+        // Not a .NET binary.
+        assert!(!m.is_dotnet);
+        assert!(m.clr_version.is_none());
+
+        // Data directory + section_characteristics typed kv carriers.
+        assert_eq!(m.data_directory_entries.len(), 7);
+        assert!(!m.section_characteristics_entries.is_empty());
+    }
+
+    /// Microsoft-signed Sysinternals PsInfo64. Asserts the Authenticode
+    /// block end-to-end: signer identity, EKU, thumbprint, signature
+    /// verification, and the SHA-256 image hash matching the signature's
+    /// own claimed digest (the load-bearing property of Authenticode).
+    #[test]
+    fn compute_pe_metrics_psinfo64_signed_authenticode() {
+        let path = std::path::PathBuf::from("/Users/t/data/good/dissect-random/PsInfo64.exe");
+        if !path.exists() {
+            return;
+        }
+        let analyzer = PEAnalyzer::new();
+        let bytes = std::fs::read(&path).unwrap();
+        let Ok(pe) = PE::parse(&bytes) else { return };
+        let ctx = crate::analysis_context::AnalysisContext::open(&path, &bytes).unwrap();
+        let (m, _) = analyzer.compute_pe_metrics(&pe, &bytes, &path, &ctx);
+
+        assert!(m.has_signature);
+        assert_eq!(m.leaf_subject.as_deref(), Some("Microsoft Corporation"));
+        assert_eq!(m.signature_type.as_deref(), Some("platform"));
+        assert!(m.leaf_eku_code_signing);
+        // Expose surfaces the friendly OID name as `sha256WithRSAEncryption`
+        // (the RFC-spelled algorithm identifier). Cleave's old goblin
+        // walker used `"sha256_rsa"`; tests + traits should be
+        // updated to the canonical RFC name in a follow-up.
+        assert_eq!(
+            m.leaf_signature_algorithm.as_deref(),
+            Some("sha256WithRSAEncryption"),
+        );
+        assert_eq!(
+            m.leaf_thumbprint_sha1.as_deref(),
+            Some("f372c27f6e052a6be8bab3112b465c692196cd6f"),
+        );
+        assert_eq!(m.signature_verified, Some(true));
+        assert!(!m.sig_algorithm_unsupported);
+
+        // The image hash under the algorithm the signature claims
+        // MUST equal the signature's claimed digest — that's what
+        // Authenticode verifies. signature_digest_mismatch should
+        // therefore be `false`.
+        assert_eq!(m.signature_digest_algorithm.as_deref(), Some("sha256"));
+        assert_eq!(m.signature_digest, m.authentihash);
+        assert!(!m.signature_digest_mismatch);
+
+        // Cert chain depth is the outer SignedData bag's cert count —
+        // non-zero on a signed PE.
+        assert!(m.cert_chain_depth > 0);
+    }
+
+    /// Heavy real fixture — kernel32.dll. Asserts non-trivial counts
+    /// across imports, exports (with forwarders), debug directory,
+    /// and image hashes. Skips silently if the fixture isn't present.
+    #[test]
+    fn compute_pe_metrics_kernel32_heavy() {
+        let path = std::path::PathBuf::from("/Users/t/data/good/data2/kernel32.dll");
+        if !path.exists() {
+            return;
+        }
+        let analyzer = PEAnalyzer::new();
+        let bytes = std::fs::read(&path).unwrap();
+        let Ok(pe) = PE::parse(&bytes) else { return };
+        let ctx = crate::analysis_context::AnalysisContext::open(&path, &bytes).unwrap();
+        let (m, _) = analyzer.compute_pe_metrics(&pe, &bytes, &path, &ctx);
+
+        // Kernel32 forwards ~208 entries (the canonical Windows shape:
+        // forwarders to KernelBase.dll). Exact counts drift across
+        // Windows builds; we assert the order of magnitude is right.
+        assert!(
+            m.export_forwarder_count > 100,
+            "kernel32 forwarder count looks too low: {}",
+            m.export_forwarder_count,
+        );
+        assert!(m.system_dll_forward_count > 0);
+        assert!(m.forward_ratio > 0.0 && m.forward_ratio < 1.0);
+
+        // Imports — at least one library, non-trivial count.
+        assert!(m.import_dll_count > 0);
+        assert!(m.ordinal_import_count == 0); // KernelBase imports by name
+
+        // PDB + image hashes always populate on a signed Windows DLL.
+        assert!(m.pdb_path.is_some());
+        assert!(m.authentihash.is_some());
+        assert_eq!(m.authentihash.as_deref().map(str::len), Some(64));
+
+        // Section walk produces sane values.
+        assert!(!m.section_count_mismatch);
+        assert_eq!(m.section_raw_overflow_count, 0);
+    }
+
+    /// `compute_pe_metrics` on a real IL-only .NET binary. Asserts the
+    /// CLR detection path: `is_dotnet = true`, runtime version populated,
+    /// `mixed_mode = false` (IL-only means no native entrypoint).
+    #[test]
+    fn compute_pe_metrics_dotnet_il_only() {
+        let path = std::path::PathBuf::from("/Users/t/data/benchmark/100MB/TaskschDemo.exe");
+        if !path.exists() {
+            return;
+        }
+        let analyzer = PEAnalyzer::new();
+        let bytes = std::fs::read(&path).unwrap();
+        let Ok(pe) = PE::parse(&bytes) else { return };
+        let ctx = crate::analysis_context::AnalysisContext::open(&path, &bytes).unwrap();
+        let (m, _) = analyzer.compute_pe_metrics(&pe, &bytes, &path, &ctx);
+
+        assert!(m.is_dotnet);
+        assert!(m.clr_version.is_some(), "clr_version should be populated");
+        assert!(!m.mixed_mode, "IL-only PE must not be mixed-mode");
+        assert!(!m.dotnet_has_native_entry);
     }
 }

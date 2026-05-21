@@ -1,6 +1,6 @@
 //! SQLite-based analysis result cache.
 //!
-//! Caches `AnalysisReport` results keyed by `(file SHA256, options hash, traits timestamp)`.
+//! Caches `AnalysisReport` results keyed by `(file SHA256, options hash, traits revision)`.
 //! Reports are stored as zstd-compressed JSON blobs in a SQLite database with WAL mode.
 //!
 //! # Concurrency
@@ -13,7 +13,7 @@
 //!
 //! Cache entries are automatically invalidated when:
 //! - The file content changes (different SHA256)
-//! - Trait definitions are modified (different `cache_timestamp()`)
+//! - Trait definitions are modified (different `cache_revision()`)
 //! - The cleave binary is updated (different binary mtime in production mode)
 //! - Analysis options change (different options hash)
 //!
@@ -24,7 +24,7 @@
 //! is bounded while still keeping the cache close to the configured ceiling
 //! on long-running scans (10M+ files over multiple days).
 
-use crate::cache::{cache_dir, cache_timestamp};
+use crate::cache::{cache_dir, cache_revision};
 use crate::types::AnalysisReport;
 use crate::types::FileAnalysis;
 use crate::AnalysisOptions;
@@ -266,13 +266,9 @@ fn options_hash(options: &AnalysisOptions) -> String {
     format!("{:x}", hash)[..16].to_string()
 }
 
-/// Get the traits timestamp as Unix seconds, or `None` if unavailable.
-fn traits_timestamp_secs() -> Option<i64> {
-    cache_timestamp()
-        .ok()?
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .map(|d| d.as_secs() as i64)
+/// Get the active traits/rules revision fingerprint, or `None` if unavailable.
+fn traits_revision_key() -> Option<i64> {
+    cache_revision().ok().map(|revision| revision.cache_i64())
 }
 
 /// Current time as Unix seconds.
@@ -291,7 +287,7 @@ pub(crate) fn report_cache_lookup(
     options: &AnalysisOptions,
 ) -> Option<AnalysisReport> {
     let opts_hash = options_hash(options);
-    let traits_ts = traits_timestamp_secs()?;
+    let traits_ts = traits_revision_key()?;
     with_conn(|conn| report_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
 }
 
@@ -311,7 +307,7 @@ pub(crate) fn report_cache_entry_count() -> Option<i64> {
 /// Silently does nothing if caching is unavailable or any error occurs.
 pub(crate) fn report_cache_store(sha256: &str, options: &AnalysisOptions, report: &AnalysisReport) {
     let opts_hash = options_hash(options);
-    let Some(traits_ts) = traits_timestamp_secs() else {
+    let Some(traits_ts) = traits_revision_key() else {
         return;
     };
     with_conn(|conn| {
@@ -328,7 +324,7 @@ pub(crate) fn file_analysis_cache_lookup(
     options: &AnalysisOptions,
 ) -> Option<FileAnalysis> {
     let opts_hash = options_hash(options);
-    let traits_ts = traits_timestamp_secs()?;
+    let traits_ts = traits_revision_key()?;
     with_conn(|conn| file_analysis_cache_lookup_conn(conn, sha256, &opts_hash, traits_ts)).flatten()
 }
 
@@ -341,7 +337,7 @@ pub(crate) fn file_analysis_cache_store(
     fa: &FileAnalysis,
 ) {
     let opts_hash = options_hash(options);
-    let Some(traits_ts) = traits_timestamp_secs() else {
+    let Some(traits_ts) = traits_revision_key() else {
         return;
     };
     with_conn(|conn| {

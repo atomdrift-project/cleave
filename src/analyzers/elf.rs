@@ -718,16 +718,16 @@ impl ElfAnalyzer {
                         || {
                             let goblin_start = std::time::Instant::now();
                             if let Some(c) = ctx {
-                        self.analyze_structure_from_ctx(c, data, &mut report);
-                    } else {
-                        self.analyze_structure(&elf, data, &mut report);
-                    }
+                                self.analyze_structure_from_ctx(c, data, &mut report);
+                            } else {
+                                self.analyze_structure(&elf, data, &mut report);
+                            }
                             self.analyze_dynamic_symbols(&elf, data, &mut report, ctx);
                             if let Some(c) = ctx {
-                        self.analyze_sections_from_ctx(c, &mut report);
-                    } else {
-                        self.analyze_sections(&elf, data, &mut report);
-                    }
+                                self.analyze_sections_from_ctx(c, &mut report);
+                            } else {
+                                self.analyze_sections(&elf, data, &mut report);
+                            }
                             goblin_ms = goblin_start.elapsed().as_millis();
                         },
                     );
@@ -1616,18 +1616,18 @@ impl ElfAnalyzer {
     /// on goblin's re-export.
     fn arch_name_from_machine(&self, e_machine: u16) -> String {
         match e_machine {
-            62 => "x86_64".to_string(),     // EM_X86_64
-            3 => "i386".to_string(),        // EM_386
-            183 => "aarch64".to_string(),   // EM_AARCH64
-            40 => "arm".to_string(),        // EM_ARM
-            243 => "riscv".to_string(),     // EM_RISCV
-            8 => "mips".to_string(),        // EM_MIPS
-            20 => "powerpc".to_string(),    // EM_PPC
-            21 => "powerpc64".to_string(),  // EM_PPC64
+            62 => "x86_64".to_string(),         // EM_X86_64
+            3 => "i386".to_string(),            // EM_386
+            183 => "aarch64".to_string(),       // EM_AARCH64
+            40 => "arm".to_string(),            // EM_ARM
+            243 => "riscv".to_string(),         // EM_RISCV
+            8 => "mips".to_string(),            // EM_MIPS
+            20 => "powerpc".to_string(),        // EM_PPC
+            21 => "powerpc64".to_string(),      // EM_PPC64
             2 | 18 | 43 => "sparc".to_string(), // EM_SPARC + SPARC32PLUS + SPARCV9
-            4 => "m68k".to_string(),        // EM_68K
-            22 => "s390".to_string(),       // EM_S390
-            42 => "superh".to_string(),     // EM_SH
+            4 => "m68k".to_string(),            // EM_68K
+            22 => "s390".to_string(),           // EM_S390
+            42 => "superh".to_string(),         // EM_SH
             _ => format!("unknown_{}", e_machine),
         }
     }
@@ -2420,10 +2420,10 @@ impl ElfAnalyzer {
         report.findings.push(
             Finding::structural(
                 "anti-static/packer/upx".to_string(),
-                "Binary is packed with UPX".to_string(),
+                "Binary contains a UPX packing marker".to_string(),
                 1.0,
             )
-            .with_criticality(Criticality::Notable),
+            .with_criticality(Criticality::Suspicious),
         );
 
         if !UPXDecompressor::is_available() {
@@ -2433,7 +2433,7 @@ impl ElfAnalyzer {
                     "UPX binary not found in PATH - unpacked analysis skipped".to_string(),
                     1.0,
                 )
-                .with_criticality(Criticality::Notable),
+                .with_criticality(Criticality::Suspicious),
             );
             return report;
         }
@@ -2535,7 +2535,7 @@ impl ElfAnalyzer {
                         description,
                         1.0,
                     )
-                    .with_criticality(Criticality::Notable),
+                    .with_criticality(Criticality::Hostile),
                 );
             }
         }
@@ -3185,10 +3185,10 @@ mod tests {
         assert!(upx_finding.is_some(), "Should have UPX finding");
         let finding = upx_finding.unwrap();
 
-        // UPX packing alone is packaging evidence, not a hostile conclusion.
-        assert_eq!(finding.crit, Criticality::Notable);
+        // UPX materially changes static visibility even when otherwise legitimate.
+        assert_eq!(finding.crit, Criticality::Suspicious);
         assert_eq!(finding.conf, 1.0);
-        assert_eq!(finding.desc, "Binary is packed with UPX");
+        assert_eq!(finding.desc, "Binary contains a UPX packing marker");
     }
 
     #[test]

@@ -181,6 +181,40 @@ pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
     Ok((most_recent, most_recent_path))
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct RuleFilesRevision {
+    pub newest_mtime: SystemTime,
+    pub fingerprint: u64,
+}
+
+impl RuleFilesRevision {
+    pub(crate) fn cache_i64(self) -> i64 {
+        i64::from_ne_bytes(self.fingerprint.to_ne_bytes())
+    }
+}
+
+fn system_time_nanos(t: SystemTime) -> Result<u128> {
+    Ok(t.duration_since(SystemTime::UNIX_EPOCH)
+        .context("Invalid cache timestamp")?
+        .as_nanos())
+}
+
+fn hash_path_metadata(
+    hasher: &mut std::collections::hash_map::DefaultHasher,
+    traits_dir: &Path,
+    path: &Path,
+    metadata: &fs::Metadata,
+) {
+    use std::hash::Hash;
+
+    let rel = path.strip_prefix(traits_dir).unwrap_or(path);
+    rel.hash(hasher);
+    metadata.len().hash(hasher);
+    if let Ok(mtime) = metadata.modified() {
+        system_time_nanos(mtime).unwrap_or(0).hash(hasher);
+    }
+}
+
 /// Returns the most recently modified `.yaml`/`.yml` trait file and its mtime.
 ///
 /// Excludes the `third-party/` directory (YARA vendor rules, not trait definitions).
@@ -225,11 +259,73 @@ pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
     Ok((most_recent, most_recent_path))
 }
 
-/// Returns the most recent modification time across all rule and trait files.
+/// Returns a stable revision fingerprint for YAML trait files.
 ///
-/// Used by the analysis result cache and rule-stats display, which invalidate on any change.
-pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
+/// This excludes `third-party/` because those files feed the YARA cache, not the
+/// trait mapper. It includes path, file size, and nanosecond mtime so mapper
+/// cache keys change even for same-second edits.
+pub(crate) fn trait_yaml_revision() -> Result<RuleFilesRevision> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
     let mut most_recent = SystemTime::UNIX_EPOCH;
+    let mut hasher = DefaultHasher::new();
+    let mut count = 0u64;
+
+    let traits_dir = traits_path();
+    if traits_dir.exists() {
+        for entry in WalkDir::new(&traits_dir)
+            .follow_links(true)
+            .into_iter()
+            .flatten()
+        {
+            let path = entry.path();
+            if path.components().any(|c| c.as_os_str() == "third-party") {
+                continue;
+            }
+            if path.is_file()
+                && path
+                    .extension()
+                    .map(|ext| ext == "yaml" || ext == "yml")
+                    .unwrap_or(false)
+            {
+                if let Ok(metadata) = fs::metadata(path) {
+                    count += 1;
+                    hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
+                    if let Ok(mtime) = metadata.modified() {
+                        if mtime > most_recent {
+                            most_recent = mtime;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if most_recent == SystemTime::UNIX_EPOCH {
+        anyhow::bail!("No .yaml/.yml files found");
+    }
+
+    count.hash(&mut hasher);
+    Ok(RuleFilesRevision {
+        newest_mtime: most_recent,
+        fingerprint: hasher.finish(),
+    })
+}
+
+/// Returns a stable revision fingerprint for all rule and trait files.
+///
+/// Used by caches that must invalidate on trait/YARA edits. The newest mtime is
+/// kept for human-readable stats, while the fingerprint includes file paths,
+/// sizes, and nanosecond mtimes so same-second edits do not reuse stale cache
+/// entries.
+pub(crate) fn rule_files_revision() -> Result<RuleFilesRevision> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut most_recent = SystemTime::UNIX_EPOCH;
+    let mut hasher = DefaultHasher::new();
+    let mut count = 0u64;
 
     let traits_dir = traits_path();
     if traits_dir.exists() {
@@ -246,6 +342,8 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
                     .unwrap_or(false)
             {
                 if let Ok(metadata) = fs::metadata(path) {
+                    count += 1;
+                    hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
                     if let Ok(mtime) = metadata.modified() {
                         if mtime > most_recent {
                             most_recent = mtime;
@@ -260,7 +358,18 @@ pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
         anyhow::bail!("No YARA/trait files found");
     }
 
-    Ok(most_recent)
+    count.hash(&mut hasher);
+    Ok(RuleFilesRevision {
+        newest_mtime: most_recent,
+        fingerprint: hasher.finish(),
+    })
+}
+
+/// Returns the most recent modification time across all rule and trait files.
+///
+/// Used by rule-stats display. Prefer `rule_files_revision()` for cache keys.
+pub(crate) fn most_recent_yara_mtime() -> Result<SystemTime> {
+    Ok(rule_files_revision()?.newest_mtime)
 }
 
 /// Returns the modification time of the cleave binary
@@ -292,6 +401,25 @@ pub(crate) fn cache_timestamp() -> Result<SystemTime> {
     Ok(*CACHED.get_or_init(|| ts))
 }
 
+/// Returns the active rule/trait revision fingerprint for cache invalidation.
+pub(crate) fn cache_revision() -> Result<RuleFilesRevision> {
+    static CACHED: OnceLock<RuleFilesRevision> = OnceLock::new();
+    if let Some(&revision) = CACHED.get() {
+        return Ok(revision);
+    }
+    let revision = match rule_files_revision() {
+        Ok(revision) => revision,
+        Err(_) => {
+            let mtime = binary_mtime()?;
+            RuleFilesRevision {
+                newest_mtime: mtime,
+                fingerprint: system_time_nanos(mtime)? as u64,
+            }
+        }
+    };
+    Ok(*CACHED.get_or_init(|| revision))
+}
+
 /// Generate a cache key based on the newest `.yar`/`.yara` file mtime and third-party flag.
 ///
 /// Only pure YARA rule files are considered, so editing trait YAMLs does not
@@ -302,10 +430,7 @@ pub(crate) fn yara_cache_key(third_party_enabled: bool) -> Result<String> {
     let mtime = most_recent_yar_file()
         .map(|(t, _)| t)
         .or_else(|_| binary_mtime())?;
-    let timestamp = mtime
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .context("Invalid cache timestamp")?
-        .as_secs();
+    let timestamp = system_time_nanos(mtime)?;
 
     let suffix = if third_party_enabled {
         "with-3p"
@@ -336,19 +461,21 @@ pub fn yara_cache_path(third_party_enabled: bool) -> Result<PathBuf> {
 /// values whose newest YAML mtime rounds to the same second) could read each
 /// other's compiled mapper.
 pub(crate) fn mapper_cache_key() -> Result<String> {
-    let mtime = most_recent_yaml_file()
-        .map(|(t, _)| t)
-        .or_else(|_| binary_mtime())?;
-    let timestamp = mtime
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .context("Invalid cache timestamp")?
-        .as_secs();
+    let revision = trait_yaml_revision().or_else(|_| {
+        let mtime = binary_mtime()?;
+        Ok::<RuleFilesRevision, anyhow::Error>(RuleFilesRevision {
+            newest_mtime: mtime,
+            fingerprint: system_time_nanos(mtime)? as u64,
+        })
+    })?;
+    let timestamp = system_time_nanos(revision.newest_mtime)?;
+    let fingerprint = revision.fingerprint;
 
     let version = env!("CARGO_PKG_VERSION");
     let dir_tag = traits_dir_tag();
 
     Ok(format!(
-        "capability-mapper-v5-{version}-{dir_tag}-{timestamp}.bin"
+        "capability-mapper-v6-{version}-{dir_tag}-{timestamp}-{fingerprint:016x}.bin"
     ))
 }
 
@@ -489,6 +616,8 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+    use std::time::Duration;
 
     #[test]
     fn test_yara_cache_key_format() {
@@ -502,6 +631,39 @@ mod tests {
             assert!(key.starts_with("yara-rules-"));
             assert!(key.ends_with("-with-3p.bin"));
         }
+    }
+
+    #[test]
+    fn test_rule_files_revision_changes_for_same_second_edits() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let traits_dir = tmp.path();
+        let rule = traits_dir.join("traits.yaml");
+        fs::write(&rule, b"traits: []\n").expect("write rule");
+
+        let fixed = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
+            .expect("set mtime");
+
+        let old = std::env::var("CLEAVE_TRAITS_DIR").ok();
+        std::env::set_var("CLEAVE_TRAITS_DIR", traits_dir);
+        let first = rule_files_revision().expect("first revision");
+
+        let mut file = fs::OpenOptions::new()
+            .append(true)
+            .open(&rule)
+            .expect("open rule");
+        file.write_all(b"# edit in same second\n").expect("append");
+        filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
+            .expect("reset mtime");
+        let second = rule_files_revision().expect("second revision");
+
+        match old {
+            Some(value) => std::env::set_var("CLEAVE_TRAITS_DIR", value),
+            None => std::env::remove_var("CLEAVE_TRAITS_DIR"),
+        }
+
+        assert_eq!(first.newest_mtime, second.newest_mtime);
+        assert_ne!(first.fingerprint, second.fingerprint);
     }
 
     #[test]

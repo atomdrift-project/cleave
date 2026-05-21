@@ -779,6 +779,7 @@ dependencies = [
  "encoding_rs",
  "expose",
  "fileid",
+ "filetime",
  "flate2",
  "gimli 0.32.3",
  "goblin",

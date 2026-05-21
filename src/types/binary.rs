@@ -3,8 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use super::is_false;
 use super::ml_features::{
-    CallPatternMetrics, ControlFlowMetrics, EmbeddedConstant, FunctionProperties,
-    FunctionSignature, InstructionAnalysis, NestingMetrics, RegisterUsage,
+    CallPatternMetrics, ControlFlowMetrics, EmbeddedConstant, FunctionSignature, NestingMetrics,
+    RegisterUsage,
 };
 
 /// A function discovered via static analysis (binary disassembly or source parsing)
@@ -30,18 +30,12 @@ pub struct Function {
     /// Control flow graph metrics
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub control_flow: Option<ControlFlowMetrics>,
-    /// Instruction-level analysis
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub instruction_analysis: Option<InstructionAnalysis>,
     /// Register usage patterns
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub register_usage: Option<RegisterUsage>,
     /// Embedded numeric constants
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub constants: Vec<EmbeddedConstant>,
-    /// High-level function properties
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub properties: Option<FunctionProperties>,
     /// Function signature (source code languages)
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub signature: Option<FunctionSignature>,
@@ -774,10 +768,8 @@ mod tests {
             calls: vec![],
             source: "symbols".to_string(),
             control_flow: None,
-            instruction_analysis: None,
             register_usage: None,
             constants: vec![],
-            properties: None,
             signature: None,
             nesting: None,
             call_patterns: None,
@@ -796,10 +788,8 @@ mod tests {
             calls: vec!["malloc".to_string(), "free".to_string()],
             source: "analysis".to_string(),
             control_flow: None,
-            instruction_analysis: None,
             register_usage: None,
             constants: vec![],
-            properties: None,
             signature: None,
             nesting: None,
             call_patterns: None,

@@ -44,7 +44,7 @@
 //!
 //! We extract these into a `GoBuildInfo` struct that the analyzer
 //! integration layer maps onto the `go.*` kv tree per the schema in
-//! `binary_kv`.
+//! expose's `go.*` namespace.
 
 use std::collections::BTreeMap;
 

@@ -8,7 +8,6 @@ use crate::analyzers::{self, detect_file_type, FileType};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
 use crate::commands::shared::SymbolInfo;
-use crate::radare2::Radare2Analyzer;
 use anyhow::Result;
 use std::path::Path;
 
@@ -113,56 +112,14 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                     });
                 }
 
-                // Fall back to rizin when the static parse found no
-                // exports (e.g. stripped or obfuscated binaries).
-                if report.exports.is_empty() && Radare2Analyzer::is_available() {
-                    let r2 = Radare2Analyzer::new();
-                    if let Ok((r2_imports, r2_exports, r2_symbols)) =
-                        r2.extract_all_symbols(path, None)
-                    {
-                        // Replace static-parse imports with rizin's (likely more complete)
-                        symbols.retain(|s| s.symbol_type != "import");
-                        for imp in r2_imports {
-                            symbols.push(SymbolInfo {
-                                name: imp.name.trim_start_matches('_').to_string(),
-                                address: None,
-                                library: imp.lib_name,
-                                symbol_type: "import".to_string(),
-                                source: "rizin".to_string(),
-                                forward_to: None,
-                            });
-                        }
-                        for exp in r2_exports {
-                            symbols.push(SymbolInfo {
-                                name: exp.name.trim_start_matches('_').to_string(),
-                                address: Some(format!("0x{:x}", exp.vaddr)),
-                                library: None,
-                                symbol_type: "export".to_string(),
-                                source: "rizin".to_string(),
-                                forward_to: None,
-                            });
-                        }
-                        for sym in r2_symbols {
-                            let sym_type = if sym.symbol_type == "FUNC" || sym.symbol_type == "func"
-                            {
-                                "function"
-                            } else {
-                                &sym.symbol_type
-                            };
-                            let clean_name = sym.name.trim_start_matches('_').to_string();
-                            if !symbols.iter().any(|s| s.name == clean_name) {
-                                symbols.push(SymbolInfo {
-                                    name: clean_name,
-                                    address: Some(format!("0x{:x}", sym.vaddr)),
-                                    library: None,
-                                    symbol_type: sym_type.to_lowercase(),
-                                    source: "rizin".to_string(),
-                                    forward_to: None,
-                                });
-                            }
-                        }
-                    }
-                }
+                // expose owns the rizin fallback now: when goblin's
+                // PE/ELF/Mach-O view comes back empty, `expose::open`
+                // re-runs through rizin internally and fills imports /
+                // exports / functions with `source: "rizin"`. The
+                // `analyze_binary_report` path above already projected
+                // those entries into `report.imports` / `report.exports`
+                // / `report.functions`, so there is nothing extra to do
+                // here for stripped/obfuscated binaries.
             }
             _ => {
                 // Source file or script - analyze for symbols using unified analyzer

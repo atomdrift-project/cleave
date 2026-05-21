@@ -151,7 +151,7 @@ fn test_analysis_report_new() {
 
     let report = AnalysisReport::new(target);
 
-    assert_eq!(report.version, "2.0");
+    assert_eq!(report.version, "3.0");
     assert_eq!(report.target.path, "/test");
     assert!(report.findings.is_empty());
     assert!(report.strings.is_empty());
@@ -175,7 +175,7 @@ fn test_analysis_report_new_with_timestamp() {
 
     let report = AnalysisReport::new_with_timestamp(target, timestamp);
 
-    assert_eq!(report.version, "2.0");
+    assert_eq!(report.version, "3.0");
     assert_eq!(report.target.path, "/test");
     assert_eq!(report.analysis_timestamp, Some(timestamp));
     assert!(report.findings.is_empty());
@@ -287,10 +287,8 @@ fn test_function_creation() {
         calls: vec!["printf".to_string()],
         source: "radare2".to_string(),
         control_flow: None,
-        instruction_analysis: None,
         register_usage: None,
         constants: vec![],
-        properties: None,
         signature: None,
         nesting: None,
         call_patterns: None,

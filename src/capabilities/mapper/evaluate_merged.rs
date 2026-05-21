@@ -108,10 +108,10 @@ impl super::CapabilityMapper {
         };
 
         // Open the file once via the shared `AnalysisContext` and
-        // merge expose's structured view into `report.kv_tree` /
-        // `report.metrics` for the trait engine. All other call
-        // sites that need format-native kv read through the same
-        // entry point — see `cleave::analysis_context`.
+        // merge expose's structured view into `report.kv_tree` and
+        // `report.expose_metrics` for the trait engine. All other
+        // call sites that need format-native kv read through the
+        // same entry point — see `cleave::analysis_context`.
         let target_path = std::path::PathBuf::from(&report.target.path);
         if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(&target_path, binary_data) {
             let values_tree = ctx.values_tree();

@@ -18,7 +18,6 @@
 //! --kv-path`, so the output doubles as a discovery tool for authoring kv rules.
 
 use crate::analyzers;
-use crate::analyzers::binary_kv;
 use crate::analyzers::FileType;
 use crate::cli;
 use crate::composite_rules::evaluators::kv::{navigate, parse_path, parse_structured_content};
@@ -41,9 +40,9 @@ struct KvEntry {
 ///    kv (`lnk.*`, `pe.*`, `pdf.*`, `chm.*`, …). One call covers every
 ///    format expose has an extractor for.
 /// 2. Office (OLE2 / OOXML) — cleave-owned until expose Phase 2 lands.
-/// 3. Binary cross-format kv — cleave's `binary_kv` / `binary_extractors`
-///    layers add `build.*` / `signing.*` / `hash.*` over expose's
-///    `pe|elf|macho.*` until Phase 11/12.
+/// 3. Binary cross-format kv — cleave's `binary_extractors` layer
+///    augments expose's `pe|elf|macho.*` trees with cleave-derived
+///    fields (Rich header, imphash, ELF .comment, DWARF, …).
 /// 4. Source code analyzer — `source.*` / `metrics.*` are cleave-side.
 /// 5. Generic structured fallback — JSON / YAML / TOML / plist /
 ///    PKG-INFO / systemd / desktop / XML manifests.
@@ -170,10 +169,8 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
     let mut report = analyzer.analyze(path).ok()?;
     // `pe.*` / `elf.*` / `macho.*` come exclusively from expose
-    // (single source of truth); `binary_kv::attach_to_report` fills
-    // the cleave-derived cross-format namespaces (`build`, `signing`,
-    // `debug`, `hash`, `binary`, `archive`) and `binary_extractors`
-    // augments with `.comment`/sanitizer detections.
+    // (single source of truth). `binary_extractors` augments with
+    // `.comment` / sanitizer detections.
     if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, content) {
         if let Value::Object(map) = ctx.values_tree() {
             for (namespace, subtree) in map {
@@ -181,7 +178,6 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
             }
         }
     }
-    binary_kv::attach_to_report(&mut report);
     analyzers::binary_extractors::augment_report(&mut report, content);
     report.kv_tree.as_deref().cloned()
 }

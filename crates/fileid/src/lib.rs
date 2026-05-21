@@ -997,6 +997,14 @@ mod tests {
     }
 
     #[test]
+    fn github_actions_workflow_by_content() {
+        let workflow = b"name: CI\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest\n";
+        let det = detect(Path::new("ci.yml"), workflow).unwrap();
+        assert_eq!(det.file_type, FileType::GithubActions);
+        assert_eq!(det.source, DetectionSource::Heuristic);
+    }
+
+    #[test]
     fn github_actions_composite() {
         assert_detect("action.yml", b"name: My Action\n", FileType::GithubActions);
     }
@@ -1295,6 +1303,11 @@ mod tests {
     #[test]
     fn yaml_not_misclassified() {
         assert!(detect(Path::new("config.yaml"), b"name: test\non: push\n").is_none());
+        assert!(detect(
+            Path::new("config.yaml"),
+            b"name: test\non: push\njobs_enabled: true\n"
+        )
+        .is_none());
     }
 
     #[test]

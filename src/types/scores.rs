@@ -1,88 +1,14 @@
-//! Composite scoring metrics and unified metrics container
+//! Composite scoring metrics and the encoded-payload counter.
+//!
+//! The unified `Metrics` container retired with the typed
+//! PE/ELF/Mach-O/Binary metric projections — every numeric metric
+//! now flows through `AnalysisReport::expose_metrics` under its
+//! dotted-key namespace.
 
 use cleave_macros::ValidFieldPaths;
 use serde::{Deserialize, Serialize};
 
-use super::binary_metrics::{BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics};
 use super::{is_zero_f32, is_zero_u32};
-
-// =============================================================================
-// UNIFIED METRICS SYSTEM
-// =============================================================================
-
-/// Unified metrics container - all measurements in one place
-/// Sections are only present when applicable to the file type
-#[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct Metrics {
-    // File-level metrics (`file.size`) flow through
-    // `AnalysisReport::expose_metrics` rather than a typed sub-struct.
-
-    // === Universal text metrics (all text files) ===
-    // `text.*`, `identifiers.*`, `strings.*`, `comments.*`, `functions.*`,
-    // `statements.*`, `imports.*`, `encoded.*` all flow through
-    // `AnalysisReport::expose_metrics` (the flat metric map). The typed
-    // sub-fields were dropped in #41 — `analyzers::unified` flattens
-    // its in-memory builders into expose_metrics directly. The struct
-    // definitions (`TextMetrics`, `IdentifierMetrics`, …) survive as
-    // producer-side builders and as the canonical field-path manifest
-    // surfaced through `field_paths::all_valid_metric_paths`.
-
-    // Language-specific metric sub-fields (`python`, `javascript`,
-    // `powershell`, `shell`, `php`, `ruby`, `perl`, `go_metrics`,
-    // `rust_metrics`, `c_metrics`, `java`, `lua`, `csharp`) retired
-    // — all were typed marker structs with zero production
-    // producers (#41). If language-specific metrics get wired,
-    // they flow through `AnalysisReport::expose_metrics` under
-    // `<language>.*` keys.
-
-    // === Binary-specific metrics ===
-    /// Cross-format binary metrics (entropy, imports, strings)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub binary: Option<BinaryMetrics>,
-    /// ELF-specific metrics (only for ELF files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub elf: Option<ElfMetrics>,
-    /// PE-specific metrics (only for PE files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub pe: Option<PeMetrics>,
-    /// Mach-O-specific metrics (only for Mach-O files)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub macho: Option<MachoMetrics>,
-    /// Java class file-specific metrics
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub java_class: Option<JavaClassMetrics>,
-    // Container/Archive metrics (`archive.*`, `chm.*`,
-    // `package_json.*`) flow through `AnalysisReport::expose_metrics`.
-    // ArchiveMetrics is populated by `analyzers::archive::zip::inspect_zip_metadata_from_reader`;
-    // chm and package_json metrics come from expose's emission.
-
-    // Image metrics (pixel entropy, histogram, edge density, per-channel
-    // entropy, JPEG/PNG format-specific counts) flow through
-    // `AnalysisReport::expose_metrics` under `image.*` / `jpeg.*` /
-    // `png.*` keys. Populated by analyzers/jpeg.rs and
-    // analyzers/png.rs through their `analyze_jpeg_data` /
-    // `analyze_png_data` helpers.
-
-    // === Document metrics ===
-    // LNK whitespace/presence metrics flow through
-    // `AnalysisReport::expose_metrics` under `lnk.*` keys — no typed
-    // sub-struct because expose's flat metric map is the source of
-    // truth for that surface.
-    // Office metrics (cross-format + per-container `ole.*`/`ooxml.*`/
-    // `vba.*`/`xlm.*` sub-fields) flow through
-    // `AnalysisReport::expose_metrics` under `office.*` dotted keys.
-    // Populated by `analyzers/office/mod.rs::populate_*_metrics`.
-    // PDF metrics flow through `AnalysisReport::expose_metrics`
-    // under `pdf.*` keys — populated by analyzers/pdf via
-    // `populate_pdf_metrics`. No typed sub-struct here.
-
-    // `obfuscation`, `packing`, `supply_chain` composite scores
-    // retired — they were declared as typed marker structs with
-    // zero production producers (#41). If/when composite scoring
-    // gets wired, the per-component values flow through
-    // `AnalysisReport::expose_metrics` under `obfuscation.*` /
-    // `packing.*` / `supply_chain.*` keys.
-}
 
 /// Embedded code counts by decoded language and encoding.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
@@ -280,79 +206,20 @@ pub struct SupplyChainScore {
 // METRIC VALUE ACCESSOR
 // =============================================================================
 
-/// Get a metric value by field path (e.g., "binary.string_count", "text.total_lines")
-/// Returns None if the metric doesn't exist or the field path is invalid
-///
-/// Uses serde_json for dynamic field access instead of hardcoded match statements.
-/// A leaf missing from the serialized JSON due to `skip_serializing_if` is treated as 0.0
-/// when its parent container exists (common for numeric fields with `is_zero` skips).
+/// Get a metric value by field path (e.g., "binary.string_count", "text.total_lines").
+/// Returns `None` if the metric doesn't exist. Reads exclusively from expose's
+/// flat metric map; cleave-side typed metric projections have been retired.
 #[must_use]
 pub(crate) fn get_metric_value(report: &crate::types::AnalysisReport, field: &str) -> Option<f64> {
-    if let Some(metrics) = report.metrics.as_ref() {
-        if let Some(v) = typed_metric_value(metrics, field) {
-            return Some(v);
-        }
-    }
-    // Fall back to expose's flat metric map — see the docstring on
-    // `AnalysisReport::expose_metrics` for why this isn't merged into
-    // the typed struct above.
     report
         .expose_metrics
         .as_ref()
         .and_then(|m| m.get(field).copied())
 }
 
-fn typed_metric_value(metrics: &Metrics, field: &str) -> Option<f64> {
-    // Convert metrics to JSON value for dynamic access
-    let value = serde_json::to_value(metrics).ok()?;
-
-    // Split field path into components (e.g., "binary.string_count" -> ["binary", "string_count"])
-    let parts: Vec<&str> = field.split('.').collect();
-
-    // Navigate through all but the last component — parent path must exist.
-    let (last, parents) = parts.split_last()?;
-    let mut current = &value;
-    for part in parents {
-        current = current.get(part)?;
-    }
-
-    // Leaf lookup: a missing leaf under an existing object parent means the numeric
-    // field was skipped by `skip_serializing_if = "is_zero_*"` — treat it as 0.0
-    // only when the parent struct itself is present and non-empty (so we don't
-    // shadow expose's flat-map fallback for namespaces cleave never populates).
-    match current.get(last) {
-        Some(serde_json::Value::Number(n)) => n.as_f64(),
-        Some(serde_json::Value::Bool(b)) => Some(if *b { 1.0 } else { 0.0 }),
-        None if current.is_object() && current.as_object().is_some_and(|o| !o.is_empty()) => {
-            Some(0.0)
-        }
-        Some(_) | None => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // ==================== Metrics Default Tests ====================
-
-    #[test]
-    fn test_metrics_default() {
-        let metrics = Metrics::default();
-        assert!(metrics.binary.is_none());
-    }
-
-    #[test]
-    fn test_metrics_with_binary() {
-        let metrics = Metrics {
-            binary: Some(BinaryMetrics::default()),
-            elf: Some(ElfMetrics::default()),
-            ..Default::default()
-        };
-        assert!(metrics.binary.is_some());
-        assert!(metrics.elf.is_some());
-        assert!(metrics.pe.is_none());
-    }
 
     // ==================== ObfuscationScore Default Tests ====================
 

@@ -25,7 +25,6 @@ pub(crate) mod applescript;
 pub(crate) mod archive;
 pub(crate) mod ast_walker;
 pub(crate) mod chm;
-pub(crate) mod goblin_safe;
 
 // Unified analysis input type
 mod input;
@@ -36,14 +35,11 @@ pub(crate) mod comment_metrics;
 pub(crate) mod function_metrics;
 pub(crate) mod identifier_metrics;
 pub(crate) mod import_metrics;
-pub(crate) mod metrics_utils;
 pub(crate) mod string_metrics;
 pub(crate) mod symbol_extraction;
 pub(crate) mod text_metrics;
 pub(crate) mod utils;
 
-// Cross-format binary metadata kv-tree synthesis (B0 foundation).
-pub(crate) mod binary_kv;
 // Source-code kv-tree synthesis (imports/exports/functions).
 pub(crate) mod source_kv;
 // Python `.pyc` bytecode kv-tree synthesis (header + co_filename).

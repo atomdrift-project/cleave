@@ -5,7 +5,6 @@
 //!
 //! Useful for quick triage and finding embedded indicators.
 
-use crate::radare2::R2String;
 use crate::types::{StringInfo, StringType};
 use base64::{engine::general_purpose, Engine as _};
 use std::borrow::Cow;
@@ -116,49 +115,23 @@ impl StringExtractor {
     }
 
     /// Extract strings using stng for comprehensive extraction.
-    /// If r2_strings are provided, they are passed to stng for integration.
-    pub(crate) fn extract_smart(
-        &self,
-        data: &[u8],
-        r2_strings: Option<Vec<R2String>>,
-    ) -> Vec<StringInfo> {
-        let raw = self.extract_raw_smart(data, r2_strings);
+    ///
+    /// Rizin string extraction is owned by `expose` now — when stng
+    /// needs rizin-derived boundaries or function metadata they arrive
+    /// through `stng::ExtractOptions::with_rizin_*` populated by the
+    /// upstream `expose` parse, not via a cleave-side `with_r2_strings`
+    /// fold. Callers that previously plumbed `Option<Vec<R2String>>`
+    /// through this function just stop passing it.
+    pub(crate) fn extract_smart(&self, data: &[u8]) -> Vec<StringInfo> {
+        let raw = self.extract_raw_smart(data);
         // We own `raw` and don't need it after conversion — move each element
         // instead of cloning.
         self.convert_stng_strings_owned(raw)
     }
 
     /// Extract raw stng strings from binary data.
-    pub(crate) fn extract_raw_smart(
-        &self,
-        data: &[u8],
-        r2_strings: Option<Vec<R2String>>,
-    ) -> Vec<ExtractedString> {
-        let mut opts = crate::analyzers::stng_analysis_opts(self.min_length);
-
-        // Convert and pass r2 strings to stng if available
-        if let Some(r2s) = r2_strings {
-            let stng_r2_strings: Vec<ExtractedString> = r2s
-                .into_iter()
-                .map(|r| ExtractedString {
-                    value: r.string,
-                    data_offset: r.paddr,
-                    section: None,
-                    method: StringMethod::R2String,
-                    kind: None,
-                    raw: None,
-                    source: None,
-                    fragments: None,
-                    section_size: None,
-                    section_executable: None,
-                    section_writable: None,
-                    architecture: None,
-                    function_meta: None,
-                })
-                .collect();
-            opts = opts.with_r2_strings(stng_r2_strings);
-        }
-
+    pub(crate) fn extract_raw_smart(&self, data: &[u8]) -> Vec<ExtractedString> {
+        let opts = crate::analyzers::stng_analysis_opts(self.min_length);
         stng::extract_strings_with_options(data, &opts)
     }
 
@@ -389,7 +362,7 @@ mod tests {
     fn test_string_extraction() {
         let data = b"Hello World http://example.com /usr/bin/ls";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         assert!(!strings.is_empty());
     }
@@ -402,7 +375,7 @@ mod tests {
         // sees the bare address and can label it as Email.
         let data = b"\0admin@example.com\0other string\0";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         let email_string = strings
             .iter()
@@ -421,7 +394,7 @@ mod tests {
     fn test_min_length_filter() {
         let data = b"ab  Hello World";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         // "ab" should be filtered (< 4 chars), "Hello World" should be kept
         assert!(!strings.iter().any(|s| s.value == "ab"));
@@ -432,7 +405,7 @@ mod tests {
     fn test_control_characters_filtered() {
         let data = b"Hello\x00\x01World";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         // Should extract "Hello" and "World" separately
         assert!(strings.len() >= 2);
@@ -442,7 +415,7 @@ mod tests {
     fn test_offset_recorded() {
         let data = b"start test string end";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         // Offset should be recorded for each string
         assert!(strings.iter().all(|s| s.offset.is_some()));
@@ -458,7 +431,7 @@ mod tests {
     fn test_trimmed_strings() {
         let data = b"  spaced  ";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         // Should trim whitespace
         if let Some(s) = strings.first() {
@@ -470,7 +443,7 @@ mod tests {
     fn test_empty_data() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         assert!(strings.is_empty());
     }
@@ -479,7 +452,7 @@ mod tests {
     fn test_binary_data_only() {
         let data = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(&data, None);
+        let strings = extractor.extract_smart(&data);
 
         // No printable strings should be found
         assert!(strings.is_empty());
@@ -534,7 +507,7 @@ mod tests {
         // Basic test with null-terminated strings so stng can extract them individually
         let data = b"Hello World\0http://example.com\0/usr/bin/ls\0";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         assert!(!strings.is_empty());
 
@@ -562,7 +535,7 @@ mod tests {
     fn test_extract_smart_empty() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         assert!(strings.is_empty());
     }
@@ -572,7 +545,7 @@ mod tests {
         // Test that duplicate strings are removed
         let data = b"test string\0test string\0test string";
         let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data, None);
+        let strings = extractor.extract_smart(data);
 
         // Should not have duplicate values
         let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
@@ -590,7 +563,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let strings = extractor.extract_smart(&data, None);
+        let strings = extractor.extract_smart(&data);
 
         // Should find strings from both lang_strings and basic extraction
         assert!(!strings.is_empty());
@@ -613,7 +586,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let strings = extractor.extract_smart(&data, None);
+        let strings = extractor.extract_smart(&data);
 
         // Should find strings
         assert!(!strings.is_empty());

@@ -455,7 +455,7 @@ pub fn log_all_memory_stats() {
     crate::analyzers::archive::analyzers::log_archive_analysis_stats();
 
     // Log rizin subprocess statistics
-    crate::radare2::log_rizin_stats();
+    expose::rizin::log_stats();
 }
 
 /// Jemalloc allocator statistics — only available when compiled with `--features jemalloc`.

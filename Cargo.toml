@@ -89,8 +89,7 @@ cleave-macros = { path = "cleave-macros" }
 # views on `ParsedFile`.
 expose = { path = "../expose" }
 
-# Binary parsing
-goblin = "0.10"
+# Binary parsing — all goblin reads now go through expose's typed views.
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
 cfb = "0.10"  # Microsoft OLE2/CFBF compound document parsing
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing

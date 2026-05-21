@@ -85,73 +85,6 @@ pub struct ControlFlowMetrics {
     pub out_degree: u32,
 }
 
-/// Instruction-level analysis for ML features
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct InstructionAnalysis {
-    /// Total instruction count
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_instructions: u32,
-    /// CPU cycle cost estimate
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub instruction_cost: u32,
-    /// Instruction density (instructions per byte)
-    #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub instruction_density: f32,
-    /// Instruction categories and counts
-    pub categories: InstructionCategories,
-    /// Top 5 most used opcodes
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub top_opcodes: Vec<OpcodeFrequency>,
-    /// Unusual/suspicious instructions detected
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub unusual_instructions: Vec<String>,
-}
-
-/// Categorized instruction counts for behavioral analysis
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct InstructionCategories {
-    /// Arithmetic operations (add, sub, mul, div, inc, dec)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub arithmetic: u32,
-    /// Logical operations (and, or, xor, not, test)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub logic: u32,
-    /// Memory operations (mov, lea, push, pop, load, store)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub memory: u32,
-    /// Control flow (jmp, jne, call, ret, loop)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub control: u32,
-    /// System calls and interrupts (syscall, int, sysenter)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub system: u32,
-    /// FPU/SIMD operations (fadd, fmul, xmm, etc)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub fpu_simd: u32,
-    /// String operations (movs, cmps, scas, stos)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub string_ops: u32,
-    /// Privileged instructions (cli, sti, hlt, in, out)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub privileged: u32,
-    /// Crypto-related instructions (aes, sha, etc)
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub crypto: u32,
-}
-
-/// Opcode frequency for pattern detection
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OpcodeFrequency {
-    /// Mnemonic name of the opcode (e.g., "mov", "xor", "call")
-    pub opcode: String,
-    /// Absolute occurrence count in the analyzed code region
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub count: u32,
-    /// Fraction of total instructions this opcode represents (0.0–1.0)
-    #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub percentage: f32,
-}
-
 /// Register usage patterns
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RegisterUsage {
@@ -208,32 +141,6 @@ pub struct DecodedValue {
     /// Confidence in this interpretation (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub conf: f32,
-}
-
-/// Function-level properties
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct FunctionProperties {
-    /// Function is side-effect free (pure)
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_pure: bool,
-    /// Function never returns
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_noreturn: bool,
-    /// Function is recursive
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_recursive: bool,
-    /// Stack frame size in bytes
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub stack_frame: u32,
-    /// Number of local variables
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub local_vars: u32,
-    /// Number of arguments
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub args: u32,
-    /// Function is a leaf (calls nothing)
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub is_leaf: bool,
 }
 
 /// Function signature analysis (source code languages)
@@ -363,79 +270,6 @@ mod tests {
         assert_eq!(metrics.cyclomatic_complexity, 8);
     }
 
-    // ==================== InstructionCategories Tests ====================
-
-    #[test]
-    fn test_instruction_categories_default() {
-        let cats = InstructionCategories::default();
-        assert_eq!(cats.arithmetic, 0);
-        assert_eq!(cats.memory, 0);
-    }
-
-    #[test]
-    fn test_instruction_categories_creation() {
-        let cats = InstructionCategories {
-            arithmetic: 100,
-            logic: 50,
-            memory: 200,
-            control: 30,
-            system: 5,
-            fpu_simd: 10,
-            string_ops: 15,
-            privileged: 2,
-            crypto: 3,
-        };
-        assert_eq!(cats.arithmetic, 100);
-        assert_eq!(cats.memory, 200);
-    }
-
-    // ==================== InstructionAnalysis Tests ====================
-
-    #[test]
-    fn test_instruction_analysis_default() {
-        let analysis = InstructionAnalysis::default();
-        assert_eq!(analysis.total_instructions, 0);
-        assert!(analysis.top_opcodes.is_empty());
-    }
-
-    #[test]
-    fn test_instruction_analysis_creation() {
-        let analysis = InstructionAnalysis {
-            total_instructions: 500,
-            instruction_cost: 1000,
-            instruction_density: 0.8,
-            categories: InstructionCategories::default(),
-            top_opcodes: vec![OpcodeFrequency {
-                opcode: "mov".to_string(),
-                count: 150,
-                percentage: 30.0,
-            }],
-            unusual_instructions: vec!["rdtsc".to_string()],
-        };
-        assert_eq!(analysis.total_instructions, 500);
-        assert_eq!(analysis.top_opcodes.len(), 1);
-    }
-
-    // ==================== OpcodeFrequency Tests ====================
-
-    #[test]
-    fn test_opcode_frequency_default() {
-        let freq = OpcodeFrequency::default();
-        assert!(freq.opcode.is_empty());
-        assert_eq!(freq.count, 0);
-    }
-
-    #[test]
-    fn test_opcode_frequency_creation() {
-        let freq = OpcodeFrequency {
-            opcode: "call".to_string(),
-            count: 50,
-            percentage: 10.0,
-        };
-        assert_eq!(freq.opcode, "call");
-        assert_eq!(freq.count, 50);
-    }
-
     // ==================== RegisterUsage Tests ====================
 
     #[test]
@@ -505,31 +339,6 @@ mod tests {
         };
         assert_eq!(val.value_type, "port");
         assert!((val.conf - 0.95).abs() < f32::EPSILON);
-    }
-
-    // ==================== FunctionProperties Tests ====================
-
-    #[test]
-    fn test_function_properties_default() {
-        let props = FunctionProperties::default();
-        assert!(!props.is_pure);
-        assert!(!props.is_recursive);
-    }
-
-    #[test]
-    fn test_function_properties_creation() {
-        let props = FunctionProperties {
-            is_pure: true,
-            is_noreturn: false,
-            is_recursive: true,
-            stack_frame: 256,
-            local_vars: 10,
-            args: 3,
-            is_leaf: false,
-        };
-        assert!(props.is_pure);
-        assert!(props.is_recursive);
-        assert_eq!(props.stack_frame, 256);
     }
 
     // ==================== FunctionSignature Tests ====================

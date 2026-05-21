@@ -30,7 +30,6 @@ use std::path::{Path, PathBuf};
 
 use crate::types::binary::{Export, Import, Section, StringInfo};
 use crate::types::file_analysis::FileAnalysis;
-use crate::types::scores::Metrics;
 use crate::types::traits_findings::Finding;
 use crate::types::{
     AnalysisReport, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, Scope, ScopeDiff,
@@ -150,13 +149,8 @@ impl Default for ScopeMask {
 pub(crate) struct DiffUnit {
     pub(crate) path: String,
     pub(crate) findings: Vec<Finding>,
-    pub(crate) metrics: Option<Metrics>,
-    /// Expose's flat metric map carried alongside the typed
-    /// `metrics` struct. As cleave's typed `*Metrics` sub-structs
-    /// retire one by one, their values land here under the same
-    /// dotted-path keys; `scopes::flatten_metrics` walks both
-    /// surfaces so the metric pane shows them regardless of which
-    /// carrier currently holds the data.
+    /// Flat numeric metric map (dotted-path keys). Sole surface
+    /// after typed `*Metrics` projections retired.
     pub(crate) expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
     /// kv tree pre-flattened with diff-friendly path encoding
     /// (membership / identity-keyed for arrays). Built once at unit
@@ -174,7 +168,6 @@ impl DiffUnit {
         Self {
             path,
             findings: Vec::new(),
-            metrics: None,
             expose_metrics: None,
             kv_flat: Vec::new(),
             imports: Vec::new(),
@@ -343,7 +336,6 @@ fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
     out.push(DiffUnit {
         path: root_rel.to_string(),
         findings: report.findings.clone(),
-        metrics: report.metrics.clone(),
         expose_metrics: report.expose_metrics.clone(),
         kv_flat: report
             .kv_tree
@@ -374,13 +366,7 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
     DiffUnit {
         path,
         findings: fa.findings.clone(),
-        metrics: fa.metrics.clone(),
-        // Archive members don't yet carry a per-member flat metric
-        // map — when typed `*Metrics` retire entirely, FileAnalysis
-        // grows an `expose_metrics` field too. For now, `None` here
-        // means archive-member diffs only see the typed metric
-        // surface (no behaviour change vs. pre-migration).
-        expose_metrics: None,
+        expose_metrics: fa.expose_metrics.clone(),
         // Archive members carry their own kv tree (preserved via
         // `FileAnalysis.kv_tree`) so a `.class` inside a `.jar` still
         // contributes its `class.*` paths to the diff. Earlier

@@ -873,15 +873,13 @@ impl TraitDefinition {
         // Check entropy constraints (from if: block)
         // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
         if self.entropy_min.is_some() || self.entropy_max.is_some() {
-            // Try binary entropy first, fall back to text char entropy.
-            // Binary lives on the typed `Metrics` until #41d; text lives
-            // in the flat `expose_metrics` map under `text.char_entropy`.
+            // Both `binary.overall_entropy` and `text.char_entropy`
+            // flow through the flat `expose_metrics` map now.
             let binary_entropy = ctx
                 .report
-                .metrics
+                .expose_metrics
                 .as_ref()
-                .and_then(|m| m.binary.as_ref())
-                .map(|b| f64::from(b.overall_entropy));
+                .and_then(|m| m.get("binary.overall_entropy").copied());
             let text_entropy = ctx
                 .report
                 .expose_metrics

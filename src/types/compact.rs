@@ -299,8 +299,9 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         .map(|i| i.symbol.clone())
         .collect();
 
-    // Round metrics floats to 2dp
-    let metrics = file.metrics.as_ref().and_then(|m| {
+    // Round metrics floats to 2dp. Only the flat expose_metrics map
+    // survives — typed projections were retired.
+    let metrics = file.expose_metrics.as_ref().and_then(|m| {
         serde_json::to_value(m)
             .ok()
             .map(round_json_floats)

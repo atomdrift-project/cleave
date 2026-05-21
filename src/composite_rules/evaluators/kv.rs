@@ -315,6 +315,10 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
         return StructuredFormat::Plist;
     }
 
+    if looks_like_github_actions_workflow(content) {
+        return StructuredFormat::Yaml;
+    }
+
     // Check for XML Plist (text format)
     if content.starts_with(b"<?xml") {
         // Only convert minimal bytes needed to check for plist
@@ -369,6 +373,42 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
     StructuredFormat::Unknown
 }
 
+fn looks_like_github_actions_workflow(content: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(&content[..content.len().min(16 * 1024)]) else {
+        return false;
+    };
+
+    let mut has_on = false;
+    let mut has_jobs = false;
+
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with("---") || line.starts_with('#') {
+            continue;
+        }
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+
+        let Some((key, _)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim_matches(|c| c == '\'' || c == '"' || c == ' ');
+
+        match key {
+            "on" => has_on = true,
+            "jobs" => has_jobs = true,
+            _ => {}
+        }
+
+        if has_on && has_jobs {
+            return true;
+        }
+    }
+
+    false
+}
+
 /// Parse a path string into segments.
 ///
 /// # Examples
@@ -399,7 +439,41 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
                     current_key.clear();
                 }
 
-                // Parse index or wildcard
+                // Three shapes inside the brackets:
+                //   ["literal"]  or  ['literal']  — quoted key (lets the
+                //     caller traverse object keys that contain dots or
+                //     reserved chars, e.g. macOS entitlement OIDs).
+                //   [*]                            — wildcard
+                //   [N]                            — numeric index
+                if matches!(chars.peek(), Some('"') | Some('\'')) {
+                    let quote = chars.next().expect("just peeked");
+                    let mut key = String::new();
+                    let mut closed = false;
+                    for next_c in chars.by_ref() {
+                        if next_c == quote {
+                            closed = true;
+                            break;
+                        }
+                        key.push(next_c);
+                    }
+                    if !closed {
+                        return Err(format!("unterminated quoted key in path: [{quote}{key}"));
+                    }
+                    match chars.next() {
+                        Some(']') => {}
+                        Some(other) => {
+                            return Err(format!(
+                                "expected ']' after quoted key, got {other:?}",
+                            ));
+                        }
+                        None => {
+                            return Err("expected ']' after quoted key, got EOF".into());
+                        }
+                    }
+                    segments.push(PathSegment::Key(key));
+                    continue;
+                }
+
                 let mut index_str = String::new();
                 while let Some(&next_c) = chars.peek() {
                     if next_c == ']' {
@@ -1664,6 +1738,98 @@ mod tests {
         );
     }
 
+    /// macOS entitlement keys are dotted OIDs that can't be expressed
+    /// with the bare-dot path syntax (`a.b.c` would split into three
+    /// segments). The bracketed-quoted-string form lets a trait
+    /// navigate `macho.code_signature.entitlements["com.apple.security.cs.disable-library-validation"]`
+    /// — the quoted key is taken as one literal segment.
+    #[test]
+    fn test_path_quoted_key_holds_dotted_string() {
+        let parsed = parse_path(
+            r#"macho.code_signature.entitlements["com.apple.security.cs.disable-library-validation"]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                PathSegment::Key("macho".into()),
+                PathSegment::Key("code_signature".into()),
+                PathSegment::Key("entitlements".into()),
+                PathSegment::Key(
+                    "com.apple.security.cs.disable-library-validation".into(),
+                ),
+            ],
+        );
+    }
+
+    /// Single-quote form parses identically to double-quote form.
+    #[test]
+    fn test_path_quoted_key_accepts_single_quotes() {
+        let parsed = parse_path("entitlements['com.apple.security.get-task-allow']").unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                PathSegment::Key("entitlements".into()),
+                PathSegment::Key("com.apple.security.get-task-allow".into()),
+            ],
+        );
+    }
+
+    /// A quoted key can follow another quoted key without a leading
+    /// dot — the `]` terminates the previous segment and the next `[`
+    /// starts a new one.
+    #[test]
+    fn test_path_chained_quoted_keys() {
+        let parsed = parse_path(r#"foo["a.b"]["c.d"]"#).unwrap();
+        assert_eq!(
+            parsed,
+            vec![
+                PathSegment::Key("foo".into()),
+                PathSegment::Key("a.b".into()),
+                PathSegment::Key("c.d".into()),
+            ],
+        );
+    }
+
+    #[test]
+    fn test_path_quoted_key_rejects_unterminated() {
+        assert!(parse_path(r#"foo["bar"#).is_err());
+    }
+
+    #[test]
+    fn test_path_quoted_key_rejects_missing_close_bracket() {
+        // The agent walks until the closing quote, then expects `]`
+        // immediately. A stray char between the close-quote and the
+        // close-bracket is malformed.
+        assert!(parse_path(r#"foo["bar"x]"#).is_err());
+    }
+
+    /// Quoted-key navigation: an entitlements object keyed on dotted
+    /// OIDs is reachable via the bracketed-string form. Bare dot
+    /// syntax would erroneously split the OID.
+    #[test]
+    fn test_navigate_quoted_key_reaches_dotted_entitlement_oid() {
+        let v: Value = serde_json::from_str(
+            r#"{
+              "macho": {
+                "code_signature": {
+                  "entitlements": {
+                    "com.apple.security.cs.disable-library-validation": true,
+                    "com.apple.security.get-task-allow": false
+                  }
+                }
+              }
+            }"#,
+        )
+        .unwrap();
+        let segs = parse_path(
+            r#"macho.code_signature.entitlements["com.apple.security.cs.disable-library-validation"]"#,
+        )
+        .unwrap();
+        let hits = navigate(&v, &segs);
+        assert_eq!(hits, vec![&Value::Bool(true)]);
+    }
+
     #[test]
     fn test_path_nested() {
         assert_eq!(
@@ -2297,6 +2463,13 @@ mod tests {
             detect_format(Path::new(".github/workflows/test.yml"), b""),
             StructuredFormat::Yaml
         );
+        assert_eq!(
+            detect_format(
+                Path::new("ci.yml"),
+                b"name: CI\non:\n  push:\njobs:\n  test:\n    runs-on: ubuntu-latest"
+            ),
+            StructuredFormat::Yaml
+        );
     }
 
     #[test]
@@ -2334,6 +2507,13 @@ mod tests {
         );
         assert_eq!(
             detect_format(Path::new("config.yaml"), b"key: value"),
+            StructuredFormat::Unknown
+        );
+        assert_eq!(
+            detect_format(
+                Path::new("config.yaml"),
+                b"name: value\non: push\njobs_enabled: true"
+            ),
             StructuredFormat::Unknown
         );
     }
@@ -2549,14 +2729,14 @@ mod tests {
             StructuredFormat::Yaml
         );
 
-        // But not outside .github/workflows/
+        // Non-workflow locations still work if the YAML has workflow structure.
         assert_eq!(
             detect_format(Path::new(".github/ci.yml"), workflow),
-            StructuredFormat::Unknown
+            StructuredFormat::Yaml
         );
         assert_eq!(
             detect_format(Path::new("ci.yml"), workflow),
-            StructuredFormat::Unknown
+            StructuredFormat::Yaml
         );
 
         // Verify kv evaluation works for workflows
@@ -2573,7 +2753,7 @@ mod tests {
         };
 
         assert!(evaluate_kv_test(&cond, workflow, Path::new(".github/workflows/ci.yml")).is_some());
-        assert!(evaluate_kv_test(&cond, workflow, Path::new("ci.yml")).is_none());
+        assert!(evaluate_kv_test(&cond, workflow, Path::new("ci.yml")).is_some());
     }
 
     #[test]

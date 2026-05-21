@@ -170,33 +170,83 @@ impl<'a> AnalysisContext<'a> {
     }
 
     /// Project expose's typed `Functions` view into cleave's
-    /// `Vec<Function>` shape with the minimum fields populated
-    /// (name, source, offset). The richer fields cleave's binary
-    /// analyzers fill (control flow, register usage, ...) stay
-    /// `None` — expose deals in static identifiers, not
-    /// disassembly.
+    /// `Vec<Function>` shape, threading the CFG metrics rizin
+    /// recovered (complexity, basic blocks, edges, instruction
+    /// count, resolved call edges) into cleave's
+    /// `ControlFlowMetrics` mirror when they're present on the
+    /// expose entry.
+    ///
+    /// For symbol-table-sourced functions (PE export table, ELF
+    /// `.dynsym`, VBA `Public Sub`, etc.) the CFG fields are absent
+    /// on expose's side and the cleave projection leaves the nested
+    /// block `None`. The fuller per-function rizin data
+    /// (instructions, stack frame, recursive / noreturn flags) lives
+    /// on `expose::Function` and ships in `report.expose.functions`
+    /// for diff/ML consumers.
     #[must_use]
     pub fn functions_from_expose(&self) -> Vec<Function> {
         self.parsed
             .functions()
             .iter()
-            .map(|f| Function {
-                name: f.name.clone(),
-                offset: f.offset.map(|o| format!("0x{o:x}")),
-                size: None,
-                complexity: None,
-                calls: Vec::new(),
-                source: f.source.to_string(),
-                control_flow: None,
-                instruction_analysis: None,
-                register_usage: None,
-                constants: Vec::new(),
-                properties: None,
-                signature: None,
-                nesting: None,
-                call_patterns: None,
-            })
+            .map(project_expose_function)
             .collect()
+    }
+}
+
+/// Pure projection: `expose::Function` → cleave's typed `Function`
+/// mirror. Lives at module scope so the binary analyzers can call
+/// it without going back through an `AnalysisContext`.
+#[must_use]
+pub fn project_expose_function(f: &expose::Function) -> Function {
+    use crate::types::ml_features::ControlFlowMetrics;
+
+    let nbbs = f.basic_blocks;
+    let edges = f.edges;
+    let ninstr = f.instructions;
+
+    // Build control-flow metrics only when rizin gave us at least
+    // one shape signal (basic_blocks or edges).
+    let control_flow = if nbbs.is_some() || edges.is_some() {
+        let nbbs = nbbs.unwrap_or(1);
+        let edges = edges.unwrap_or(0);
+        let ninstr = ninstr.unwrap_or(0);
+        Some(ControlFlowMetrics {
+            basic_blocks: nbbs,
+            edges,
+            cyclomatic_complexity: f.complexity.unwrap_or(1),
+            max_block_size: ninstr.checked_div(nbbs).unwrap_or(0),
+            avg_block_size: if nbbs > 0 {
+                ninstr as f32 / nbbs as f32
+            } else {
+                0.0
+            },
+            is_linear: f.is_linear.unwrap_or(false),
+            loop_count: if edges >= nbbs { edges - nbbs + 1 } else { 0 },
+            branch_density: if ninstr > 0 {
+                edges as f32 / ninstr as f32
+            } else {
+                0.0
+            },
+            in_degree: 0,
+            out_degree: f.calls.len() as u32,
+        })
+    } else {
+        None
+    };
+
+    Function {
+        name: f.name.trim_start_matches('_').to_string(),
+        offset: f.offset.map(|o| format!("0x{o:x}")),
+        size: None,
+        complexity: f.complexity,
+        calls: f.calls.clone(),
+        source: f.source.to_string(),
+        control_flow,
+        register_usage: None,
+        constants: Vec::new(),
+        signature: None,
+        nesting: None,
+        call_patterns: None,
     }
 }
 

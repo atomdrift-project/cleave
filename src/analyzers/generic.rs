@@ -8,7 +8,7 @@ use crate::analyzers::symbol_extraction;
 use crate::analyzers::FileType;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::{AnalysisReport, Metrics, StringInfo, TargetInfo};
+use crate::types::{AnalysisReport, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
@@ -484,13 +484,9 @@ impl GenericAnalyzer {
             // Use the raw bytes when available — a lossy UTF-8 round trip collapses
             // non-printable bytes to U+FFFD and tanks the entropy score.
             let bytes = original_bytes.unwrap_or(content.as_bytes());
-            report.metrics = Some(Metrics {
-                binary: Some(crate::types::BinaryMetrics {
-                    overall_entropy: crate::entropy::calculate_entropy(bytes) as f32,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            });
+            use crate::types::core::MetricsExt;
+            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            flat.set_f("binary.overall_entropy", crate::entropy::calculate_entropy(bytes));
         }
     }
 }

@@ -11,7 +11,7 @@ use super::strings::StringExtractor;
 fn test_woff2_malware_extraction() {
     let data = std::fs::read("tests/testdata/malware/fa-brands-regular.woff2").unwrap();
     let extractor = StringExtractor::default();
-    let strings = extractor.extract_smart(&data, None);
+    let strings = extractor.extract_smart(&data);
     assert!(
         !strings.is_empty(),
         "WOFF2 fixture should yield extracted strings"
@@ -21,7 +21,7 @@ fn test_woff2_malware_extraction() {
 #[test]
 fn test_extract_smart_empty() {
     let extractor = StringExtractor::new();
-    let strings = extractor.extract_smart(b"", None);
+    let strings = extractor.extract_smart(b"");
     assert!(strings.is_empty());
 }
 
@@ -29,7 +29,7 @@ fn test_extract_smart_empty() {
 fn test_extract_smart_basic() {
     let data = b"Hello World\0http://example.com\0/usr/bin/ls\0";
     let extractor = StringExtractor::new();
-    let strings = extractor.extract_smart(data, None);
+    let strings = extractor.extract_smart(data);
     assert!(!strings.is_empty());
 }
 
@@ -52,7 +52,7 @@ fn test_symbol_map_enrichment() {
 
     // Symbol map should contain the normalized import
     let data = b"malloc\0";
-    let strings = extractor.extract_smart(data, None);
+    let strings = extractor.extract_smart(data);
     if let Some(s) = strings.iter().find(|s| s.value == "malloc") {
         assert_eq!(s.string_type, Some(crate::types::StringType::Import));
     }

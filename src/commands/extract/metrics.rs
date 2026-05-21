@@ -9,7 +9,6 @@
 use crate::analyzers::{self, detect_file_type, FileType};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
-use crate::commands::shared::flatten_json_to_metrics;
 use anyhow::Result;
 use std::path::Path;
 
@@ -32,8 +31,7 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
     let file_analysis = extract_layer_file_analysis(target, layer)?;
     let file_type = detect_file_type(Path::new(target))?;
 
-    // Extract metrics from the layer's FileAnalysis
-    let metrics = file_analysis.metrics.clone().ok_or_else(|| {
+    let metrics = file_analysis.expose_metrics.clone().ok_or_else(|| {
         anyhow::anyhow!(
             "No metrics available for layer '{}' (layer may not support metrics)",
             layer
@@ -72,26 +70,15 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
         }
     };
 
-    // Extract metrics from report and update binary metrics with report data
-    let mut metrics = report.metrics.clone().ok_or_else(|| {
-        anyhow::anyhow!("No metrics computed for file (file type may not support metrics)")
-    })?;
-
-    // Refine metrics using common utility (this ensures metrics cmd and JSON report are consistent)
-    let data = std::fs::read(path)?;
-    let mut full_report = report.clone();
-    crate::analyzers::metrics_utils::populate_binary_metrics(&mut full_report, &data);
     // Layer binary_extractors metric writes (e.g. .comment counts,
     // stripped-section inventory) so the metrics command sees the
     // same fields as a full `cleave analyze` run.
+    let data = std::fs::read(path)?;
+    let mut full_report = report.clone();
     if matches!(file_type, FileType::Elf | FileType::Pe | FileType::MachO) {
         crate::analyzers::binary_extractors::augment_report(&mut full_report, &data);
     }
-
-    // Update our metrics object with the refined one
-    if let Some(refined_metrics) = full_report.metrics {
-        metrics = refined_metrics;
-    }
+    let metrics = full_report.expose_metrics.clone().unwrap_or_default();
 
     format_metrics_output(&metrics, target, &file_type, format)
 }
@@ -164,7 +151,7 @@ fn format_metric_value(value: &serde_json::Value) -> String {
 
 /// Format metrics output for display
 fn format_metrics_output(
-    metrics: &crate::types::Metrics,
+    metrics: &std::collections::BTreeMap<String, f64>,
     target: &str,
     file_type: &FileType,
     format: &cli::OutputFormat,
@@ -182,20 +169,14 @@ fn format_metrics_output(
                 .map(|(w, _)| w.0 as usize)
                 .unwrap_or(100);
 
-            // Flatten metrics into (path, formatted_value) pairs, sorted.
-            let json_value = serde_json::to_value(metrics)?;
-            let mut flattened = Vec::new();
-            flatten_json_to_metrics(&json_value, "", &mut flattened);
-            flattened.sort_by(|a, b| a.0.cmp(&b.0));
-
-            // Group by prefix (everything before the first '.')
+            // Flat-map → sorted (path, formatted_value) pairs.
             let mut groups: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
-            for (path, value) in &flattened {
+            for (path, value) in metrics {
                 let prefix = path.split('.').next().unwrap_or("").to_string();
-                groups
-                    .entry(prefix)
-                    .or_default()
-                    .push((path.clone(), format_metric_value(value)));
+                groups.entry(prefix).or_default().push((
+                    path.clone(),
+                    format_metric_value(&serde_json::Value::from(*value)),
+                ));
             }
 
             // File header + rule — matches analyze style.

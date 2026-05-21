@@ -102,13 +102,10 @@ pub(super) fn diff_metrics(
     new: &DiffUnit,
     limit: usize,
 ) -> ScopeDiff<MetricChange> {
-    // The analyze pipeline populates `metrics.file.size` for every file
-    // regardless of analyzer, so size shows up here naturally without any
-    // diff-time synthesis. As typed `*Metrics` sub-structs retire (#41),
-    // their values land in `expose_metrics` under the same dotted-path
-    // keys; the helper walks both surfaces.
-    let old_flat = flatten_metrics(old.metrics.as_ref(), old.expose_metrics.as_ref());
-    let new_flat = flatten_metrics(new.metrics.as_ref(), new.expose_metrics.as_ref());
+    // The analyze pipeline populates `file.size` for every file
+    // through `expose_metrics`, so size shows up here naturally.
+    let old_flat = flatten_metrics(old.expose_metrics.as_ref());
+    let new_flat = flatten_metrics(new.expose_metrics.as_ref());
     let mut diff = diff_flat_paths(
         &old_flat,
         &new_flat,
@@ -165,29 +162,9 @@ fn is_trivial_metric_change(old: &Value, new: &Value) -> bool {
 }
 
 fn flatten_metrics(
-    typed: Option<&crate::types::scores::Metrics>,
     flat_map: Option<&std::collections::BTreeMap<String, f64>>,
 ) -> Vec<(String, Value)> {
     let mut out: Vec<(String, Value)> = Vec::new();
-
-    // Typed-struct surface: serialize then walk for backward
-    // compat with sub-structs that haven't migrated to the flat
-    // map yet. Drops non-scalar leaves — strings/arrays belong in
-    // the kv scope.
-    if let Some(m) = typed {
-        if let Ok(value) = serde_json::to_value(m) {
-            let mut flat = flatten_dotted(&value);
-            flat.retain(|(_, v)| is_metric_scalar(v));
-            out.extend(flat);
-        }
-    }
-
-    // Flat-map surface: post-#41, format-specific metrics
-    // (`pdf.*`, `jpeg.*`, `png.*`, `image.*`, `lnk.*`, plus expose-
-    // emitted `pe.*` / `elf.*` / `macho.*` / `sections.*` / etc.)
-    // live here. Wrap each f64 as `Value::Number` for symmetry with
-    // the typed surface; later phases will drop the typed branch
-    // entirely.
     if let Some(map) = flat_map {
         for (k, &v) in map {
             if let Some(n) = serde_json::Number::from_f64(v) {
@@ -820,77 +797,6 @@ mod tests {
     /// totals, ratios, bools. Strings, arrays of strings, and nested
     /// objects are kv content; the `flatten_metrics` filter must drop
     /// them so they don't double-list under metrics (kv carries the
-    /// same data via `flatten_kv_for_diff`).
-    #[test]
-    fn metrics_filter_drops_non_scalar_leaves() {
-        use crate::types::binary_metrics::ElfMetrics;
-        use crate::types::scores::Metrics;
-
-        let mut old = unit();
-        let mut new = unit();
-        let elf_old = ElfMetrics {
-            // Scalar fields that should survive the filter.
-            ifunc_count: 1,
-            has_direct_loader_dep: false,
-            // Non-scalar fields that must be dropped — they belong in kv.
-            needed: vec!["libc.so.6".into()],
-            soname: Some("libfoo.so.1".into()),
-            ..Default::default()
-        };
-        let elf_new = ElfMetrics {
-            ifunc_count: 2,
-            has_direct_loader_dep: true,
-            needed: vec!["libc.so.6".into(), "ld-linux.so.2".into()],
-            soname: Some("libfoo.so.2".into()),
-            ..Default::default()
-        };
-        old.metrics = Some(Metrics {
-            elf: Some(elf_old),
-            ..Default::default()
-        });
-        new.metrics = Some(Metrics {
-            elf: Some(elf_new),
-            ..Default::default()
-        });
-
-        let d = diff_metrics(&old, &new, 0);
-
-        // Scalars survive across all buckets. The bool flip is an *added*
-        // entry (not changed) because `has_direct_loader_dep: false` is
-        // skipped during serialization, so the old side never carried it.
-        // `elf.ifunc_count` 1 → 2 is a real change above the trivial-floor.
-        let metrics_paths: Vec<String> = d
-            .added
-            .iter()
-            .map(|c| c.path.clone())
-            .chain(d.removed.iter().map(|c| c.path.clone()))
-            .chain(d.changed.iter().map(|c| c.new.path.clone()))
-            .collect();
-        assert!(
-            metrics_paths
-                .iter()
-                .any(|p| p == "elf.has_direct_loader_dep"),
-            "expected bool flip to surface as a metric, got {metrics_paths:?}",
-        );
-        assert!(
-            metrics_paths.iter().any(|p| p == "elf.ifunc_count"),
-            "expected counter delta to surface as a metric, got {metrics_paths:?}",
-        );
-
-        // Non-scalars must NOT appear in any metrics bucket — they belong
-        // in kv, where `flatten_kv_for_diff` already carries them.
-        for p in &metrics_paths {
-            assert!(
-                !p.starts_with("elf.needed"),
-                "elf.needed[] must route through kv, not metrics; saw {p}",
-            );
-            assert!(
-                !p.starts_with("elf.soname"),
-                "elf.soname must route through kv, not metrics; saw {p}",
-            );
-        }
-    }
-
     #[test]
     fn kv_added_namespace_extracted() {
         let mut old = unit();

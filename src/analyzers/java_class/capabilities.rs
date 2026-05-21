@@ -243,7 +243,10 @@ impl super::JavaClassAnalyzer {
                 || s_lower.contains("o-keylogger")
                 || (Self::contains_word(&s_lower, "keystroke")
                     && !s_lower.contains("javax/swing")
-                    && !s_lower.contains("javax.swing"))
+                    && !s_lower.contains("javax.swing")
+                    && !s_lower.contains("jline/console")
+                    && !s_lower.contains("ljline/console")
+                    && s_lower != "keystroke: ")
             {
                 self.add_capability(
                     report,
@@ -271,9 +274,12 @@ impl super::JavaClassAnalyzer {
             }
 
             // Download and execute
-            if s_lower.contains("up-n-exec")
-                || s_lower.contains("download") && s_lower.contains("exec")
-                || Self::contains_word(&s_lower, "dropper")
+            let updater_installer_class = s_lower.contains("updateinstaller")
+                && (s_lower.contains("downloadmanager") || s_lower.contains("updateapplier"));
+            if !updater_installer_class
+                && (s_lower.contains("up-n-exec")
+                    || s_lower.contains("download") && s_lower.contains("exec")
+                    || Self::contains_word(&s_lower, "dropper"))
             {
                 self.add_capability(
                     report,

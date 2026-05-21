@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
 use super::core::Criticality;
+use super::expose_view::ExposeView;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
-use super::scores::Metrics;
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 
 /// Path delimiter for archive members (e.g., "archive.zip!!inner/file.py")
@@ -108,17 +108,14 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
 
-    // `binary_properties`, `code_metrics`, `source_code_metrics`,
-    // and `overlay_metrics` retired — their data surface flows
-    // through `expose_metrics` when populated.
-    /// Unified metrics container
+    /// Report-side mirror of expose's typed views. Schema v3.0
+    /// ships this verbatim under `expose: ...`. See
+    /// `crate::types::ExposeView` for the field shape.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub metrics: Option<Metrics>,
+    pub expose: Option<ExposeView>,
 
-    /// Flat metric map — same role as
-    /// `AnalysisReport::expose_metrics`. Populated piece-by-piece
-    /// as typed `*Metrics` sub-structs retire under #41. The
-    /// dotted-key namespace mirrors expose's emission convention.
+    /// Flat metric map mirroring expose's emission convention.
+    /// Sole numeric metric surface — typed projection structs retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
 
@@ -192,7 +189,7 @@ impl FileAnalysis {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            metrics: None,
+            expose: None,
             expose_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
@@ -486,7 +483,6 @@ mod tests {
         assert_eq!(fa.score, 0);
         assert!(fa.counts.is_none());
         assert!(fa.encoding.is_none());
-        assert!(fa.metrics.is_none());
         assert!(fa.extracted_path.is_none());
     }
 

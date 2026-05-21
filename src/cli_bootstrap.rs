@@ -98,7 +98,7 @@ pub(crate) fn apply_runtime_overrides(
     }
 
     if disabled.radare2 {
-        cleave::disable_radare2();
+        expose::rizin::disable();
     }
     if disabled.upx {
         cleave::disable_upx();

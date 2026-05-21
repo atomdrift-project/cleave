@@ -3616,9 +3616,32 @@ impl super::CapabilityMapper {
                     .collect();
             let mut invalid_metric_refs = Vec::new();
 
+            // Metric paths emitted by expose live in cleave's flat
+            // `expose_metrics` map (`BTreeMap<String, f64>`). The set
+            // of valid keys is open — expose adds new ones as
+            // extractors grow — so we accept any path under the
+            // namespaces expose owns. The strict-whitelist check
+            // below only fires for paths that don't match an
+            // expose-owned prefix AND aren't in the explicit
+            // language/encoding manifest.
+            const EXPOSE_PREFIXES: &[&str] = &[
+                "binary.",
+                "pe.",
+                "elf.",
+                "macho.",
+                "java_class.",
+                "sections.",
+                "strings.",
+                "imports.",
+                "exports.",
+                "functions.",
+            ];
+            let in_expose_namespace =
+                |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
+
             for trait_def in &trait_definitions {
                 if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if {
-                    if !valid_metric_fields.contains(field) {
+                    if !valid_metric_fields.contains(field) && !in_expose_namespace(field) {
                         let source_file = trait_source_files
                             .get(&trait_def.id)
                             .map(String::as_str)

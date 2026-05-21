@@ -383,7 +383,54 @@ pub(crate) fn detect_from_content(path: &Path, data: &[u8]) -> Option<(FileType,
         }
     }
 
+    // Detached GitHub Actions workflow YAML. In archives, uploads, and malware
+    // sandboxes we often only have `ci.yml` rather than `.github/workflows/ci.yml`.
+    // Keep this structural enough that ordinary YAML like `name: ...\non: ...`
+    // does not become a workflow.
+    if looks_like_github_actions_workflow(data) {
+        return Some((FileType::GithubActions, DetectionSource::Heuristic));
+    }
+
     None
+}
+
+fn looks_like_github_actions_workflow(data: &[u8]) -> bool {
+    let Ok(text) = std::str::from_utf8(&data[..data.len().min(16 * 1024)]) else {
+        return false;
+    };
+
+    let mut has_on = false;
+    let mut has_jobs = false;
+
+    for line in text.lines() {
+        let line = line.trim_end();
+        if line.is_empty() || line.starts_with("---") || line.starts_with('#') {
+            continue;
+        }
+
+        // Only top-level keys. Indented `on:` or `jobs:` inside ordinary
+        // configuration should not classify the whole document as a workflow.
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+
+        let Some((key, _)) = line.split_once(':') else {
+            continue;
+        };
+        let key = key.trim_matches(|c| c == '\'' || c == '"' || c == ' ');
+
+        match key {
+            "on" => has_on = true,
+            "jobs" => has_jobs = true,
+            _ => {}
+        }
+
+        if has_on && has_jobs {
+            return true;
+        }
+    }
+
+    false
 }
 
 /// Case-insensitive suffix match on path bytes (no allocation).

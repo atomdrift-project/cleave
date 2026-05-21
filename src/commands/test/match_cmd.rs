@@ -2085,7 +2085,6 @@ pub fn run(
                 output.push_str("  Use --pattern for field path (e.g., 'binary.avg_complexity')\n");
                 output.push_str("  Use --value-min/--value-max for thresholds\n");
                 output.push_str("  Use --min-size/--max-size for file size constraints\n");
-                let has_typed = report.metrics.is_some();
                 let flat_keys: Vec<&str> = report
                     .expose_metrics
                     .as_ref()
@@ -2093,9 +2092,9 @@ pub fn run(
                     .unwrap_or_default();
                 let has_prefix = |p: &str| flat_keys.iter().any(|k| k.starts_with(p));
 
-                if has_typed || !flat_keys.is_empty() {
+                if !flat_keys.is_empty() {
                     output.push_str("\n  Available metric fields:\n");
-                    if report.metrics.as_ref().is_some_and(|m| m.binary.is_some()) {
+                    if has_prefix("binary.") {
                         output.push_str("    binary.overall_entropy, binary.avg_complexity, binary.import_count, ...\n");
                     }
                     if has_prefix("text.") {

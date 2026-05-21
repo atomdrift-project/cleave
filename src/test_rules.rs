@@ -999,28 +999,6 @@ impl<'a> RuleDebugger<'a> {
             result
                 .details
                 .push(format!("Metric '{}' not found in report", field));
-            if let Some(metrics) = &self.report.metrics {
-                result.details.push("Available metrics:".to_string());
-                if let Some(binary) = &metrics.binary {
-                    result.details.push(format!(
-                        "  binary.code_to_data_ratio: {:.2}",
-                        binary.code_to_data_ratio
-                    ));
-                    result
-                        .details
-                        .push(format!("  binary.string_count: {}", binary.string_count));
-                    result
-                        .details
-                        .push(format!("  binary.func_count: {}", binary.func_count));
-                    result.details.push(format!(
-                        "  binary.avg_complexity: {:.2}",
-                        binary.avg_complexity
-                    ));
-                }
-            }
-            // `text.*`, `functions.*`, `identifiers.*` are populated on
-            // the flat metric map; surface whatever's present for the
-            // diagnostic output.
             if let Some(flat) = &self.report.expose_metrics {
                 for key in [
                     "text.total_lines",

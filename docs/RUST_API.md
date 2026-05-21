@@ -51,7 +51,7 @@ mapping. For long-running processes, warm them up front:
 Each component can be disabled globally for the process:
 
     cleave::disable_rayon();
-    cleave::disable_radare2();
+    expose::rizin::disable();
     cleave::disable_upx();
 
 Or per call, via `AnalysisOptions`. Use the global switches when the

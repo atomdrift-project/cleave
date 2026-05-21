@@ -837,7 +837,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
     let mapper_stats = crate::shared_resources::capability_mapper_stats();
 
     let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures, rizin_mem_exceeded) =
-        crate::radare2::rizin_stats();
+        expose::rizin::stats();
 
     Json(serde_json::json!({
         "process": {

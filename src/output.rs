@@ -1092,7 +1092,7 @@ mod tests {
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {
         let mut report = AnalysisReport {
-            version: "2.0".to_string(),
+            version: "3.0".to_string(),
             analysis_timestamp: Some(Utc::now()),
             target: TargetInfo {
                 path: "/test/sample.bin".to_string(),
@@ -1111,7 +1111,7 @@ mod tests {
             exports: vec![],
             yara_matches,
             syscalls: vec![],
-            metrics: None,
+            expose: None,
             kv_tree: None,
             expose_metrics: None,
             paths: vec![],

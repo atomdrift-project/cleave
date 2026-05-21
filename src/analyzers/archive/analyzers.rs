@@ -366,94 +366,24 @@ impl ArchiveAnalyzer {
             let extract_payloads = Self::should_extract_archive_payloads(file_type);
             let skip_rizin_reason =
                 Self::archive_member_rizin_skip_reason(relative_path, file_type);
+            let _ = (file_path, sha256);
 
-            // For native binaries where rizin will run, pre-launch the rizin subprocess
-            // in a rayon task before stng so they execute in parallel. Rizin dominates
-            // wall-clock time (20+ min for deep analysis vs 2s for stng). The result is
-            // stored in the SHA256-keyed disk cache; when the PE/ELF/MachO analyzer calls
-            // extract_batched moments later it gets an instant cache hit.
-            //
-            // Conservative pre-call parameters:
-            //   has_symbols=true  → full aa;aflj function analysis (correct for most real binaries)
-            //   goblin_ok=false   → also extract iSj/iij (goblin overrides these on success anyway)
-            //   include_strings=false → stng provides strings; skip rizin izj
-            let should_prelaunched_rizin = skip_rizin_reason.is_none()
-                && !crate::cache::skip_cache()
-                && crate::radare2::Radare2Analyzer::is_available();
-            let prelaunch_label = format!("prelaunching rizin on {relative_path}");
-
-            let stng_strings;
-            if should_prelaunched_rizin {
-                let r2 = crate::radare2::Radare2Analyzer::new();
-                let r2_path = file_path.to_path_buf();
-                let r2_sha256 = sha256.to_string();
-                let r2_cancelled = self.cancelled.clone();
-                let stng_result;
-                if rayon::current_thread_index().is_some() {
-                    // Batch mode: sequentialize to avoid pool starvation.
-                    crate::memory_tracker::set_current_phase(&prelaunch_label);
-                    let opts = crate::analyzers::attach_stng_cancellation(
-                        crate::analyzers::stng_analysis_opts(4),
-                        self.cancelled.as_ref(),
-                    );
-                    stng_result = stng::extract_strings_with_options(data, &opts);
-                    crate::memory_tracker::clear_current_phase();
-                    let _ = r2.extract_batched(
-                        &r2_path,
-                        data.len() as u64,
-                        true,
-                        false,
-                        false,
-                        Some(r2_sha256),
-                        r2_cancelled.as_ref(),
-                        Some(data),
-                    );
-                } else {
-                    let mut inner_stng_result = Vec::new();
-                    rayon::scope(|s| {
-                        s.spawn(|_| {
-                            tracing::debug!(
-                                relative_path,
-                                "Pre-launching rizin in parallel with stng"
-                            );
-                            let _ = r2.extract_batched(
-                                &r2_path,
-                                data.len() as u64,
-                                true,
-                                false,
-                                false,
-                                Some(r2_sha256),
-                                r2_cancelled.as_ref(),
-                                Some(data),
-                            );
-                        });
-                        crate::memory_tracker::set_current_phase(&prelaunch_label);
-                        let opts = crate::analyzers::attach_stng_cancellation(
-                            crate::analyzers::stng_analysis_opts(4),
-                            self.cancelled.as_ref(),
-                        );
-                        inner_stng_result = stng::extract_strings_with_options(data, &opts);
-                        crate::memory_tracker::clear_current_phase();
-                    });
-                    stng_result = inner_stng_result;
-                }
-                stng_strings = stng_result;
+            // Per-format selection of stng's XOR scan: text/source
+            // members skip it entirely. The historical "pre-launch
+            // rizin" optimization was retired in Wave B — rizin now
+            // runs inside `expose::open` on the member's bytes when
+            // the per-analyzer parse fires; there's no separate
+            // subprocess for the archive layer to overlap with.
+            let stng_opts = if skip_rizin_reason.is_some() {
+                crate::analyzers::stng_text_opts(4)
             } else {
-                // Rizin was skipped, which (per `archive_member_rizin_skip_reason`)
-                // means the member is not a native binary we want to analyse deeply:
-                // text/source/manifest files, vendored `.node` modules, etc. Pass
-                // `FormatHint::Text` via `stng_text_opts` so stng skips its XOR
-                // scan — `extract_incremental_xor_strings` was ~5% of CPU on the
-                // slow benchmark, almost entirely on these non-binary members where
-                // XOR-obfuscated payloads are vanishingly rare.
-                crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
-                let opts = crate::analyzers::attach_stng_cancellation(
-                    crate::analyzers::stng_text_opts(4),
-                    self.cancelled.as_ref(),
-                );
-                stng_strings = stng::extract_strings_with_options(data, &opts);
-                crate::memory_tracker::clear_current_phase();
-            }
+                crate::analyzers::stng_analysis_opts(4)
+            };
+            crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
+            let stng_opts =
+                crate::analyzers::attach_stng_cancellation(stng_opts, self.cancelled.as_ref());
+            let stng_strings = stng::extract_strings_with_options(data, &stng_opts);
+            crate::memory_tracker::clear_current_phase();
             let payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {

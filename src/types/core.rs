@@ -6,9 +6,9 @@ use super::binary::{
     AnalysisMetadata, Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch,
 };
 use super::diff::DiffReportV1;
+use super::expose_view::ExposeView;
 use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
-use super::scores::Metrics;
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
 use crate::malecule_bridge;
@@ -69,7 +69,8 @@ impl Criticality {
 /// Main analysis output structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
-    /// Schema version ("3" after finalize, "2.0" pre-finalize/cached)
+    /// Schema version ("3" after finalize, "3.0" pre-finalize/cached).
+    /// v3.0 adds the `expose` field mirroring expose's typed views.
     #[serde(alias = "schema_version")]
     pub version: String,
     /// Timestamp when analysis was performed (cleared after finalize)
@@ -117,14 +118,14 @@ pub struct AnalysisReport {
     /// Syscalls detected via binary analysis (ELF, Mach-O)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
-    // `binary_properties`, `code_metrics`, `source_code_metrics`,
-    // and `overlay_metrics` were typed Option<*> fields with zero
-    // production constructors (#41). Their data surface flows
-    // through `expose_metrics` under `binary.*` / `code.*` / etc.
-    // keys when populated.
-    /// Unified metrics container for ML analysis
+    /// Report-side mirror of expose's typed views — `values`,
+    /// `metrics`, `sections`, `imports`, `exports`, `functions`,
+    /// `errors`. Populated at every binary analyzer entry that runs
+    /// through `AnalysisContext`. Schema v3.0 ships this verbatim so
+    /// downstream consumers can navigate `expose.values.pe.machine`
+    /// directly.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub metrics: Option<Metrics>,
+    pub expose: Option<ExposeView>,
     /// Synthetic key-value tree for `type: kv` matchers on file
     /// formats whose metadata isn't natively a manifest (e.g.,
     /// office documents). Populated by analyzers; consumed by the
@@ -136,13 +137,9 @@ pub struct AnalysisReport {
     pub kv_tree: Option<Box<serde_json::Value>>,
     /// Expose's flat metric map (`{ "lnk.args_max_whitespace_run":
     /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
-    /// trait-rule resolution for `type: metrics, field: …` can read
-    /// expose-emitted values without round-tripping through cleave's
-    /// typed `*Metrics` structs (which would silently fail serde on
-    /// the first `f64` → `u32`/`u64`/`bool` mismatch).
-    ///
-    /// `get_metric_value` checks the typed `metrics` struct first
-    /// (for cleave-native fields) and falls back to this flat map.
+    /// trait-rule resolution for `type: metrics, field: …` reads
+    /// expose-emitted values directly. This is the sole numeric
+    /// metric surface — typed projection structs were retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
     /// Raw paths discovered (complete list)
@@ -316,7 +313,7 @@ impl AnalysisReport {
     #[must_use]
     pub fn new_with_timestamp(target: TargetInfo, timestamp: chrono::DateTime<Utc>) -> Self {
         Self {
-            version: "2.0".to_string(),
+            version: "3.0".to_string(),
             analysis_timestamp: Some(timestamp),
             target,
             traits: Vec::new(),
@@ -329,7 +326,7 @@ impl AnalysisReport {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            metrics: None,
+            expose: None,
             kv_tree: None,
             expose_metrics: None,
             paths: Vec::new(),
@@ -957,7 +954,6 @@ impl AnalysisReport {
         let _ = std::mem::take(&mut self.directories);
         let _ = std::mem::take(&mut self.env_vars);
         let _ = std::mem::take(&mut self.archive_contents);
-        self.metrics = None;
 
         // Clear fields that are redundant with files[0] / summary
         self.target = TargetInfo::default();
@@ -989,7 +985,7 @@ impl AnalysisReport {
             .as_ref()
             .and_then(|a| a.first().cloned());
         file.findings = self.findings.clone();
-        file.metrics = self.metrics.clone();
+        file.expose = self.expose.clone();
         file.expose_metrics = self.expose_metrics.clone();
         file.structure = self.structure.clone();
         file.strings = self.strings.clone();
@@ -1033,7 +1029,8 @@ impl AnalysisReport {
 
         file.arch = arch;
         file.findings = self.findings;
-        file.metrics = self.metrics;
+        file.expose = self.expose;
+        file.expose_metrics = self.expose_metrics;
         file.structure = self.structure;
         file.strings = self.strings;
         file.imports = self.imports;
@@ -1352,7 +1349,7 @@ mod tests {
     fn test_analysis_report_new() {
         let report = AnalysisReport::new(test_target());
 
-        assert_eq!(report.version, "2.0");
+        assert_eq!(report.version, "3.0");
         assert_eq!(report.target.path, "/test/sample.bin");
         assert!(report.findings.is_empty());
         assert!(report.traits.is_empty());

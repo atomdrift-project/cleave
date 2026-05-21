@@ -31,7 +31,6 @@ pub mod extractors;
 pub mod file_io;
 pub mod ip_validator;
 pub mod memory_tracker;
-mod radare2;
 mod shared_resources;
 pub mod strings;
 pub mod test_rules;
@@ -76,7 +75,6 @@ pub use types::diff::{
     ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
     TraitChange,
 };
-pub use types::scores::Metrics;
 pub use types::text_metrics::TextMetrics;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 pub use types::FileAnalysis;
@@ -189,7 +187,7 @@ fn should_skip_unknown_xor_payload_for_binary(
     file_type: &FileType,
     payload: &types::ExtractedPayload,
     sections: &[types::Section],
-    metrics: Option<&types::scores::Metrics>,
+    report: &types::AnalysisReport,
 ) -> bool {
     if payload.encoding_chain.len() != 1
         || payload.encoding_chain[0] != "xor"
@@ -222,22 +220,46 @@ fn should_skip_unknown_xor_payload_for_binary(
     }
 
     if *file_type == FileType::Pe {
+        // Heuristic: PE signed by a third-party developer with a large
+        // export surface (a code-signing library binary). Detected via
+        // a `metadata/signed/leaf::*` Notable finding plus a non-trivial
+        // export count from `report.exports`.
         let in_readonly_data = section.name == ".rdata";
-        let is_signed_developer_library = metrics.is_some_and(|m| {
-            m.pe.as_ref().is_some_and(|pe| {
-                pe.has_signature && pe.signature_type.as_deref() == Some("developer")
-            }) && m
-                .binary
-                .as_ref()
-                .is_some_and(|binary| binary.export_count >= 50 && binary.func_count >= 200)
-        });
+        let is_signed_leaf = report
+            .findings
+            .iter()
+            .any(|f| f.id.starts_with("metadata/signed/leaf::"));
+        let has_large_export_surface = report.exports.len() >= 50;
 
         return in_readonly_data
-            && is_signed_developer_library
+            && is_signed_leaf
+            && has_large_export_surface
             && !looks_like_actionable_payload_preview(&payload.preview);
     }
 
     false
+}
+
+/// Recognise a signed-Python-extension PE (e.g. a CPython runtime DLL)
+/// whose `.rdata`-resident hex payloads are part of unicodedata /
+/// Unicode property tables. Reads expose's `pe.signatures[0].subject`
+/// and falls back on `report.findings` / `report.exports` /
+/// `report.strings` counts (all populated already on the analyse path).
+fn is_signed_python_extension(report: &types::AnalysisReport) -> bool {
+    let signer_psf = report
+        .expose
+        .as_ref()
+        .and_then(|e| e.values.get("pe"))
+        .and_then(|pe| pe.get("signatures"))
+        .and_then(|s| s.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|sig| sig.get("subject"))
+        .and_then(|v| v.as_str())
+        .is_some_and(|subject| subject.contains("Python Software Foundation"));
+    signer_psf
+        && report.exports.len() <= 2
+        && report.functions.len() >= 100
+        && report.strings.len() >= 2000
 }
 
 fn is_elf_metadata_offset(offset: usize, sections: &[types::Section]) -> bool {
@@ -359,18 +381,14 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Disable radare2 integration process-wide.
-pub fn disable_radare2() {
-    radare2::disable_radare2();
-}
-
 /// SIGKILL every currently-live rizin process group.
 ///
-/// Intended for host CLI signal handlers that need to reap rizin workers
-/// before a forced `process::exit`. Cheap and idempotent — safe to call from
+/// Forwards to [`expose::rizin::kill_all_rizin_groups`]. Intended for
+/// host CLI signal handlers that need to reap rizin workers before a
+/// forced `process::exit`. Cheap and idempotent — safe to call from
 /// the `ctrlc` crate's dispatch thread. No-op on non-Unix platforms.
 pub fn kill_all_rizin_groups() {
-    radare2::kill_all_rizin_groups();
+    expose::rizin::kill_all_rizin_groups();
 }
 
 /// Disable UPX integration process-wide.
@@ -380,7 +398,7 @@ pub fn disable_upx() {
 
 /// Scoped disable guards applied for a single analysis operation.
 struct AnalysisDisableGuards {
-    _radare2: Option<radare2::ScopedRadare2Disable>,
+    _radare2: Option<expose::rizin::ScopedDisable>,
     _upx: Option<upx::ScopedUpxDisable>,
 }
 
@@ -389,7 +407,7 @@ impl AnalysisDisableGuards {
         Self {
             _radare2: options
                 .disable_radare2
-                .then(radare2::scoped_disable_radare2),
+                .then(expose::rizin::scoped_disable),
             _upx: options.disable_upx.then(upx::scoped_disable_upx),
         }
     }
@@ -1125,7 +1143,6 @@ fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::An
     report.sections = fa.sections;
     report.syscalls = fa.syscalls;
     report.yara_matches = fa.yara_matches;
-    report.metrics = fa.metrics;
     report.expose_metrics = fa.expose_metrics;
     report.paths = fa.paths;
     report.directories = fa.directories;
@@ -1374,23 +1391,41 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // Open expose on the preferred-arch slice so the Mach-O
             // analyzer can pull dyld imports / export-trie entries
             // from the typed view instead of re-walking goblin.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, arch_data).ok();
-            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
-                path,
-                arch_data,
-                input.sha256.clone(),
-                ctx.as_ref(),
-            ));
+            // When expose can't open the bytes, fall back to the
+            // analyzer's own bytes-only entry point so the malformed
+            // signal is still surfaced.
+            let (struct_result, expose_view): (
+                Result<AnalysisReport, anyhow::Error>,
+                Option<crate::types::ExposeView>,
+            ) = match crate::analysis_context::AnalysisContext::open(path, arch_data) {
+                Ok(ctx) => {
+                    let report = analyzer.analyze_structural_with_ctx(
+                        path,
+                        arch_data,
+                        input.sha256.clone(),
+                        &ctx,
+                    );
+                    let view = crate::types::ExposeView::from_ctx(&ctx);
+                    (Ok(report), Some(view))
+                }
+                Err(_) => (
+                    Ok(analyzer.analyze_structural(path, arch_data, input.sha256.clone())),
+                    None,
+                ),
+            };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
+            report.expose = expose_view;
             analyzer.apply_fat_metadata(&mut report, file_data);
 
-            // For FAT binaries, parse the non-preferred arch slices with goblin and
-            // union their imports/exports into the report. Without this, malware
-            // hidden in a non-preferred arch (e.g. malicious x86_64 slice with a
-            // benign arm64 slice) escapes goblin-derived trait rules. YARA and stng
-            // already cover the full file, so this closes the remaining gap.
+            // For FAT binaries, open each non-preferred arch slice as
+            // its own AnalysisContext and union its imports/exports
+            // into the report. Without this, malware hidden in a
+            // non-preferred arch (e.g. malicious x86_64 slice with a
+            // benign arm64 slice) escapes expose-derived trait rules.
+            // YARA and stng already cover the full file, so this
+            // closes the remaining gap.
             if is_fat {
                 let preferred_offset = range.start;
                 analyzer.union_supplementary_arches(&mut report, file_data, preferred_offset);
@@ -1398,22 +1433,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
 
             // For FAT binaries, re-extract strings from full file for correct offsets
             if is_fat && preextracted_strings.is_empty() {
-                report.strings = string_extractor.extract_smart(file_data, None);
-                if let Some(ref mut metrics) = report.metrics {
-                    if let Some(ref mut binary_metrics) = metrics.binary {
-                        binary_metrics.string_count = report.strings.len() as u32;
-                    }
-                }
+                report.strings = string_extractor.extract_smart(file_data);
             }
 
             // Process YARA results and evaluate with inline evidence
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
-            // Populate the binary kv tree *before* the capability
-            // mapper runs so `type: kv` traits resolve against
-            // `report.kv_tree` (e.g. signing.team_id, build.is_pie).
-            analyzers::binary_kv::attach_to_report(&mut report);
+            // Trait authors read cross-format facts directly from
+            // `report.expose.values.*` (PE/ELF/Mach-O native trees).
             analyzers::binary_extractors::augment_report(&mut report, eval_data);
             set_phase("macho:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
@@ -1448,25 +1476,39 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
             // Open expose once and lend it to the ELF analyzer so
-            // it can pull imports/exports from the typed view
-            // instead of re-walking `.dynsym` with goblin.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
-            let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
-                path,
-                file_data,
-                input.sha256.clone(),
-                ctx.as_ref(),
-            ));
+            // structural helpers read from the typed view directly.
+            // When expose can't open the bytes, fall back to the
+            // analyzer's own bytes-only entry point so the malformed
+            // signal is still surfaced.
+            let (struct_result, expose_view): (
+                Result<AnalysisReport, anyhow::Error>,
+                Option<crate::types::ExposeView>,
+            ) = match crate::analysis_context::AnalysisContext::open(path, file_data) {
+                Ok(ctx) => {
+                    let report = analyzer.analyze_structural_with_ctx(
+                        path,
+                        file_data,
+                        input.sha256.clone(),
+                        &ctx,
+                    );
+                    let view = crate::types::ExposeView::from_ctx(&ctx);
+                    (Ok(report), Some(view))
+                }
+                Err(_) => (
+                    Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone())),
+                    None,
+                ),
+            };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
+            report.expose = expose_view;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
-            // Populate `report.kv_tree` from already-extracted ELF
-            // metrics (entry_section, build_id, RELRO, canary, etc.)
-            // before traits run.  Format-specific extractors (B0.5
-            // .comment, B3 DWARF) layer additional sections on top.
-            analyzers::binary_kv::attach_to_report(&mut report);
+            // Trait authors read ELF facts directly from
+            // `report.expose.values.elf.*`. Format-specific extractors
+            // (B0.5 .comment, B3 DWARF) layer cleave-side augmentation
+            // through `binary_extractors::augment_report`.
             analyzers::binary_extractors::augment_report(&mut report, file_data);
             set_phase("elf:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
@@ -1502,28 +1544,31 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            // Open expose once here and lend it to the PE analyzer so
-            // it can prefer expose's typed Imports view over a second
-            // goblin walk. The trait engine downstream opens its own
+            // Open expose once here and lend it to the PE analyzer
+            // so it can read sections, imports, exports, and PE-specific
+            // values from the typed view instead of re-parsing with
+            // goblin. The trait engine downstream opens its own
             // context for the kv tree; consolidating those two
             // parses is a follow-up.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
+                .map_err(|e| anyhow::anyhow!("expose open failed for PE: {e}"))?;
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
                 input.sha256.clone(),
-                ctx.as_ref(),
+                &ctx,
             ));
+            let expose_view = crate::types::ExposeView::from_ctx(&ctx);
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
+            report.expose = Some(expose_view);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
-            // Populate `report.kv_tree` from already-extracted PE
-            // metrics (PDB path, signing flags, etc.) before traits
-            // run.  B2 layers VERSIONINFO / Rich header / imphash on
-            // top via `binary_kv::extend_with`.
-            analyzers::binary_kv::attach_to_report(&mut report);
+            // Trait authors read PE facts directly from
+            // `report.expose.values.pe.*`. B2 layers VERSIONINFO /
+            // Rich header / imphash on top via
+            // `binary_extractors::augment_report`.
             analyzers::binary_extractors::augment_report(&mut report, file_data);
             set_phase("pe:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
@@ -1695,18 +1740,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             && !payload.encoding_chain.is_empty()
             && payload.encoding_chain.iter().all(|e| e == "hex")
             && payload.detected_type == FileType::Unknown
-            && report.metrics.as_ref().is_some_and(|m| {
-                m.pe.as_ref().is_some_and(|pe| pe.has_signature)
-                    && m.binary.as_ref().is_some_and(|binary| {
-                        binary.export_count <= 2
-                            && binary.func_count >= 100
-                            && binary.string_count >= 2000
-                    })
-                    && m.pe
-                        .as_ref()
-                        .and_then(|pe| pe.signer.as_ref())
-                        .is_some_and(|signer| signer.contains("Python Software Foundation"))
-            })
+            && is_signed_python_extension(&report)
         {
             tracing::debug!(
                 "Skipping unknown hex payload in signed Python extension data tables: {}",
@@ -1733,7 +1767,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             &file_type,
             &payload,
             &report.sections,
-            report.metrics.as_ref(),
+            &report,
         ) {
             tracing::debug!(
                 "Skipping unknown xor fragment in ELF metadata section: {}",
@@ -1757,11 +1791,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     || f.id
                         == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
             })
-            && report
-                .metrics
-                .as_ref()
-                .and_then(|m| m.binary.as_ref())
-                .is_some_and(|m| m.func_count >= 200 && m.string_count >= 800)
         {
             tracing::debug!(
                 "Skipping unknown xor fragment in versioned .NET resource library: {}",

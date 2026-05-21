@@ -9,9 +9,8 @@
 
 use crate::analyzers::{detect_file_type, FileType};
 use crate::cli;
-use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
+use crate::commands::extract::extract_layer_file_analysis;
 use crate::commands::shared::extract_strings_from_ast;
-use crate::radare2::Radare2Analyzer;
 use crate::strings;
 use anyhow::Result;
 use std::fs;
@@ -118,63 +117,20 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                     }
                 }
 
-                // Use radare2 directly for fast symbol/function extraction in ONE batch
-                if Radare2Analyzer::is_available() {
-                    let r2 = Radare2Analyzer::new();
-                    if let Ok((r2_imports, _, r2_symbols)) = r2.extract_all_symbols(path, None) {
-                        for imp in r2_imports {
-                            let name = imp.name.trim_start_matches('_');
-                            imports.insert(name.to_string());
-                            if let Some(lib) = imp.lib_name {
-                                import_libraries.insert(name.to_string(), lib);
-                            }
-                        }
-                        for sym in r2_symbols {
-                            if sym.name.starts_with("imp.") || sym.name.starts_with("sym.imp.") {
-                                let clean = sym
-                                    .name
-                                    .trim_start_matches("sym.imp.")
-                                    .trim_start_matches("imp.")
-                                    .trim_start_matches('_');
-                                imports.insert(clean.to_string());
-                            } else if sym.symbol_type == "FUNC"
-                                || sym.symbol_type == "func"
-                                || sym.name.starts_with("fcn.")
-                            {
-                                let name = sym.name.trim_start_matches('_').to_string();
-                                // Exports are GLOBAL in MachO symbols
-                                if sym.symbol_type == "FUNC"
-                                    && (sym.name.starts_with("__mh_") || !sym.name.starts_with('_'))
-                                {
-                                    exports.insert(name.clone());
-                                }
-                                if !imports.contains(&name) && !exports.contains(&name) {
-                                    functions.insert(name);
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    // Fallback to minimal goblin analysis
-                    let report = analyze_binary_report(path, &file_type)?;
-
-                    for import in report.imports {
-                        imports.insert(import.symbol.clone());
-                        if let Some(lib) = import.library {
-                            import_libraries.insert(import.symbol, lib);
-                        }
-                    }
-                    for export in report.exports {
-                        exports.insert(export.symbol);
-                    }
-                    for func in report.functions {
-                        if func.name.starts_with("sym.imp.") {
-                            let clean = func.name.trim_start_matches("sym.imp.");
-                            imports.insert(clean.to_string());
-                        } else if !imports.contains(&func.name) && !exports.contains(&func.name) {
-                            functions.insert(func.name);
-                        }
-                    }
+                // expose::open() owns rizin now — imports / exports /
+                // functions come from its typed views regardless of
+                // whether the binary parsed cleanly with goblin or fell
+                // back through the rizin recovery path.
+                if let Ok(parsed) = expose::open(&data) {
+                    // Realize the parse so the typed views are populated.
+                    let _ = parsed.values();
+                    populate_symbols_from_expose(
+                        &parsed,
+                        &mut imports,
+                        &mut import_libraries,
+                        &mut exports,
+                        &mut functions,
+                    );
                 }
             }
             _ => {}
@@ -188,8 +144,40 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
         .with_exports(&exports)
         .with_functions(&functions);
 
-    let strings = extractor.extract_smart(&data, None);
+    let strings = extractor.extract_smart(&data);
     format_strings_output(&strings, format)
+}
+
+/// Fold expose's typed `imports` / `exports` / `functions` views into
+/// the symbol sets the string-extractor consumes for classification.
+/// Leading-underscore stripping mirrors the historical r2-symbol
+/// normalisation; symbol names that appear in any of imports/exports
+/// are excluded from `functions` so each name is classified once.
+fn populate_symbols_from_expose(
+    parsed: &expose::ParsedFile<'_>,
+    imports: &mut std::collections::HashSet<String>,
+    import_libraries: &mut std::collections::HashMap<String, String>,
+    exports: &mut std::collections::HashSet<String>,
+    functions: &mut std::collections::HashSet<String>,
+) {
+    for imp in parsed.imports().iter() {
+        let name = imp.name.trim_start_matches('_').to_string();
+        imports.insert(name.clone());
+        if let Some(lib) = &imp.library {
+            import_libraries.insert(name, lib.clone());
+        }
+    }
+    for exp in parsed.exports().iter() {
+        let name = exp.name.trim_start_matches('_').to_string();
+        exports.insert(name);
+    }
+    for func in parsed.functions().iter() {
+        let name = func.name.trim_start_matches('_').to_string();
+        if name.is_empty() || imports.contains(&name) || exports.contains(&name) {
+            continue;
+        }
+        functions.insert(name);
+    }
 }
 
 /// Format strings output for display

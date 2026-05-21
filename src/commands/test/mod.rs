@@ -163,7 +163,7 @@ pub(crate) fn prepare_test_analysis(
     // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
     if prepared_target.is_fat_macho {
         let string_extractor = crate::strings::StringExtractor::default();
-        report.strings = string_extractor.extract_smart(&full_data, None);
+        report.strings = string_extractor.extract_smart(&full_data);
     }
 
     // Attach the binary kv tree so kv-sourced traits (`type: kv,
@@ -171,11 +171,10 @@ pub(crate) fn prepare_test_analysis(
     // pipeline. Without this, kv conditions silently fail and rules
     // like `metadata/binary/linking::ifunc` show NOT MATCHED in
     // test-rules even when they fire in `cleave analyze`.
-    // Mirrors the order in `lib.rs::analyze_file_with_resources`:
-    // `attach_to_report` first (synthesises the base kv tree from
-    // metrics), then `augment_report` layers on raw extractors
-    // (ELF .comment, DWARF, ifunc_symbols, init_array entries, …).
-    crate::analyzers::binary_kv::attach_to_report(&mut report);
+    // Mirrors `lib.rs::analyze_file_with_resources`: trait authors
+    // read cross-format facts from `report.expose.values.*`; cleave
+    // only layers on raw extractors here (ELF .comment, DWARF,
+    // ifunc_symbols, init_array entries, …).
     crate::analyzers::binary_extractors::augment_report(&mut report, &full_data);
 
     Ok(PreparedTestAnalysis {

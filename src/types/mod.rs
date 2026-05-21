@@ -36,12 +36,12 @@ pub(crate) fn is_zero_i64(v: &i64) -> bool {
 
 // Module declarations
 pub mod binary;
-pub(crate) mod binary_metrics;
 pub(crate) mod code_structure;
 pub mod compact;
 pub(crate) mod container_metrics;
 pub(crate) mod core;
 pub(crate) mod diff;
+pub mod expose_view;
 pub mod field_paths;
 pub(crate) mod file_analysis;
 // file_metrics retired — `file.size` flows through expose_metrics.
@@ -71,6 +71,8 @@ pub use core::{
     flatten_into_metrics, kv_set_path, AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload,
     MetricsExt, TargetInfo,
 };
+
+pub use expose_view::ExposeView;
 
 pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]
@@ -104,8 +106,8 @@ pub use diff::{
 
 #[allow(unused_imports)]
 pub(crate) use ml_features::{
-    CallPatternMetrics, ControlFlowMetrics, DecodedValue, EmbeddedConstant, FunctionProperties,
-    FunctionSignature, InstructionAnalysis, InstructionCategories, NestingMetrics,
+    CallPatternMetrics, ControlFlowMetrics, DecodedValue, EmbeddedConstant, FunctionSignature,
+    NestingMetrics,
 };
 
 #[allow(unused_imports)]
@@ -123,9 +125,7 @@ pub(crate) use language_metrics::{
     GoMetrics, JavaScriptMetrics, PythonMetrics, RustMetrics, ShellMetrics,
 };
 
-pub(crate) use binary_metrics::{BinaryMetrics, MachoMetrics};
-
-pub(crate) use scores::{EncodedMetrics, Metrics};
+pub(crate) use scores::EncodedMetrics;
 
 use std::path::PathBuf;
 

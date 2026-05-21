@@ -512,7 +512,7 @@ mod tests {
         let cached = cached.expect("cache hit expected");
         assert_eq!(cached.target.sha256, sha);
         assert_eq!(cached.target.file_type, "elf");
-        assert_eq!(cached.version, "2.0");
+        assert_eq!(cached.version, "3.0");
     }
 
     #[test]

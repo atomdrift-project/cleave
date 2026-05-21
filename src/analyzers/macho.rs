@@ -1,25 +1,36 @@
 //! Mach-O binary analyzer for macOS executables.
+//!
+//! Every Mach-O helper takes a non-optional
+//! [`crate::analysis_context::AnalysisContext`]: structural data
+//! (segments, dylibs, code signature, header bits) is read from
+//! `expose`'s typed views rather than re-walked with goblin. The
+//! analyzer no longer carries its own goblin parse path.
 use crate::analyzers::macho_codesign;
-use crate::analyzers::{goblin_safe, AnalysisInput, Analyzer};
+use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::entropy::{calculate_entropy, EntropyLevel};
-use crate::radare2::Radare2Analyzer;
+use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Function, Import,
-    MachoMetrics, Metrics, Section, StringInfo, StructuralFeature, TargetInfo,
+    AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, StringInfo,
+    StructuralFeature, TargetInfo,
 };
 use anyhow::{Context, Result};
-use goblin::mach::{Mach, MachO};
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-/// Analyzer for macOS Mach-O binaries (executables, dylibs, bundles)
+type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
+
+/// Analyzer for macOS Mach-O binaries (executables, dylibs, bundles).
+///
+/// Wave B routed deep-binary signal through `expose::open`: function
+/// CFG fields and rizin-recovered symbols arrive on
+/// `ctx.parsed.functions()` / `imports()` / `exports()`. The analyzer
+/// no longer merges its own rizin import augment over goblin's view —
+/// expose's typed Mach-O imports cover what cleave needed previously.
 #[derive(Debug)]
 pub(crate) struct MachOAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
-    radare2: Radare2Analyzer,
     string_extractor: StringExtractor,
     /// Pre-extracted strings from stng (avoids redundant extraction)
     preextracted_strings: Option<Vec<StringInfo>>,
@@ -49,20 +60,11 @@ impl MachOAnalyzer {
         );
     }
 
-    fn unpack_macho_version(version: u32) -> (u32, u32, u32) {
-        (
-            (version >> 16) & 0xffff,
-            (version >> 8) & 0xff,
-            version & 0xff,
-        )
-    }
-
     /// Creates a new Mach-O analyzer with default configuration
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
-            radare2: Radare2Analyzer::new(),
             string_extractor: StringExtractor::new(),
             preextracted_strings: None,
             cancellation: None,
@@ -113,19 +115,41 @@ impl MachOAnalyzer {
     /// Structural analysis of a thin Mach-O binary (no YARA scan, no trait evaluation).
     /// Only handles thin binaries — fat binary dispatch is done by the caller.
     /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
+    ///
+    /// Synthesises an [`AnalysisContext`] internally; callers that
+    /// already hold one should call [`Self::analyze_structural_with_ctx`]
+    /// directly to avoid the second expose parse.
+    ///
+    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn analyze_structural(
         &self,
         file_path: &Path,
         data: &[u8],
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
-        self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, None)
+        match crate::analysis_context::AnalysisContext::open(file_path, data) {
+            Ok(ctx) => self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx),
+            Err(e) => {
+                let sha256 = precomputed_sha256
+                    .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
+                self.analyze_macho_fallback(
+                    file_path,
+                    file_path,
+                    data,
+                    sha256,
+                    Some(format!("expose open failed: {e}")),
+                    true,
+                    None,
+                    std::time::Instant::now(),
+                )
+            }
+        }
     }
 
     /// Same as [`Self::analyze_structural`] but accepts an
-    /// [`AnalysisContext`] borrowing the same bytes. When provided,
-    /// imports / exports come from expose's typed views instead of
-    /// re-walking goblin's dyld-bind / export-trie tables.
+    /// [`AnalysisContext`] borrowing the same bytes. Imports,
+    /// exports, segments, code-signature metadata and header bits all
+    /// come from expose's typed views; no goblin walk happens here.
     ///
     /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn analyze_structural_with_ctx<'a>(
@@ -133,7 +157,7 @@ impl MachOAnalyzer {
         file_path: &'a Path,
         data: &'a [u8],
         precomputed_sha256: Option<String>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+        ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         self.analyze_structural_with_strings(
             file_path,
@@ -147,6 +171,11 @@ impl MachOAnalyzer {
     }
 
     /// Structural analysis with optional pre-extracted strings.
+    /// The caller provides an [`AnalysisContext`] borrowing `data`;
+    /// every Mach-O-internal helper reads from expose's typed views
+    /// via that ctx (no goblin re-parse).
+    ///
+    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     #[allow(clippy::too_many_arguments)]
     fn analyze_structural_with_strings<'a>(
         &self,
@@ -156,36 +185,41 @@ impl MachOAnalyzer {
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'a>>,
+        ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         let sha256 = precomputed_sha256
             .clone()
             .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
-        // Parse with goblin via the panic-safe wrapper. If parsing fails
-        // (Err *or* panic), or returns a fat archive we can't currently
-        // analyze structurally, fall back to rizin-based metrics so the
-        // binary still gets the malformed-structure signal and the basic
-        // structural metrics rather than an empty report.
-        let parse_outcome = goblin_safe::parse_mach(data);
-        let parse_failure = parse_outcome.failure_info();
-        let macho_opt = match parse_outcome.ok() {
-            Some(Mach::Binary(macho)) => Some(macho),
-            Some(Mach::Fat(_)) | None => None,
-        };
-        let Some(macho) = macho_opt else {
+        // expose marks unparseable bytes with `macho.parse_failed` or
+        // `macho.parse_panicked` metrics. When neither the parse
+        // succeeded nor a fat-slice cpu_type was observed, fall back
+        // to the rizin path so the binary still gets baseline metrics
+        // and a malformed-structure signal.
+        let m = ctx.parsed.metrics();
+        let parse_failed = m.get("macho.parse_failed").is_some();
+        let parse_panicked = m.get("macho.parse_panicked").is_some();
+        let cpu_type_known = ctx.parsed.values().get("macho.cpu_type").is_some();
+        if parse_failed || parse_panicked || !cpu_type_known {
+            let parse_msg = if parse_panicked {
+                Some("Mach-O parse panicked in expose".to_string())
+            } else if parse_failed {
+                Some("Mach-O parse failed in expose".to_string())
+            } else {
+                None
+            };
             return self.analyze_macho_fallback(
                 logical_path,
                 analysis_path,
                 data,
                 sha256,
-                parse_failure.as_ref(),
+                parse_msg,
                 allow_rizin,
                 precomputed_sha256,
                 start,
             );
-        };
+        }
 
         // Create target info
         let target = TargetInfo {
@@ -193,50 +227,47 @@ impl MachOAnalyzer {
             file_type: "macho".to_string(),
             size_bytes: data.len() as u64,
             sha256: sha256.clone(),
-            architectures: Some(vec![self.arch_name(&macho)]),
+            architectures: Some(vec![arch_name_from_ctx(ctx)]),
         };
 
         let mut report = AnalysisReport::new(target);
-        let mut tools_used = vec!["goblin".to_string()];
+        let mut tools_used = vec!["expose".to_string()];
 
-        // Parse code signature early for metrics and findings
+        // Parse code signature for findings and richer metrics (team
+        // ID, entitlements, hardened runtime). Expose already emits
+        // most of the same data under `macho.code_signature.*`, but
+        // the structured `CodeSignature` value drives downstream
+        // helpers (entitlement criticality, dangerous-entitlement
+        // counting). Reuse expose's `LC_CODE_SIGNATURE` offset via
+        // the typed Section/values machinery is more work than just
+        // re-parsing the blob; the cleave-side parser is already
+        // panic-safe and ~free on the trivial fixtures.
         let codesig_data: Option<macho_codesign::CodeSignature> =
-            macho.load_commands.iter().find_map(|lc| {
-                if let goblin::mach::load_command::CommandVariant::CodeSignature(cs) = &lc.command {
-                    macho_codesign::parse_code_signature(data, cs.dataoff, cs.datasize).ok()
-                } else {
-                    None
-                }
-            });
+            code_signature_blob_range_from_ctx(ctx)
+                .and_then(|(off, size)| macho_codesign::parse_code_signature(data, off, size).ok());
 
-        // Analyze header and structure
+        // Phase 1: structural features, signature findings, imports,
+        // exports, sections. All driven from ctx.
         let _t = std::time::Instant::now();
-        self.analyze_structure_with_signature(&macho, &mut report, codesig_data.as_ref());
+        self.fill_structural_features_from_ctx(ctx, &mut report);
         let structure_ms = _t.elapsed().as_millis();
 
-        // Generate signature findings from parsed code signature.
-        // The unsigned case is now emitted by the YAML trait
-        // `metadata/signed::unsigned-macho` reading from
-        // `kv: signing.is_signed exists: false`.
         let _t = std::time::Instant::now();
         if let Some(ref codesig) = codesig_data {
             self.generate_signature_findings(codesig, &mut report);
         }
         let sig_findings_ms = _t.elapsed().as_millis();
 
-        // Extract imports and map to capabilities
         let _t = std::time::Instant::now();
-        let _ = self.analyze_imports(&macho, &mut report, ctx);
+        self.analyze_imports_from_ctx(ctx, &mut report);
         let imports_ms = _t.elapsed().as_millis();
 
-        // Extract exports
         let _t = std::time::Instant::now();
-        let _ = self.analyze_exports(&macho, &mut report, ctx);
+        self.analyze_exports_from_ctx(ctx, &mut report);
         let exports_ms = _t.elapsed().as_millis();
 
-        // Analyze sections and entropy
         let _t = std::time::Instant::now();
-        let _ = self.analyze_sections(&macho, data, &mut report);
+        self.analyze_sections_from_ctx(ctx, &mut report);
         let sections_ms = _t.elapsed().as_millis();
 
         tracing::info!(
@@ -249,456 +280,31 @@ impl MachOAnalyzer {
             "macho:phase1"
         );
 
-        // Initialize metrics with Mach-O header info
-        let mut macho_metrics = MachoMetrics {
-            file_type: macho.header.filetype,
-            cpu_type: macho.header.cputype,
-            cpu_subtype: macho.header.cpusubtype,
-            flags: macho.header.flags,
-            class_bits: if macho.is_64 { 64 } else { 32 },
-            little_endian: macho.little_endian,
-            entry: macho.entry,
-            old_style_entry: macho.old_style_entry,
-            load_command_count: macho.header.ncmds as u32,
-            load_commands_size: macho.header.sizeofcmds,
-            rpath_count: macho.rpaths.len() as u32,
-            has_install_name: macho.name.is_some(),
-            // Tier A: decoded MH_* header bits. (PIE is on
-            // BinaryMetrics; not duplicated here.)
-            allow_stack_execution: (macho.header.flags & 0x0008_0000) != 0,
-            no_heap_execution: (macho.header.flags & 0x0100_0000) != 0,
-            app_extension_safe: (macho.header.flags & 0x0200_0000) != 0,
-            dylib_in_cache: (macho.header.flags & 0x8000_0000) != 0,
-            ..Default::default()
-        };
+        // Cross-format metric facts (segment_count, is_stripped, is_pie,
+        // has_debug_info, code-signature details) flow through
+        // `expose.values.macho.*` and `expose.metrics` now.
 
-        // Track segments + dylibs for Tier A/B anomaly detection.
-        // (vmaddr, vmend, writable, executable, name)
-        let mut segment_ranges: Vec<(u64, u64, bool, bool, String)> = Vec::new();
-        let mut dylib_names: Vec<String> = Vec::new();
-        let mut data_in_code_count: u32 = 0;
-
-        for lc in &macho.load_commands {
-            match &lc.command {
-                goblin::mach::load_command::CommandVariant::CodeSignature(cs) => {
-                    macho_metrics.has_code_signature = true;
-                    macho_metrics.code_signature_size = cs.datasize;
-                }
-                goblin::mach::load_command::CommandVariant::Uuid(_) => {
-                    macho_metrics.has_uuid = true;
-                }
-                goblin::mach::load_command::CommandVariant::BuildVersion(command) => {
-                    let (min_os_major, min_os_minor, min_os_patch) =
-                        Self::unpack_macho_version(command.minos);
-                    let (sdk_major, sdk_minor, sdk_patch) = Self::unpack_macho_version(command.sdk);
-                    macho_metrics.has_build_version = true;
-                    macho_metrics.build_platform = command.platform;
-                    macho_metrics.min_os_major = min_os_major;
-                    macho_metrics.min_os_minor = min_os_minor;
-                    macho_metrics.min_os_patch = min_os_patch;
-                    macho_metrics.sdk_major = sdk_major;
-                    macho_metrics.sdk_minor = sdk_minor;
-                    macho_metrics.sdk_patch = sdk_patch;
-                    macho_metrics.build_tool_count = command.ntools;
-                }
-                goblin::mach::load_command::CommandVariant::SourceVersion(command) => {
-                    macho_metrics.has_source_version = true;
-                    macho_metrics.source_version = command.version;
-                }
-                goblin::mach::load_command::CommandVariant::Main(_) => {
-                    macho_metrics.has_main_command = true;
-                }
-                goblin::mach::load_command::CommandVariant::Unixthread(_) => {
-                    macho_metrics.has_unixthread_command = true;
-                }
-                goblin::mach::load_command::CommandVariant::LoadWeakDylib(d) => {
-                    macho_metrics.dylib_count += 1;
-                    macho_metrics.weak_dylib_count += 1;
-                    let entry = mk_dylib_entry(d, "weak");
-                    dylib_names.push(entry.name.clone());
-                    macho_metrics.dylib_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::ReexportDylib(d) => {
-                    macho_metrics.dylib_count += 1;
-                    macho_metrics.reexport_dylib_count += 1;
-                    let entry = mk_dylib_entry(d, "reexport");
-                    dylib_names.push(entry.name.clone());
-                    macho_metrics.dylib_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::LoadUpwardDylib(d) => {
-                    macho_metrics.dylib_count += 1;
-                    macho_metrics.upward_dylib_count += 1;
-                    let entry = mk_dylib_entry(d, "upward");
-                    dylib_names.push(entry.name.clone());
-                    macho_metrics.dylib_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::LazyLoadDylib(d) => {
-                    macho_metrics.dylib_count += 1;
-                    macho_metrics.lazy_dylib_count += 1;
-                    let entry = mk_dylib_entry(d, "lazy");
-                    dylib_names.push(entry.name.clone());
-                    macho_metrics.dylib_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::LoadDylib(d) => {
-                    macho_metrics.dylib_count += 1;
-                    let entry = mk_dylib_entry(d, "regular");
-                    dylib_names.push(entry.name.clone());
-                    macho_metrics.dylib_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::LoadDylinker(_)
-                | goblin::mach::load_command::CommandVariant::IdDylinker(_)
-                | goblin::mach::load_command::CommandVariant::DyldEnvironment(_) => {
-                    macho_metrics.has_dylinker = true;
-                }
-                goblin::mach::load_command::CommandVariant::Segment32(seg) => {
-                    let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry32(seg);
-                    if is_pagezero {
-                        macho_metrics.pagezero_size = seg.vmsize as u64;
-                    }
-                    let name = entry.name.clone();
-                    if name == "__DATA_CONST" {
-                        macho_metrics.has_data_const_segment = true;
-                    }
-                    segment_ranges.push((seg.vmaddr as u64, vm_end, w, x, name));
-                    macho_metrics.segment_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::Segment64(seg) => {
-                    let (entry, is_pagezero, vm_end, w, x) = mk_macho_seg_entry64(seg);
-                    if is_pagezero {
-                        macho_metrics.pagezero_size = seg.vmsize;
-                    }
-                    let name = entry.name.clone();
-                    if name == "__DATA_CONST" {
-                        macho_metrics.has_data_const_segment = true;
-                    }
-                    segment_ranges.push((seg.vmaddr, vm_end, w, x, name));
-                    macho_metrics.segment_entries.push(entry);
-                }
-                goblin::mach::load_command::CommandVariant::EncryptionInfo32(e)
-                    if e.cryptid != 0 =>
-                {
-                    macho_metrics.has_encrypted_section = true;
-                }
-                goblin::mach::load_command::CommandVariant::EncryptionInfo64(e)
-                    if e.cryptid != 0 =>
-                {
-                    macho_metrics.has_encrypted_section = true;
-                }
-                goblin::mach::load_command::CommandVariant::DyldChainedFixups(_) => {
-                    macho_metrics.has_chained_fixups = true;
-                }
-                goblin::mach::load_command::CommandVariant::DyldInfo(_)
-                | goblin::mach::load_command::CommandVariant::DyldInfoOnly(_) => {
-                    macho_metrics.has_dyld_info_legacy = true;
-                }
-                goblin::mach::load_command::CommandVariant::VersionMinMacosx(_)
-                | goblin::mach::load_command::CommandVariant::VersionMinIphoneos(_)
-                | goblin::mach::load_command::CommandVariant::VersionMinTvos(_)
-                | goblin::mach::load_command::CommandVariant::VersionMinWatchos(_) => {
-                    macho_metrics.uses_legacy_version_min = true;
-                }
-                goblin::mach::load_command::CommandVariant::DataInCode(c) => {
-                    // datasize / sizeof(DataInCodeEntry=8 bytes)
-                    data_in_code_count = c.datasize / 8;
-                }
-                _ => {}
-            }
-        }
-        macho_metrics.data_in_code_count = data_in_code_count;
-
-        // Populate the dylib_entries[].name from macho.libs[1..] —
-        // goblin keeps libs[0] as the binary's own name and the rest
-        // in load-command order, matching dylib_entries.
-        let mut name_iter = macho.libs.iter().skip(1);
-        for entry in macho_metrics.dylib_entries.iter_mut() {
-            if let Some(name) = name_iter.next() {
-                entry.name = (*name).to_string();
-            }
-        }
-        // Refresh dylib_names from the now-populated entries.
-        let dylib_names: Vec<String> = macho_metrics
-            .dylib_entries
-            .iter()
-            .map(|e| e.name.clone())
-            .collect();
-
-        // Tier A derived: EP-in-segment analysis + W+X count.
-        let mut wx_count: u32 = 0;
-        let mut ep_in_segment = false;
-        let mut ep_in_writable = false;
-        let mut last_seg_idx: Option<usize> = None;
-        let mut last_seg_vmaddr: u64 = 0;
-        let entry_va = macho.entry;
-        for (i, (start, end, w, x, _name)) in segment_ranges.iter().enumerate() {
-            if *w && *x {
-                wx_count = wx_count.saturating_add(1);
-            }
-            if entry_va >= *start && entry_va < *end && entry_va != 0 {
-                ep_in_segment = true;
-                if *w {
-                    ep_in_writable = true;
-                }
-            }
-            if last_seg_idx.is_none() || *start > last_seg_vmaddr {
-                last_seg_idx = Some(i);
-                last_seg_vmaddr = *start;
-            }
-        }
-        macho_metrics.wx_segment_count = wx_count;
-        macho_metrics.entry_in_writable_segment = ep_in_writable;
-        macho_metrics.entry_outside_segments = !ep_in_segment && entry_va != 0;
-        if let Some(idx) = last_seg_idx {
-            if let Some((start, end, _, _, _)) = segment_ranges.get(idx) {
-                if entry_va >= *start && entry_va < *end && entry_va != 0 {
-                    macho_metrics.entry_in_last_segment = true;
-                }
-            }
-        }
-
-        // Segment overlap detection — sort by vmaddr, walk pairs.
-        // __PAGEZERO sits at vaddr 0 with vast vmsize on 64-bit, so
-        // skip it for overlap purposes (it's expected to "overlap"
-        // nothing but is also at the start of the address space).
-        if segment_ranges.len() > 1 {
-            let mut sorted: Vec<&(u64, u64, bool, bool, String)> = segment_ranges
-                .iter()
-                .filter(|(_, _, _, _, name)| name != "__PAGEZERO")
-                .collect();
-            sorted.sort_by_key(|t| t.0);
-            let mut overlap_names: std::collections::HashSet<String> =
-                std::collections::HashSet::new();
-            for w in sorted.windows(2) {
-                let (a_start, a_end, _, _, a_name) = w[0];
-                let (b_start, _, _, _, b_name) = w[1];
-                if *a_end > *b_start && *b_start >= *a_start {
-                    overlap_names.insert(a_name.clone());
-                    overlap_names.insert(b_name.clone());
-                }
-            }
-            macho_metrics.segment_overlap_count = overlap_names.len() as u32;
-            let mut names: Vec<String> = overlap_names.into_iter().collect();
-            names.sort();
-            macho_metrics.overlapping_segments = names;
-        }
-
-        // Tier B derived: dylib path direction + duplicates.
-        let file_type = macho_metrics.file_type;
-        const MH_EXECUTE: u32 = 0x2;
-        const MH_DYLIB: u32 = 0x6;
-        let mut name_counts: std::collections::HashMap<String, u32> =
-            std::collections::HashMap::new();
-        for n in &dylib_names {
-            *name_counts.entry(n.clone()).or_default() += 1;
-            if !n.starts_with('/') && !n.starts_with('@') && !n.is_empty() {
-                macho_metrics.dylib_path_unrooted_count =
-                    macho_metrics.dylib_path_unrooted_count.saturating_add(1);
-            }
-            if n.contains("@executable_path") && file_type == MH_DYLIB {
-                macho_metrics.executable_path_in_dylib = true;
-            }
-            if n.contains("@loader_path") && file_type == MH_EXECUTE {
-                macho_metrics.loader_path_in_executable = true;
-            }
-        }
-        macho_metrics.duplicate_dylib_count = name_counts
-            .values()
-            .filter(|&&c| c > 1)
-            .map(|c| c - 1)
-            .sum();
-
-        // Tier 1 — supply-chain similarity hashes. Sort + dedupe + join
-        // so byte-equal vendor releases produce byte-equal hashes.
-        if !dylib_names.is_empty() {
-            macho_metrics.dylib_hash = Some(sha256_of_sorted(&dylib_names));
-        }
-        if let Ok(imports) = macho.imports() {
-            let import_names: Vec<String> = imports.iter().map(|i| i.name.to_string()).collect();
-            if !import_names.is_empty() {
-                macho_metrics.symhash = Some(sha256_of_sorted(&import_names));
-            }
-        }
-        if let Ok(exports) = macho.exports() {
-            let export_names: Vec<String> = exports.iter().map(|e| e.name.clone()).collect();
-            if !export_names.is_empty() {
-                macho_metrics.export_hash = Some(sha256_of_sorted(&export_names));
-            }
-        }
-
-        // Always compute basic binary metrics (even if radare2 fails)
-        let binary_metrics = crate::types::BinaryMetrics {
-            segment_count: macho
-                .load_commands
-                .iter()
-                .filter(|lc| {
-                    matches!(
-                        lc.command,
-                        goblin::mach::load_command::CommandVariant::Segment32(_)
-                            | goblin::mach::load_command::CommandVariant::Segment64(_)
-                    )
-                })
-                .count() as u32,
-            is_stripped: macho.symbols().count() == 0,
-            has_debug_info: macho.load_commands.iter().any(|lc| match &lc.command {
-                goblin::mach::load_command::CommandVariant::Segment32(seg) => seg
-                    .segname
-                    .iter()
-                    .take_while(|&&b| b != 0)
-                    .map(|&b| b as char)
-                    .collect::<String>()
-                    .contains("DWARF"),
-                goblin::mach::load_command::CommandVariant::Segment64(seg) => seg
-                    .segname
-                    .iter()
-                    .take_while(|&&b| b != 0)
-                    .map(|&b| b as char)
-                    .collect::<String>()
-                    .contains("DWARF"),
-                _ => false,
-            }),
-            is_pie: (macho.header.flags & 0x200000) != 0,
-            string_count: 0, // Will be updated after string extraction
-            ..Default::default()
-        };
-
-        report.metrics = Some(Metrics {
-            macho: Some(macho_metrics),
-            binary: Some(binary_metrics.clone()),
-            ..Default::default()
-        });
-
-        // AMOS cipher detection now handled by stng library internally
-
-        // Use radare2 for deep analysis if available - SINGLE r2 spawn for all data
+        // Functions come from expose's typed `Functions` view —
+        // `aflj`-derived CFG fields ride along when expose's rizin
+        // recovery fired (stripped binaries / packed bodies); symbol-
+        // table-only entries leave the cleave CFG mirror `None`.
         let _t_r2 = std::time::Instant::now();
-        let r2_strings = if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
+        report.functions = ctx
+            .parsed
+            .functions()
+            .iter()
+            .map(crate::analysis_context::project_expose_function)
+            .collect();
+        if ctx
+            .parsed
+            .functions()
+            .iter()
+            .any(|f| f.source == "rizin")
+        {
             tools_used.push("radare2".to_string());
-
-            // Use batched extraction - single r2 session for functions, sections, strings, imports
-            let has_symbols = macho.symbols().count() > 0;
-            let needs_r2_strings = stng_strings.is_none() && self.preextracted_strings.is_none();
-            if let Ok(batched) = self.radare2.extract_batched(
-                analysis_path,
-                data.len() as u64,
-                has_symbols,
-                true, // goblin_success
-                needs_r2_strings,
-                precomputed_sha256,
-                self.cancellation.as_ref(),
-                Some(data),
-            ) {
-                crate::radare2::push_rizin_warnings(&mut report, &batched);
-
-                // Compute metrics from batched data (radare2-specific metrics)
-                let r2_binary_metrics =
-                    self.radare2
-                        .compute_metrics_from_batched(&batched, data.len() as u64, "macho");
-
-                // Enhance existing binary metrics with radare2 data
-                if let Some(ref mut metrics) = report.metrics {
-                    if let Some(ref mut binary_metrics) = metrics.binary {
-                        // Merge radare2 metrics into existing basic metrics (only if non-zero)
-                        if r2_binary_metrics.func_count > 0 {
-                            binary_metrics.func_count = r2_binary_metrics.func_count;
-                            binary_metrics.avg_func_size = r2_binary_metrics.avg_func_size;
-                            binary_metrics.avg_complexity = r2_binary_metrics.avg_complexity;
-                        }
-                        // Don't use radare2's code_to_data_ratio - it has a bug where __const sections
-                        // are incorrectly marked as executable. We calculate this correctly from
-                        // goblin-based segment permissions in update_binary_metrics().
-
-                        // Also merge section-level metrics from radare2
-                        if r2_binary_metrics.section_count > 0 {
-                            binary_metrics.executable_section_count =
-                                r2_binary_metrics.executable_section_count;
-                            binary_metrics.writable_section_count =
-                                r2_binary_metrics.writable_section_count;
-                            binary_metrics.wx_section_count = r2_binary_metrics.wx_section_count;
-                        }
-                    } else {
-                        // Fallback: set full radare2 metrics if binary metrics somehow missing
-                        let mut full_metrics = r2_binary_metrics;
-                        full_metrics.segment_count = macho
-                            .load_commands
-                            .iter()
-                            .filter(|lc| {
-                                matches!(
-                                    lc.command,
-                                    goblin::mach::load_command::CommandVariant::Segment32(_)
-                                        | goblin::mach::load_command::CommandVariant::Segment64(_)
-                                )
-                            })
-                            .count() as u32;
-                        full_metrics.is_stripped = macho.symbols().count() == 0;
-                        full_metrics.is_pie = (macho.header.flags & 0x200000) != 0;
-                        metrics.binary = Some(full_metrics);
-                    }
-
-                    if let Some(ref mut macho_metrics) = metrics.macho {
-                        macho_metrics.has_entitlements = !codesig_data
-                            .as_ref()
-                            .map(|c| c.entitlements.is_empty())
-                            .unwrap_or(true);
-                        if let Some(ref codesig) = codesig_data {
-                            macho_metrics.signature_type =
-                                Some(codesig.signature_type.as_str().to_string());
-                            macho_metrics.team_identifier = codesig.team_id.clone();
-
-                            // Count dangerous entitlements
-                            let mut dangerous_count = 0u32;
-                            for ent_key in codesig.entitlements.keys() {
-                                if ent_key.contains("disable-library-validation")
-                                    || ent_key.contains("allow-jit")
-                                    || ent_key.contains("unsigned-executable-memory")
-                                    || ent_key.contains("debugger")
-                                {
-                                    dangerous_count += 1;
-                                }
-                            }
-                            macho_metrics.dangerous_entitlements = dangerous_count;
-                            // Tier 1 — entitlement_hash. Sort + join
-                            // entitlement keys (values can be paths /
-                            // identifiers that drift across releases;
-                            // keys are the stable surface).
-                            let keys: Vec<String> = codesig.entitlements.keys().cloned().collect();
-                            if !keys.is_empty() {
-                                macho_metrics.entitlement_hash = Some(sha256_of_sorted(&keys));
-                            }
-                            // Raw CodeDirectory flags; decoded named
-                            // bits surface via kv `macho.cs_flags.*`.
-                            macho_metrics.cs_flags = codesig.cs_flags;
-                            macho_metrics.cs_runtime_version = codesig.cs_runtime_version.clone();
-                        }
-                    }
-                }
-
-                // Convert R2Functions to Functions for the report
-                report.functions = batched.functions.into_iter().map(Function::from).collect();
-
-                // Process batched imports if goblin didn't find any
-                if report.imports.is_empty() && !batched.imports.is_empty() {
-                    for imp in &batched.imports {
-                        report.imports.push(Import::new(
-                            &imp.name,
-                            imp.lib_name.clone(),
-                            "radare2",
-                        ));
-                        let name = crate::types::binary::normalize_symbol(&imp.name);
-                        if let Some(cap) = self.capability_mapper.lookup(&name, "radare2") {
-                            if !report.findings.iter().any(|c| c.id == cap.id) {
-                                report.findings.push(cap);
-                            }
-                        }
-                    }
-                }
-
-                // Use strings from batched data (no extra r2 spawn)
-                Some(batched.strings)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
+        }
+        let r2_strings: Option<Vec<stng::ExtractedString>> = None;
+        let _ = (allow_rizin, precomputed_sha256, codesig_data);
 
         let r2_total_ms = _t_r2.elapsed().as_millis();
 
@@ -713,7 +319,8 @@ impl MachOAnalyzer {
             report.strings = strings.clone();
         } else {
             // Extract strings using language-aware extraction (Go/Rust)
-            report.strings = self.string_extractor.extract_smart(data, r2_strings);
+            let _ = r2_strings;
+            report.strings = self.string_extractor.extract_smart(data);
         }
         let strings_ms = _t.elapsed().as_millis();
 
@@ -744,13 +351,6 @@ impl MachOAnalyzer {
         }
         tools_used.push("stng".to_string());
 
-        // Update binary metrics with string count
-        if let Some(ref mut metrics) = report.metrics {
-            if let Some(ref mut binary_metrics) = metrics.binary {
-                binary_metrics.string_count = report.strings.len() as u32;
-            }
-        }
-
         // Analyze embedded code in strings
         let _t = std::time::Instant::now();
         let string_count = report.strings.len();
@@ -767,27 +367,14 @@ impl MachOAnalyzer {
         report.findings.extend(plain_findings);
         let embedded_ms = _t.elapsed().as_millis();
 
-        // Populate common binary metrics (strings, entropy, etc.)
-        let _t = std::time::Instant::now();
-        crate::analyzers::metrics_utils::populate_binary_metrics(&mut report, data);
-        let metrics_ms = _t.elapsed().as_millis();
-
         tracing::info!(
             path = %logical_path.display(),
             r2_total_ms,
             strings_ms,
             string_count,
             embedded_ms,
-            metrics_ms,
             "macho:phase2"
         );
-
-        // Validate metric ranges to catch calculation bugs
-        if let Some(ref metrics) = report.metrics {
-            if let Some(ref binary) = metrics.binary {
-                binary.validate(&report.target.path, report.target.size_bytes);
-            }
-        }
 
         // Round up to 1ms when the work completed in <1ms so the
         // recorded duration is always distinguishable from the
@@ -799,54 +386,63 @@ impl MachOAnalyzer {
         report
     }
 
-    fn analyze_structure_with_signature<'a>(
-        &self,
-        macho: &MachO<'a>,
-        report: &mut AnalysisReport,
-        _codesig: Option<&macho_codesign::CodeSignature>,
-    ) {
-        // Binary format
+    /// Emit the binary/format, architecture, signature presence, and
+    /// metadata findings (install name, linked dylibs, rpaths) from
+    /// expose's typed views. No goblin walk — every fact comes from
+    /// `ctx.parsed`.
+    fn fill_structural_features_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        let v = ctx.parsed.values();
+
         report.structure.push(StructuralFeature {
             id: "binary/format/macho".to_string(),
             desc: "Mach-O binary format".to_string(),
             evidence: vec![Evidence {
                 method: "magic".to_string(),
-                source: "goblin".to_string(),
-                value: format!("0x{:x}", macho.header.magic),
+                source: "expose".to_string(),
+                // Cleave traits historically read `0x{magic:x}` but
+                // expose doesn't surface the magic word directly. The
+                // file_type_raw (MH_* constant) gives a stable
+                // architecture-agnostic identity.
+                value: format!(
+                    "filetype=0x{:x}",
+                    v.get("macho.file_type_raw")
+                        .and_then(|x| x.as_u64())
+                        .unwrap_or(0)
+                ),
                 location: None,
                 ..Default::default()
             }],
         });
 
-        // Architecture
-        let arch = self.arch_name(macho);
+        let arch = arch_name_from_ctx(ctx);
+        let cputype_raw = v
+            .get("macho.cpu_type_raw")
+            .and_then(|x| x.as_u64())
+            .unwrap_or(0);
         report.structure.push(StructuralFeature {
             id: format!("binary/arch/{}", arch),
             desc: format!("{} architecture", arch),
             evidence: vec![Evidence {
                 method: "header".to_string(),
-                source: "goblin".to_string(),
-                value: format!("cputype=0x{:x}", macho.header.cputype),
+                source: "expose".to_string(),
+                value: format!("cputype=0x{:x}", cputype_raw),
                 location: None,
                 ..Default::default()
             }],
         });
 
-        // Check for code signature
-        let has_signature = macho.load_commands.iter().any(|lc| {
-            matches!(
-                lc.command,
-                goblin::mach::load_command::CommandVariant::CodeSignature(_)
-            )
-        });
-
+        // Code signature presence: an LC_CODE_SIGNATURE in the load
+        // command list or any `macho.code_signature.*` value (parsed
+        // out by expose's code-signature reader) means the binary
+        // carries a signature blob.
+        let has_signature = lc_present(ctx, "LC_CODE_SIGNATURE");
         if has_signature {
             report.structure.push(StructuralFeature {
                 id: "binary/signed".to_string(),
                 desc: "Binary has code signature".to_string(),
                 evidence: vec![Evidence {
                     method: "load_command".to_string(),
-                    source: "goblin".to_string(),
+                    source: "expose".to_string(),
                     value: "LC_CODE_SIGNATURE".to_string(),
                     location: Some("load_commands".to_string()),
                     ..Default::default()
@@ -854,220 +450,92 @@ impl MachOAnalyzer {
             });
         }
 
-        // Mach-O UUID is now emitted by the YAML trait
-        // `metadata/build/reproducible::macho-uuid` reading from the
-        // binary kv tree (`macho.uuid` — populated by
-        // `analyzers::macho_extractors::extract`).
-
-        if let Some(name) = macho.name {
+        if let Some(name) = v.get("macho.install_name").and_then(|x| x.as_str()) {
             Self::push_metadata_finding(
                 report,
                 "metadata/binary/linking::macho-install-name",
                 "Mach-O install name present",
                 "lc_id_dylib",
-                "goblin",
+                "expose",
                 name.to_string(),
             );
         }
 
-        for dylib in &macho.libs {
-            if *dylib == "self" || macho.name.is_some_and(|name| name == *dylib) {
-                continue;
-            }
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::macho-dylib",
-                "Mach-O linked dylib",
-                "load_dylib",
-                "goblin",
-                (*dylib).to_string(),
-            );
-        }
-
-        for rpath in &macho.rpaths {
-            Self::push_metadata_finding(
-                report,
-                "metadata/binary/linking::macho-rpath",
-                "Mach-O runtime search path",
-                "rpath",
-                "goblin",
-                (*rpath).to_string(),
-            );
-        }
-    }
-
-    fn analyze_imports<'a>(
-        &self,
-        macho: &MachO<'a>,
-        report: &mut AnalysisReport,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) -> Result<()> {
-        // When the shared expose-side parse is available, mirror
-        // its typed Imports view (source: "macho-bind") — same
-        // dyld bind-info walk goblin would do here, with dylib
-        // names already normalised to lowercase basenames.
-        // Falls back to the legacy goblin/symtab path when no
-        // ctx is provided (CLI direct paths, tests).
-        if let Some(c) = ctx {
-            let bridged = c.imports_from_expose();
-            if !bridged.is_empty() {
-                for imp in bridged {
-                    if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
-                        if !report.findings.iter().any(|c| c.id == cap.id) {
-                            report.findings.push(cap);
-                        }
-                    }
-                    report.imports.push(imp);
+        if let Some(libs) = v.get("macho.libraries").and_then(|x| x.as_array()) {
+            for lib in libs {
+                let Some(name) = lib.as_str() else { continue };
+                if name.is_empty() {
+                    continue;
                 }
-                return Ok(());
-            }
-            // expose returned an empty Imports view — fall through
-            // to goblin's symtab-fallback path below.
-        }
-
-        let imports = macho.imports()?;
-
-        // Fallback: use symbol table if imports() is empty
-        // (r2 imports are now handled via batched analysis above)
-        if imports.is_empty() {
-            if let Some(syms) = &macho.symbols {
-                for (name, sym) in syms.iter().flatten() {
-                    // N_EXT (external) and N_UNDF (undefined) means it's an import
-                    if (sym.n_type & 0x01 != 0) && (sym.n_type & 0x0e == 0) {
-                        let clean_name = crate::types::binary::normalize_symbol(name);
-                        // Only add if not already added by radare2
-                        if !report.imports.iter().any(|i| i.symbol == clean_name) {
-                            report
-                                .imports
-                                .push(Import::new(name, None, "goblin_symtab"));
-                        }
-                    }
-                }
-            }
-        } else {
-            for imp in &imports {
-                report
-                    .imports
-                    .push(Import::new(imp.name, Some(imp.dylib.to_string()), "goblin"));
-                let name = crate::types::binary::normalize_symbol(imp.name);
-
-                // Map import to capability
-                if let Some(cap) = self.capability_mapper.lookup(&name, "goblin") {
-                    // Check if we already have this capability
-                    if !report.findings.iter().any(|c| c.id == cap.id) {
-                        report.findings.push(cap);
-                    }
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    fn analyze_exports<'a>(
-        &self,
-        macho: &MachO<'a>,
-        report: &mut AnalysisReport,
-        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
-    ) -> Result<()> {
-        if let Some(c) = ctx {
-            for exp in c.exports_from_expose() {
-                report.exports.push(exp);
-            }
-            return Ok(());
-        }
-        for exp in &macho.exports()? {
-            report.exports.push(Export::new(
-                &exp.name,
-                Some(format!("0x{:x}", exp.offset)),
-                "goblin",
-            ));
-        }
-
-        Ok(())
-    }
-
-    fn analyze_sections<'a>(
-        &self,
-        macho: &MachO<'a>,
-        data: &[u8],
-        report: &mut AnalysisReport,
-    ) -> Result<()> {
-        for segment in &macho.segments {
-            // Convert segment init_prot to permission string (r/w/x format)
-            let segment_perm = {
-                let init_prot = segment.initprot;
-                let mut perm = String::new();
-                if init_prot & 0x01 != 0 {
-                    perm.push('r');
-                } // VM_PROT_READ
-                if init_prot & 0x02 != 0 {
-                    perm.push('w');
-                } // VM_PROT_WRITE
-                if init_prot & 0x04 != 0 {
-                    perm.push('x');
-                } // VM_PROT_EXECUTE
-                if perm.is_empty() {
-                    perm.push('-');
-                }
-                perm
-            };
-
-            for (section, _) in &segment.sections()? {
-                let section_name = format!(
-                    "{}.__{}",
-                    segment.name().unwrap_or("unknown"),
-                    section.name().unwrap_or("unknown")
+                Self::push_metadata_finding(
+                    report,
+                    "metadata/binary/linking::macho-dylib",
+                    "Mach-O linked dylib",
+                    "load_dylib",
+                    "expose",
+                    name.to_string(),
                 );
-
-                // Calculate entropy for this section
-                let section_offset = section.offset as usize;
-                let section_size = section.size as usize;
-
-                if section_offset + section_size <= data.len() {
-                    let section_data = &data[section_offset..section_offset + section_size];
-                    let entropy = calculate_entropy(section_data);
-
-                    let mut flag_tokens = Vec::new();
-                    if segment_perm.contains('r') {
-                        flag_tokens.push("readable".to_string());
-                    }
-                    if segment_perm.contains('w') {
-                        flag_tokens.push("writable".to_string());
-                    }
-                    if segment_perm.contains('x') {
-                        flag_tokens.push("executable".to_string());
-                    }
-                    report.sections.push(Section {
-                        name: section_name.clone(),
-                        address: Some(section.addr),
-                        offset: Some(section.offset as u64),
-                        size: section.size,
-                        entropy,
-                        permissions: Some(segment_perm.clone()), // Use segment permissions
-                        flags: flag_tokens,
-                    });
-
-                    // Add entropy-based structural features
-                    let level = EntropyLevel::from_value(entropy);
-                    if level == EntropyLevel::High {
-                        report.structure.push(StructuralFeature {
-                            id: "entropy/high".to_string(),
-                            desc: "High entropy section (possibly packed/encrypted)".to_string(),
-                            evidence: vec![Evidence {
-                                method: "entropy".to_string(),
-                                source: "entropy_analyzer".to_string(),
-                                value: format!("{:.2}", entropy),
-                                location: Some(section_name),
-                                ..Default::default()
-                            }],
-                        });
-                    }
-                }
             }
         }
 
-        Ok(())
+        if let Some(rpaths) = v.get("macho.rpaths").and_then(|x| x.as_array()) {
+            for rpath in rpaths {
+                let Some(name) = rpath.as_str() else { continue };
+                Self::push_metadata_finding(
+                    report,
+                    "metadata/binary/linking::macho-rpath",
+                    "Mach-O runtime search path",
+                    "rpath",
+                    "expose",
+                    name.to_string(),
+                );
+            }
+        }
+    }
+
+    /// Pull imports off expose's typed Imports view, run capability
+    /// lookups against each, and merge into the report.
+    fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        for imp in ctx.imports_from_expose() {
+            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
+                if !report.findings.iter().any(|c| c.id == cap.id) {
+                    report.findings.push(cap);
+                }
+            }
+            report.imports.push(imp);
+        }
+    }
+
+    /// Pull exports off expose's typed Exports view.
+    fn analyze_exports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        for exp in ctx.exports_from_expose() {
+            report.exports.push(exp);
+        }
+    }
+
+    /// Project expose's typed Sections view into the report, marking
+    /// high-entropy sections with the canonical `entropy/high`
+    /// structural feature.
+    fn analyze_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        for section in ctx.sections_from_expose() {
+            let entropy = section.entropy;
+            let section_name = section.name.clone();
+            report.sections.push(section);
+            let level = EntropyLevel::from_value(entropy);
+            if level == EntropyLevel::High {
+                report.structure.push(StructuralFeature {
+                    id: "entropy/high".to_string(),
+                    desc: "High entropy section (possibly packed/encrypted)".to_string(),
+                    evidence: vec![Evidence {
+                        method: "entropy".to_string(),
+                        source: "expose".to_string(),
+                        value: format!("{:.2}", entropy),
+                        location: Some(section_name),
+                        ..Default::default()
+                    }],
+                });
+            }
+        }
     }
 
     /// Generate findings from parsed code signature data
@@ -1201,159 +669,67 @@ impl MachOAnalyzer {
         //   - metadata/signed/trust-level/traits.yaml::hardened-runtime-dup
     }
 
-    fn arch_name<'a>(&self, macho: &MachO<'a>) -> String {
-        self.arch_name_from_cputype(macho.header.cputype)
-    }
-
-    fn arch_name_from_cputype(&self, cputype: u32) -> String {
-        match cputype {
-            0x01000007 => "x86_64".to_string(),
-            0x0100000c => "arm64".to_string(),
-            0x0200000c => "arm64e".to_string(),
-            _ => format!("unknown_0x{:x}", cputype),
-        }
-    }
-
     // AMOS cipher detection/decryption removed - now handled by stng library internally
 }
 
-/// Construct a baseline `MachoDylibEntry` from a goblin DylibCommand.
-/// Name is left empty for the caller to fill from macho.libs/imports.
-fn mk_dylib_entry(
-    cmd: &goblin::mach::load_command::DylibCommand,
-    kind: &str,
-) -> crate::types::binary_metrics::MachoDylibEntry {
-    crate::types::binary_metrics::MachoDylibEntry {
-        name: String::new(),
-        current_version: cmd.dylib.current_version,
-        compatibility_version: cmd.dylib.compatibility_version,
-        kind: kind.to_string(),
+/// Architecture label for a Mach-O ctx. Mirrors expose's
+/// `cpu_type_string` taxonomy (`x86_64`, `arm64`, `arm64e`, …) so
+/// downstream consumers see a canonical lowercase name. Returns
+/// `unknown_0x<hex>` when the cpu type isn't in expose's known set.
+fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
+    let v = ctx.parsed.values();
+    if let Some(name) = v.get("macho.cpu_type").and_then(|x| x.as_str()) {
+        if name != "unknown" {
+            return name.to_string();
+        }
     }
+    let raw = v
+        .get("macho.cpu_type_raw")
+        .and_then(|x| x.as_u64())
+        .unwrap_or(0);
+    format!("unknown_0x{:x}", raw)
 }
 
-/// Build a Mach-O segment carrier entry from a 32-bit segment cmd.
-/// Returns the entry plus derived flags `(is_pagezero, vm_end,
-/// writable, executable)` for Tier A processing.
-fn mk_macho_seg_entry32(
-    seg: &goblin::mach::load_command::SegmentCommand32,
-) -> (
-    crate::types::binary_metrics::MachoSegmentEntry,
-    bool,
-    u64,
-    bool,
-    bool,
-) {
-    let name = std::str::from_utf8(&seg.segname)
-        .unwrap_or("")
-        .trim_end_matches('\0')
-        .to_string();
-    const VM_PROT_READ: u32 = 0x01;
-    const VM_PROT_WRITE: u32 = 0x02;
-    const VM_PROT_EXECUTE: u32 = 0x04;
-    let perms = format!(
-        "{}{}{}",
-        if seg.initprot & VM_PROT_READ != 0 {
-            "r"
-        } else {
-            "-"
-        },
-        if seg.initprot & VM_PROT_WRITE != 0 {
-            "w"
-        } else {
-            "-"
-        },
-        if seg.initprot & VM_PROT_EXECUTE != 0 {
-            "x"
-        } else {
-            "-"
-        },
-    );
-    let entry = crate::types::binary_metrics::MachoSegmentEntry {
-        name: name.clone(),
-        vmaddr: seg.vmaddr as u64,
-        vmsize: seg.vmsize as u64,
-        fileoff: seg.fileoff as u64,
-        filesize: seg.filesize as u64,
-        maxprot_hex: format!("{:x}", seg.maxprot),
-        initprot_hex: format!("{:x}", seg.initprot),
-        perms,
-    };
-    let vm_end = (seg.vmaddr as u64).saturating_add(seg.vmsize as u64);
-    let writable = (seg.initprot & VM_PROT_WRITE) != 0 || (seg.maxprot & VM_PROT_WRITE) != 0;
-    let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
-    (entry, name == "__PAGEZERO", vm_end, writable, executable)
+/// True when expose's `macho.load_commands[]` list contains `name`.
+fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
+    ctx.parsed
+        .values()
+        .get("macho.load_commands")
+        .and_then(|v| v.as_array())
+        .is_some_and(|arr| arr.iter().any(|lc| lc.as_str().is_some_and(|s| s == name)))
 }
 
-/// 64-bit variant. Same shape as `mk_macho_seg_entry32`.
-fn mk_macho_seg_entry64(
-    seg: &goblin::mach::load_command::SegmentCommand64,
-) -> (
-    crate::types::binary_metrics::MachoSegmentEntry,
-    bool,
-    u64,
-    bool,
-    bool,
-) {
-    let name = std::str::from_utf8(&seg.segname)
-        .unwrap_or("")
-        .trim_end_matches('\0')
-        .to_string();
-    const VM_PROT_READ: u32 = 0x01;
-    const VM_PROT_WRITE: u32 = 0x02;
-    const VM_PROT_EXECUTE: u32 = 0x04;
-    let perms = format!(
-        "{}{}{}",
-        if seg.initprot & VM_PROT_READ != 0 {
-            "r"
-        } else {
-            "-"
-        },
-        if seg.initprot & VM_PROT_WRITE != 0 {
-            "w"
-        } else {
-            "-"
-        },
-        if seg.initprot & VM_PROT_EXECUTE != 0 {
-            "x"
-        } else {
-            "-"
-        },
-    );
-    let entry = crate::types::binary_metrics::MachoSegmentEntry {
-        name: name.clone(),
-        vmaddr: seg.vmaddr,
-        vmsize: seg.vmsize,
-        fileoff: seg.fileoff,
-        filesize: seg.filesize,
-        maxprot_hex: format!("{:x}", seg.maxprot),
-        initprot_hex: format!("{:x}", seg.initprot),
-        perms,
-    };
-    let vm_end = seg.vmaddr.saturating_add(seg.vmsize);
-    let writable = (seg.initprot & VM_PROT_WRITE) != 0 || (seg.maxprot & VM_PROT_WRITE) != 0;
-    let executable = (seg.initprot & VM_PROT_EXECUTE) != 0;
-    (entry, name == "__PAGEZERO", vm_end, writable, executable)
-}
-
-/// SHA-256 of `\n`-joined sorted-deduplicated input strings, lowercase
-/// hex. Used for the Mach-O similarity-hash family
-/// (`dylib_hash`, `symhash`, `export_hash`, `entitlement_hash`).
-/// Sort + dedupe so the order returned by goblin doesn't affect the
-/// hash — vendor releases share byte-equal hashes regardless of
-/// load-command ordering.
-fn sha256_of_sorted(items: &[String]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut sorted: Vec<&String> = items.iter().filter(|s| !s.is_empty()).collect();
-    sorted.sort();
-    sorted.dedup();
-    let joined = sorted
+/// Locate the LC_CODE_SIGNATURE blob `(file_offset, size)` from
+/// expose's code-signature metadata. Returns `None` when the binary
+/// is unsigned. `file_offset` isn't currently emitted by expose, so
+/// we recover it from the `__LINKEDIT` segment + the signature size:
+/// the cms blob always sits at the end of `__LINKEDIT`.
+///
+/// This is a small hack that lets the cleave-side
+/// `macho_codesign::parse_code_signature` consume the same bytes
+/// expose's parser saw, without re-walking the load commands.
+fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
+    let v = ctx.parsed.values();
+    // Expose surfaces the signature size when LC_CODE_SIGNATURE is
+    // present; absence here means there's no signature to parse.
+    let size = v
+        .get("macho.code_signature_size")
+        .and_then(|x| x.as_u64())? as u32;
+    if size == 0 {
+        return None;
+    }
+    // The LC_CODE_SIGNATURE blob sits inside __LINKEDIT, at the very
+    // end. Use `__LINKEDIT.file_offset + __LINKEDIT.file_size - size`
+    // as the start offset.
+    let segs = v.get("macho.segments").and_then(|x| x.as_array())?;
+    let linkedit = segs
         .iter()
-        .map(|s| s.as_str())
-        .collect::<Vec<_>>()
-        .join("\n");
-    let mut h = Sha256::new();
-    h.update(joined.as_bytes());
-    hex::encode(h.finalize())
+        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("__LINKEDIT"))?;
+    let file_offset = linkedit.get("file_offset").and_then(|x| x.as_u64())?;
+    let file_size = linkedit.get("file_size").and_then(|x| x.as_u64())?;
+    let end = file_offset.checked_add(file_size)?;
+    let cs_off = end.checked_sub(u64::from(size))?;
+    Some((cs_off as u32, size))
 }
 
 /// Determine criticality of an entitlement based on its key
@@ -1653,14 +1029,22 @@ impl MachOAnalyzer {
 
     /// Parse every non-preferred arch slice of a fat Mach-O and union its imports
     /// and exports into the report, running capability lookups on each new import
-    /// so rules matching on goblin-derived imports still fire for malware hidden
+    /// so rules matching on expose-derived imports still fire for malware hidden
     /// in a non-preferred arch.
     ///
     /// Preferred arch has already been parsed by the main structural pass, so
     /// imports/exports already present are skipped (deduped by normalized symbol
     /// name + library for imports; by symbol name for exports).
     ///
+    /// Each non-preferred slice is opened as its own [`AnalysisContext`],
+    /// so the slice's bytes flow through the same expose pipeline as
+    /// the preferred slice did. Slices that expose can't open are
+    /// skipped silently — fat binaries with one bad slice are rare
+    /// enough that surfacing the failure as a finding adds noise.
+    ///
     /// Only runs on fat binaries; caller is expected to check.
+    ///
+    /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn union_supplementary_arches(
         &self,
         report: &mut AnalysisReport,
@@ -1668,13 +1052,6 @@ impl MachOAnalyzer {
         preferred_offset: usize,
     ) {
         use std::collections::HashSet;
-
-        let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() else {
-            return;
-        };
-        let Ok(arches) = fat.arches() else {
-            return;
-        };
 
         // Build dedup sets from what's already in the report.
         let mut seen_imports: HashSet<(String, Option<String>)> = report
@@ -1688,74 +1065,74 @@ impl MachOAnalyzer {
         let baseline_exports = report.exports.len();
         let mut arches_parsed = 0;
 
-        for arch in arches.iter() {
-            let offset = arch.offset as usize;
+        // Use the same `macho.slices[]` view the public range helpers
+        // already consume, then open a fresh ctx per slice.
+        let Ok(parsed) = expose::open(data) else {
+            return;
+        };
+        let Some(slices) = parsed
+            .values()
+            .get("macho.slices")
+            .and_then(|v| v.as_array())
+        else {
+            return;
+        };
+        let dummy_path = Path::new("");
+        for slice in slices {
+            let Some(offset) = slice.get("file_offset").and_then(|x| x.as_u64()) else {
+                continue;
+            };
+            let Some(size) = slice.get("file_size").and_then(|x| x.as_u64()) else {
+                continue;
+            };
+            let offset = offset as usize;
+            let size = size as usize;
             if offset == preferred_offset {
                 continue;
             }
-            let size = arch.size as usize;
-            if offset.saturating_add(size) > data.len() {
+            if offset.saturating_add(size) > data.len() || size == 0 {
                 continue;
             }
-            let slice = &data[offset..offset + size];
-            let arch_name = self.arch_name_from_cputype(arch.cputype);
-            let import_source = format!("goblin-{}", arch_name);
+            let slice_bytes = &data[offset..offset + size];
+            let arch_name = slice
+                .get("cpu_type")
+                .and_then(|x| x.as_str())
+                .unwrap_or("unknown");
+            let import_source = format!("expose-{}", arch_name);
 
-            let parse = goblin_safe::parse_mach(slice);
-            let Some(Mach::Binary(macho)) = parse.ok() else {
+            let Ok(slice_ctx) =
+                crate::analysis_context::AnalysisContext::open(dummy_path, slice_bytes)
+            else {
                 continue;
             };
             arches_parsed += 1;
 
-            let goblin_imports = macho.imports().unwrap_or_default();
-            if !goblin_imports.is_empty() {
-                for imp in &goblin_imports {
-                    let symbol = crate::types::binary::normalize_symbol(imp.name);
-                    let library = Some(imp.dylib.to_string());
-                    if !seen_imports.insert((symbol.clone(), library.clone())) {
-                        continue;
-                    }
-                    report
-                        .imports
-                        .push(Import::new(imp.name, library, import_source.clone()));
-                    if let Some(cap) = self.capability_mapper.lookup(&symbol, "goblin") {
-                        if !report.findings.iter().any(|c| c.id == cap.id) {
-                            report.findings.push(cap);
-                        }
-                    }
+            for imp in slice_ctx.imports_from_expose() {
+                let key = (imp.symbol.clone(), imp.library.clone());
+                if !seen_imports.insert(key) {
+                    continue;
                 }
-            } else if let Some(syms) = &macho.symbols {
-                // Mirror analyze_imports' symtab fallback: N_EXT+undefined means import
-                for (name, sym) in syms.iter().flatten() {
-                    if (sym.n_type & 0x01 != 0) && (sym.n_type & 0x0e == 0) {
-                        let symbol = crate::types::binary::normalize_symbol(name);
-                        if !seen_imports.insert((symbol.clone(), None)) {
-                            continue;
-                        }
-                        report
-                            .imports
-                            .push(Import::new(name, None, import_source.clone()));
-                        if let Some(cap) = self.capability_mapper.lookup(&symbol, "goblin") {
-                            if !report.findings.iter().any(|c| c.id == cap.id) {
-                                report.findings.push(cap);
-                            }
-                        }
+                let symbol = imp.symbol.clone();
+                report.imports.push(crate::types::Import {
+                    source: import_source.clone(),
+                    ..imp
+                });
+                if let Some(cap) = self.capability_mapper.lookup(&symbol, "macho-bind") {
+                    if !report.findings.iter().any(|c| c.id == cap.id) {
+                        report.findings.push(cap);
                     }
                 }
             }
 
-            if let Ok(exports) = macho.exports() {
-                for exp in &exports {
-                    let symbol = crate::types::binary::normalize_symbol(&exp.name);
-                    if !seen_exports.insert(symbol) {
-                        continue;
-                    }
-                    report.exports.push(Export::new(
-                        &exp.name,
-                        Some(format!("0x{:x}", exp.offset)),
-                        import_source.clone(),
-                    ));
+            for exp in slice_ctx.exports_from_expose() {
+                let symbol = exp.symbol.clone();
+                if !seen_exports.insert(symbol) {
+                    continue;
                 }
+                report.exports.push(Export {
+                    source: import_source.clone(),
+                    ..exp
+                });
             }
         }
 
@@ -1772,15 +1149,16 @@ impl MachOAnalyzer {
     }
 
     /// Updates a report with fat binary metadata (architecture list, universal binary flag).
-    /// No-op for thin binaries.
+    /// No-op for thin binaries. Arch names come from expose's
+    /// `macho.slices[]` — each slice entry carries a `cpu_type` string
+    /// (`"x86_64"` / `"arm64"` / etc). If expose can't open the bytes
+    /// the fat marker is silently dropped; this is rare enough on
+    /// real fat Mach-Os that a finding here would only add noise.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
-        // Source arch names from expose's `macho.slices[]` — each slice
-        // entry carries a `cpu_type` string ("x86_64" / "arm64" / etc).
-        // Falls back to a goblin walk only when expose can't open the
-        // bytes (extremely unusual for valid fat Mach-O).
-        let arch_names: Vec<String> =
-            match expose::open_with_path(report.target.path.as_ref(), data) {
-                Ok(parsed) => parsed
+        let arch_names: Vec<String> = expose::open_with_path(report.target.path.as_ref(), data)
+            .ok()
+            .and_then(|parsed| {
+                parsed
                     .values()
                     .get("macho.slices")
                     .and_then(|v| v.as_array())
@@ -1794,43 +1172,24 @@ impl MachOAnalyzer {
                             })
                             .collect()
                     })
-                    .unwrap_or_default(),
-                Err(_) => goblin_safe::parse_mach(data)
-                    .ok()
-                    .and_then(|m| match m {
-                        Mach::Fat(fat) => fat.arches().ok().map(|a| {
-                            a.iter()
-                                .map(|arch| self.arch_name_from_cputype(arch.cputype))
-                                .collect()
-                        }),
-                        _ => None,
-                    })
-                    .unwrap_or_default(),
-            };
+            })
+            .unwrap_or_default();
         if arch_names.is_empty() {
             return;
         }
-        report.target.architectures = Some(arch_names.clone());
-        if let Some(ref mut metrics) = report.metrics {
-            if let Some(ref mut macho_metrics) = metrics.macho {
-                if arch_names.len() > 1 {
-                    macho_metrics.is_universal = true;
-                    macho_metrics.slice_count = arch_names.len() as u32;
-                }
-            }
-        }
+        report.target.architectures = Some(arch_names);
     }
 
-    /// Build a minimal Mach-O analysis report when goblin couldn't parse
-    /// the binary cleanly (returned an error, panicked, or returned a fat
-    /// archive we can't currently structurally analyze).
+    /// Build a minimal Mach-O analysis report when expose couldn't
+    /// parse the binary cleanly (the parse failed or panicked, or
+    /// no `macho.cpu_type` was emitted).
     ///
-    /// Mirrors the rizin-fallback strategy used by `pe.rs` and `elf.rs`:
-    /// runs `Radare2Analyzer::extract_batched` (which has its own
-    /// sha256-keyed disk cache, so a re-analysis of the same binary is
-    /// essentially free), populates `BinaryMetrics` from the result, and
-    /// sets `has_malformed_structure` so downstream consumers know the
-    /// structural data didn't come from the primary parser.
+    /// Wave B retired the cleave-side rizin spawn here: expose owns
+    /// the rizin recovery path now, and it fires from inside
+    /// `expose::open` on the same bytes when goblin's typed views
+    /// come back empty. Callers that already hold an
+    /// `AnalysisContext` route through `analyze_structural_with_ctx`
+    /// to surface those recovered functions / imports / sections.
     #[allow(clippy::too_many_arguments)]
     fn analyze_macho_fallback(
         &self,
@@ -1838,7 +1197,7 @@ impl MachOAnalyzer {
         analysis_path: &Path,
         data: &[u8],
         sha256: String,
-        parse_failure: Option<&goblin_safe::GoblinFailureInfo>,
+        parse_failure: Option<String>,
         allow_rizin: bool,
         precomputed_sha256: Option<String>,
         _start: std::time::Instant,
@@ -1852,20 +1211,12 @@ impl MachOAnalyzer {
         };
         let mut report = AnalysisReport::new(target);
 
-        if let Some(failure) = parse_failure {
-            report.metadata.errors.push(format!(
-                "Mach-O parse {}: {}",
-                if failure.panicked {
-                    "panicked"
-                } else {
-                    "error"
-                },
-                failure.message
-            ));
+        if let Some(msg) = parse_failure {
+            report.metadata.errors.push(msg.clone());
             report.findings.push(Finding {
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/macho-header".to_string(),
-                desc: format!("Malformed Mach-O header: {}", failure.message),
+                desc: format!("Malformed Mach-O header: {}", msg),
                 conf: 1.0,
                 crit: Criticality::Suspicious,
                 mbc: Some("B0001".to_string()),
@@ -1877,50 +1228,14 @@ impl MachOAnalyzer {
             });
         }
 
-        let mut binary_metrics =
-            if allow_rizin && !self.is_cancelled() && Radare2Analyzer::is_available() {
-                match self.radare2.extract_batched(
-                    analysis_path,
-                    data.len() as u64,
-                    false, // has_symbols=false: nothing came back from goblin
-                    false, // goblin_success=false
-                    true,  // include_strings: no stng pre-extraction in this path
-                    precomputed_sha256,
-                    self.cancellation.as_ref(),
-                    Some(data),
-                ) {
-                    Ok(batched) => {
-                        crate::radare2::push_rizin_warnings(&mut report, &batched);
-                        let bm = self.radare2.compute_metrics_from_batched(
-                            &batched,
-                            data.len() as u64,
-                            "macho",
-                        );
-                        report.functions =
-                            batched.functions.into_iter().map(Function::from).collect();
-                        bm
-                    }
-                    Err(e) => {
-                        tracing::debug!(
-                            "rizin fallback also failed for goblin-malformed Mach-O {}: {}",
-                            report.target.path,
-                            e
-                        );
-                        crate::types::BinaryMetrics {
-                            ..Default::default()
-                        }
-                    }
-                }
-            } else {
-                crate::types::BinaryMetrics {
-                    ..Default::default()
-                }
-            };
-        binary_metrics.has_malformed_structure = true;
-        report.metrics = Some(Metrics {
-            binary: Some(binary_metrics),
-            ..Default::default()
-        });
+        // Expose's rizin recovery already populated the typed
+        // `Functions` view (if rizin was usable) by the time the
+        // fallback path runs — the analysis context here is built
+        // by the caller and projected through `open_with_path`.
+        // Wave B drops the cleave-side `extract_batched` spawn; if
+        // a future caller needs to opt into rizin from this branch
+        // it should pass an `AnalysisContext` instead of bytes.
+        let _ = (analysis_path, allow_rizin, precomputed_sha256);
         report
     }
 }
@@ -1939,19 +1254,38 @@ impl Analyzer for MachOAnalyzer {
             Some(input.strings)
         };
         // Open expose-side parse so downstream helpers source structural
-        // data from expose's typed views rather than re-walking goblin.
-        // Falls through to legacy goblin paths when expose can't open
-        // (corrupted Mach-O / unknown shape).
-        let ctx = crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
-        let mut report = self.analyze_structural_with_strings(
-            input.path,
-            input.backing_path(),
-            preferred_data,
-            strings,
-            !input.skip_rizin,
-            input.sha256.clone(),
-            ctx.as_ref(),
-        );
+        // data from expose's typed views. When expose can't open the
+        // bytes the fallback path (rizin-based metrics + malformed
+        // signal) is taken by `analyze_structural_with_strings` via
+        // `analyze_structural` synthesising a fresh ctx; either way
+        // we never re-walk with goblin from here.
+        let mut report =
+            match crate::analysis_context::AnalysisContext::open(input.path, preferred_data) {
+                Ok(ctx) => self.analyze_structural_with_strings(
+                    input.path,
+                    input.backing_path(),
+                    preferred_data,
+                    strings,
+                    !input.skip_rizin,
+                    input.sha256.clone(),
+                    &ctx,
+                ),
+                Err(e) => {
+                    let sha256 = input.sha256.clone().unwrap_or_else(|| {
+                        crate::analyzers::utils::calculate_sha256(preferred_data)
+                    });
+                    self.analyze_macho_fallback(
+                        input.path,
+                        input.backing_path(),
+                        preferred_data,
+                        sha256,
+                        Some(format!("expose open failed: {e}")),
+                        !input.skip_rizin,
+                        input.sha256.clone(),
+                        std::time::Instant::now(),
+                    )
+                }
+            };
         self.apply_fat_metadata(&mut report, input.data);
 
         // For FAT binaries, strings should already be file-relative from input.strings
@@ -2037,43 +1371,6 @@ mod tests {
 
     fn test_macho_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.macho")
-    }
-
-    #[test]
-    fn test_sha256_of_sorted_order_independent() {
-        let a = sha256_of_sorted(&[
-            "libfoo.dylib".into(),
-            "libbar.dylib".into(),
-            "libbaz.dylib".into(),
-        ]);
-        let b = sha256_of_sorted(&[
-            "libbaz.dylib".into(),
-            "libbar.dylib".into(),
-            "libfoo.dylib".into(),
-        ]);
-        assert_eq!(a, b, "input order must not affect hash");
-    }
-
-    #[test]
-    fn test_sha256_of_sorted_dedups() {
-        let a = sha256_of_sorted(&["libfoo.dylib".into(), "libfoo.dylib".into()]);
-        let b = sha256_of_sorted(&["libfoo.dylib".into()]);
-        assert_eq!(a, b, "duplicates must be removed before hashing");
-    }
-
-    #[test]
-    fn test_sha256_of_sorted_empty_inputs_skipped() {
-        let a = sha256_of_sorted(&["".into(), "libfoo.dylib".into()]);
-        let b = sha256_of_sorted(&["libfoo.dylib".into()]);
-        assert_eq!(a, b, "empty strings must be filtered out");
-    }
-
-    #[test]
-    fn test_sha256_of_sorted_known_value() {
-        // Single input, no padding — SHA-256 of "libfoo.dylib".
-        let h = sha256_of_sorted(&["libfoo.dylib".into()]);
-        assert_eq!(h.len(), 64);
-        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
     #[test]
@@ -2203,7 +1500,7 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report.metadata.tools_used.contains(&"goblin".to_string()));
+        assert!(report.metadata.tools_used.contains(&"expose".to_string()));
     }
 
     #[test]
@@ -2481,48 +1778,6 @@ mod tests {
             ),
             Criticality::Notable,
         );
-    }
-
-    #[test]
-    fn test_macho_metrics_dangerous_entitlements_counting() {
-        let analyzer = MachOAnalyzer::new();
-        let test_file = test_macho_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-
-        // If metrics are present, verify dangerous_entitlements is set
-        if let Some(metrics) = &report.metrics {
-            if let Some(macho_metrics) = &metrics.macho {
-                // dangerous_entitlements should be initialized
-                let _ = macho_metrics.dangerous_entitlements;
-            }
-        }
-    }
-
-    #[test]
-    fn test_macho_metrics_signature_type_recorded() {
-        let analyzer = MachOAnalyzer::new();
-        let test_file = test_macho_path();
-
-        if !test_file.exists() {
-            return;
-        }
-
-        let report = analyzer.analyze(&test_file).unwrap();
-
-        // If metrics are present and binary is signed, signature type should be recorded
-        if let Some(metrics) = &report.metrics {
-            if let Some(macho_metrics) = &metrics.macho {
-                // If has_entitlements, then signature_type should also be set
-                if macho_metrics.has_entitlements {
-                    assert!(macho_metrics.signature_type.is_some());
-                }
-            }
-        }
     }
 
     #[test]

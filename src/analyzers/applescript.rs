@@ -116,7 +116,7 @@ impl Analyzer for AppleScriptAnalyzer {
         if !input.strings.is_empty() {
             report.strings = self.string_extractor.convert_stng_strings(input.strings);
         } else {
-            report.strings = self.string_extractor.extract_smart(input.data, None);
+            report.strings = self.string_extractor.extract_smart(input.data);
         }
 
         // Prefer the struct's cancellation flag; fall back to the input's flag.
@@ -179,7 +179,7 @@ impl Analyzer for AppleScriptAnalyzer {
         self.extract_scpt_symbols(&data, &mut report);
 
         // Use intelligent string extraction
-        report.strings = self.string_extractor.extract_smart(&data, None);
+        report.strings = self.string_extractor.extract_smart(&data);
 
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =

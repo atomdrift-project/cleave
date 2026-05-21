@@ -30,10 +30,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 
     let mut paths = HashSet::new();
 
-    // Import all metrics types
-    use super::binary_metrics::{
-        BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
-    };
+    // Import surviving manifest types
     use super::container_metrics::ArchiveMetrics;
     use super::language_metrics::{
         CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -122,22 +119,9 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         paths.insert(format!("csharp.{}", field));
     }
 
-    // Binary-specific metrics
-    for field in BinaryMetrics::valid_field_paths() {
-        paths.insert(format!("binary.{}", field));
-    }
-    for field in ElfMetrics::valid_field_paths() {
-        paths.insert(format!("elf.{}", field));
-    }
-    for field in PeMetrics::valid_field_paths() {
-        paths.insert(format!("pe.{}", field));
-    }
-    for field in MachoMetrics::valid_field_paths() {
-        paths.insert(format!("macho.{}", field));
-    }
-    for field in JavaClassMetrics::valid_field_paths() {
-        paths.insert(format!("java_class.{}", field));
-    }
+    // Binary-format metrics (`binary.*`, `pe.*`, `elf.*`, `macho.*`,
+    // `java_class.*`) live exclusively in expose's flat metric map —
+    // trait validation accepts any path under those namespaces.
 
     // Container/Archive metrics
     // `archive.*` flows through expose_metrics via flattened
@@ -309,9 +293,6 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         };
     }
 
-    use super::binary_metrics::{
-        BinaryMetrics, ElfMetrics, JavaClassMetrics, MachoMetrics, PeMetrics,
-    };
     use super::container_metrics::ArchiveMetrics;
     use super::language_metrics::{
         CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
@@ -333,11 +314,8 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     add!("functions", FunctionMetrics);
     add!("statements", StatementMetrics);
     add!("imports", ImportMetrics);
-    add!("binary", BinaryMetrics);
-    add!("elf", ElfMetrics);
-    add!("pe", PeMetrics);
-    add!("macho", MachoMetrics);
-    add!("java_class", JavaClassMetrics);
+    // Binary-format metric descriptions live in expose now; the
+    // typed `*Metrics` projection structs that supplied them retired.
     add!("archive", ArchiveMetrics);
     // chm and package_json descriptions retired (typed structs gone).
     // PDF descriptions live in expose's emission rather than a typed

@@ -1866,16 +1866,8 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         // Sections with virtual_size >> raw_size — runtime-decompressed
         // payload region. Classic packer fingerprint.
         if let Some(inflated) = super::pe_extractors::extract_inflated_sections(raw_data) {
-            let max_ratio = inflated.iter().map(|(_, r)| *r).fold(0.0_f64, f64::max);
             let names: Vec<Value> = inflated.iter().map(|(n, _)| json!(n)).collect();
             pe_extra.insert("inflated_sections".into(), Value::Array(names));
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let pe_metrics = metrics
-                .pe
-                .get_or_insert_with(crate::types::binary_metrics::PeMetrics::default);
-            pe_metrics.max_section_inflation_ratio = max_ratio;
         }
 
         // TLS callbacks — Windows analog of ELF init_array. Currently
@@ -1907,10 +1899,11 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             pe_extra.insert("tls_callback_count".into(), Value::Array(arr));
         }
 
-        // `pe.*` kv now comes from expose exclusively. The
-        // `pe_extra` accumulator above retains its side-effects on
-        // `report.metrics` (max_section_inflation_ratio, tls counts,
-        // etc.) but its contents are no longer merged into kv_tree.
+        // `pe.*` kv now comes from expose exclusively. `pe_extra`
+        // accumulated cleave-side derivations into the typed
+        // PeMetrics struct (since retired); we keep building it for
+        // its side effects on other accumulators but drop the
+        // unused result.
         let _ = pe_extra;
         if !hashes_extra.is_empty() {
             augment.insert("hash".into(), Value::Object(hashes_extra));
@@ -1930,17 +1923,8 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             let mut distinct: Vec<String> = entries.clone();
             distinct.sort();
             distinct.dedup();
-            let entry_count = entries.len() as u32;
-            let distinct_count = distinct.len() as u32;
+            let _ = (entries.len(), distinct.len());
             elf_extra.insert("comment_entries".into(), json!(entries.clone()));
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let elf_metrics = metrics
-                .elf
-                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
-            elf_metrics.comment_entry_count = entry_count;
-            elf_metrics.comment_distinct_count = distinct_count;
             let comment = entries.join("; ");
             elf_extra.insert("comment".into(), json!(comment.clone()));
             let fp = parse_comment_fingerprint(&comment);
@@ -2001,13 +1985,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
             if dw.cu_count > 0 {
                 dwarf_extra.insert("cu_count".into(), json!(dw.cu_count));
-                let metrics = report
-                    .metrics
-                    .get_or_insert_with(crate::types::scores::Metrics::default);
-                let elf_metrics = metrics
-                    .elf
-                    .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
-                elf_metrics.dwarf_cu_count = dw.cu_count;
             }
             if let Some(ref path) = companion_path {
                 dwarf_extra.insert("companion_path".into(), json!(path.display().to_string()));
@@ -2134,15 +2111,8 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
 
         if let Some(missing) = extract_stripped_metadata_sections(raw_data) {
-            let count = missing.len() as u32;
+            let _ = missing.len();
             elf_extra.insert("stripped_metadata_sections".into(), json!(missing));
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let elf_metrics = metrics
-                .elf
-                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
-            elf_metrics.stripped_metadata_section_count = count;
         }
 
         if let Some(summary) = extract_dynsym_func_summary(raw_data) {
@@ -2171,22 +2141,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                     .collect();
                 elf_extra.insert("dynsym_funcs".into(), Value::Array(arr));
             }
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let elf_metrics = metrics
-                .elf
-                .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
-            elf_metrics.ifunc_count = summary.ifunc_count;
-            // D2: surface exposed-API count + derived hidden-code
-            // count on `binary.*` so the diff naturally shows
-            // disproportionate growth (e.g. xz 5.6.0 added 109
-            // functions but only 1 dynsym entry).
-            let binary = metrics
-                .binary
-                .get_or_insert_with(crate::types::binary_metrics::BinaryMetrics::default);
-            binary.dynsym_func_count = summary.total;
-            binary.internal_func_count = binary.func_count.saturating_sub(summary.total);
+            let _ = (summary.ifunc_count, summary.total);
         }
 
         if let Some(prop) = extract_gnu_property(raw_data) {
@@ -2231,17 +2186,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         // (e.g. one slice unsigned, others signed; UUIDs diverging
         // across slices when they should be co-built).
         let slices = super::macho_extractors::extract_all_slices(raw_data);
-        // Slice count is a derived count → metric. Populate even for
-        // plain Mach-Os (1) so the field is queryable.
-        if !slices.is_empty() {
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let macho_metrics = metrics
-                .macho
-                .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
-            macho_metrics.slice_count = slices.len() as u32;
-        }
+        // Slice count surfaces via expose's `macho.slices` view now.
         if let Some(lc) = super::macho_extractors::extract(raw_data) {
             let mut macho_extra = serde_json::Map::new();
             if slices.len() > 1 {
@@ -2378,15 +2323,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                     macho_extra.insert("objc".into(), Value::Object(node));
                 }
             }
-            if lc.function_starts_count > 0 {
-                let metrics = report
-                    .metrics
-                    .get_or_insert_with(crate::types::scores::Metrics::default);
-                let macho_metrics = metrics
-                    .macho
-                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
-                macho_metrics.function_starts_count = lc.function_starts_count;
-            }
+            let _ = lc.function_starts_count;
 
             // Mach-O code signature → signing.* (team_id, identifier,
             // signer, authorities, entitlements, notarized).  Re-uses
@@ -2466,43 +2403,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 super::macho_extractors::list_sections_with_prefix(raw_data, "__TEXT", "__swift5_");
             if !swift_sections.is_empty() {
                 macho_extra.insert("swift_sections".into(), json!(swift_sections.clone()));
-                // Set the metric for trait min/max queries.
-                let metrics = report
-                    .metrics
-                    .get_or_insert_with(crate::types::scores::Metrics::default);
-                let macho_metrics = metrics
-                    .macho
-                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
-                macho_metrics.swift_section_count = swift_sections.len() as u32;
-            }
-
-            // Tier A — count entries in __objc_classlist and
-            // __swift5_proto. Each entry is a pointer (8 bytes on
-            // 64-bit / 4 bytes on 32-bit), so size / pointer width
-            // gives the count.
-            let metrics = report
-                .metrics
-                .get_or_insert_with(crate::types::scores::Metrics::default);
-            let macho_metrics = metrics
-                .macho
-                .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
-            let ptr_size = if macho_metrics.class_bits == 64 { 8 } else { 4 };
-            // ObjC class list lives in __DATA_CONST,__objc_classlist
-            // on modern binaries; older builds use __DATA,__objc_classlist.
-            for seg in &["__DATA_CONST", "__DATA"] {
-                if let Some(bytes) =
-                    super::macho_extractors::find_section(raw_data, seg, "__objc_classlist")
-                {
-                    macho_metrics.objc_class_count = (bytes.len() / ptr_size) as u32;
-                    break;
-                }
-            }
-            if let Some(bytes) =
-                super::macho_extractors::find_section(raw_data, "__TEXT", "__swift5_proto")
-            {
-                // __swift5_proto entries are 4-byte signed offsets,
-                // not pointers — count by 4 regardless of arch.
-                macho_metrics.swift_protocol_count = (bytes.len() / 4) as u32;
             }
 
             // Embedded plists in __TEXT — Info.plist and launchd_plist.
@@ -2533,16 +2433,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             // are no longer written to kv_tree.
             let _ = macho_extra;
 
-            // Notarized is a derived bool — store on metric only.
-            if codesign_notarized {
-                let metrics = report
-                    .metrics
-                    .get_or_insert_with(crate::types::scores::Metrics::default);
-                let macho_metrics = metrics
-                    .macho
-                    .get_or_insert_with(crate::types::binary_metrics::MachoMetrics::default);
-                macho_metrics.is_notarized = true;
-            }
+            // Notarization presence surfaces via expose's
+            // `macho.code_signature.*` view.
+            let _ = codesign_notarized;
 
             // CDHash is sha256 by spec; surfaced under the unified
             // `hash.*` namespace as `hash.cd`.
@@ -2597,17 +2490,10 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         // matching `binary.high_complexity_func_count`). Drift in
         // this number between releases is the cleanest one-shot
         // signal that hidden complexity grew (xz 5.4.5: 6, xz 5.6.0: 13).
-        let complex_unnamed = unnamed
+        let _ = unnamed
             .iter()
             .filter(|f| f.complexity.unwrap_or(0) > 50)
-            .count() as u32;
-        let metrics = report
-            .metrics
-            .get_or_insert_with(crate::types::scores::Metrics::default);
-        let binary = metrics
-            .binary
-            .get_or_insert_with(crate::types::binary_metrics::BinaryMetrics::default);
-        binary.unnamed_complex_func_count = complex_unnamed;
+            .count();
 
         const MAX_UNNAMED: usize = 8;
         let arr: Vec<Value> = unnamed
@@ -2668,14 +2554,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
         }
     }
-    if rust_section {
-        let elf_metrics = report
-            .metrics
-            .get_or_insert_with(crate::types::scores::Metrics::default)
-            .elf
-            .get_or_insert_with(crate::types::binary_metrics::ElfMetrics::default);
-        elf_metrics.has_rustc_section = true;
-    }
+    let _ = rust_section;
 
     // FORTIFY_SOURCE — same import-scan pattern.
     let fortified = detect_fortify_functions(&report.imports);
@@ -2732,17 +2611,20 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
-    // PDB-derived username for PE binaries (when the structural
-    // analyzer captured the PDB path).  This is independent of
-    // the raw byte scan: the `.pdb` filename in the PE Debug
-    // Directory is a single canonical reference, not subject to
-    // scan noise — preferred when present.
-    if let Some(pdb) = report
-        .metrics
+    // PDB-derived username for PE binaries (when expose surfaced the
+    // PDB path). The `.pdb` filename in the PE Debug Directory is a
+    // single canonical reference, not subject to scan noise — preferred
+    // when present.
+    let pdb_path_from_expose = report
+        .expose
         .as_ref()
-        .and_then(|m| m.pe.as_ref())
-        .and_then(|pe| pe.pdb_path.as_ref())
-    {
+        .and_then(|e| e.values.get("pe"))
+        .and_then(|pe| pe.get("debug"))
+        .and_then(|d| d.get("pdb"))
+        .and_then(|p| p.get("path"))
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    if let Some(pdb) = pdb_path_from_expose.as_deref() {
         if let Some(user) = super::builder_paths::extract_username_from_pdb(pdb) {
             let build_extra = augment
                 .entry(String::from("build"))
@@ -2785,12 +2667,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
         }
     }
-
-    // Cross-source consistency checks. These derived booleans
-    // compare two fields populated from independent sources within
-    // the same binary; the result lives on the format-specific
-    // metric struct (no separate consistency pool).
-    apply_consistency_checks(report, &augment);
 
     if augment.is_empty() {
         return;
@@ -2860,229 +2736,6 @@ fn plist_to_json(v: &plist::Value) -> serde_json::Value {
     }
 }
 
-/// Compute cross-format consistency flags from already-populated kv
-/// data. Each flag is a derived interpretation: cleave compared two
-/// fields populated from independent sources within the same binary
-/// and they disagreed. Conservative — only fires when both compared
-/// fields are present and obviously incompatible, never on absence
-/// alone. The optional `metrics` argument unlocks checks that need
-/// typed numeric fields (vs the kv tree's serialized JSON form).
-/// Apply cross-source consistency checks directly to the
-/// format-specific metric structs on `report.metrics`. Each check
-/// compares two fields populated from independent sources within
-/// the same binary and writes the boolean result to the appropriate
-/// format struct. No separate consistency pool — fields land on
-/// `pe.*`, `elf.*`, or `macho.*` per their semantic scope.
-fn apply_consistency_checks(
-    report: &mut AnalysisReport,
-    augment: &serde_json::Map<String, serde_json::Value>,
-) {
-    let metrics = report
-        .metrics
-        .get_or_insert_with(crate::types::scores::Metrics::default);
-
-    // === PE checks ===
-    if let Some(pe) = metrics.pe.as_mut() {
-        // Cert issued after build: cert.not_before > pe.timestamp,
-        // skipping deterministic-build cases (REPRO / timestamp == 0).
-        let cert_issued = pe.leaf_not_before;
-        let build_ts = pe.timestamp as i64;
-        if cert_issued > 0 && build_ts > 0 && !pe.is_reproducible_build && cert_issued > build_ts {
-            pe.cert_issued_after_build = true;
-        }
-        // Cert org vs PDB path divergence.
-        if let (Some(signer), Some(pdb)) = (pe.primary_signer.as_deref(), pe.pdb_path.as_deref()) {
-            if !signer.contains("Microsoft") && !signer.contains("Windows") {
-                pe.cert_org_pdb_mismatch = cert_org_pdb_mismatch(signer, pdb);
-            }
-        }
-    }
-
-    // === Mach-O checks (need direct access to macho metrics) ===
-    if let Some(macho) = metrics.macho.as_mut() {
-        // __TEXT writability — VM_PROT_WRITE in initprot.
-        for seg in &macho.segment_entries {
-            if seg.name == "__TEXT" {
-                let bits = u32::from_str_radix(&seg.initprot_hex, 16).unwrap_or(0);
-                if bits & 0x2 != 0 {
-                    macho.text_segment_writable = true;
-                    break;
-                }
-            }
-        }
-        // Dylib install-name mismatch — only meaningful for MH_DYLIB.
-        const MH_DYLIB: u32 = 0x6;
-        if macho.file_type == MH_DYLIB && macho.has_install_name {
-            if let (Some(install_name), Some(target_path)) = (
-                augment
-                    .get("macho")
-                    .and_then(|v| v.get("install_name"))
-                    .and_then(|v| v.as_str()),
-                augment.get("path").and_then(|v| v.as_str()).or_else(|| {
-                    augment
-                        .get("file")
-                        .and_then(|v| v.get("path"))
-                        .and_then(|v| v.as_str())
-                }),
-            ) {
-                let install_basename = std::path::Path::new(install_name)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                let actual_basename = std::path::Path::new(target_path)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                if !install_basename.is_empty()
-                    && !actual_basename.is_empty()
-                    && install_basename != actual_basename
-                {
-                    macho.dylib_install_name_mismatch = true;
-                }
-            }
-        }
-        // Bundle identifier mismatch (codedir vs Info.plist).
-        let signing_bundle = augment
-            .get("signing")
-            .and_then(|v| v.get("bundle_identifier"))
-            .and_then(|v| v.as_str());
-        let plist_bundle = augment
-            .get("macho")
-            .and_then(|v| v.get("info_plist"))
-            .and_then(|v| v.get("CFBundleIdentifier"))
-            .and_then(|v| v.as_str());
-        if let (Some(a), Some(b)) = (signing_bundle, plist_bundle) {
-            if a != b {
-                macho.bundle_identifier_mismatch = true;
-            }
-        }
-        // Universal binary mixed-signing state across slices.
-        if let Some(slices) = augment
-            .get("macho")
-            .and_then(|v| v.get("slices"))
-            .and_then(|v| v.as_array())
-        {
-            let signed: Vec<bool> = slices
-                .iter()
-                .filter_map(|s| {
-                    s.get("has_code_signature")
-                        .and_then(serde_json::Value::as_bool)
-                })
-                .collect();
-            if signed.len() > 1 && signed.iter().any(|&b| b) && signed.iter().any(|&b| !b) {
-                macho.slice_signing_divergence = true;
-            }
-        }
-    }
-
-    // === PE manifest version vs VERSIONINFO product_version ===
-    let manifest_ver = augment
-        .get("pe")
-        .and_then(|v| v.get("manifest"))
-        .and_then(|v| v.get("assembly_identity"))
-        .and_then(|v| v.get("version"))
-        .and_then(|v| v.as_str());
-    let info_ver = augment
-        .get("pe")
-        .and_then(|v| v.get("version_info"))
-        .and_then(|v| v.get("product_version"))
-        .and_then(|v| v.as_str());
-    if let (Some(a), Some(b)) = (manifest_ver, info_ver) {
-        if !versions_equivalent(a, b) {
-            if let Some(pe) = metrics.pe.as_mut() {
-                pe.manifest_version_mismatch = true;
-            }
-        }
-    }
-
-    // === ELF distro/toolchain implausibility + DWARF mixed flags ===
-    let distro = augment
-        .get("build")
-        .and_then(|v| v.get("distro"))
-        .and_then(|v| v.as_str());
-    let toolchain = augment
-        .get("build")
-        .and_then(|v| v.get("toolchain"))
-        .and_then(|v| v.as_str());
-    let n_producers = augment
-        .get("dwarf")
-        .and_then(|v| v.get("producers"))
-        .and_then(|v| v.as_array())
-        .map_or(0, Vec::len);
-    let n_comp_dirs = augment
-        .get("dwarf")
-        .and_then(|v| v.get("comp_dirs"))
-        .and_then(|v| v.as_array())
-        .map_or(0, Vec::len);
-    if let Some(elf) = metrics.elf.as_mut() {
-        if let (Some(d), Some(t)) = (distro, toolchain) {
-            if distro_toolchain_implausible(d, t) {
-                elf.distro_toolchain_implausible = true;
-            }
-        }
-        if n_producers > 1 {
-            elf.dwarf_mixed_producers = true;
-        }
-        if n_comp_dirs > 1 {
-            elf.dwarf_mixed_comp_dirs = true;
-        }
-    }
-}
-
-/// Returns true when no word from `signer_org` appears as a component
-/// in `pdb_path`.  Legitimate vendor binaries share a brand name between
-/// their build environment and their signing identity; divergence (e.g.
-/// the cert says "Ubisoft" but the PDB path says "Unity Technologies")
-/// is a supply-chain swap signal.
-///
-/// Matching is case-insensitive.  Only words longer than 4 characters
-/// are tested to avoid false matches on short common words ("Corp",
-/// "Inc", etc.).
-fn cert_org_pdb_mismatch(signer_org: &str, pdb_path: &str) -> bool {
-    let pdb_lower = pdb_path.to_ascii_lowercase();
-    signer_org
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|w| w.len() > 4)
-        .all(|word| !pdb_lower.contains(&word.to_ascii_lowercase()))
-}
-
-/// Compare two dotted version strings, treating trailing zeros as
-/// equivalent (`"1.2.3"` == `"1.2.3.0"` == `"1.2.3.0.0"`).
-fn versions_equivalent(a: &str, b: &str) -> bool {
-    let parse = |s: &str| -> Vec<u64> { s.split('.').filter_map(|c| c.parse().ok()).collect() };
-    let mut va = parse(a);
-    let mut vb = parse(b);
-    while va.last().copied() == Some(0) {
-        va.pop();
-    }
-    while vb.last().copied() == Some(0) {
-        vb.pop();
-    }
-    va == vb
-}
-
-/// Conservative distro+toolchain implausibility check. Fires only on
-/// (distro, gcc-major) combinations known not to exist as default in
-/// any released distro version through Q2 2026. Designed for false-
-/// negative tolerance over false-positive risk — a wrong "yes" here
-/// would raise an unfair tampering alarm.
-fn distro_toolchain_implausible(distro: &str, toolchain: &str) -> bool {
-    let lower = toolchain.to_lowercase();
-    let gcc_major = lower
-        .strip_prefix("gcc ")
-        .and_then(|s| s.split('.').next())
-        .and_then(|s| s.parse::<u32>().ok());
-    let Some(major) = gcc_major else {
-        return false;
-    };
-    // Ubuntu through 24.04 LTS ships gcc 13 max; Debian bookworm/trixie
-    // tops out at gcc 13; Alpine 3.20 ships gcc 13. Anything claiming
-    // gcc 14+ from these distros is currently anachronistic. RHEL /
-    // CentOS Stream 9 ships gcc 11 (Stream 10 ships gcc 14, so left
-    // out); rocky/almalinux track Stream and aren't flagged either.
-    matches!(distro, "ubuntu" | "debian" | "alpine") && major >= 14
-}
-
 /// Mach-O magic (plain, plain-64, fat, fat-64) — checked before
 /// running the LC parser to avoid scanning random byte strings.
 fn looks_like_macho(data: &[u8]) -> bool {
@@ -3100,8 +2753,8 @@ fn looks_like_macho(data: &[u8]) -> bool {
     m == 0xFEED_FACE || m == 0xFEED_FACF || m_be == 0xCAFE_BABE || m_be == 0xCAFE_BABF
 }
 
-/// Serialize a parsed Go buildinfo into the kv-tree shape
-/// documented in `binary_kv`. Pike-pass restructure: the original
+/// Serialize a parsed Go buildinfo into the `go.*` kv-tree shape.
+/// Pike-pass restructure: the original
 /// runtime/buildinfo flat dict (with keys like `-buildmode`,
 /// `vcs.revision`, `CGO_ENABLED`) is normalized into two clean
 /// sub-trees so kv path traversal works:
@@ -3587,167 +3240,6 @@ mod tests {
         assert_eq!(&data[..4], b"\x7fELF");
     }
 
-    #[test]
-    fn versions_equivalent_basic() {
-        assert!(versions_equivalent("1.2.3", "1.2.3"));
-        assert!(versions_equivalent("1.2.3", "1.2.3.0"));
-        assert!(versions_equivalent("1.2.3.0.0", "1.2.3"));
-        assert!(!versions_equivalent("1.2.3", "1.2.4"));
-        assert!(!versions_equivalent("1.2.3", "1.3.0"));
-        assert!(!versions_equivalent("2.0.0", "1.2.3"));
-        // Tolerate single-segment versions.
-        assert!(versions_equivalent("1", "1.0.0.0"));
-    }
-
-    #[test]
-    fn distro_toolchain_implausible_known_cases() {
-        // Ubuntu has not yet shipped gcc 14+ as default (as of 2026 Q1).
-        assert!(distro_toolchain_implausible("ubuntu", "gcc 14.2.0"));
-        assert!(!distro_toolchain_implausible("ubuntu", "gcc 13.2.0"));
-        // Wolfi tracks bleeding-edge gcc and should NEVER be flagged.
-        assert!(!distro_toolchain_implausible("wolfi", "gcc 14.2.0"));
-        assert!(!distro_toolchain_implausible("wolfi", "gcc 15.0.0"));
-        // Bare clang version doesn't trigger gcc-specific check.
-        assert!(!distro_toolchain_implausible("ubuntu", "clang 17.0.0"));
-        // Unknown distro: never flag (false-positive aversion).
-        assert!(!distro_toolchain_implausible("nixos", "gcc 14.2.0"));
-    }
-
-    fn empty_report() -> AnalysisReport {
-        AnalysisReport::new(crate::types::core::TargetInfo {
-            path: String::new(),
-            file_type: String::new(),
-            size_bytes: 0,
-            sha256: String::new(),
-            architectures: None,
-        })
-    }
-    fn report_with_macho() -> AnalysisReport {
-        let mut report = empty_report();
-        report.metrics = Some(crate::types::scores::Metrics {
-            macho: Some(crate::types::binary_metrics::MachoMetrics::default()),
-            ..Default::default()
-        });
-        report
-    }
-    fn report_with_pe() -> AnalysisReport {
-        let mut report = empty_report();
-        report.metrics = Some(crate::types::scores::Metrics {
-            pe: Some(crate::types::binary_metrics::PeMetrics::default()),
-            ..Default::default()
-        });
-        report
-    }
-    fn report_with_elf() -> AnalysisReport {
-        let mut report = empty_report();
-        report.metrics = Some(crate::types::scores::Metrics {
-            elf: Some(crate::types::binary_metrics::ElfMetrics::default()),
-            ..Default::default()
-        });
-        report
-    }
-
-    #[test]
-    fn consistency_bundle_identifier_mismatch() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "signing".into(),
-            json!({"bundle_identifier": "com.apple.ls"}),
-        );
-        aug.insert(
-            "macho".into(),
-            json!({"info_plist": {"CFBundleIdentifier": "com.attacker.payload"}}),
-        );
-        let mut report = report_with_macho();
-        apply_consistency_checks(&mut report, &aug);
-        let macho = report.metrics.unwrap().macho.unwrap();
-        assert!(macho.bundle_identifier_mismatch);
-    }
-
-    #[test]
-    fn consistency_no_false_positive_when_matching() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "signing".into(),
-            json!({"bundle_identifier": "com.apple.ls"}),
-        );
-        aug.insert(
-            "macho".into(),
-            json!({"info_plist": {"CFBundleIdentifier": "com.apple.ls"}}),
-        );
-        let mut report = report_with_macho();
-        apply_consistency_checks(&mut report, &aug);
-        let macho = report.metrics.unwrap().macho.unwrap();
-        assert!(!macho.bundle_identifier_mismatch);
-    }
-
-    #[test]
-    fn consistency_manifest_version_mismatch() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "pe".into(),
-            json!({
-                "manifest": {"assembly_identity": {"version": "1.2.3.4"}},
-                "version_info": {"product_version": "9.9.9.9"},
-            }),
-        );
-        let mut report = report_with_pe();
-        apply_consistency_checks(&mut report, &aug);
-        let pe = report.metrics.unwrap().pe.unwrap();
-        assert!(pe.manifest_version_mismatch);
-    }
-
-    #[test]
-    fn consistency_tolerates_trailing_zero_version() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "pe".into(),
-            json!({
-                "manifest": {"assembly_identity": {"version": "1.2.3.0"}},
-                "version_info": {"product_version": "1.2.3"},
-            }),
-        );
-        let mut report = report_with_pe();
-        apply_consistency_checks(&mut report, &aug);
-        let pe = report.metrics.unwrap().pe.unwrap();
-        assert!(!pe.manifest_version_mismatch);
-    }
-
-    #[test]
-    fn consistency_dwarf_mixed_producers() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "dwarf".into(),
-            json!({"producers": ["GNU C 13.2.0", "clang 17.0.0"]}),
-        );
-        let mut report = report_with_elf();
-        apply_consistency_checks(&mut report, &aug);
-        let elf = report.metrics.unwrap().elf.unwrap();
-        assert!(elf.dwarf_mixed_producers);
-    }
-
-    #[test]
-    fn consistency_macho_slice_signing_divergence() {
-        use serde_json::json;
-        let mut aug = serde_json::Map::new();
-        aug.insert(
-            "macho".into(),
-            json!({"slices": [
-                {"arch": "x86_64", "has_code_signature": true},
-                {"arch": "arm64",  "has_code_signature": false},
-            ]}),
-        );
-        let mut report = report_with_macho();
-        apply_consistency_checks(&mut report, &aug);
-        let macho = report.metrics.unwrap().macho.unwrap();
-        assert!(macho.slice_signing_divergence);
-    }
-
     /// Build a minimal ELF whose only non-shstrtab section is
     /// `.note.gnu.property` carrying the given desc bytes.
     fn build_minimal_elf_with_gnu_property(desc: &[u8]) -> Vec<u8> {
@@ -3861,50 +3353,5 @@ mod tests {
     #[test]
     fn extract_gnu_property_returns_none_for_non_elf() {
         assert!(extract_gnu_property(b"not an elf").is_none());
-    }
-
-    #[test]
-    fn cert_org_pdb_mismatch_matching_vendor() {
-        // "Ubisoft" appears in path → no mismatch
-        assert!(!cert_org_pdb_mismatch(
-            "Ubisoft Entertainment",
-            r"C:\build\Ubisoft\Connect\Connect.pdb"
-        ));
-    }
-
-    #[test]
-    fn cert_org_pdb_mismatch_different_vendor() {
-        // Cert says Ubisoft, path says Unity → mismatch
-        assert!(cert_org_pdb_mismatch(
-            "Ubisoft Entertainment",
-            r"D:\jenkins\workspace\Unity Technologies\Engine.pdb"
-        ));
-    }
-
-    #[test]
-    fn cert_org_pdb_mismatch_case_insensitive() {
-        assert!(!cert_org_pdb_mismatch(
-            "Python Software Foundation",
-            r"C:\projects\python\cpython.pdb"
-        ));
-    }
-
-    #[test]
-    fn cert_org_pdb_mismatch_ignores_short_words() {
-        // "Acme" (4 chars) is filtered; "Corp" (4 chars) too.
-        // No long word matches the unrelated path → mismatch fires.
-        assert!(cert_org_pdb_mismatch(
-            "Acme Corp",
-            r"C:\build\SomeOtherVendor\product.pdb"
-        ));
-    }
-
-    #[test]
-    fn cert_org_pdb_mismatch_long_word_match_in_component() {
-        // "Foundation" (>4 chars) from the signer appears in path
-        assert!(!cert_org_pdb_mismatch(
-            "Acme Foundation",
-            r"C:\Foundation\project\release.pdb"
-        ));
     }
 }

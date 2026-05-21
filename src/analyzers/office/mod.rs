@@ -170,14 +170,14 @@ impl OfficeAnalyzer {
             office_ctx.as_ref(),
         );
 
-        // Stash the OLE2 / OOXML / XLM structural sub-metrics into
-        // `report.metrics.office.*` so traits keyed on
-        // `type: metrics field: office.ole.*` / `office.ooxml.*` /
-        // `office.xlm.*` resolve.  Container-format-specific counts
-        // (stream count, zip entry count, content-type flags, XLM
-        // substring counts) come from the parsers; cross-format counts
-        // (embedded executable count, external relationship breakdown)
-        // are folded onto the top-level OfficeMetrics here.
+        // Emit OLE2 / OOXML / XLM structural sub-metrics under the
+        // flat `office.ole.*` / `office.ooxml.*` / `office.xlm.*`
+        // keys (post-#41, all metric resolution goes through expose's
+        // flat map — `expose_metrics`). Container-format-specific
+        // counts (stream count, zip entry count, content-type flags,
+        // XLM substring counts) come from the parsers; cross-format
+        // counts (embedded executable count, external relationship
+        // breakdown) are folded in here.
         self.populate_structure_metrics(
             &mut report,
             ole_metrics,
@@ -203,13 +203,9 @@ impl OfficeAnalyzer {
 
         // Surface count on the cross-format binary metric so ML/scoring can use it.
         if embedded_count > 0 {
-            let metrics = report.metrics.get_or_insert_with(Default::default);
-            let binary = metrics.binary.get_or_insert_with(Default::default);
-            binary.embedded_binary_count =
-                binary.embedded_binary_count.saturating_add(embedded_count);
-            binary.embedded_file_count = binary
-                .embedded_binary_count
-                .saturating_add(binary.embedded_archive_count);
+            use crate::types::core::MetricsExt;
+            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            flat.set_u("binary.embedded_binary_count", u64::from(embedded_count));
         }
 
         // Delegate pattern detection to capability mapper (YAML traits + YARA)
@@ -434,11 +430,11 @@ impl OfficeAnalyzer {
         flatten_into_metrics(&agg, "office.vba", flat);
     }
 
-    /// Stash structure-level metrics produced by `analyze_ole2` /
-    /// `analyze_ooxml` onto `report.metrics.office.{ole,ooxml,xlm}` and
-    /// fold cross-format counts (`embedded_executable_count`, the
-    /// external-relationship breakdown, `dde_link_count`) into the
-    /// top-level `OfficeMetrics` directly.
+    /// Emit structure-level metrics produced by `analyze_ole2` /
+    /// `analyze_ooxml` under flat `office.{ole,ooxml,xlm}.*` keys
+    /// (in `expose_metrics`) and fold cross-format counts
+    /// (`embedded_executable_count`, the external-relationship
+    /// breakdown, `dde_link_count`) into the per-file metric map.
     ///
     /// Called from `analyze_office` after the parser tuple unpacks,
     /// before `capability_mapper.evaluate` runs so traits keyed on
@@ -1650,7 +1646,8 @@ mod tests {
     }
 
     /// Verify `populate_structure_metrics` threads sub-struct metrics
-    /// and cross-format counts onto `report.metrics.office.*`.
+    /// and cross-format counts onto the flat `office.*` keys in
+    /// `expose_metrics`.
     #[test]
     fn populate_structure_metrics_wires_subobjects_and_cross_counts() {
         let analyzer = OfficeAnalyzer::new();

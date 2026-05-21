@@ -1537,23 +1537,37 @@ impl Default for MachOAnalyzer {
 }
 
 impl MachOAnalyzer {
-    /// Returns the byte range of the preferred architecture slice within a fat binary,
-    /// or `0..data.len()` for thin binaries.
-    /// Used by test-rules/test-match for consistent single-arch evaluation.
+    /// Returns the byte range of the preferred architecture slice
+    /// within a fat binary, or `0..data.len()` for thin binaries.
+    /// Reads slice extents from expose's `macho.slices[]` instead of
+    /// re-parsing the fat wrapper through goblin. Prefers arm64; falls
+    /// back to the first slice when arm64 isn't present.
     pub(crate) fn preferred_arch_range(&self, data: &[u8]) -> std::ops::Range<usize> {
-        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
-            if let Ok(arches) = fat.arches() {
-                let preferred = arches
-                    .iter()
-                    .find(|a| a.cputype == 0x0100000c) // CPU_TYPE_ARM64
-                    .or_else(|| arches.first());
-                if let Some(arch) = preferred {
-                    let offset = arch.offset as usize;
-                    let size = arch.size as usize;
-                    if offset + size <= data.len() {
-                        return offset..offset + size;
-                    }
-                }
+        let Ok(parsed) = expose::open(data) else {
+            return 0..data.len();
+        };
+        let Some(slices) = parsed
+            .values()
+            .get("macho.slices")
+            .and_then(|v| v.as_array())
+        else {
+            return 0..data.len();
+        };
+        let pick = slices
+            .iter()
+            .find(|s| s.get("cpu_type").and_then(|c| c.as_str()) == Some("arm64"))
+            .or_else(|| slices.first());
+        if let Some(slice) = pick {
+            let off = slice
+                .get("file_offset")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            let size = slice
+                .get("file_size")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0) as usize;
+            if size > 0 && off.saturating_add(size) <= data.len() {
+                return off..off + size;
             }
         }
         0..data.len()
@@ -1572,51 +1586,60 @@ impl MachOAnalyzer {
         data: &[u8],
     ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
         use crate::composite_rules::Arch;
-        if let Some(goblin::mach::Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
-            if let Ok(arches) = fat.arches() {
-                let ranges: Vec<_> = arches
-                    .iter()
-                    .filter_map(|arch| {
-                        let offset = arch.offset as usize;
-                        let size = arch.size as usize;
-                        if offset + size <= data.len() {
-                            let name = self.arch_name_from_cputype(arch.cputype);
-                            Some((Arch::from_report_str(&name), offset..offset + size))
+        let Ok(parsed) = expose::open(data) else {
+            return vec![(Arch::All, 0..data.len())];
+        };
+        let ranges = parsed
+            .values()
+            .get("macho.slices")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        let off = s.get("file_offset").and_then(|v| v.as_u64())? as usize;
+                        let size = s.get("file_size").and_then(|v| v.as_u64())? as usize;
+                        let name = s.get("cpu_type").and_then(|v| v.as_str())?;
+                        if size > 0 && off.saturating_add(size) <= data.len() {
+                            Some((Arch::from_report_str(name), off..off + size))
                         } else {
                             None
                         }
                     })
-                    .collect();
-                if !ranges.is_empty() {
-                    return ranges;
-                }
-            }
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !ranges.is_empty() {
+            return ranges;
         }
         vec![(Arch::All, 0..data.len())]
     }
 
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
-        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
-            if let Ok(arches) = fat.arches() {
-                let ranges: Vec<_> = arches
-                    .iter()
-                    .filter_map(|arch| {
-                        let offset = arch.offset as usize;
-                        let size = arch.size as usize;
-                        if offset + size <= data.len() {
-                            Some(offset..offset + size)
+        let Ok(parsed) = expose::open(data) else {
+            return vec![0..data.len()];
+        };
+        let ranges = parsed
+            .values()
+            .get("macho.slices")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|s| {
+                        let off = s.get("file_offset").and_then(|v| v.as_u64())? as usize;
+                        let size = s.get("file_size").and_then(|v| v.as_u64())? as usize;
+                        if size > 0 && off.saturating_add(size) <= data.len() {
+                            Some(off..off + size)
                         } else {
                             None
                         }
                     })
-                    .collect();
-                if !ranges.is_empty() {
-                    return ranges;
-                }
-            }
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if !ranges.is_empty() {
+            return ranges;
         }
-        // Return the full data range as a single-element Vec for thin binaries
         vec![0..data.len()]
     }
 

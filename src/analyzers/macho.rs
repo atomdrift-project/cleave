@@ -1743,20 +1743,47 @@ impl MachOAnalyzer {
     /// Updates a report with fat binary metadata (architecture list, universal binary flag).
     /// No-op for thin binaries.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
-        if let Some(Mach::Fat(fat)) = goblin_safe::parse_mach(data).ok() {
-            if let Ok(arches) = fat.arches() {
-                let arch_names: Vec<String> = arches
-                    .iter()
-                    .map(|a| self.arch_name_from_cputype(a.cputype))
-                    .collect();
-                report.target.architectures = Some(arch_names.clone());
-                if let Some(ref mut metrics) = report.metrics {
-                    if let Some(ref mut macho_metrics) = metrics.macho {
-                        if arch_names.len() > 1 {
-                            macho_metrics.is_universal = true;
-                            macho_metrics.slice_count = arch_names.len() as u32;
-                        }
-                    }
+        // Source arch names from expose's `macho.slices[]` — each slice
+        // entry carries a `cpu_type` string ("x86_64" / "arm64" / etc).
+        // Falls back to a goblin walk only when expose can't open the
+        // bytes (extremely unusual for valid fat Mach-O).
+        let arch_names: Vec<String> = match expose::open_with_path(report.target.path.as_ref(), data) {
+            Ok(parsed) => parsed
+                .values()
+                .get("macho.slices")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|entry| {
+                            entry
+                                .get("cpu_type")
+                                .and_then(|c| c.as_str())
+                                .map(str::to_string)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            Err(_) => goblin_safe::parse_mach(data)
+                .ok()
+                .and_then(|m| match m {
+                    Mach::Fat(fat) => fat.arches().ok().map(|a| {
+                        a.iter()
+                            .map(|arch| self.arch_name_from_cputype(arch.cputype))
+                            .collect()
+                    }),
+                    _ => None,
+                })
+                .unwrap_or_default(),
+        };
+        if arch_names.is_empty() {
+            return;
+        }
+        report.target.architectures = Some(arch_names.clone());
+        if let Some(ref mut metrics) = report.metrics {
+            if let Some(ref mut macho_metrics) = metrics.macho {
+                if arch_names.len() > 1 {
+                    macho_metrics.is_universal = true;
+                    macho_metrics.slice_count = arch_names.len() as u32;
                 }
             }
         }

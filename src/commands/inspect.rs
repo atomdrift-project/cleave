@@ -1,19 +1,19 @@
-//! Inspect command — dump everything expose extracts from one or more files.
+//! Facts command — dump everything filefacts extracts from one or more files.
 //!
 //! Output shape:
-//! - **One target, no subtree** → pretty JSON object with every
-//!   top-level tree (`fileid`, `values`, `strings`, `metrics`, `ast`,
+//! - **One target, no view** → pretty JSON object with every
+//!   top-level view (`fileid`, `values`, `strings`, `metrics`, `ast`,
 //!   `sections`, `imports`, `exports`, `functions`, `errors`).
-//! - **One target, subtree filter** → pretty JSON of that one tree.
+//! - **One target, view filter** → pretty JSON of that one view.
 //! - **Multiple targets** → JSONL, one line per file with a `"path"`
 //!   field plus either the full bundle or the single filtered tree.
 //!   Failures emit `{"path": ..., "error": ...}` so the stream stays
 //!   consumable by `jq`.
 //!
-//! Every read comes from `expose::open_with_path` so the output is
-//! exactly what the trait engine sees — `cleave inspect` doubles as
-//! the discovery tool for authoring `type: kv` / `type: metrics`
-//! rules against expose's schema.
+//! Every read comes from `filefacts::open_with_path` so the output is
+//! exactly what the trait engine sees — `cleave facts` doubles as
+//! the discovery tool for authoring `type: value` / `type: metrics`
+//! rules against filefacts's schema.
 
 use crate::cli;
 use anyhow::{Context, Result};
@@ -28,7 +28,7 @@ pub fn run(
     _format: &cli::OutputFormat,
 ) -> Result<String> {
     if targets.is_empty() {
-        anyhow::bail!("cleave inspect: at least one target file required");
+        anyhow::bail!("cleave facts: at least one target file required");
     }
 
     if targets.len() == 1 {
@@ -43,12 +43,12 @@ pub fn run(
                 if let Value::Object(map) = &mut value {
                     map.insert("path".into(), json!(target));
                 } else {
-                    // Subtree may be a non-object (e.g., `imports` is
+                    // A view may be a non-object (e.g., `imports` is
                     // a JSON array). Wrap it so each JSONL line is an
                     // object with `path` + the named tree.
                     value = json!({
                         "path": target,
-                        tree.map_or("inspect", cli::InspectTree::name): value,
+                        tree.map_or("facts", cli::InspectTree::name): value,
                     });
                 }
                 value
@@ -67,8 +67,8 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
         anyhow::bail!("File does not exist: {}", target);
     }
     let bytes = fs::read(path).with_context(|| format!("reading {}", target))?;
-    let parsed = expose::open_with_path(path, &bytes)
-        .map_err(|e| anyhow::anyhow!("expose failed to parse {}: {}", target, e))?;
+    let parsed = filefacts::open_with_path(path, &bytes)
+        .map_err(|e| anyhow::anyhow!("filefacts failed to parse {}: {}", target, e))?;
 
     Ok(match tree {
         None => json!({
@@ -92,5 +92,6 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
         Some(cli::InspectTree::Imports { .. }) => serde_json::to_value(parsed.imports())?,
         Some(cli::InspectTree::Exports { .. }) => serde_json::to_value(parsed.exports())?,
         Some(cli::InspectTree::Functions { .. }) => serde_json::to_value(parsed.functions())?,
+        Some(cli::InspectTree::Errors { .. }) => serde_json::to_value(parsed.errors())?,
     })
 }

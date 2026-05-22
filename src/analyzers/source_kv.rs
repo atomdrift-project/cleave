@@ -136,9 +136,9 @@ fn parse_shebang(content: &[u8]) -> Option<String> {
     }
 }
 
-/// Stash the synthesized source kv tree on `report.kv_tree`.
+/// Stash the synthesized source kv tree on `report.values_tree`.
 /// Idempotent: when no source data is present (binary-only file),
-/// `report.kv_tree` is left untouched.
+/// `report.values_tree` is left untouched.
 pub(crate) fn attach_to_report(report: &mut AnalysisReport, content: Option<&[u8]>) {
     if let Some(source) = build_source_kv(report, content) {
         report.merge_kv_subtree("source", source);
@@ -211,9 +211,9 @@ mod tests {
     fn attach_preserves_existing_kv() {
         let mut r = empty_report();
         r.imports.push(Import::new("requests", None, "test"));
-        r.kv_tree = Some(Box::new(json!({"existing": "value"})));
+        r.values_tree = Some(Box::new(json!({"existing": "value"})));
         attach_to_report(&mut r, None);
-        let kv = r.kv_tree.as_ref().unwrap();
+        let kv = r.values_tree.as_ref().unwrap();
         assert_eq!(kv["existing"], "value");
         assert!(kv["source"].is_object());
         assert!(kv["source"]["imports"].is_array());

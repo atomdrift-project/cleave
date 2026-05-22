@@ -77,7 +77,7 @@ impl JavaClassAnalyzer {
 
         self.detect_capabilities(&class_info, &mut report);
 
-        // `class.*` kv comes from expose's dual emission in the
+        // `class.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis here.
 
         Ok(report)

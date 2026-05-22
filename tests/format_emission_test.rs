@@ -1,22 +1,21 @@
-//! Per-format regression tests for expose's canonical emission surface.
+//! Per-format regression tests for filefacts-backed emission.
 //!
 //! These tests load representative fixtures and assert the canonical
-//! metric/kv paths trait authors are expected to read from. They lock
-//! in the "values-path-mirroring" schema established after the
-//! cleave→expose migration:
+//! metric/value paths trait authors are expected to read from. Compact
+//! v5 stores filefacts data under `ff`: typed fact families are kept out
+//! of residual values, grouped metrics live under `ff.m`, and residual
+//! values live under `ff.v`.
 //!
 //! - Cross-format counts: `sections.count`, `imports.count`,
 //!   `exports.count`, `functions.count`, `dependencies.count`,
 //!   `parse.error_count`.
-//! - Per-format detail under the format namespace (`pe.*`, `elf.*`,
-//!   `macho.*`, `lnk.*`, `archive.*`, …).
+//! - Per-format residual detail under the format namespace (`pe.*`,
+//!   `elf.*`, `macho.*`, `lnk.*`, `archive.*`, ...).
 //!
-//! Each test runs cleave via subprocess on a real fixture and parses
-//! the compact JSON output's `ms` (metrics) and `k` (flattened
-//! kv-tree) maps. Fixtures not present on the test host (e.g. PDFs
-//! pulled from outside-of-repo sources) silently skip — the goal is
-//! catching regressions on what the host CAN extract, not requiring
-//! every fixture everywhere.
+//! Each test runs cleave via subprocess on a real fixture and parses the
+//! compact JSON output. Fixtures not present on the test host silently
+//! skip; the goal is catching regressions on what the host can extract,
+//! not requiring every fixture everywhere.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -52,24 +51,34 @@ fn analyze(path: &Path) -> Value {
         .expect("report has no files")
 }
 
-/// `ms` map (flat dotted-key metrics) as a HashMap<String, f64>.
+/// Compact v5 metrics as a flat dotted-key map.
 fn metrics(file: &Value) -> HashMap<String, f64> {
-    file["ms"]
-        .as_object()
-        .map(|m| {
-            m.iter()
-                .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
-                .collect()
-        })
-        .unwrap_or_default()
+    let mut out = HashMap::new();
+    let groups = file
+        .pointer("/ff/m")
+        .and_then(Value::as_object)
+        .expect("compact v5 filefacts metrics missing");
+    for (group, fields) in groups {
+        let Some(fields) = fields.as_object() else {
+            continue;
+        };
+        for (field, value) in fields {
+            if let Some(value) = value.as_f64() {
+                out.insert(format!("{group}.{field}"), value);
+            }
+        }
+    }
+    out
 }
 
-/// `k` map (flat kv-tree) as a HashMap<String, Value>.
+/// Compact v5 residual values as a flat dotted-key map.
 fn kv(file: &Value) -> HashMap<String, Value> {
-    file["k"]
-        .as_object()
-        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
-        .unwrap_or_default()
+    file.pointer("/ff/v")
+        .and_then(Value::as_object)
+        .expect("compact v5 filefacts values missing")
+        .iter()
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
 }
 
 /// `true` when every canonical cross-format count is present in `m`.
@@ -238,9 +247,19 @@ fn pe_emits_format_specific_kv() {
     ] {
         assert!(k.contains_key(key), "missing PE kv key {key}");
     }
-    // Indexed import structure should be there.
-    assert!(k.contains_key("pe.imports[0].library"));
-    assert!(k.contains_key("pe.imports[0].functions[0]"));
+    // Imports are a typed fact family in v5, not residual values.
+    let imports = f
+        .pointer("/ff/i")
+        .and_then(Value::as_array)
+        .expect("PE imports should be present under ff.i");
+    assert!(imports.iter().any(|entry| {
+        entry.as_array().is_some_and(|fields| {
+            fields.first().and_then(Value::as_str).is_some()
+                && fields.get(1).and_then(Value::as_str).is_some()
+        })
+    }));
+    assert!(!k.contains_key("pe.imports[0].library"));
+    assert!(!k.contains_key("pe.imports[0].functions[0]"));
 }
 
 // ────────────────────────────────────────────────────────────────────
@@ -338,7 +357,7 @@ fn zip_emits_canonical_archive_keys() {
 // ────────────────────────────────────────────────────────────────────
 
 /// Tar.gz is handled by cleave's archive analyzer (which decompresses
-/// and recurses); expose itself only carries `archive.*` extraction for
+/// and recurses); filefacts itself only carries `archive.*` extraction for
 /// uncompressed tar by design. The compressed wrapper still shows
 /// `archive.format.kind = "tar.gz"` in kv and surfaces member-level
 /// detail via `archive.members[N].*` — those are the keys traits

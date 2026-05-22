@@ -6,7 +6,7 @@
 //! takes a `&[u8]` (raw file bytes) or `&AnalysisReport` (already
 //! populated), returns an optional string or short list, and the
 //! analyzer integration layer stitches the results into
-//! `report.kv_tree`.
+//! `report.values_tree`.
 //!
 //! Trade-off: this is slightly redundant with parsing already done
 //! by the format analyzers (`analyzers::elf::analyze_structural`).
@@ -1769,7 +1769,7 @@ pub(crate) struct CommentFingerprint {
 // ---------------------------------------------------------------------------
 
 /// Run all post-analysis extractors and merge their results into
-/// `report.kv_tree`. Idempotent: safe to call multiple times.
+/// `report.values_tree`. Idempotent: safe to call multiple times.
 pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     use serde_json::{json, Value};
 
@@ -1899,7 +1899,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             pe_extra.insert("tls_callback_count".into(), Value::Array(arr));
         }
 
-        // `pe.*` kv now comes from expose exclusively. `pe_extra`
+        // `pe.*` kv now comes from filefacts exclusively. `pe_extra`
         // accumulated cleave-side derivations into the typed
         // PeMetrics struct (since retired); we keep building it for
         // its side effects on other accumulators but drop the
@@ -2166,9 +2166,9 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             }
         }
 
-        // `elf.*` kv comes from expose exclusively; the
+        // `elf.*` kv comes from filefacts exclusively; the
         // accumulator is retained for any side-effects but its
-        // contents are no longer written to kv_tree.
+        // contents are no longer written to values_tree.
         let _ = elf_extra;
         if !build_extra.is_empty() {
             augment.insert("build".into(), Value::Object(build_extra));
@@ -2186,7 +2186,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         // (e.g. one slice unsigned, others signed; UUIDs diverging
         // across slices when they should be co-built).
         let slices = super::macho_extractors::extract_all_slices(raw_data);
-        // Slice count surfaces via expose's `macho.slices` view now.
+        // Slice count surfaces via filefacts's `macho.slices` view now.
         if let Some(lc) = super::macho_extractors::extract(raw_data) {
             let mut macho_extra = serde_json::Map::new();
             if slices.len() > 1 {
@@ -2427,13 +2427,13 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
                 }
             }
 
-            // `macho.*` kv comes from expose exclusively; the
+            // `macho.*` kv comes from filefacts exclusively; the
             // accumulator is retained for any side-effects (metric
             // population, swift_section_count, etc.) but its contents
-            // are no longer written to kv_tree.
+            // are no longer written to values_tree.
             let _ = macho_extra;
 
-            // Notarization presence surfaces via expose's
+            // Notarization presence surfaces via filefacts's
             // `macho.code_signature.*` view.
             let _ = codesign_notarized;
 
@@ -2577,7 +2577,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // survives stripping).
     //
     // Naming: when exactly one canonical username is recovered we
-    // expose the singular `username`; otherwise we expose the
+    // filefacts the singular `username`; otherwise we filefacts the
     // array `usernames` (mutually exclusive shapes).  Trait authors
     // target one or the other based on cardinality; the
     // `username_from` field carries provenance.
@@ -2611,12 +2611,12 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
-    // PDB-derived username for PE binaries (when expose surfaced the
+    // PDB-derived username for PE binaries (when filefacts surfaced the
     // PDB path). The `.pdb` filename in the PE Debug Directory is a
     // single canonical reference, not subject to scan noise — preferred
     // when present.
-    let pdb_path_from_expose = report
-        .expose
+    let pdb_path_from_filefacts = report
+        .filefacts
         .as_ref()
         .and_then(|e| e.values.get("pe"))
         .and_then(|pe| pe.get("debug"))
@@ -2624,7 +2624,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         .and_then(|p| p.get("path"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    if let Some(pdb) = pdb_path_from_expose.as_deref() {
+    if let Some(pdb) = pdb_path_from_filefacts.as_deref() {
         if let Some(user) = super::builder_paths::extract_username_from_pdb(pdb) {
             let build_extra = augment
                 .entry(String::from("build"))
@@ -2672,14 +2672,14 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         return;
     }
 
-    // Merge `augment` into the existing kv_tree (or create one).
+    // Merge `augment` into the existing values_tree (or create one).
     let existing = report
-        .kv_tree
+        .values_tree
         .take()
         .map(|b| *b)
         .unwrap_or_else(|| Value::Object(serde_json::Map::new()));
     let merged = deep_merge(existing, Value::Object(augment));
-    report.kv_tree = Some(Box::new(merged));
+    report.values_tree = Some(Box::new(merged));
 }
 
 /// Parse a plist (XML or binary) into a serde_json::Value with
@@ -2699,7 +2699,7 @@ fn parse_plist_to_json(bytes: &[u8]) -> Option<serde_json::Value> {
 }
 
 /// Recursively convert a plist::Value to serde_json::Value.  Object
-/// keys are snake_cased so kv paths stay uniform with the rest of
+/// keys are snake_cased so value paths stay uniform with the rest of
 /// cleave's kv schema.
 fn plist_to_json(v: &plist::Value) -> serde_json::Value {
     use serde_json::{Map, Value};
@@ -2757,7 +2757,7 @@ fn looks_like_macho(data: &[u8]) -> bool {
 /// Pike-pass restructure: the original
 /// runtime/buildinfo flat dict (with keys like `-buildmode`,
 /// `vcs.revision`, `CGO_ENABLED`) is normalized into two clean
-/// sub-trees so kv path traversal works:
+/// sub-trees so value path traversal works:
 ///
 /// - `go.build.{mode, compiler, goos, goarch, goamd64, goarm,
 ///   cgo, trimpath, ldflags, asmflags, gcflags, buildvcs}`
@@ -2930,7 +2930,7 @@ fn go_value_for(key: &str, raw: &str) -> serde_json::Value {
 
 /// Convert a PE-spec PascalCase identifier (e.g. `CompanyName`,
 /// `OriginalFilename`, `LegalCopyright`) to snake_case for kv-tree
-/// path consistency. Same rule the office kv tree uses for PDF
+/// path consistency. Same rule the office values tree uses for PDF
 /// info-dict keys.
 fn snake_case(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);

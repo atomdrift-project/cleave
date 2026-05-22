@@ -22,9 +22,9 @@ pub trait ValidFieldPaths {
 }
 
 // Canonical source-text metric field lists. Kept in sync with the
-// dotted keys expose's source extractors emit
-// (`expose/src/formats/source/{text,identifier,string,comment,function,import}_metrics.rs`).
-// New emitter additions in expose must show up here too — the trait
+// dotted keys filefacts's source extractors emit
+// (`filefacts/src/formats/source/{text,identifier,string,comment,function,import}_metrics.rs`).
+// New emitter additions in filefacts must show up here too — the trait
 // engine rejects unknown field paths.
 
 const TEXT_METRIC_FIELDS: &[&str] = &[
@@ -212,8 +212,8 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
 
-    // Source-text metrics live in expose
-    // (`expose/src/formats/source/`). The canonical key list is
+    // Source-text metrics live in filefacts
+    // (`filefacts/src/formats/source/`). The canonical key list is
     // hardcoded below — kept in sync with the dotted keys those
     // emitters write to. New emitters must be reflected here so
     // trait field validation accepts their paths.
@@ -247,18 +247,18 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Per-language metric structs (PythonMetrics / JavaScriptMetrics /
-    // …) retired with the cleave→expose migration. No production code
+    // …) retired with the cleave→filefacts migration. No production code
     // ever emitted them — the surface is gone.
 
     // Binary-format metrics (`binary.*`, `pe.*`, `elf.*`, `macho.*`,
-    // `java_class.*`) live exclusively in expose's flat metric map —
+    // `java_class.*`) live exclusively in filefacts's flat metric map —
     // trait validation accepts any path under those namespaces.
 
     // Container/Archive metrics. `archive.*` paths are emitted by
-    // expose's zip/tar extractors directly into `report.expose_metrics`.
+    // filefacts's zip/tar extractors directly into `report.filefacts_metrics`.
     // The list below is the canonical manifest the trait engine accepts;
-    // it mirrors the keys expose's `formats::zip` and `formats::tar`
-    // write. Keep in sync when expose adds a new `archive.*` metric.
+    // it mirrors the keys filefacts's `formats::zip` and `formats::tar`
+    // write. Keep in sync when filefacts adds a new `archive.*` metric.
     for field in [
         // Index/size aggregates.
         "member_count",
@@ -291,7 +291,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         "extra_field_size",
         "uses_zip64",
         "has_comment",
-        // Security sub-namespace expose emits alongside the flat names.
+        // Security sub-namespace filefacts emits alongside the flat names.
         "security.setuid_count",
         "security.setgid_count",
         "security.sticky_count",
@@ -305,7 +305,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     ] {
         paths.insert(format!("archive.{}", field));
     }
-    // `chm.*` and `package_json.*` paths come from expose's
+    // `chm.*` and `package_json.*` paths come from filefacts's
     // emission (no typed marker struct cleave-side).
     for field in [
         "chm.default_topic_missing",
@@ -319,7 +319,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Image metrics (image.*, jpeg.*, png.*) flow through
-    // `expose_metrics` rather than typed marker structs; field
+    // `filefacts_metrics` rather than typed marker structs; field
     // validation accepts any of those paths.
     for field in [
         "image.width",
@@ -342,11 +342,11 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Document/shortcut metrics
-    // LNK whitespace/presence metrics live in expose's flat metric
+    // LNK whitespace/presence metrics live in filefacts's flat metric
     // map (`lnk.*` keys); no typed marker struct here.
     // PDF metrics similarly live in cleave's flat metric map under
-    // `pdf.*` keys, populated by expose's `formats::pdf` extractor
-    // and surfaced via `report.expose_metrics`.
+    // `pdf.*` keys, populated by filefacts's `formats::pdf` extractor
+    // and surfaced via `report.filefacts_metrics`.
     for field in [
         "lnk.args_leading_spaces",
         "lnk.args_leading_tabs",
@@ -398,7 +398,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     }
 
     // Office metrics: cross-format fields plus per-container sub-structs.
-    // Cross-format `office.*` fields flow through `expose_metrics`
+    // Cross-format `office.*` fields flow through `filefacts_metrics`
     // (no typed `OfficeMetrics` struct after #41). Sub-structs
     // (`ole`, `ooxml`, `vba`, `xlm`) remain as internal data
     // carriers populated by analyzer parsers, then flattened into
@@ -406,7 +406,7 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     use super::office_metrics::{OleMetrics, OoxmlMetrics, VbaMetrics, XlmMetrics};
     // Cross-format `office.*` fields don't have a typed struct anymore;
     // trait validation accepts any `office.X` path that the analyzer
-    // writes to `expose_metrics`.
+    // writes to `filefacts_metrics`.
     for field in [
         "office.dde_link_count",
         "office.doc_type",
@@ -473,10 +473,10 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
 
-    // Source-text metric descriptions retired with the cleave→expose
+    // Source-text metric descriptions retired with the cleave→filefacts
     // migration. Trait-engine field descriptions for `text.*` /
     // `identifiers.*` / `strings.*` / `comments.*` / `functions.*` /
-    // `imports.*` come from expose's emission, not from typed-struct
+    // `imports.*` come from filefacts's emission, not from typed-struct
     // doc comments. The validation manifest is still maintained
     // above via the hardcoded `_METRIC_FIELDS` constants.
     add!("obfuscation", ObfuscationScore);
@@ -498,10 +498,10 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
     }
 
     // Image metrics (image.*, jpeg.*, png.*) live in
-    // `expose_metrics` rather than typed marker structs.
+    // `filefacts_metrics` rather than typed marker structs.
 
-    // LNK metrics live in expose; field descriptions for `lnk.*`
-    // come from expose's emission rather than a typed struct here.
+    // LNK metrics live in filefacts; field descriptions for `lnk.*`
+    // come from filefacts's emission rather than a typed struct here.
 
     // Office metrics
     // Cross-format `office.*` field descriptions retired with the

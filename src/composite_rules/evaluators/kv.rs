@@ -11,17 +11,17 @@
 //! # Examples
 //! ```yaml
 //! # Check if permissions array contains "debugger"
-//! type: kv
+//! type: value
 //! path: "permissions"
 //! exact: "debugger"
 //!
 //! # Check if any content script targets all URLs
-//! type: kv
+//! type: value
 //! path: "content_scripts[*].matches"
 //! exact: "<all_urls>"
 //!
 //! # Check if postinstall script contains curl
-//! type: kv
+//! type: value
 //! path: "scripts.postinstall"
 //! substr: "curl"
 //! ```
@@ -336,7 +336,7 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
 
     // Content-sniffed XML for extensionless files that start with a well-known
     // root element. Matches the narrow set in fileid::magic::detect_xml, so the
-    // kv evaluator sees the same files fileid classifies as Xml.
+    // value evaluator sees the same files fileid classifies as Xml.
     if content.starts_with(b"<Project ") || content.starts_with(b"<Project\t") {
         let head = &content[..content.len().min(512)];
         if memchr::memmem::find(head, b"schemas.microsoft.com/developer/msbuild").is_some() {
@@ -795,7 +795,7 @@ fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
     }
 }
 
-/// Parse an XML document into a JSON value queryable by kv paths.
+/// Parse an XML document into a JSON value queryable by value paths.
 ///
 /// Mapping rules:
 /// - Root element becomes a top-level key: `{"Project": {...}}`.
@@ -828,7 +828,7 @@ fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
         children.insert(key, Value::String(attr.value().to_string()));
     }
 
-    // Expose namespace declarations (xmlns=, xmlns:prefix=) ONLY at the point
+    // Filefacts namespace declarations (xmlns=, xmlns:prefix=) ONLY at the point
     // they are declared, not inherited into every descendant. Skip a
     // declaration if the parent element already has it in scope.
     let parent = node.parent();
@@ -1442,12 +1442,12 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     let mut values = Vec::new();
 
     // Files whose metadata isn't natively a manifest format (office
-    // documents, PDFs, expose-backed formats, etc.) can have a synthetic
-    // kv tree stashed on `report.kv_tree`. Consult it first, but do not
+    // documents, PDFs, filefacts-backed formats, etc.) can have a synthetic
+    // kv tree stashed on `report.values_tree`. Consult it first, but do not
     // let it shadow the native parser for structured text formats. PKG-INFO
-    // is the motivating edge case: expose preserves header casing, while
+    // is the motivating edge case: filefacts preserves header casing, while
     // cleave's parser normalizes keys for stable lowercase rule paths.
-    if let Some(synthetic) = ctx.report.kv_tree.as_ref() {
+    if let Some(synthetic) = ctx.report.values_tree.as_ref() {
         values.extend(navigate(synthetic.as_ref(), &segments));
     }
 
@@ -1482,7 +1482,8 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         }
     }
 
-    if values.is_empty() && ctx.report.kv_tree.is_none() && format == StructuredFormat::Unknown {
+    if values.is_empty() && ctx.report.values_tree.is_none() && format == StructuredFormat::Unknown
+    {
         return None;
     }
 
@@ -1500,7 +1501,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         if !*should_exist && !path_found {
             // exists: false and path not found - match!
             return Some(Evidence {
-                method: "kv".to_string(),
+                method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: format!("field '{}' does not exist", path),
                 location: Some(path.clone()),
@@ -1529,7 +1530,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         if matcher.matches(value) {
             let matched_value = format_evidence_value_with_size(value, *size_min, *size_max);
             return Some(Evidence {
-                method: "kv".to_string(),
+                method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: matched_value,
                 location: Some(path.clone()),
@@ -1637,12 +1638,12 @@ mod tests {
 
     /// Build a test context whose report carries a synthetic kv tree —
     /// the path the office analyzer takes when stashing
-    /// `report.kv_tree`. Used by `synthetic_kv_tree_*` tests below.
-    fn create_test_ctx_with_kv_tree<'a>(
+    /// `report.values_tree`. Used by `synthetic_values_tree_*` tests below.
+    fn create_test_ctx_with_values_tree<'a>(
         binary_data: &'a [u8],
         path: &'a std::path::Path,
         file_type: FileType,
-        kv_tree: serde_json::Value,
+        values_tree: serde_json::Value,
     ) -> EvaluationContext<'a> {
         let mut report = AnalysisReport::new(TargetInfo {
             path: path.display().to_string(),
@@ -1651,15 +1652,15 @@ mod tests {
             sha256: "test".to_string(),
             architectures: None,
         });
-        report.kv_tree = Some(Box::new(kv_tree));
+        report.values_tree = Some(Box::new(values_tree));
         let leaked: &'static AnalysisReport = Box::leak(Box::new(report));
         EvaluationContext::test_only_new(leaked, binary_data, file_type)
     }
 
-    /// `report.kv_tree` is consulted in preference to the file's
+    /// `report.values_tree` is consulted in preference to the file's
     /// own structured-format parsing — even when the binary is empty.
     #[test]
-    fn synthetic_kv_tree_resolves_paths_for_office() {
+    fn synthetic_values_tree_resolves_paths_for_office() {
         let kv = serde_json::json!({
             "summary": {
                 "author": "Иван Иванов",
@@ -1673,7 +1674,7 @@ mod tests {
             },
         });
         let path = std::path::Path::new("evil.doc");
-        let ctx = create_test_ctx_with_kv_tree(&[], path, FileType::All, kv);
+        let ctx = create_test_ctx_with_values_tree(&[], path, FileType::All, kv);
 
         // Cyrillic-author regex fires.
         let cond = Condition::Kv {
@@ -1719,7 +1720,7 @@ mod tests {
     }
 
     #[test]
-    fn native_pkginfo_parser_still_applies_with_synthetic_kv_tree() {
+    fn native_pkginfo_parser_still_applies_with_synthetic_values_tree() {
         let pkginfo = b"Metadata-Version: 2.4
 Name: tap-wordpress
 Summary: Security research - dependency confusion PoC
@@ -1730,7 +1731,7 @@ Author-email: security-research@example.com
             "Author-email": "security-research@example.com",
         });
         let path = std::path::Path::new("METADATA");
-        let ctx = create_test_ctx_with_kv_tree(pkginfo, path, FileType::PkgInfo, kv);
+        let ctx = create_test_ctx_with_values_tree(pkginfo, path, FileType::PkgInfo, kv);
 
         let cond = Condition::Kv {
             path: "summary".to_string(),

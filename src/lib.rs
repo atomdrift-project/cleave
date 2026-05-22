@@ -75,9 +75,9 @@ pub use types::diff::{
     ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
     TraitChange,
 };
-// `TextMetrics` typed struct retired with the cleave→expose
+// `TextMetrics` typed struct retired with the cleave→filefacts
 // text-metrics migration; downstream consumers should read keys
-// from `report.expose_metrics` (BTreeMap<String, f64>) under the
+// from `report.filefacts_metrics` (BTreeMap<String, f64>) under the
 // `text.*` prefix instead.
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 pub use types::FileAnalysis;
@@ -245,12 +245,12 @@ fn should_skip_unknown_xor_payload_for_binary(
 
 /// Recognise a signed-Python-extension PE (e.g. a CPython runtime DLL)
 /// whose `.rdata`-resident hex payloads are part of unicodedata /
-/// Unicode property tables. Reads expose's `pe.signatures[0].subject`
+/// Unicode property tables. Reads filefacts's `pe.signatures[0].subject`
 /// and falls back on `report.findings` / `report.exports` /
 /// `report.strings` counts (all populated already on the analyse path).
 fn is_signed_python_extension(report: &types::AnalysisReport) -> bool {
     let signer_psf = report
-        .expose
+        .filefacts
         .as_ref()
         .and_then(|e| e.values.get("pe"))
         .and_then(|pe| pe.get("signatures"))
@@ -386,12 +386,12 @@ use std::sync::Arc;
 
 /// SIGKILL every currently-live rizin process group.
 ///
-/// Forwards to [`expose::rizin::kill_all_rizin_groups`]. Intended for
+/// Forwards to [`filefacts::rizin::kill_all_rizin_groups`]. Intended for
 /// host CLI signal handlers that need to reap rizin workers before a
 /// forced `process::exit`. Cheap and idempotent — safe to call from
 /// the `ctrlc` crate's dispatch thread. No-op on non-Unix platforms.
 pub fn kill_all_rizin_groups() {
-    expose::rizin::kill_all_rizin_groups();
+    filefacts::rizin::kill_all_rizin_groups();
 }
 
 /// Disable UPX integration process-wide.
@@ -401,14 +401,16 @@ pub fn disable_upx() {
 
 /// Scoped disable guards applied for a single analysis operation.
 struct AnalysisDisableGuards {
-    _radare2: Option<expose::rizin::ScopedDisable>,
+    _radare2: Option<filefacts::rizin::ScopedDisable>,
     _upx: Option<upx::ScopedUpxDisable>,
 }
 
 impl AnalysisDisableGuards {
     fn from_options(options: &AnalysisOptions) -> Self {
         Self {
-            _radare2: options.disable_radare2.then(expose::rizin::scoped_disable),
+            _radare2: options
+                .disable_radare2
+                .then(filefacts::rizin::scoped_disable),
             _upx: options.disable_upx.then(upx::scoped_disable_upx),
         }
     }
@@ -625,7 +627,7 @@ pub struct AnalysisOptions {
 /// Callers (e.g. litmus) create one per request and pass it via
 /// [`AnalysisOptions::phase`]. Cleave updates it at each major stage
 /// (archive extraction, YARA, structural analysis, …) so the caller
-/// can expose the current phase in diagnostic endpoints like `/_/requests`.
+/// can filefacts the current phase in diagnostic endpoints like `/_/requests`.
 ///
 /// Trackers created via [`PhaseTracker::with_label`] register themselves
 /// in a process-global list so [`start_rayon_diagnostics`] can enumerate
@@ -1144,7 +1146,7 @@ fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::An
     report.sections = fa.sections;
     report.syscalls = fa.syscalls;
     report.yara_matches = fa.yara_matches;
-    report.expose_metrics = fa.expose_metrics;
+    report.filefacts_metrics = fa.filefacts_metrics;
     report.paths = fa.paths;
     report.directories = fa.directories;
     report.env_vars = fa.env_vars;
@@ -1389,15 +1391,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let eval_data = if is_fat { file_data } else { arch_data };
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("macho");
-            // Open expose on the preferred-arch slice so the Mach-O
+            // Open filefacts on the preferred-arch slice so the Mach-O
             // analyzer can pull dyld imports / export-trie entries
             // from the typed view instead of re-walking goblin.
-            // When expose can't open the bytes, fall back to the
+            // When filefacts can't open the bytes, fall back to the
             // analyzer's own bytes-only entry point so the malformed
             // signal is still surfaced.
-            let (struct_result, expose_view): (
+            let (struct_result, filefacts_view): (
                 Result<AnalysisReport, anyhow::Error>,
-                Option<crate::types::ExposeView>,
+                Option<crate::types::FilefactsView>,
             ) = match crate::analysis_context::AnalysisContext::open(path, arch_data) {
                 Ok(ctx) => {
                     let report = analyzer.analyze_structural_with_ctx(
@@ -1406,7 +1408,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         input.sha256.clone(),
                         &ctx,
                     );
-                    let view = crate::types::ExposeView::from_ctx(&ctx);
+                    let view = crate::types::FilefactsView::from_ctx(&ctx);
                     (Ok(report), Some(view))
                 }
                 Err(_) => (
@@ -1417,14 +1419,14 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
-            report.expose = expose_view;
+            report.filefacts = filefacts_view;
             analyzer.apply_fat_metadata(&mut report, file_data);
 
             // For FAT binaries, open each non-preferred arch slice as
             // its own AnalysisContext and union its imports/exports
             // into the report. Without this, malware hidden in a
             // non-preferred arch (e.g. malicious x86_64 slice with a
-            // benign arm64 slice) escapes expose-derived trait rules.
+            // benign arm64 slice) escapes filefacts-derived trait rules.
             // YARA and stng already cover the full file, so this
             // closes the remaining gap.
             if is_fat {
@@ -1442,7 +1444,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             let fat_arch_ranges = if is_fat { Some(labeled_ranges) } else { None };
             // Trait authors read cross-format facts directly from
-            // `report.expose.values.*` (PE/ELF/Mach-O native trees).
+            // `report.filefacts.values.*` (PE/ELF/Mach-O native trees).
             analyzers::binary_extractors::augment_report(&mut report, eval_data);
             set_phase("macho:traits");
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
@@ -1476,14 +1478,14 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
-            // Open expose once and lend it to the ELF analyzer so
+            // Open filefacts once and lend it to the ELF analyzer so
             // structural helpers read from the typed view directly.
-            // When expose can't open the bytes, fall back to the
+            // When filefacts can't open the bytes, fall back to the
             // analyzer's own bytes-only entry point so the malformed
             // signal is still surfaced.
-            let (struct_result, expose_view): (
+            let (struct_result, filefacts_view): (
                 Result<AnalysisReport, anyhow::Error>,
-                Option<crate::types::ExposeView>,
+                Option<crate::types::FilefactsView>,
             ) = match crate::analysis_context::AnalysisContext::open(path, file_data) {
                 Ok(ctx) => {
                     let report = analyzer.analyze_structural_with_ctx(
@@ -1492,7 +1494,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                         input.sha256.clone(),
                         &ctx,
                     );
-                    let view = crate::types::ExposeView::from_ctx(&ctx);
+                    let view = crate::types::FilefactsView::from_ctx(&ctx);
                     (Ok(report), Some(view))
                 }
                 Err(_) => (
@@ -1503,11 +1505,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
-            report.expose = expose_view;
+            report.filefacts = filefacts_view;
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read ELF facts directly from
-            // `report.expose.values.elf.*`. Format-specific extractors
+            // `report.filefacts.values.elf.*`. Format-specific extractors
             // (B0.5 .comment, B3 DWARF) layer cleave-side augmentation
             // through `binary_extractors::augment_report`.
             analyzers::binary_extractors::augment_report(&mut report, file_data);
@@ -1545,29 +1547,29 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            // Open expose once here and lend it to the PE analyzer
+            // Open filefacts once here and lend it to the PE analyzer
             // so it can read sections, imports, exports, and PE-specific
             // values from the typed view instead of re-parsing with
             // goblin. The trait engine downstream opens its own
             // context for the kv tree; consolidating those two
             // parses is a follow-up.
             let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
-                .map_err(|e| anyhow::anyhow!("expose open failed for PE: {e}"))?;
+                .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
                 input.sha256.clone(),
                 &ctx,
             ));
-            let expose_view = crate::types::ExposeView::from_ctx(&ctx);
+            let filefacts_view = crate::types::FilefactsView::from_ctx(&ctx);
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
-            report.expose = Some(expose_view);
+            report.filefacts = Some(filefacts_view);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read PE facts directly from
-            // `report.expose.values.pe.*`. B2 layers VERSIONINFO /
+            // `report.filefacts.values.pe.*`. B2 layers VERSIONINFO /
             // Rich header / imphash on top via
             // `binary_extractors::augment_report`.
             analyzers::binary_extractors::augment_report(&mut report, file_data);
@@ -2058,7 +2060,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         use crate::types::MetricsExt;
         let size = report.target.size_bytes;
         report
-            .expose_metrics
+            .filefacts_metrics
             .get_or_insert_with(Default::default)
             .set_u("file.size", size);
     }

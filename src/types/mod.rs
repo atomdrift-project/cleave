@@ -36,10 +36,10 @@ pub(crate) mod code_structure;
 pub mod compact;
 pub(crate) mod core;
 pub(crate) mod diff;
-pub mod expose_view;
 pub mod field_paths;
 pub(crate) mod file_analysis;
-// Retired with the cleave→expose migration (now sourced from expose's
+pub mod filefacts_view;
+// Retired with the cleave→filefacts migration (now sourced from filefacts's
 // flat metric map under their respective namespaces — `file.*`,
 // `image.*`/`jpeg.*`/`png.*`, `lnk.*`, `pdf.*`, `text.*`/
 // `identifiers.*`/`strings.*`/`comments.*`/`functions.*`/`imports.*`):
@@ -61,7 +61,7 @@ pub use core::{
     MetricsExt, TargetInfo,
 };
 
-pub use expose_view::ExposeView;
+pub use filefacts_view::FilefactsView;
 
 pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]

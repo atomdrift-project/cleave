@@ -96,7 +96,7 @@ fn diff_elf_vs_macho_behavior() {
         scoped_diff.scopes.metrics.is_none(),
         "metrics should be excluded"
     );
-    assert!(scoped_diff.scopes.kv.is_none(), "kv should be excluded");
+    assert!(scoped_diff.scopes.kv.is_none(), "value should be excluded");
     assert!(
         scoped_diff.scopes.symbols.is_none(),
         "symbols should be excluded"

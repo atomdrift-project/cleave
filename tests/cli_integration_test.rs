@@ -614,7 +614,7 @@ fn test_system_binary_false_positive_sanity() {
     );
 }
 
-/// kv should bail on unknown file types.
+/// value should bail on unknown file types.
 #[test]
 fn test_kv_unknown_format() {
     let temp_dir = TempDir::new().unwrap();
@@ -622,7 +622,7 @@ fn test_kv_unknown_format() {
     fs::write(&file, "just some text\n").unwrap();
 
     isolated_cleave_cmd()
-        .args(["kv", file.to_str().unwrap()])
+        .args(["value", file.to_str().unwrap()])
         .assert()
         .failure()
         .stderr(predicate::str::contains(
@@ -630,7 +630,7 @@ fn test_kv_unknown_format() {
         ));
 }
 
-/// kv should flatten a JSON manifest into dotted paths, including array indices.
+/// value should flatten a JSON manifest into dotted paths, including array indices.
 #[test]
 fn test_kv_package_json() {
     let temp_dir = TempDir::new().unwrap();
@@ -642,7 +642,7 @@ fn test_kv_package_json() {
     .unwrap();
 
     isolated_cleave_cmd()
-        .args(["kv", file.to_str().unwrap()])
+        .args(["value", file.to_str().unwrap()])
         .assert()
         .success()
         .stdout(predicate::str::contains("name"))
@@ -653,7 +653,7 @@ fn test_kv_package_json() {
         .stdout(predicate::str::contains("keywords[1]"));
 }
 
-/// kv --path should restrict output to the matched subtree.
+/// value --path should restrict output to the matched subtree.
 #[test]
 fn test_kv_path_filter() {
     let temp_dir = TempDir::new().unwrap();
@@ -666,7 +666,7 @@ fn test_kv_path_filter() {
 
     isolated_cleave_cmd()
         .args([
-            "kv",
+            "value",
             file.to_str().unwrap(),
             "--path",
             "scripts.postinstall",
@@ -678,7 +678,7 @@ fn test_kv_path_filter() {
         .stdout(predicate::str::contains("\"build\"").not());
 }
 
-/// kv --json should emit a parseable JSON array of {path, value} records.
+/// value --json should emit a parseable JSON array of {path, value} records.
 #[test]
 fn test_kv_json_output() {
     let temp_dir = TempDir::new().unwrap();
@@ -686,7 +686,7 @@ fn test_kv_json_output() {
     fs::write(&file, "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n").unwrap();
 
     let output = isolated_cleave_cmd()
-        .args(["--json", "kv", file.to_str().unwrap()])
+        .args(["--json", "value", file.to_str().unwrap()])
         .output()
         .unwrap();
     assert!(output.status.success());

@@ -34,7 +34,7 @@ use colored::{ColoredString, Colorize};
 //
 // Pinned RGB triples mapping to 256-color indices 167/214/39/71/244
 // (xterm extended palette).  Truecolor used directly for portability
-// — the `colored` crate doesn't expose a 256-color setter, and every
+// — the `colored` crate doesn't filefacts a 256-color setter, and every
 // modern terminal that runs cleave handles truecolor cleanly.
 //
 // Constants are `pub(crate)` so future themes can swap them without

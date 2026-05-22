@@ -103,9 +103,9 @@ pub(super) fn diff_metrics(
     limit: usize,
 ) -> ScopeDiff<MetricChange> {
     // The analyze pipeline populates `file.size` for every file
-    // through `expose_metrics`, so size shows up here naturally.
-    let old_flat = flatten_metrics(old.expose_metrics.as_ref());
-    let new_flat = flatten_metrics(new.expose_metrics.as_ref());
+    // through `filefacts_metrics`, so size shows up here naturally.
+    let old_flat = flatten_metrics(old.filefacts_metrics.as_ref());
+    let new_flat = flatten_metrics(new.filefacts_metrics.as_ref());
     let mut diff = diff_flat_paths(
         &old_flat,
         &new_flat,
@@ -324,19 +324,19 @@ fn identity_field_for(arr: &[Value]) -> Option<&'static str> {
 }
 
 // =============================================================================
-// KV — diffs a kv_tree pre-flattened by `flatten_kv_for_diff` into path /
+// Value tree — diffs a values tree pre-flattened by `flatten_kv_for_diff` into path /
 // value pairs. Identity is path; values may be of any JSON type. The top-
 // level path segment becomes `namespace` for downstream grouping.
 // =============================================================================
 
-/// Flatten a kv_tree into the diff-engine's path/value pairs. Public to
+/// Flatten a values_tree into the diff-engine's path/value pairs. Public to
 /// the `diff` module so unit construction can pre-flatten once per side.
-/// Mirrors the encoding accepted by `type: kv` rules and `cleave kv`,
+/// Mirrors the encoding accepted by `type: value` rules and `cleave value`,
 /// with smart array handling that doesn't fabricate diffs on reorder.
 ///
 /// `source.imports[]` and `source.exports[]` are dropped — they're
 /// kv-tree projections of `report.imports` / `report.exports`
-/// (load-bearing for trait authoring via `type: kv`) but the diff
+/// (load-bearing for trait authoring via `type: value`) but the diff
 /// already shows the same data through the dedicated `symbols` scope.
 /// Keeping them in the kv flatten would double-list every changed
 /// import. The kv tree on each report is unmodified — traits keep
@@ -347,7 +347,7 @@ pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
     flat
 }
 
-/// `true` for kv paths whose content is fully shown by another diff
+/// `true` for value paths whose content is fully shown by another diff
 /// scope. Currently `source.imports[]` and `source.exports[]` (the
 /// `symbols` scope is the canonical view).
 fn is_redundant_kv_path(path: &str) -> bool {
@@ -777,8 +777,8 @@ mod tests {
 
         let mut old = unit();
         let mut new = unit();
-        old.expose_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 100.0)]));
-        new.expose_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 150.0)]));
+        old.filefacts_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 100.0)]));
+        new.filefacts_metrics = Some(BTreeMap::from([("text.total_lines".to_string(), 150.0)]));
 
         let d = diff_metrics(&old, &new, 0);
         assert!(d.old_count > 0);

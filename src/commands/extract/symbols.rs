@@ -11,17 +11,77 @@ use crate::commands::shared::SymbolInfo;
 use anyhow::Result;
 use std::path::Path;
 
+#[derive(Clone, Copy)]
+enum SymbolFilter {
+    All,
+    Imports,
+    Exports,
+    Functions,
+}
+
+impl SymbolFilter {
+    fn keeps(self, symbol_type: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Imports => symbol_type == "import",
+            Self::Exports => symbol_type == "export",
+            Self::Functions => symbol_type == "function",
+        }
+    }
+}
+
 /// Extract symbols from a target, optionally from a named analysis layer.
 pub fn run(target: &str, layer: Option<&str>, format: &cli::OutputFormat) -> Result<String> {
+    run_filtered(target, layer, format, SymbolFilter::All)
+}
+
+/// Extract imports from a target, optionally from a named analysis layer.
+pub fn run_imports(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    run_filtered(target, layer, format, SymbolFilter::Imports)
+}
+
+/// Extract exports from a target, optionally from a named analysis layer.
+pub fn run_exports(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    run_filtered(target, layer, format, SymbolFilter::Exports)
+}
+
+/// Extract functions from a target, optionally from a named analysis layer.
+pub fn run_functions(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+) -> Result<String> {
+    run_filtered(target, layer, format, SymbolFilter::Functions)
+}
+
+fn run_filtered(
+    target: &str,
+    layer: Option<&str>,
+    format: &cli::OutputFormat,
+    filter: SymbolFilter,
+) -> Result<String> {
     // If a layer is specified, we need to run full analysis to get that layer's data
     if let Some(layer_name) = layer {
-        return run_with_layer(target, layer_name, format);
+        return run_with_layer(target, layer_name, format, filter);
     }
-    run_direct(target, format)
+    run_direct(target, format, filter)
 }
 
 /// Run symbol extraction with layer filtering (requires full analysis)
-fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Result<String> {
+fn run_with_layer(
+    target: &str,
+    layer: &str,
+    format: &cli::OutputFormat,
+    filter: SymbolFilter,
+) -> Result<String> {
     let file_analysis = extract_layer_file_analysis(target, layer)?;
 
     // Convert FileAnalysis symbols to SymbolInfo
@@ -60,11 +120,12 @@ fn run_with_layer(target: &str, layer: &str, format: &cli::OutputFormat) -> Resu
         });
     }
 
+    symbols.retain(|s| filter.keeps(&s.symbol_type));
     format_symbols_output(&symbols, target, format)
 }
 
 /// Direct symbol extraction without layer filtering (fast path)
-fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
+fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) -> Result<String> {
     let path = Path::new(target);
     if !path.exists() {
         anyhow::bail!("File does not exist: {}", target);
@@ -76,7 +137,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
     if let Ok(file_type) = detect_file_type(path) {
         match file_type {
             FileType::Elf | FileType::MachO | FileType::Pe => {
-                // Binary file — expose's typed Imports/Exports/Functions
+                // Binary file — filefacts's typed Imports/Exports/Functions
                 // views feed `analyze_binary_report`; fall back to rizin
                 // if the static parse found no exports (stripped binaries).
                 let report = analyze_binary_report(path, &file_type)?;
@@ -112,8 +173,8 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
                     });
                 }
 
-                // expose owns the rizin fallback now: when goblin's
-                // PE/ELF/Mach-O view comes back empty, `expose::open`
+                // filefacts owns the rizin fallback now: when goblin's
+                // PE/ELF/Mach-O view comes back empty, `filefacts::open`
                 // re-runs through rizin internally and fills imports /
                 // exports / functions with `source: "rizin"`. The
                 // `analyze_binary_report` path above already projected
@@ -174,6 +235,7 @@ fn run_direct(target: &str, format: &cli::OutputFormat) -> Result<String> {
         anyhow::bail!("Unable to detect file type for: {}", target);
     }
 
+    symbols.retain(|s| filter.keeps(&s.symbol_type));
     format_symbols_output(&symbols, target, format)
 }
 

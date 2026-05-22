@@ -619,7 +619,7 @@ pub(crate) fn extract_rar(
                         continue;
                     }
 
-                    // Note: RAR unrar crate doesn't expose packed_size, so we can't check
+                    // Note: RAR unrar crate doesn't filefacts packed_size, so we can't check
                     // compression ratio directly. We rely on unpacked_size limit above.
 
                     // Sanitize path

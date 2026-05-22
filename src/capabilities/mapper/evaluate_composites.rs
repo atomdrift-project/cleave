@@ -232,7 +232,7 @@ impl super::CapabilityMapper {
             );
         let m = |key: &str| -> Option<f64> {
             report
-                .expose_metrics
+                .filefacts_metrics
                 .as_ref()
                 .and_then(|fm| fm.get(key).copied())
         };
@@ -291,7 +291,7 @@ impl super::CapabilityMapper {
             // Also downgrade any file with very few lines (≤5) — these are
             // typically serialized data, not obfuscated code.
             let is_few_lines = report
-                .expose_metrics
+                .filefacts_metrics
                 .as_ref()
                 .and_then(|m| m.get("text.total_lines").copied())
                 .is_some_and(|v| v as u32 <= 5);

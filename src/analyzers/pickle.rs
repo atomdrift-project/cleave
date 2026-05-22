@@ -84,7 +84,7 @@ impl PickleAnalyzer {
             });
         }
 
-        // `pickle.*` kv comes from expose's dual emission in the
+        // `pickle.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
 
         // Evaluate trait rules

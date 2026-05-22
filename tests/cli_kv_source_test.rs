@@ -1,4 +1,4 @@
-//! End-to-end test for `cleave kv` over a tree-sitter source file.
+//! End-to-end test for `cleave value` over a tree-sitter source file.
 //!
 //! Pins the contract that source-code files (here: a tiny `.c`) flow
 //! through the unified analyzer and surface a `source.*` kv subtree
@@ -29,16 +29,17 @@ int main(int argc, char **argv) {
 
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
     cmd.env("CLEAVE_SKIP_YARA", "1")
-        .args(["--json", "kv", path.to_str().unwrap()]);
-    let output = cmd.output().expect("run cleave kv");
+        .args(["--json", "value", path.to_str().unwrap()]);
+    let output = cmd.output().expect("run cleave value");
     assert!(
         output.status.success(),
-        "cleave kv exited {}: stderr={}",
+        "cleave value exited {}: stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let entries: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse kv json");
+    let entries: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse value json");
     let arr = entries.as_array().expect("entries array");
     let paths: Vec<&str> = arr.iter().map(|e| e["path"].as_str().unwrap()).collect();
 
@@ -88,23 +89,24 @@ fn cleave_kv_path_filter_works_on_source_files() {
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
     cmd.env("CLEAVE_SKIP_YARA", "1").args([
         "--json",
-        "kv",
+        "value",
         path.to_str().unwrap(),
         "--path",
         "source.imports",
     ]);
-    let output = cmd.output().expect("run cleave kv");
+    let output = cmd.output().expect("run cleave value");
     assert!(
         output.status.success(),
-        "cleave kv with --path exited {}: stderr={}",
+        "cleave value with --path exited {}: stderr={}",
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let entries: serde_json::Value = serde_json::from_slice(&output.stdout).expect("parse kv json");
+    let entries: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("parse value json");
     let arr = entries.as_array().expect("entries array");
     // Every returned entry must live under the requested prefix —
-    // confirms the filter applies to source-file kv output the same way
+    // confirms the filter applies to source-file value output the same way
     // it does to office / structured-document trees.
     for entry in arr {
         let p = entry["path"].as_str().unwrap();

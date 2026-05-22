@@ -5,51 +5,33 @@ use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper to get the first file from v2 JSON output
+/// Helper to get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    if let Some(file) = json.get("fs").and_then(|f| f.get(0)) {
-        return Some(file);
-    }
-    json.get("files").and_then(|f| f.get(0))
+    json.get("fs").and_then(|f| f.get(0))
 }
 
 fn get_file_type(file: &serde_json::Value) -> &str {
-    file.get("file_type")
-        .or_else(|| file.get("type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
+    file.get("type").and_then(|v| v.as_str()).unwrap_or("")
 }
 
 fn get_traits(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.get("traits")
-        .or_else(|| file.get("ts"))
-        .and_then(|v| v.as_array())
+    file.get("ts").and_then(|v| v.as_array())
 }
 
 fn trait_id(trait_value: &serde_json::Value) -> Option<&str> {
-    trait_value
-        .get("id")
-        .or_else(|| trait_value.get("i"))
-        .and_then(|v| v.as_str())
+    trait_value.get("i").and_then(|v| v.as_str())
 }
 
 fn trait_desc(trait_value: &serde_json::Value) -> Option<&str> {
-    trait_value
-        .get("description")
-        .or_else(|| trait_value.get("d"))
-        .and_then(|v| v.as_str())
+    trait_value.get("d").and_then(|v| v.as_str())
 }
 
 fn trait_conf(trait_value: &serde_json::Value) -> Option<f64> {
-    if let Some(v) = trait_value
-        .get("confidence")
-        .or_else(|| trait_value.get("c"))
-        .and_then(Value::as_f64)
-    {
+    if let Some(v) = trait_value.get("c").and_then(Value::as_f64) {
         return Some(v);
     }
 
-    // Compact v4 omits the confidence field when it is the default 0.5.
+    // Compact output omits confidence when it is the default 0.5.
     trait_value.get("i").map(|_| 0.5)
 }
 

@@ -2,7 +2,7 @@
 //!
 //! Provides utilities for resolving section names and byte ranges
 //! in ELF, Mach-O, and PE binaries. The section table is always
-//! sourced from `expose::open`'s typed `Sections` view — cleave
+//! sourced from `filefacts::open`'s typed `Sections` view — cleave
 //! never re-parses the file format.
 
 use rustc_hash::FxHashMap;
@@ -42,18 +42,18 @@ impl SectionMap {
     }
 
     /// Create a section map by sourcing the section table from
-    /// `expose::open`.
+    /// `filefacts::open`.
     ///
-    /// Every binary format expose recognises (ELF, PE, Mach-O thin,
+    /// Every binary format filefacts recognises (ELF, PE, Mach-O thin,
     /// Mach-O fat) surfaces its sections through `parsed.sections()`
     /// with `name`/`file_offset`/`file_size` fields already normalised.
-    /// Files expose can't parse (unknown format, malformed magic)
+    /// Files filefacts can't parse (unknown format, malformed magic)
     /// produce an empty section list, which becomes an empty
     /// `SectionMap` — the same behaviour the old goblin-fallback path
     /// produced.
     pub(crate) fn from_binary(binary_data: &[u8]) -> Self {
         let file_size = binary_data.len() as u64;
-        let Ok(parsed) = expose::open(binary_data) else {
+        let Ok(parsed) = filefacts::open(binary_data) else {
             return Self::empty(file_size);
         };
         let sections: Vec<SectionInfo> = parsed

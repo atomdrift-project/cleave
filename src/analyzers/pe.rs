@@ -3,7 +3,7 @@
 //! Every PE-internal helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (sections, imports, exports, characteristics) is read from
-//! `expose`'s typed views rather than re-walked with goblin. The
+//! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -24,7 +24,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 ///
 /// All deep-binary signal — function CFG fields, sections recovered
 /// from packed binaries, the rizin import fallback — now flows in
-/// through `expose::open`. The analyzer projects from
+/// through `filefacts::open`. The analyzer projects from
 /// `ctx.parsed.functions()` / `imports()` / `sections()` rather than
 /// spawning rizin itself.
 #[derive(Debug)]
@@ -41,7 +41,7 @@ pub struct PEAnalyzer {
 }
 
 /// True when the PE has the IMAGE_FILE_DLL characteristic
-/// (`0x2000`) set. Reads from expose's `pe.characteristics_raw`
+/// (`0x2000`) set. Reads from filefacts's `pe.characteristics_raw`
 /// emission, which always carries the raw COFF Characteristics u16.
 fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
     ctx.parsed
@@ -51,7 +51,7 @@ fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
         .is_some_and(|c| c & 0x2000 != 0)
 }
 
-/// Read the certificate-table range `(offset, end)` from expose's
+/// Read the certificate-table range `(offset, end)` from filefacts's
 /// emitted `pe.data_directories[]`. Returns `None` when the
 /// directory is absent, empty, or extends past the file end.
 fn pe_certificate_range_from_ctx(ctx: &Ctx<'_>, data: &[u8]) -> Option<(usize, usize)> {
@@ -129,7 +129,7 @@ impl PEAnalyzer {
     /// downstream consumers expect: `pe/header`, `pe/dll` (when the
     /// IMAGE_FILE_DLL characteristic is set), and `pe/optional_header`
     /// (when the optional header is present). All facts come from
-    /// expose's emitted values — no goblin re-walk.
+    /// filefacts's emitted values — no goblin re-walk.
     fn structural_features(&self, ctx: &Ctx<'_>) -> Vec<StructuralFeature> {
         let mut features = Vec::new();
         let values = ctx.parsed.values();
@@ -146,7 +146,7 @@ impl PEAnalyzer {
             desc: format!("PE file (machine: {}, subsystem: {:?})", machine, subsystem),
             evidence: vec![Evidence {
                 method: "header".to_string(),
-                source: "expose".to_string(),
+                source: "filefacts".to_string(),
                 value: "PE".to_string(),
                 location: None,
                 ..Default::default()
@@ -159,7 +159,7 @@ impl PEAnalyzer {
                 desc: "Dynamic Link Library (DLL)".to_string(),
                 evidence: vec![Evidence {
                     method: "header".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: "DLL".to_string(),
                     location: None,
                     ..Default::default()
@@ -173,7 +173,7 @@ impl PEAnalyzer {
                 desc: "Has optional header (standard Windows executable)".to_string(),
                 evidence: vec![Evidence {
                     method: "header".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: "OptionalHeader".to_string(),
                     location: None,
                     ..Default::default()
@@ -183,11 +183,11 @@ impl PEAnalyzer {
         features
     }
 
-    /// Project expose's typed `Imports` view into `Vec<Import>` and
+    /// Project filefacts's typed `Imports` view into `Vec<Import>` and
     /// run capability-mapper lookups over the symbol set. Symbol
-    /// names are pre-normalised inside `imports_from_expose`.
+    /// names are pre-normalised inside `imports_from_filefacts`.
     fn pe_imports(&self, ctx: &Ctx<'_>) -> (Vec<Import>, Vec<Finding>) {
-        let imports = ctx.imports_from_expose();
+        let imports = ctx.imports_from_filefacts();
         let mut findings = Vec::new();
         for imp in &imports {
             let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
@@ -198,13 +198,13 @@ impl PEAnalyzer {
         (imports, findings)
     }
 
-    /// Project expose's typed `Exports` view and the
+    /// Project filefacts's typed `Exports` view and the
     /// `pe.aliased_export_count` metric. Aliased exports are stub
     /// chains where multiple exported names land at the same target;
-    /// expose's `aliased_exports` walker emits the count, so cleave
+    /// filefacts's `aliased_exports` walker emits the count, so cleave
     /// doesn't disassemble locally.
     fn pe_exports(&self, ctx: &Ctx<'_>) -> (Vec<Export>, Option<u32>) {
-        let exports = ctx.exports_from_expose();
+        let exports = ctx.exports_from_filefacts();
         let aliased = if exports.len() < 2 {
             None
         } else {
@@ -219,11 +219,11 @@ impl PEAnalyzer {
         (exports, aliased)
     }
 
-    /// Project expose's typed `Sections` view into `Vec<Section>`.
-    /// Per-section entropy comes from expose's metric map (no second
+    /// Project filefacts's typed `Sections` view into `Vec<Section>`.
+    /// Per-section entropy comes from filefacts's metric map (no second
     /// scan over the section bytes).
     fn pe_sections(&self, ctx: &Ctx<'_>) -> Vec<Section> {
-        ctx.sections_from_expose()
+        ctx.sections_from_filefacts()
     }
     /// Creates a new PE analyzer with default configuration
     #[must_use]
@@ -329,7 +329,7 @@ impl PEAnalyzer {
                 report
                     .metadata
                     .errors
-                    .push(format!("expose open failed: {e}"));
+                    .push(format!("filefacts open failed: {e}"));
                 report
             }
         }
@@ -509,7 +509,7 @@ impl PEAnalyzer {
 
     /// Structural analysis with optional pre-extracted strings.
     /// The caller provides an `AnalysisContext` borrowing `data`;
-    /// every PE-internal helper reads from expose's typed views via
+    /// every PE-internal helper reads from filefacts's typed views via
     /// that ctx (no goblin re-parse).
     #[allow(clippy::too_many_arguments)]
     fn analyze_structural_with_strings<'a>(
@@ -548,9 +548,9 @@ impl PEAnalyzer {
 
     /// Unified PE analysis driven by an `AnalysisContext`. Structure,
     /// imports, exports, sections, and per-format metrics all flow
-    /// from expose's typed views. Rizin runs in parallel for
+    /// from filefacts's typed views. Rizin runs in parallel for
     /// disassembly-derived metrics (function counts, complexity,
-    /// strings) and as a fallback when expose surfaces no sections
+    /// strings) and as a fallback when filefacts surfaces no sections
     /// or imports (e.g. corrupted import directories).
     ///
     /// `pe_data` is the post-tamper-strip slice; `original_data` is
@@ -573,11 +573,11 @@ impl PEAnalyzer {
         precomputed_sha256: Option<String>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
-        // `expose_ok` is true whenever expose identified the bytes as
+        // `filefacts_ok` is true whenever filefacts identified the bytes as
         // PE and emitted at least the COFF header. The fallback path
         // (no PE values present) still produces a report so that
         // tamper findings and rizin disassembly surface for triage.
-        let expose_ok = ctx.parsed.values().get("pe.machine").is_some();
+        let filefacts_ok = ctx.parsed.values().get("pe.machine").is_some();
         let lazy_walker_panicked = ctx
             .parsed
             .metrics()
@@ -590,7 +590,7 @@ impl PEAnalyzer {
 
         let file_size = original_data.len() as u64;
         // Executable-code size sums every section flagged `executable`
-        // on expose's typed Sections view, capped to the file extent.
+        // on filefacts's typed Sections view, capped to the file extent.
         let code_size_from_ctx: u64 = ctx
             .parsed
             .sections()
@@ -614,29 +614,29 @@ impl PEAnalyzer {
             sha256: precomputed_sha256
                 .clone()
                 .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
-            architectures: expose_ok.then(|| vec![self.arch_name(ctx)]),
+            architectures: filefacts_ok.then(|| vec![self.arch_name(ctx)]),
         };
 
         let mut report = AnalysisReport::new(target);
         let mut tools_used = Vec::new();
         let mut embedded_binary_count: u32 = 0;
         let mut embedded_archive_count: u32 = 0;
-        if expose_ok {
-            tools_used.push("expose".to_string());
+        if filefacts_ok {
+            tools_used.push("filefacts".to_string());
         }
 
         // Add any tampering findings detected during preprocessing
         report.findings.append(&mut tamper_findings);
         let _ = (analysis_path, code_size_from_ctx, file_size, allow_rizin);
 
-        // Project structural views from expose's typed accessors. The
+        // Project structural views from filefacts's typed accessors. The
         // rizin recovery (for stripped / packed PEs) already ran
-        // inside `expose::open` — `ctx.parsed.functions()` /
+        // inside `filefacts::open` — `ctx.parsed.functions()` /
         // `imports()` / `sections()` already carry the rizin-recovered
         // entries with `source: "rizin"`.
         let scope_start = std::time::Instant::now();
         let mut struct_ms = 0u128;
-        if expose_ok {
+        if filefacts_ok {
             let s_start = std::time::Instant::now();
             let structural_features = self.structural_features(ctx);
             let (pe_imports, pe_import_findings) = self.pe_imports(ctx);
@@ -666,8 +666,8 @@ impl PEAnalyzer {
         }
 
         // Detect inflated section headers (declared size extends
-        // beyond EOF). Reads expose's typed Sections view.
-        if expose_ok {
+        // beyond EOF). Reads filefacts's typed Sections view.
+        if filefacts_ok {
             let has_inflated = ctx
                 .parsed
                 .sections()
@@ -685,31 +685,31 @@ impl PEAnalyzer {
             }
         }
 
-        // Functions come straight from expose: goblin-extracted entries
+        // Functions come straight from filefacts: goblin-extracted entries
         // for symbols, plus rizin-recovered ones (with CFG fields) when
-        // expose's rizin fallback fired during `open`.
+        // filefacts's rizin fallback fired during `open`.
         report.functions = ctx
             .parsed
             .functions()
             .iter()
-            .map(crate::analysis_context::project_expose_function)
+            .map(crate::analysis_context::project_filefacts_function)
             .collect();
         if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
             tools_used.push("radare2".to_string());
         }
 
         // String extraction no longer threads rizin's `izj` output
-        // through stng: expose runs rizin once during `open`, and the
+        // through stng: filefacts runs rizin once during `open`, and the
         // stng pre-population options (boundaries / function metadata /
         // connect-addrs / xor candidates) are sourced from there.
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;
 
-        // --- Corrupted-header findings (expose's PE parse fell back
+        // --- Corrupted-header findings (filefacts's PE parse fell back
         // to header-only, or failed entirely). The exact failure
-        // detail isn't surfaced by expose's metrics; the absence of
+        // detail isn't surfaced by filefacts's metrics; the absence of
         // `pe.machine` or presence of `pe.partial_parse` IS the
         // signal.
-        if !expose_ok || partial_parse {
+        if !filefacts_ok || partial_parse {
             let rizin_found_hidden_content =
                 !report.sections.is_empty() || !report.imports.is_empty();
             let is_dos_executable = looks_like_dos_executable(pe_data);
@@ -718,7 +718,7 @@ impl PEAnalyzer {
             // resource-only DLLs and resource-table errors land
             // here. Treat as informational unless rizin found
             // something the parse missed.
-            let (crit, conf) = if !expose_ok && !is_dos_executable {
+            let (crit, conf) = if !filefacts_ok && !is_dos_executable {
                 if rizin_found_hidden_content {
                     (Criticality::Suspicious, 0.8)
                 } else {
@@ -728,8 +728,8 @@ impl PEAnalyzer {
                 (Criticality::Baseline, 0.3)
             };
 
-            let msg = if !expose_ok {
-                "PE could not be identified by expose"
+            let msg = if !filefacts_ok {
+                "PE could not be identified by filefacts"
             } else {
                 "PE parsed with header-only fallback (downstream walker failed)"
             };
@@ -744,7 +744,7 @@ impl PEAnalyzer {
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: msg.to_string(),
                     location: None,
                     ..Default::default()
@@ -758,7 +758,7 @@ impl PEAnalyzer {
                 desc: "Corrupted/tampered PE binary (header parsing failed)".to_string(),
                 evidence: vec![Evidence {
                     method: "parse-failure".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: msg.to_string(),
                     location: None,
                     ..Default::default()
@@ -768,14 +768,14 @@ impl PEAnalyzer {
             report.metadata.errors.push(msg.to_string());
         }
 
-        // Surface "expose couldn't be trusted on this binary" via
+        // Surface "filefacts couldn't be trusted on this binary" via
         // `metadata.errors` only — the malformed-structure metric
         // bit lived on the retired typed projection.
-        if any_lazy_panic && expose_ok && !partial_parse {
+        if any_lazy_panic && filefacts_ok && !partial_parse {
             report
                 .metadata
                 .errors
-                .push("expose lazy walker panicked during PE metric extraction".to_string());
+                .push("filefacts lazy walker panicked during PE metric extraction".to_string());
         }
 
         // --- Shared post-processing (strings, embedded code, metrics, overlay, SFX) ---
@@ -837,7 +837,7 @@ impl PEAnalyzer {
         report.files.extend(encoded_layers);
         report.findings.extend(plain_findings);
 
-        // Emit signature findings directly from expose's
+        // Emit signature findings directly from filefacts's
         // `pe.signatures[]` view. Each leaf cert subject CN becomes
         // a `metadata/signed/<type>::<cn>` finding; the very first
         // signature's CN is also emitted as a `metadata/signed/leaf::<cn>`
@@ -872,7 +872,7 @@ impl PEAnalyzer {
                     trait_refs: vec![],
                     evidence: vec![Evidence {
                         method: "authenticode".to_string(),
-                        source: "expose".to_string(),
+                        source: "filefacts".to_string(),
                         value: cn.clone(),
                         ..Default::default()
                     }],
@@ -900,7 +900,7 @@ impl PEAnalyzer {
                         trait_refs: vec![],
                         evidence: vec![Evidence {
                             method: "authenticode".to_string(),
-                            source: "expose".to_string(),
+                            source: "filefacts".to_string(),
                             value: primary,
                             ..Default::default()
                         }],
@@ -912,7 +912,7 @@ impl PEAnalyzer {
         }
         let _ = original_data;
 
-        // Overlay analysis. The overlay extent comes from expose's
+        // Overlay analysis. The overlay extent comes from filefacts's
         // emitted `pe.overlay_offset` / `pe.overlay_end` metrics —
         // the same range the legacy "sections end → cert table"
         // derivation produced.
@@ -925,7 +925,7 @@ impl PEAnalyzer {
                 _ => None,
             }
         };
-        // Overlay extents flow through `expose.metrics` (pe.overlay_offset
+        // Overlay extents flow through `filefacts.metrics` (pe.overlay_offset
         // / pe.overlay_end) — no cleave-side metric mirror needed now.
 
         // Overlay archive analysis
@@ -1010,9 +1010,9 @@ impl PEAnalyzer {
                 report.findings.extend(archive_report.findings);
                 report.files.extend(archive_report.files);
                 // Merge per-format kv subtrees from the inner archive report
-                // (e.g. `pyinstaller.*`) into the host PE's kv_tree so they
+                // (e.g. `pyinstaller.*`) into the host PE's values_tree so they
                 // surface in the host's `k` field at finalize time.
-                if let Some(inner_kv) = archive_report.kv_tree {
+                if let Some(inner_kv) = archive_report.values_tree {
                     if let serde_json::Value::Object(map) = *inner_kv {
                         for (ns, value) in map {
                             report.merge_kv_subtree(&ns, value);
@@ -1056,9 +1056,9 @@ impl PEAnalyzer {
                 // Downgrade embedded binaries in .rsrc or .NET
                 // managed resources to Notable (legitimate use —
                 // e.g. resource-only DLLs, .NET assemblies bundling
-                // drivers). Section lookup runs over expose's typed
+                // drivers). Section lookup runs over filefacts's typed
                 // Sections view.
-                if expose_ok {
+                if filefacts_ok {
                     let in_rsrc = ctx.parsed.sections().iter().any(|s| {
                         if s.name != ".rsrc" {
                             return false;
@@ -1174,10 +1174,12 @@ impl PEAnalyzer {
         // Emit recursive-scan counters. Embedded-binary detection is
         // cleave's job (it spawns child analyses on each find), so
         // these counts live on cleave's flat metric map alongside the
-        // expose-emitted `binary.*` keys.
+        // filefacts-emitted `binary.*` keys.
         if embedded_binary_count > 0 || embedded_archive_count > 0 {
             use crate::types::core::MetricsExt;
-            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            let flat = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
             if embedded_binary_count > 0 {
                 flat.set_f(
                     "binary.embedded_binary_count",
@@ -1202,9 +1204,9 @@ impl PEAnalyzer {
         report
     }
     /// Canonical machine-type label for the parsed PE, read from
-    /// expose's `pe.machine` (lowercase forms like `"x86_64"`,
+    /// filefacts's `pe.machine` (lowercase forms like `"x86_64"`,
     /// `"i386"`, `"arm64"`). Falls back to a literal `"unknown"`
-    /// only when expose didn't identify the binary as PE — every
+    /// only when filefacts didn't identify the binary as PE — every
     /// successful PE parse emits the field.
     fn arch_name(&self, ctx: &Ctx<'_>) -> String {
         ctx.parsed
@@ -1440,11 +1442,11 @@ impl Analyzer for PEAnalyzer {
         } else {
             Some(input.strings)
         };
-        // Open expose-side parse so structural helpers (sections,
+        // Open filefacts-side parse so structural helpers (sections,
         // imports, exports, signature verification) source from
-        // expose's typed view.
+        // filefacts's typed view.
         let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
-            .map_err(|e| anyhow::anyhow!("expose open failed for PE: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
@@ -1479,7 +1481,7 @@ impl Analyzer for PEAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         // PE magic-byte check: `MZ` + valid `e_lfanew` pointing at `PE\0\0`.
-        // A full expose parse just to gate analyzability is wasted
+        // A full filefacts parse just to gate analyzability is wasted
         // work — the actual parse happens once we commit to analyze().
         let Ok(mut file) = fs::File::open(file_path) else {
             return false;
@@ -1571,7 +1573,7 @@ mod tests {
             .architectures
             .expect("PE analyzer should detect at least one architecture");
         // test.exe is a 64-bit MSVC build. The canonical label is
-        // `"x86_64"` — what expose emits and what every analyst-facing
+        // `"x86_64"` — what filefacts emits and what every analyst-facing
         // tool (objdump, file(1), LIEF) reports. The ctx-fed path
         // returns this verbatim; the legacy fallback maps 0x8664 to
         // the same string.
@@ -1582,10 +1584,10 @@ mod tests {
         );
     }
 
-    /// Verify `arch_name` returns expose's canonical lowercase label
+    /// Verify `arch_name` returns filefacts canonical lowercase label
     /// (`"x86_64"`, `"i386"`, `"arm64"`).
     #[test]
-    fn arch_name_returns_expose_canonical_label() {
+    fn arch_name_returns_filefacts_canonical_label() {
         let analyzer = PEAnalyzer::new();
         let test_file = test_pe_path();
         if !test_file.exists() {
@@ -1593,7 +1595,7 @@ mod tests {
         }
         let bytes = std::fs::read(&test_file).unwrap();
         let ctx = crate::analysis_context::AnalysisContext::open(&test_file, &bytes).unwrap();
-        // test.exe is x86_64; expose surfaces it via `pe.machine`.
+        // test.exe is x86_64; filefacts surfaces it via `pe.machine`.
         assert_eq!(analyzer.arch_name(&ctx), "x86_64");
     }
 
@@ -1625,7 +1627,7 @@ mod tests {
 
     /// `analyze_structural_with_ctx` produces non-empty
     /// imports / sections views for a standard MSVC fixture.
-    /// Source tags should land as `"pe"` (from expose's typed view).
+    /// Source tags should land as `"pe"` (from filefacts's typed view).
     #[test]
     fn analyze_structural_populates_pe_views() {
         let analyzer = PEAnalyzer::new();
@@ -1643,7 +1645,7 @@ mod tests {
         // only.
         assert!(!report.sections.is_empty());
 
-        // Imports come from expose's typed view; the source tag is "pe".
+        // Imports come from filefacts's typed view; the source tag is "pe".
         let sources: std::collections::HashSet<&str> =
             report.imports.iter().map(|i| i.source.as_str()).collect();
         assert!(sources.contains("pe"));
@@ -1687,7 +1689,10 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report.metadata.tools_used.contains(&"expose".to_string()));
+        assert!(report
+            .metadata
+            .tools_used
+            .contains(&"filefacts".to_string()));
     }
 
     #[test]
@@ -1979,7 +1984,7 @@ mod tests {
 
         let path = std::path::Path::new("synthetic.exe");
         let ctx = crate::analysis_context::AnalysisContext::open(path, &pe_data)
-            .expect("expose opens synthetic PE");
+            .expect("filefacts opens synthetic PE");
         assert_eq!(
             super::pe_certificate_range_from_ctx(&ctx, &pe_data),
             Some((0x300, 0x420)),

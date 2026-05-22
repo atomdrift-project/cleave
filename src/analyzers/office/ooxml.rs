@@ -76,7 +76,7 @@ pub(crate) struct ExternalRef {
 /// Document metadata from docProps/core.xml (Dublin Core) and
 /// docProps/app.xml (Office-specific application metadata).
 ///
-/// Field names mirror the OPC element tags so the office kv tree
+/// Field names mirror the OPC element tags so the office values tree
 /// snake_case mapping is mechanical.
 #[derive(Debug, Default)]
 pub(crate) struct OoxmlMetadata {

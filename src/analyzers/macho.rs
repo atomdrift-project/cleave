@@ -3,7 +3,7 @@
 //! Every Mach-O helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (segments, dylibs, code signature, header bits) is read from
-//! `expose`'s typed views rather than re-walked with goblin. The
+//! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
 use crate::analyzers::macho_codesign;
 use crate::analyzers::{AnalysisInput, Analyzer};
@@ -23,11 +23,11 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for macOS Mach-O binaries (executables, dylibs, bundles).
 ///
-/// Wave B routed deep-binary signal through `expose::open`: function
+/// Wave B routed deep-binary signal through `filefacts::open`: function
 /// CFG fields and rizin-recovered symbols arrive on
 /// `ctx.parsed.functions()` / `imports()` / `exports()`. The analyzer
 /// no longer merges its own rizin import augment over goblin's view —
-/// expose's typed Mach-O imports cover what cleave needed previously.
+/// filefacts's typed Mach-O imports cover what cleave needed previously.
 #[derive(Debug)]
 pub(crate) struct MachOAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
@@ -112,7 +112,7 @@ impl MachOAnalyzer {
     ///
     /// Synthesises an [`AnalysisContext`] internally; callers that
     /// already hold one should call [`Self::analyze_structural_with_ctx`]
-    /// directly to avoid the second expose parse.
+    /// directly to avoid the second filefacts parse.
     ///
     /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn analyze_structural(
@@ -131,7 +131,7 @@ impl MachOAnalyzer {
                     file_path,
                     data,
                     sha256,
-                    Some(format!("expose open failed: {e}")),
+                    Some(format!("filefacts open failed: {e}")),
                     true,
                     None,
                     std::time::Instant::now(),
@@ -143,7 +143,7 @@ impl MachOAnalyzer {
     /// Same as [`Self::analyze_structural`] but accepts an
     /// [`AnalysisContext`] borrowing the same bytes. Imports,
     /// exports, segments, code-signature metadata and header bits all
-    /// come from expose's typed views; no goblin walk happens here.
+    /// come from filefacts's typed views; no goblin walk happens here.
     ///
     /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
     pub(crate) fn analyze_structural_with_ctx<'a>(
@@ -166,7 +166,7 @@ impl MachOAnalyzer {
 
     /// Structural analysis with optional pre-extracted strings.
     /// The caller provides an [`AnalysisContext`] borrowing `data`;
-    /// every Mach-O-internal helper reads from expose's typed views
+    /// every Mach-O-internal helper reads from filefacts's typed views
     /// via that ctx (no goblin re-parse).
     ///
     /// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
@@ -186,7 +186,7 @@ impl MachOAnalyzer {
             .clone()
             .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
-        // expose marks unparseable bytes with `macho.parse_failed` or
+        // filefacts marks unparseable bytes with `macho.parse_failed` or
         // `macho.parse_panicked` metrics. When neither the parse
         // succeeded nor a fat-slice cpu_type was observed, fall back
         // to the rizin path so the binary still gets baseline metrics
@@ -197,9 +197,9 @@ impl MachOAnalyzer {
         let cpu_type_known = ctx.parsed.values().get("macho.cpu_type").is_some();
         if parse_failed || parse_panicked || !cpu_type_known {
             let parse_msg = if parse_panicked {
-                Some("Mach-O parse panicked in expose".to_string())
+                Some("Mach-O parse panicked in filefacts".to_string())
             } else if parse_failed {
-                Some("Mach-O parse failed in expose".to_string())
+                Some("Mach-O parse failed in filefacts".to_string())
             } else {
                 None
             };
@@ -225,14 +225,14 @@ impl MachOAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
-        let mut tools_used = vec!["expose".to_string()];
+        let mut tools_used = vec!["filefacts".to_string()];
 
         // Parse code signature for findings and richer metrics (team
-        // ID, entitlements, hardened runtime). Expose already emits
+        // ID, entitlements, hardened runtime). Filefacts already emits
         // most of the same data under `macho.code_signature.*`, but
         // the structured `CodeSignature` value drives downstream
         // helpers (entitlement criticality, dangerous-entitlement
-        // counting). Reuse expose's `LC_CODE_SIGNATURE` offset via
+        // counting). Reuse filefacts's `LC_CODE_SIGNATURE` offset via
         // the typed Section/values machinery is more work than just
         // re-parsing the blob; the cleave-side parser is already
         // panic-safe and ~free on the trivial fixtures.
@@ -276,10 +276,10 @@ impl MachOAnalyzer {
 
         // Cross-format metric facts (segment_count, is_stripped, is_pie,
         // has_debug_info, code-signature details) flow through
-        // `expose.values.macho.*` and `expose.metrics` now.
+        // `filefacts.values.macho.*` and `filefacts.metrics` now.
 
-        // Functions come from expose's typed `Functions` view —
-        // `aflj`-derived CFG fields ride along when expose's rizin
+        // Functions come from filefacts's typed `Functions` view —
+        // `aflj`-derived CFG fields ride along when filefacts's rizin
         // recovery fired (stripped binaries / packed bodies); symbol-
         // table-only entries leave the cleave CFG mirror `None`.
         let _t_r2 = std::time::Instant::now();
@@ -287,7 +287,7 @@ impl MachOAnalyzer {
             .parsed
             .functions()
             .iter()
-            .map(crate::analysis_context::project_expose_function)
+            .map(crate::analysis_context::project_filefacts_function)
             .collect();
         if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
             tools_used.push("radare2".to_string());
@@ -377,7 +377,7 @@ impl MachOAnalyzer {
 
     /// Emit the binary/format, architecture, signature presence, and
     /// metadata findings (install name, linked dylibs, rpaths) from
-    /// expose's typed views. No goblin walk — every fact comes from
+    /// filefacts's typed views. No goblin walk — every fact comes from
     /// `ctx.parsed`.
     fn fill_structural_features_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let v = ctx.parsed.values();
@@ -387,9 +387,9 @@ impl MachOAnalyzer {
             desc: "Mach-O binary format".to_string(),
             evidence: vec![Evidence {
                 method: "magic".to_string(),
-                source: "expose".to_string(),
+                source: "filefacts".to_string(),
                 // Cleave traits historically read `0x{magic:x}` but
-                // expose doesn't surface the magic word directly. The
+                // filefacts doesn't surface the magic word directly. The
                 // file_type_raw (MH_* constant) gives a stable
                 // architecture-agnostic identity.
                 value: format!(
@@ -413,7 +413,7 @@ impl MachOAnalyzer {
             desc: format!("{} architecture", arch),
             evidence: vec![Evidence {
                 method: "header".to_string(),
-                source: "expose".to_string(),
+                source: "filefacts".to_string(),
                 value: format!("cputype=0x{:x}", cputype_raw),
                 location: None,
                 ..Default::default()
@@ -422,7 +422,7 @@ impl MachOAnalyzer {
 
         // Code signature presence: an LC_CODE_SIGNATURE in the load
         // command list or any `macho.code_signature.*` value (parsed
-        // out by expose's code-signature reader) means the binary
+        // out by filefacts's code-signature reader) means the binary
         // carries a signature blob.
         let has_signature = lc_present(ctx, "LC_CODE_SIGNATURE");
         if has_signature {
@@ -431,7 +431,7 @@ impl MachOAnalyzer {
                 desc: "Binary has code signature".to_string(),
                 evidence: vec![Evidence {
                     method: "load_command".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: "LC_CODE_SIGNATURE".to_string(),
                     location: Some("load_commands".to_string()),
                     ..Default::default()
@@ -445,7 +445,7 @@ impl MachOAnalyzer {
                 "metadata/binary/linking::macho-install-name",
                 "Mach-O install name present",
                 "lc_id_dylib",
-                "expose",
+                "filefacts",
                 name.to_string(),
             );
         }
@@ -461,7 +461,7 @@ impl MachOAnalyzer {
                     "metadata/binary/linking::macho-dylib",
                     "Mach-O linked dylib",
                     "load_dylib",
-                    "expose",
+                    "filefacts",
                     name.to_string(),
                 );
             }
@@ -475,17 +475,17 @@ impl MachOAnalyzer {
                     "metadata/binary/linking::macho-rpath",
                     "Mach-O runtime search path",
                     "rpath",
-                    "expose",
+                    "filefacts",
                     name.to_string(),
                 );
             }
         }
     }
 
-    /// Pull imports off expose's typed Imports view, run capability
+    /// Pull imports off filefacts's typed Imports view, run capability
     /// lookups against each, and merge into the report.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        for imp in ctx.imports_from_expose() {
+        for imp in ctx.imports_from_filefacts() {
             if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
                 if !report.findings.iter().any(|c| c.id == cap.id) {
                     report.findings.push(cap);
@@ -495,18 +495,18 @@ impl MachOAnalyzer {
         }
     }
 
-    /// Pull exports off expose's typed Exports view.
+    /// Pull exports off filefacts's typed Exports view.
     fn analyze_exports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        for exp in ctx.exports_from_expose() {
+        for exp in ctx.exports_from_filefacts() {
             report.exports.push(exp);
         }
     }
 
-    /// Project expose's typed Sections view into the report, marking
+    /// Project filefacts's typed Sections view into the report, marking
     /// high-entropy sections with the canonical `entropy/high`
     /// structural feature.
     fn analyze_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        for section in ctx.sections_from_expose() {
+        for section in ctx.sections_from_filefacts() {
             let entropy = section.entropy;
             let section_name = section.name.clone();
             report.sections.push(section);
@@ -517,7 +517,7 @@ impl MachOAnalyzer {
                     desc: "High entropy section (possibly packed/encrypted)".to_string(),
                     evidence: vec![Evidence {
                         method: "entropy".to_string(),
-                        source: "expose".to_string(),
+                        source: "filefacts".to_string(),
                         value: format!("{:.2}", entropy),
                         location: Some(section_name),
                         ..Default::default()
@@ -661,10 +661,10 @@ impl MachOAnalyzer {
     // AMOS cipher detection/decryption removed - now handled by stng library internally
 }
 
-/// Architecture label for a Mach-O ctx. Mirrors expose's
+/// Architecture label for a Mach-O ctx. Mirrors filefacts's
 /// `cpu_type_string` taxonomy (`x86_64`, `arm64`, `arm64e`, …) so
 /// downstream consumers see a canonical lowercase name. Returns
-/// `unknown_0x<hex>` when the cpu type isn't in expose's known set.
+/// `unknown_0x<hex>` when the cpu type isn't in filefacts's known set.
 fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
     let v = ctx.parsed.values();
     if let Some(name) = v.get("macho.cpu_type").and_then(|x| x.as_str()) {
@@ -679,7 +679,7 @@ fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
     format!("unknown_0x{:x}", raw)
 }
 
-/// True when expose's `macho.load_commands[]` list contains `name`.
+/// True when filefacts's `macho.load_commands[]` list contains `name`.
 fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
     ctx.parsed
         .values()
@@ -689,17 +689,17 @@ fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
 }
 
 /// Locate the LC_CODE_SIGNATURE blob `(file_offset, size)` from
-/// expose's code-signature metadata. Returns `None` when the binary
-/// is unsigned. `file_offset` isn't currently emitted by expose, so
+/// filefacts's code-signature metadata. Returns `None` when the binary
+/// is unsigned. `file_offset` isn't currently emitted by filefacts, so
 /// we recover it from the `__LINKEDIT` segment + the signature size:
 /// the cms blob always sits at the end of `__LINKEDIT`.
 ///
 /// This is a small hack that lets the cleave-side
 /// `macho_codesign::parse_code_signature` consume the same bytes
-/// expose's parser saw, without re-walking the load commands.
+/// filefacts's parser saw, without re-walking the load commands.
 fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
     let v = ctx.parsed.values();
-    // Expose surfaces the signature size when LC_CODE_SIGNATURE is
+    // Filefacts surfaces the signature size when LC_CODE_SIGNATURE is
     // present; absence here means there's no signature to parse.
     let size = v
         .get("macho.code_signature_size")
@@ -913,11 +913,11 @@ impl Default for MachOAnalyzer {
 impl MachOAnalyzer {
     /// Returns the byte range of the preferred architecture slice
     /// within a fat binary, or `0..data.len()` for thin binaries.
-    /// Reads slice extents from expose's `macho.slices[]` instead of
+    /// Reads slice extents from filefacts's `macho.slices[]` instead of
     /// re-parsing the fat wrapper through goblin. Prefers arm64; falls
     /// back to the first slice when arm64 isn't present.
     pub(crate) fn preferred_arch_range(&self, data: &[u8]) -> std::ops::Range<usize> {
-        let Ok(parsed) = expose::open(data) else {
+        let Ok(parsed) = filefacts::open(data) else {
             return 0..data.len();
         };
         let Some(slices) = parsed
@@ -957,7 +957,7 @@ impl MachOAnalyzer {
         data: &[u8],
     ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
         use crate::composite_rules::Arch;
-        let Ok(parsed) = expose::open(data) else {
+        let Ok(parsed) = filefacts::open(data) else {
             return vec![(Arch::All, 0..data.len())];
         };
         let ranges = parsed
@@ -987,7 +987,7 @@ impl MachOAnalyzer {
 
     #[allow(clippy::single_range_in_vec_init)] // Intentional: returns single range for thin binaries
     pub(crate) fn all_arch_ranges(&self, data: &[u8]) -> Vec<std::ops::Range<usize>> {
-        let Ok(parsed) = expose::open(data) else {
+        let Ok(parsed) = filefacts::open(data) else {
             return vec![0..data.len()];
         };
         let ranges = parsed
@@ -1016,7 +1016,7 @@ impl MachOAnalyzer {
 
     /// Parse every non-preferred arch slice of a fat Mach-O and union its imports
     /// and exports into the report, running capability lookups on each new import
-    /// so rules matching on expose-derived imports still fire for malware hidden
+    /// so rules matching on filefacts-derived imports still fire for malware hidden
     /// in a non-preferred arch.
     ///
     /// Preferred arch has already been parsed by the main structural pass, so
@@ -1024,8 +1024,8 @@ impl MachOAnalyzer {
     /// name + library for imports; by symbol name for exports).
     ///
     /// Each non-preferred slice is opened as its own [`AnalysisContext`],
-    /// so the slice's bytes flow through the same expose pipeline as
-    /// the preferred slice did. Slices that expose can't open are
+    /// so the slice's bytes flow through the same filefacts pipeline as
+    /// the preferred slice did. Slices that filefacts can't open are
     /// skipped silently — fat binaries with one bad slice are rare
     /// enough that surfacing the failure as a finding adds noise.
     ///
@@ -1054,7 +1054,7 @@ impl MachOAnalyzer {
 
         // Use the same `macho.slices[]` view the public range helpers
         // already consume, then open a fresh ctx per slice.
-        let Ok(parsed) = expose::open(data) else {
+        let Ok(parsed) = filefacts::open(data) else {
             return;
         };
         let Some(slices) = parsed
@@ -1085,7 +1085,7 @@ impl MachOAnalyzer {
                 .get("cpu_type")
                 .and_then(|x| x.as_str())
                 .unwrap_or("unknown");
-            let import_source = format!("expose-{}", arch_name);
+            let import_source = format!("filefacts-{}", arch_name);
 
             let Ok(slice_ctx) =
                 crate::analysis_context::AnalysisContext::open(dummy_path, slice_bytes)
@@ -1094,7 +1094,7 @@ impl MachOAnalyzer {
             };
             arches_parsed += 1;
 
-            for imp in slice_ctx.imports_from_expose() {
+            for imp in slice_ctx.imports_from_filefacts() {
                 let key = (imp.symbol.clone(), imp.library.clone());
                 if !seen_imports.insert(key) {
                     continue;
@@ -1111,7 +1111,7 @@ impl MachOAnalyzer {
                 }
             }
 
-            for exp in slice_ctx.exports_from_expose() {
+            for exp in slice_ctx.exports_from_filefacts() {
                 let symbol = exp.symbol.clone();
                 if !seen_exports.insert(symbol) {
                     continue;
@@ -1136,13 +1136,13 @@ impl MachOAnalyzer {
     }
 
     /// Updates a report with fat binary metadata (architecture list, universal binary flag).
-    /// No-op for thin binaries. Arch names come from expose's
+    /// No-op for thin binaries. Arch names come from filefacts's
     /// `macho.slices[]` — each slice entry carries a `cpu_type` string
-    /// (`"x86_64"` / `"arm64"` / etc). If expose can't open the bytes
+    /// (`"x86_64"` / `"arm64"` / etc). If filefacts can't open the bytes
     /// the fat marker is silently dropped; this is rare enough on
     /// real fat Mach-Os that a finding here would only add noise.
     pub(crate) fn apply_fat_metadata(&self, report: &mut AnalysisReport, data: &[u8]) {
-        let arch_names: Vec<String> = expose::open_with_path(report.target.path.as_ref(), data)
+        let arch_names: Vec<String> = filefacts::open_with_path(report.target.path.as_ref(), data)
             .ok()
             .and_then(|parsed| {
                 parsed
@@ -1167,13 +1167,13 @@ impl MachOAnalyzer {
         report.target.architectures = Some(arch_names);
     }
 
-    /// Build a minimal Mach-O analysis report when expose couldn't
+    /// Build a minimal Mach-O analysis report when filefacts couldn't
     /// parse the binary cleanly (the parse failed or panicked, or
     /// no `macho.cpu_type` was emitted).
     ///
-    /// Wave B retired the cleave-side rizin spawn here: expose owns
+    /// Wave B retired the cleave-side rizin spawn here: filefacts owns
     /// the rizin recovery path now, and it fires from inside
-    /// `expose::open` on the same bytes when goblin's typed views
+    /// `filefacts::open` on the same bytes when goblin's typed views
     /// come back empty. Callers that already hold an
     /// `AnalysisContext` route through `analyze_structural_with_ctx`
     /// to surface those recovered functions / imports / sections.
@@ -1215,7 +1215,7 @@ impl MachOAnalyzer {
             });
         }
 
-        // Expose's rizin recovery already populated the typed
+        // Filefacts's rizin recovery already populated the typed
         // `Functions` view (if rizin was usable) by the time the
         // fallback path runs — the analysis context here is built
         // by the caller and projected through `open_with_path`.
@@ -1240,8 +1240,8 @@ impl Analyzer for MachOAnalyzer {
         } else {
             Some(input.strings)
         };
-        // Open expose-side parse so downstream helpers source structural
-        // data from expose's typed views. When expose can't open the
+        // Open filefacts-side parse so downstream helpers source structural
+        // data from filefacts's typed views. When filefacts can't open the
         // bytes the fallback path (rizin-based metrics + malformed
         // signal) is taken by `analyze_structural_with_strings` via
         // `analyze_structural` synthesising a fresh ctx; either way
@@ -1266,7 +1266,7 @@ impl Analyzer for MachOAnalyzer {
                         input.backing_path(),
                         preferred_data,
                         sha256,
-                        Some(format!("expose open failed: {e}")),
+                        Some(format!("filefacts open failed: {e}")),
                         !input.skip_rizin,
                         input.sha256.clone(),
                         std::time::Instant::now(),
@@ -1487,7 +1487,10 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report.metadata.tools_used.contains(&"expose".to_string()));
+        assert!(report
+            .metadata
+            .tools_used
+            .contains(&"filefacts".to_string()));
     }
 
     #[test]

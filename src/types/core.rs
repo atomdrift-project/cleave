@@ -6,8 +6,8 @@ use super::binary::{
     AnalysisMetadata, Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch,
 };
 use super::diff::DiffReportV1;
-use super::expose_view::ExposeView;
 use super::file_analysis::{FileAnalysis, ReportSummary};
+use super::filefacts_view::FilefactsView;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
@@ -70,7 +70,7 @@ impl Criticality {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisReport {
     /// Schema version ("3" after finalize, "3.0" pre-finalize/cached).
-    /// v3.0 adds the `expose` field mirroring expose's typed views.
+    /// v3.0 adds the `filefacts` field mirroring filefacts's typed views.
     #[serde(alias = "schema_version")]
     pub version: String,
     /// Timestamp when analysis was performed (cleared after finalize)
@@ -118,30 +118,30 @@ pub struct AnalysisReport {
     /// Syscalls detected via binary analysis (ELF, Mach-O)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
-    /// Report-side mirror of expose's typed views — `values`,
+    /// Report-side mirror of filefacts's typed views — `values`,
     /// `metrics`, `sections`, `imports`, `exports`, `functions`,
     /// `errors`. Populated at every binary analyzer entry that runs
     /// through `AnalysisContext`. Schema v3.0 ships this verbatim so
-    /// downstream consumers can navigate `expose.values.pe.machine`
+    /// downstream consumers can navigate `filefacts.values.pe.machine`
     /// directly.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub expose: Option<ExposeView>,
-    /// Synthetic key-value tree for `type: kv` matchers on file
+    pub filefacts: Option<FilefactsView>,
+    /// Synthetic key-value tree for `type: value` matchers on file
     /// formats whose metadata isn't natively a manifest (e.g.,
     /// office documents). Populated by analyzers; consumed by the
-    /// kv evaluator. The schema is the public trait-base API for
+    /// value evaluator. The schema is the public trait-base API for
     /// each format that opts in. Serialized so external consumers
-    /// (and the upcoming `cleave kv` extension) can introspect the
+    /// (and the upcoming `cleave value` extension) can introspect the
     /// same path map trait authors target.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub kv_tree: Option<Box<serde_json::Value>>,
-    /// Expose's flat metric map (`{ "lnk.args_max_whitespace_run":
+    pub values_tree: Option<Box<serde_json::Value>>,
+    /// Filefacts's flat metric map (`{ "lnk.args_max_whitespace_run":
     /// 100.0, "pdf.action_count": 4.0, … }`) attached verbatim so
     /// trait-rule resolution for `type: metrics, field: …` reads
-    /// expose-emitted values directly. This is the sole numeric
+    /// filefacts-emitted values directly. This is the sole numeric
     /// metric surface — typed projection structs were retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
+    pub filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
     /// Raw paths discovered (complete list)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub paths: Vec<PathInfo>,
@@ -233,9 +233,9 @@ impl MetricsExt for std::collections::BTreeMap<String, f64> {
 /// Flatten any `Serialize` value into the flat metric map under
 /// dotted keys prefixed with `prefix`. Numbers become `f64`; bools
 /// become `1.0` / `0.0`; nested objects recurse; strings and arrays
-/// are skipped (they belong in `kv_tree`, not `metrics`). The
+/// are skipped (they belong in `values_tree`, not `metrics`). The
 /// transitional path during #41 — producers that still build typed
-/// structs internally can dump them into `expose_metrics` in one
+/// structs internally can dump them into `filefacts_metrics` in one
 /// call instead of writing N `metrics.insert(...)` lines by hand.
 pub fn flatten_into_metrics<T: serde::Serialize>(
     value: &T,
@@ -340,9 +340,9 @@ impl AnalysisReport {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            expose: None,
-            kv_tree: None,
-            expose_metrics: None,
+            filefacts: None,
+            values_tree: None,
+            filefacts_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),
@@ -361,7 +361,7 @@ impl AnalysisReport {
         file.formula = (!formula.is_empty()).then_some(formula);
     }
 
-    /// Merge a per-format kv subtree into `kv_tree` under `namespace`.
+    /// Merge a per-format kv subtree into `values_tree` under `namespace`.
     /// Preserves existing namespaces; pre-existing non-object trees
     /// are stashed under `_legacy` so we never lose data. Used by
     /// every per-format kv attacher (`png`, `jpeg`, `class`, `pyc`,
@@ -616,7 +616,7 @@ impl AnalysisReport {
     }
 
     pub(crate) fn merge_kv_subtree(&mut self, namespace: &str, value: serde_json::Value) {
-        let mut root = match self.kv_tree.take().map(|b| *b) {
+        let mut root = match self.values_tree.take().map(|b| *b) {
             Some(serde_json::Value::Object(m)) => m,
             Some(other) => {
                 let mut m = serde_json::Map::new();
@@ -626,7 +626,7 @@ impl AnalysisReport {
             None => serde_json::Map::new(),
         };
         // Deep-merge into any existing namespace value when both
-        // sides are objects, so multiple contributors (e.g. expose
+        // sides are objects, so multiple contributors (e.g. filefacts
         // adds `build.toolchain.*` while cleave's binary_extractors
         // adds `build.username`) coexist instead of clobbering.
         // Falls back to outright replace for non-object values.
@@ -637,7 +637,7 @@ impl AnalysisReport {
             (_, v) => v,
         };
         root.insert(namespace.into(), merged);
-        self.kv_tree = Some(Box::new(serde_json::Value::Object(root)));
+        self.values_tree = Some(Box::new(serde_json::Value::Object(root)));
     }
 
     /// Add a finding
@@ -999,8 +999,8 @@ impl AnalysisReport {
             .as_ref()
             .and_then(|a| a.first().cloned());
         file.findings = self.findings.clone();
-        file.expose = self.expose.clone();
-        file.expose_metrics = self.expose_metrics.clone();
+        file.filefacts = self.filefacts.clone();
+        file.filefacts_metrics = self.filefacts_metrics.clone();
         file.structure = self.structure.clone();
         file.strings = self.strings.clone();
         file.imports = self.imports.clone();
@@ -1008,10 +1008,10 @@ impl AnalysisReport {
         file.sections = self.sections.clone();
 
         file.populate_file_metrics();
-        if let Some(tree) = self.kv_tree.as_deref() {
+        if let Some(tree) = self.values_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
-        file.kv_tree = self.kv_tree.clone();
+        file.values_tree = self.values_tree.clone();
         file
     }
 
@@ -1043,8 +1043,8 @@ impl AnalysisReport {
 
         file.arch = arch;
         file.findings = self.findings;
-        file.expose = self.expose;
-        file.expose_metrics = self.expose_metrics;
+        file.filefacts = self.filefacts;
+        file.filefacts_metrics = self.filefacts_metrics;
         file.structure = self.structure;
         file.strings = self.strings;
         file.imports = self.imports;
@@ -1052,10 +1052,10 @@ impl AnalysisReport {
         file.sections = self.sections;
 
         file.populate_file_metrics();
-        if let Some(tree) = self.kv_tree.as_deref() {
+        if let Some(tree) = self.values_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
-        file.kv_tree = self.kv_tree;
+        file.values_tree = self.values_tree;
         (file, nested_files, archive_contents)
     }
 }
@@ -1113,7 +1113,7 @@ fn flatten_kv_for_output(
 /// (with the right-hand-side winning on leaf collisions); non-object
 /// leaves are replaced by the right-hand value. Used by
 /// [`AnalysisReport::merge_kv_subtree`] so multiple writers under the
-/// same top-level namespace coexist (e.g. expose populates
+/// same top-level namespace coexist (e.g. filefacts populates
 /// `build.toolchain.*` while cleave's `binary_extractors` populates
 /// `build.username`).
 fn deep_merge_objects(
@@ -1783,7 +1783,7 @@ mod tests {
         let mut report = archive_report_with_entries(Vec::new());
         report.seal_archive_metadata_kv();
         assert!(
-            report.kv_tree.is_none(),
+            report.values_tree.is_none(),
             "Empty archive_contents should not produce a kv tree"
         );
     }
@@ -1847,7 +1847,7 @@ mod tests {
         let mut report = archive_report_with_entries(entries);
         report.seal_archive_metadata_kv();
 
-        let kv = report.kv_tree.expect("kv_tree should be populated");
+        let kv = report.values_tree.expect("values_tree should be populated");
         let archive = kv
             .get("archive")
             .expect("archive subtree should be present");
@@ -1977,7 +1977,7 @@ mod tests {
         let mut report = archive_report_with_entries(entries);
         report.seal_archive_metadata_kv();
 
-        let kv = report.kv_tree.expect("kv_tree present");
+        let kv = report.values_tree.expect("values_tree present");
         let archive = kv.get("archive").expect("archive subtree present");
         assert!(
             archive.get("timing").is_none(),

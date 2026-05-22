@@ -1,13 +1,13 @@
-//! Single integration point with `expose`.
+//! Single integration point with `filefacts`.
 //!
 //! `AnalysisContext` opens the file *once* through
-//! `expose::open_with_path` and lends the resulting `ParsedFile`
+//! `filefacts::open_with_path` and lends the resulting `ParsedFile`
 //! plus a few cached projections (file-id, values tree) to every
-//! downstream consumer — the trait engine, the `cleave kv`
+//! downstream consumer — the trait engine, the `cleave value`
 //! subcommand, the binary/source analyzer post-processing, …
 //!
 //! Before this existed, each consumer called
-//! `expose::open_with_path` independently, which meant a PE file
+//! `filefacts::open_with_path` independently, which meant a PE file
 //! got parsed by `goblin` twice (once for the analyzer crate, once
 //! for the dual-emission) and the same lazy view scaffolding was
 //! rebuilt on every entry. Funneling through this struct collapses
@@ -18,11 +18,12 @@ use std::path::Path;
 
 use crate::types::{Export, Function, Import, Section};
 
-/// Files opened once via expose for the whole analysis pipeline.
+/// Files opened once via filefacts for the whole analysis pipeline.
 ///
-/// The `expose::ParsedFile` it wraps holds four lazy views
-/// (`fileid`, `values`, `strings`, `metrics`); accessing them
-/// through this struct realizes each view at most once.
+/// The `filefacts::ParsedFile` it wraps exposes lazy typed views for
+/// identity, residual values, strings, metrics, AST, sections, imports,
+/// exports, functions, and parse errors. Accessing them through this
+/// struct realizes each view at most once.
 #[derive(Debug)]
 pub struct AnalysisContext<'a> {
     /// Source path the bytes came from. Carried so format detectors
@@ -31,19 +32,19 @@ pub struct AnalysisContext<'a> {
     pub path: &'a Path,
     /// Raw file bytes. Borrowed; the parser doesn't take ownership.
     pub content: &'a [u8],
-    /// Single-pass projection of `content` by `expose`. See its
+    /// Single-pass projection of `content` by filefacts. See its
     /// `ParsedFile` docs for the available views.
-    pub parsed: expose::ParsedFile<'a>,
+    pub parsed: filefacts::ParsedFile<'a>,
 }
 
 impl<'a> AnalysisContext<'a> {
-    /// Open the file through expose, returning a context borrowing
+    /// Open the file through filefacts, returning a context borrowing
     /// the provided `path` and `content`.
     ///
-    /// Returns the expose error verbatim on failure — callers that
+    /// Returns the filefacts error verbatim on failure — callers that
     /// need to fall back to a legacy code path can match on it.
-    pub fn open(path: &'a Path, content: &'a [u8]) -> Result<Self, expose::Error> {
-        let parsed = expose::open_with_path(path, content)?;
+    pub fn open(path: &'a Path, content: &'a [u8]) -> Result<Self, filefacts::Error> {
+        let parsed = filefacts::open_with_path(path, content)?;
         Ok(Self {
             path,
             content,
@@ -51,13 +52,15 @@ impl<'a> AnalysisContext<'a> {
         })
     }
 
-    /// Format-native values tree as JSON, with the `strings` /
-    /// `ast` / `sections` namespaces stripped — those have richer
-    /// typed accessors on `ParsedFile` and consumers should read
-    /// them through those rather than re-walking JSON.
+    /// Format-native residual values tree as JSON.
     ///
-    /// Returns `Value::Null` when expose has nothing structured to
-    /// say about the file.
+    /// Current filefacts releases do not mirror typed fact families
+    /// into this tree. The namespace filter remains as a defensive
+    /// guard for stale cache entries or older filefacts output that
+    /// still duplicated `strings`, `ast`, or `sections` under values.
+    ///
+    /// Returns `Value::Null` when filefacts has no residual structured
+    /// values for the file.
     #[must_use]
     pub fn values_tree(&self) -> Value {
         match self.parsed.values().as_json() {
@@ -85,17 +88,17 @@ impl<'a> AnalysisContext<'a> {
         }
     }
 
-    /// Project expose's typed `Imports` view into cleave's
+    /// Project filefacts's typed `Imports` view into cleave's
     /// `Vec<Import>` shape. Symbol names are normalized (leading
     /// underscores stripped) and offsets are formatted as the
     /// `0xHEX` strings cleave's downstream consumers expect.
     ///
-    /// Callers wiring expose-emitted symbols into `report.imports`
+    /// Callers wiring filefacts-emitted symbols into `report.imports`
     /// are responsible for not double-counting when an analyzer
     /// has already populated entries for the same source — see
     /// the module docs for the dedupe contract.
     #[must_use]
-    pub fn imports_from_expose(&self) -> Vec<Import> {
+    pub fn imports_from_filefacts(&self) -> Vec<Import> {
         self.parsed
             .imports()
             .iter()
@@ -108,12 +111,12 @@ impl<'a> AnalysisContext<'a> {
             .collect()
     }
 
-    /// Project expose's typed `Exports` view into cleave's
+    /// Project filefacts's typed `Exports` view into cleave's
     /// `Vec<Export>` shape. PE forwarded-export targets
     /// (`KERNEL32.LoadLibraryA`, `NTDLL.#123`) carry through via
     /// `forward_to`; normal exports leave that field `None`.
     #[must_use]
-    pub fn exports_from_expose(&self) -> Vec<Export> {
+    pub fn exports_from_filefacts(&self) -> Vec<Export> {
         self.parsed
             .exports()
             .iter()
@@ -126,15 +129,15 @@ impl<'a> AnalysisContext<'a> {
             .collect()
     }
 
-    /// Project expose's typed `Sections` view into cleave's
+    /// Project filefacts's typed `Sections` view into cleave's
     /// `Vec<Section>` shape. Per-section Shannon entropy comes
-    /// straight from expose's metric map (keyed
+    /// straight from filefacts's metric map (keyed
     /// `sections[N].entropy`) so no second pass over the bytes is
     /// needed. Permission flags are flattened to the conventional
     /// `"rwx"` / `"r-x"` / `"rw-"` triplet that cleave's downstream
     /// finders expect.
     #[must_use]
-    pub fn sections_from_expose(&self) -> Vec<Section> {
+    pub fn sections_from_filefacts(&self) -> Vec<Section> {
         let metrics = self.parsed.metrics();
         self.parsed
             .sections()
@@ -169,35 +172,35 @@ impl<'a> AnalysisContext<'a> {
             .collect()
     }
 
-    /// Project expose's typed `Functions` view into cleave's
+    /// Project filefacts's typed `Functions` view into cleave's
     /// `Vec<Function>` shape, threading the CFG metrics rizin
     /// recovered (complexity, basic blocks, edges, instruction
     /// count, resolved call edges) into cleave's
     /// `ControlFlowMetrics` mirror when they're present on the
-    /// expose entry.
+    /// filefacts entry.
     ///
     /// For symbol-table-sourced functions (PE export table, ELF
     /// `.dynsym`, VBA `Public Sub`, etc.) the CFG fields are absent
-    /// on expose's side and the cleave projection leaves the nested
+    /// on filefacts's side and the cleave projection leaves the nested
     /// block `None`. The fuller per-function rizin data
     /// (instructions, stack frame, recursive / noreturn flags) lives
-    /// on `expose::Function` and ships in `report.expose.functions`
+    /// on `filefacts::Function` and ships in `report.filefacts.functions`
     /// for diff/ML consumers.
     #[must_use]
-    pub fn functions_from_expose(&self) -> Vec<Function> {
+    pub fn functions_from_filefacts(&self) -> Vec<Function> {
         self.parsed
             .functions()
             .iter()
-            .map(project_expose_function)
+            .map(project_filefacts_function)
             .collect()
     }
 }
 
-/// Pure projection: `expose::Function` → cleave's typed `Function`
+/// Pure projection: `filefacts::Function` → cleave's typed `Function`
 /// mirror. Lives at module scope so the binary analyzers can call
 /// it without going back through an `AnalysisContext`.
 #[must_use]
-pub fn project_expose_function(f: &expose::Function) -> Function {
+pub fn project_filefacts_function(f: &filefacts::Function) -> Function {
     use crate::types::ml_features::ControlFlowMetrics;
 
     let nbbs = f.basic_blocks;
@@ -259,13 +262,13 @@ mod tests {
     /// with hex-formatted offsets, matching what cleave's PE
     /// analyzer used to emit via goblin directly.
     #[test]
-    fn imports_from_expose_normalises_pe_fixture() {
+    fn imports_from_filefacts_normalises_pe_fixture() {
         let path = std::path::Path::new("tests/fixtures/test.exe");
         let bytes = std::fs::read(path).expect("fixture present");
-        let ctx = AnalysisContext::open(path, &bytes).expect("expose opens PE");
+        let ctx = AnalysisContext::open(path, &bytes).expect("filefacts opens PE");
         // Force the parse so .imports() is populated.
         let _ = ctx.values_tree();
-        let imports = ctx.imports_from_expose();
+        let imports = ctx.imports_from_filefacts();
         assert!(!imports.is_empty(), "PE fixture should have imports");
         for imp in &imports {
             assert_eq!(imp.source, "pe");
@@ -277,16 +280,16 @@ mod tests {
         }
     }
 
-    /// Exports map through with hex offsets and the expose source
+    /// Exports map through with hex offsets and the filefacts source
     /// tag intact. PE exports always carry an offset; the
     /// projection mirrors that into `Option<String>`.
     #[test]
-    fn exports_from_expose_normalises_pe_fixture() {
+    fn exports_from_filefacts_normalises_pe_fixture() {
         let path = std::path::Path::new("tests/fixtures/test.exe");
         let bytes = std::fs::read(path).expect("fixture present");
-        let ctx = AnalysisContext::open(path, &bytes).expect("expose opens PE");
+        let ctx = AnalysisContext::open(path, &bytes).expect("filefacts opens PE");
         let _ = ctx.values_tree();
-        let exports = ctx.exports_from_expose();
+        let exports = ctx.exports_from_filefacts();
         for exp in &exports {
             assert_eq!(exp.source, "pe");
             assert!(exp.forward_to.is_none());

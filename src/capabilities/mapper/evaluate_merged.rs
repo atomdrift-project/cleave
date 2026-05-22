@@ -108,22 +108,22 @@ impl super::CapabilityMapper {
         };
 
         // Open the file once via the shared `AnalysisContext` and
-        // merge expose's structured view into `report.kv_tree` and
-        // `report.expose_metrics` for the trait engine. All other
+        // merge filefacts's structured view into `report.values_tree` and
+        // `report.filefacts_metrics` for the trait engine. All other
         // call sites that need format-native kv read through the
         // same entry point — see `cleave::analysis_context`.
         let target_path = std::path::PathBuf::from(&report.target.path);
         if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(&target_path, binary_data) {
             let values_tree = ctx.values_tree();
-            // Stash expose's flat metric map verbatim on the
+            // Stash filefacts's flat metric map verbatim on the
             // report. `get_metric_value` consults it as a fallback
-            // after the typed `Metrics` struct, so expose-emitted
+            // after the typed `Metrics` struct, so filefacts-emitted
             // metrics (`lnk.args_max_whitespace_run`, `pdf.action_count`,
             // `binary.is_pie`, …) are reachable to trait rules without
             // a fragile serde round-trip — serde rejects `f64` → any
             // integer-typed field, which would silently drop the
             // whole `Metrics` rebuild on the first collision.
-            let expose_map: std::collections::BTreeMap<String, f64> = ctx
+            let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
                 .parsed
                 .metrics()
                 .iter()
@@ -135,13 +135,15 @@ impl super::CapabilityMapper {
                     report.merge_kv_subtree(&namespace, subtree);
                 }
             }
-            if !expose_map.is_empty() {
+            if !filefacts_map.is_empty() {
                 // Merge into any pre-populated map (text-side analyzers
                 // populate `text.*`/`identifiers.*`/etc. before reaching
                 // the capability mapper). Overwriting would silently
                 // drop those keys.
-                let dest = report.expose_metrics.get_or_insert_with(Default::default);
-                for (k, v) in expose_map {
+                let dest = report
+                    .filefacts_metrics
+                    .get_or_insert_with(Default::default);
+                for (k, v) in filefacts_map {
                     dest.insert(k, v);
                 }
             }
@@ -426,7 +428,7 @@ impl super::CapabilityMapper {
             return;
         }
 
-        // Iterate to fixed point: removing a finding can expose further suppressions
+        // Iterate to fixed point: removing a finding can filefacts further suppressions
         // in rules whose `unless:` referenced the just-removed finding.
         loop {
             let all_ids: FxHashSet<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();

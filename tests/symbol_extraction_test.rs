@@ -38,24 +38,16 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
     serde_json::to_value(&compact).expect("serialize compact report")
 }
 
-/// Get the first file entry from either legacy `files` or compact `fs`.
+/// Get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    if let Some(file) = json
-        .get("fs")
-        .and_then(|f| f.as_array())
-        .and_then(|arr| arr.first())
-    {
-        return Some(file);
-    }
-    json.get("files")
+    json.get("fs")
         .and_then(|f| f.as_array())
         .and_then(|arr| arr.first())
 }
 
 fn get_file_type(json: &serde_json::Value) -> Option<String> {
-    let file = get_first_file(json)?;
-    file.get("file_type")
-        .or_else(|| file.get("type"))
+    get_first_file(json)?
+        .get("type")
         .and_then(|v| v.as_str())
         .map(ToString::to_string)
 }
@@ -75,74 +67,48 @@ fn check_file_type(json: &serde_json::Value, expected: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Check if we have any AST/source-analysis signal.
-///
-/// Legacy reports exposed `structure`; compact v4 omits it, so fall back to
-/// symbol extraction, function metrics, or simply a recognized source file type.
+/// Check if we have any AST/source-analysis signal in compact v5 facts.
 fn has_structure(json: &serde_json::Value) -> bool {
     let Some(file) = get_first_file(json) else {
         return false;
     };
-
-    if file
-        .get("structure")
-        .and_then(|s| s.as_array())
-        .is_some_and(|arr| !arr.is_empty())
-    {
-        return true;
-    }
-
-    if file
-        .get("imports")
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| !arr.is_empty())
-    {
-        return true;
-    }
-
-    if file
-        .get("is")
-        .and_then(|v| v.as_array())
-        .is_some_and(|arr| !arr.is_empty())
-    {
-        return true;
-    }
-
-    if file
-        .get("ms")
-        .and_then(|ms| ms.get("functions"))
-        .and_then(|fns| fns.as_object())
-        .is_some_and(|obj| !obj.is_empty())
-    {
-        return true;
-    }
-
-    get_file_type(json).is_some()
+    ["ct", "mc", "ca", "fn", "i"].iter().any(|key| {
+        file.pointer(&format!("/ff/{key}"))
+            .and_then(|v| v.as_array())
+            .is_some_and(|arr| !arr.is_empty())
+    }) || get_file_type(json).is_some()
 }
 
-/// Get all extracted symbols from either legacy `imports` or compact `is`.
+/// Get extracted source symbols from compact v5 fact families.
 fn get_symbols(json: &serde_json::Value) -> Vec<String> {
     let Some(file) = get_first_file(json) else {
         return Vec::new();
     };
-
-    if let Some(arr) = file.get("is").and_then(|v| v.as_array()) {
-        return arr
-            .iter()
-            .filter_map(|sym| sym.as_str())
-            .map(ToString::to_string)
-            .collect();
+    let mut out = Vec::new();
+    for key in ["ct", "mc"] {
+        if let Some(values) = file
+            .pointer(&format!("/ff/{key}"))
+            .and_then(|v| v.as_array())
+        {
+            out.extend(
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(ToString::to_string)),
+            );
+        }
     }
-
-    file.get("imports")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|imp| imp.get("symbol").and_then(|s| s.as_str()))
-                .map(ToString::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+    if let Some(imports) = file.pointer("/ff/i").and_then(|v| v.as_array()) {
+        for entry in imports {
+            if let Some(symbol) = entry
+                .as_array()
+                .and_then(|fields| fields.get(1))
+                .and_then(|value| value.as_str())
+            {
+                out.push(symbol.to_string());
+            }
+        }
+    }
+    out
 }
 
 // ==================== Python Tests ====================

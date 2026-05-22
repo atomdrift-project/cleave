@@ -15,7 +15,7 @@ stream.
 
 Concrete miss — `05d8bc12d167cf6d1f56bfa8060b10f92c5688f960a2a34e2983be4739e60808.pdf`:
 
-- cleave kv reports no `embedded_files[]`
+- cleave value reports no `embedded_files[]`
 - pdf-parser sees `/EmbeddedFile` at obj 22 inside the ObjStm
 
 Same shape for `09c42b8d83803d156de74d61fe14cc06072599442a6da4212e8a588c3df9a7ad.pdf`
@@ -27,7 +27,7 @@ resolver can't follow into the ObjStm).
 ObjStm streams and re-run the dict scan over the decompressed body.
 Augments existing collectors; no `PdfDocument` API change.
 
-## kv fields to add (cheap; the parser already has the data)
+## value fields to add (cheap; the parser already has the data)
 
 Counts pdf-parser surfaces from `dicObjectTypes` that are direct anomaly
 signal — add to `shape.*`:
@@ -80,7 +80,7 @@ match `0x00 D 0x00 i 0x00 m …` no matter how good the regex is).
 
 ## Stats-style atomics worth adding under `metadata/document/pdf/structure/traits.yaml`
 
-Composites the new kv fields unlock — each is a one-line `type: kv`
+Composites the new value fields unlock — each is a one-line `type: value`
 regex:
 
 - **`pdf-link-spam-density`** —
@@ -105,7 +105,7 @@ regex:
 
 ## Trait-only (no parser change) wins available today
 
-These don't need new kv fields, just YAML in
+These don't need new value fields, just YAML in
 `metadata/document/pdf/`:
 
 - `actions[*].source` regex `^object:` paired with

@@ -364,7 +364,7 @@ fn test_evaluate_kv_package_json_permissions() {
     let result = evaluate_kv(&condition, content, path);
     assert!(result.is_some(), "Should detect debugger permission");
     let evidence = result.unwrap();
-    assert_eq!(evidence.method, "kv");
+    assert_eq!(evidence.method, "value");
     assert!(evidence.value.contains("debugger"));
 }
 

@@ -24,12 +24,12 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
     EvaluationContext::test_only_new(report, data, FileType::All)
 }
 
-/// Set a single flat metric on the report. Mirrors how expose populates
-/// `report.expose_metrics` in production — production sets dotted keys
+/// Set a single flat metric on the report. Mirrors how filefacts populates
+/// `report.filefacts_metrics` in production — production sets dotted keys
 /// directly; tests do the same.
 fn set_metric(report: &mut AnalysisReport, key: &str, value: f64) {
     report
-        .expose_metrics
+        .filefacts_metrics
         .get_or_insert_with(Default::default)
         .set_f(key.to_string(), value);
 }
@@ -259,7 +259,9 @@ fn test_eval_metrics_no_metrics() {
 fn test_eval_metrics_missing_field() {
     let mut report = create_test_report();
     // Empty flat map — `text.char_entropy` lookups return None.
-    report.expose_metrics.get_or_insert_with(Default::default);
+    report
+        .filefacts_metrics
+        .get_or_insert_with(Default::default);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -271,7 +273,9 @@ fn test_eval_metrics_missing_field() {
 #[test]
 fn test_eval_metrics_unknown_field() {
     let mut report = create_test_report();
-    report.expose_metrics.get_or_insert_with(Default::default);
+    report
+        .filefacts_metrics
+        .get_or_insert_with(Default::default);
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 

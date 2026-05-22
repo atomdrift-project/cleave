@@ -459,7 +459,7 @@ impl UnifiedSourceAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // `pyc.*` kv now comes from expose's dual emission step
+        // `pyc.*` kv now comes from filefacts's dual emission step
         // in `evaluate_and_merge_findings`; no synthesis here.
 
         // Add structural feature
@@ -564,7 +564,7 @@ impl UnifiedSourceAnalyzer {
                 f
             };
             report.findings.push(finding);
-            // `text.*` metrics still flow in via expose's `extract` —
+            // `text.*` metrics still flow in via filefacts's `extract` —
             // it falls back to a tree-less text emission when the
             // parse is skipped or fails.
         }
@@ -582,7 +582,7 @@ impl UnifiedSourceAnalyzer {
             );
             finding.crit = crate::types::Criticality::Component;
             report.findings.push(finding);
-            // Text-only metrics still come from expose's source extractor.
+            // Text-only metrics still come from filefacts's source extractor.
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -872,8 +872,8 @@ impl UnifiedSourceAnalyzer {
 
             // `text.*` / `identifiers.*` / `strings.*` / `comments.*` /
             // `functions.*` / `imports.*` metrics all flow through
-            // expose's source extractor now and get merged into
-            // `report.expose_metrics` inside the capability mapper.
+            // filefacts's source extractor now and get merged into
+            // `report.filefacts_metrics` inside the capability mapper.
         }
         // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
         // Guard against recursion: when this analyzer was created for inner analysis
@@ -907,7 +907,7 @@ impl UnifiedSourceAnalyzer {
 
         // Build the `source.*` kv tree from already-extracted
         // imports/exports/functions before the trait engine runs so
-        // `type: kv, path: source.imports, ...` traits can resolve.
+        // `type: value, path: source.imports, ...` traits can resolve.
         super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
 
         // Evaluate all rules (atomic + composite) and merge into report
@@ -1269,7 +1269,7 @@ if __name__ == "__main__":
         // emits `text.total_lines` (zero or otherwise) once content is
         // non-empty, so presence of any `text.` key confirms emission.
         assert!(report
-            .expose_metrics
+            .filefacts_metrics
             .as_ref()
             .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
     }

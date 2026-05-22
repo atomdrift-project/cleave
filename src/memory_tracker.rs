@@ -455,7 +455,7 @@ pub fn log_all_memory_stats() {
     crate::analyzers::archive::analyzers::log_archive_analysis_stats();
 
     // Log rizin subprocess statistics
-    expose::rizin::log_stats();
+    filefacts::rizin::log_stats();
 }
 
 /// Jemalloc allocator statistics — only available when compiled with `--features jemalloc`.
@@ -593,7 +593,7 @@ pub fn configure_jemalloc_low_memory() {
         not(any(target_os = "freebsd", target_os = "dragonfly", target_os = "openbsd"))
     ))]
     {
-        // tikv-jemalloc-ctl 0.6 doesn't expose dirty_decay_ms/muzzy_decay_ms
+        // tikv-jemalloc-ctl 0.6 doesn't filefacts dirty_decay_ms/muzzy_decay_ms
         // as typed helpers, so use the raw mallctl interface.
         // SAFETY: ssize_t (isize) is the correct type for these settings per jemalloc docs.
         unsafe {

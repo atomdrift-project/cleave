@@ -113,7 +113,11 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
         "string_literal"
     } else if context.contains("type: text") {
         "text"
-    } else if context.contains("type: symbol") {
+    } else if context.contains("type: symbol")
+        || context.contains("type: import")
+        || context.contains("type: export")
+        || context.contains("type: function")
+    {
         "symbol"
     } else if context.contains("type: hex") {
         "hex"
@@ -123,8 +127,8 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
         "syscall"
     } else if context.contains("type: ast") {
         "ast"
-    } else if context.contains("type: kv") {
-        "kv"
+    } else if context.contains("type: value") {
+        "value"
     } else {
         return None;
     };
@@ -225,7 +229,9 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "language",
             "case_insensitive",
         ],
-        "kv" => &["type", "key", "value", "operator"],
+        "value" => &[
+            "type", "path", "is", "exact", "substr", "regex", "exists", "size_min", "size_max",
+        ],
         _ => return None,
     };
 
@@ -256,7 +262,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
                         "pattern".to_string()
                     }
                     "match" => "match".to_string(),
-                    "value" if condition_type != "kv" => "value".to_string(),
+                    "value" if condition_type != "value" => "value".to_string(),
                     "search" => "search".to_string(),
                     "case_sensitive" => "case_sensitive".to_string(),
                     "match_type" => "match_type".to_string(),
@@ -315,11 +321,7 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
             let invalid_string_type =
                 line.starts_with("type: string") && !line.starts_with("type: string_literal");
             // Check if this is an invalid type
-            if line.contains("type: word")
-                || invalid_string_type
-                || line.contains("type: function")
-                || line.contains("type: regex")
-            {
+            if line.contains("type: word") || invalid_string_type || line.contains("type: regex") {
                 return i + 1; // Return 1-indexed line number
             }
         }
@@ -488,17 +490,17 @@ fn provide_error_guidance(
         }
     }
 
-    // Check for fields used with wrong condition type (kv doesn't support count/density)
+    // Check for fields used with wrong condition type (value doesn't support count/density)
     if !found_hallucination
-        && context.contains("type: kv")
+        && context.contains("type: value")
         && (context.contains("count_min:")
             || context.contains("count_max:")
             || context.contains("per_kb_min:")
             || context.contains("per_kb_max:"))
     {
-        guidance.push_str("\n   Count/density fields are not valid for 'type: kv'.\n");
+        guidance.push_str("\n   Count/density fields are not valid for 'type: value'.\n");
         guidance.push_str("   💡 These fields only work with 'type: text', 'type: string_literal', 'type: raw', 'type: hex', 'type: symbol', or 'type: encoded'.\n");
-        guidance.push_str("   💡 KV searches query structured data and return boolean results, not frequency counts.\n");
+        guidance.push_str("   💡 Value searches query structured data and return boolean results, not frequency counts.\n");
         found_hallucination = true;
     }
 
@@ -521,9 +523,7 @@ fn provide_error_guidance(
         guidance.push_str("   • yara       - Match YARA rule results\n");
         guidance.push_str("   • syscall    - Match system calls\n");
         guidance.push_str("   • section    - Section analysis (size/entropy ratio checks via compare_to + size_ratio_*/entropy_ratio_*)\n");
-        guidance.push_str(
-            "   • metrics, basename, kv (use `symbol kind:import` for per-import matches)\n",
-        );
+        guidance.push_str("   • import, export, function, metrics, basename, value\n");
 
         // Check for common mistakes in context
         if context.contains("type: word") {
@@ -558,10 +558,8 @@ fn provide_error_guidance(
             );
         } else if context.contains("type: import_combination") {
             guidance.push_str(
-                "\n   💡 `type: import_combination` was removed. Use `type: symbol` with `kind: import` and regex/substr filters; chain multiple atoms through a composite rule's `all:`/`any:`/`needs:`.\n",
+                "\n   💡 `type: import_combination` was removed. Use `type: import` and chain multiple atoms through a composite rule's `all:`/`any:`/`needs:`.\n",
             );
-        } else if context.contains("type: function") {
-            guidance.push_str("\n   💡 Did you mean 'type: symbol' instead of 'type: function'?\n");
         } else if context.contains("type: regex") {
             guidance
                 .push_str("\n   💡 Use 'type: text' with a 'regex:' field, not 'type: regex'\n");

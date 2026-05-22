@@ -15,6 +15,35 @@ For the library that produces these reports, see
 `"3"` for finalised reports and `"2.0"` for cached intermediates.
 Consumers should treat unknown versions as a hard error.
 
+
+## Compact JSON v5
+
+The CLI `--format json` output uses compact schema v5. The top-level object is:
+
+| JSON | Type | Meaning |
+| ---- | ---- | ------- |
+| `v` | string | Compact schema version, currently `"5"`. |
+| `fs` | array | Per-file compact records. |
+
+Each `fs[]` entry keeps cleave verdict data at the file level and packs filefacts data under `ff`. The `ff` object is intentionally not a lossless mirror of the full report; it is the dense, ML/UI-oriented fact surface.
+
+| `ff` key | Meaning |
+| -------- | ------- |
+| `id` | File identity/type from filefacts, such as `pe`, `elf`, `macho`, `js`, or `zip`. |
+| `m` | Metrics grouped by prefix: `{"binary":{"overall_entropy":7.12}}` instead of flat `binary.overall_entropy`. |
+| `v` | Residual values only. Typed fact families are not duplicated here. |
+| `s` | Strings as `[offset, encoding, value]`. |
+| `i` | Imports as `[library, symbol]` or `[library, symbol, offset]`. |
+| `x` | Exports as `[symbol]` or `[symbol, offset]`. |
+| `fn` | Functions as `[name]`, `[name, offset]`, or `[name, offset, kind]`. |
+| `sc` | Sections as `[name, file_offset, file_size, entropy, flags]`. |
+| `ct` | Source AST call targets. |
+| `mc` | Source AST member chains. |
+| `ca` | Source AST string call arguments as `[callee, value]`. |
+| `er` | Recoverable parse errors as `[kind, stage]`. |
+
+The important invariant is that `ff.v` is residual. If a fact has a typed family (`s`, `i`, `x`, `fn`, `sc`, `ct`, `mc`, `ca`, or `er`), it must not also be emitted under `ff.v` by default.
+
 ## Top-level shape
 
 `AnalysisReport`, `src/types/core.rs:71`. All array and option fields
@@ -40,7 +69,7 @@ are omitted from JSON when empty or `None`.
 | `source_code_metrics` | `SourceCodeMetrics`           | Import counts, class counts, function metrics.                   |
 | `overlay_metrics`     | `OverlayMetrics`              | Appended overlay data (self-extracting archives).                |
 | `metrics`             | `Metrics`                     | Unified feature vector for downstream ML.                        |
-| `kv_tree`             | JSON object                   | Format-specific metadata: manifest, DWARF, EXIF, etc.            |
+| `values_tree`             | JSON object                   | Format-specific metadata: manifest, DWARF, EXIF, etc.            |
 | `paths`               | array of `PathInfo`           | Discovered file and directory paths with access patterns.        |
 | `directories`         | array of `DirectoryAccess`    | Paths grouped by parent directory.                               |
 | `env_vars`            | array of `EnvVarInfo`         | Environment variable references.                                 |

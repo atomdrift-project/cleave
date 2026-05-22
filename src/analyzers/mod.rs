@@ -33,7 +33,7 @@ pub use input::AnalysisInput;
 // `text_metrics`, `identifier_metrics`, `string_metrics`,
 // `comment_metrics`, `function_metrics`, `import_metrics` retired —
 // all source-text metric extraction now lives in
-// `expose/src/formats/source/`.
+// `filefacts/src/formats/source/`.
 pub(crate) mod symbol_extraction;
 pub(crate) mod utils;
 

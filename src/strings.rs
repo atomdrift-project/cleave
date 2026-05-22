@@ -116,10 +116,10 @@ impl StringExtractor {
 
     /// Extract strings using stng for comprehensive extraction.
     ///
-    /// Rizin string extraction is owned by `expose` now — when stng
+    /// Rizin string extraction is owned by `filefacts` now — when stng
     /// needs rizin-derived boundaries or function metadata they arrive
     /// through `stng::ExtractOptions::with_rizin_*` populated by the
-    /// upstream `expose` parse, not via a cleave-side `with_r2_strings`
+    /// upstream `filefacts` parse, not via a cleave-side `with_r2_strings`
     /// fold. Callers that previously plumbed `Option<Vec<R2String>>`
     /// through this function just stop passing it.
     pub(crate) fn extract_smart(&self, data: &[u8]) -> Vec<StringInfo> {
@@ -479,7 +479,7 @@ mod tests {
         let sidecar = strings
             .iter()
             .find(|s| s.value == decoded)
-            .expect("base64 classified strings should expose decoded text to encoded traits");
+            .expect("base64 classified strings should filefacts decoded text to encoded traits");
         assert_eq!(sidecar.encoding_chain, vec!["base64"]);
         assert_eq!(sidecar.offset, Some(42));
         assert_eq!(sidecar.section.as_deref(), Some(".rodata"));

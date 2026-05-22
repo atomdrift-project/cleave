@@ -1,10 +1,10 @@
 //! PNG analyzer entry point.
 //!
 //! All PNG metric extraction (chunk walk, IHDR dimensions, pixel-stat
-//! decode for steganography signals) lives in expose. This module is
-//! now a thin shell that runs the trait engine — expose's
+//! decode for steganography signals) lives in filefacts. This module is
+//! now a thin shell that runs the trait engine — filefacts's
 //! dual-emission step in `evaluate_and_merge_findings` populates
-//! `report.expose_metrics` with every `png.*` / `image.*` /
+//! `report.filefacts_metrics` with every `png.*` / `image.*` /
 //! `binary.overall_entropy` field that the trait rules consume.
 
 use super::{AnalysisInput, Analyzer};
@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 
-/// PNG analyzer — defers extraction to expose and runs trait
+/// PNG analyzer — defers extraction to filefacts and runs trait
 /// evaluation against the merged metric set.
 #[derive(Debug)]
 pub(crate) struct PngAnalyzer {
@@ -70,9 +70,9 @@ impl PngAnalyzer {
             report.strings = self.string_extractor.convert_stng_strings(strings);
         }
 
-        // Expose's dual-emission inside `evaluate_and_merge_findings`
+        // Filefacts's dual-emission inside `evaluate_and_merge_findings`
         // populates every `png.*` / `image.*` / `binary.overall_entropy`
-        // metric onto `report.expose_metrics` for the trait engine.
+        // metric onto `report.filefacts_metrics` for the trait engine.
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
 

@@ -108,23 +108,18 @@ fn analyze(path: &Path) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("parse cleave output for {}: {e}", path.display()))
 }
 
-/// Pull the union of finding IDs from the v3 schema (top-level `findings`
-/// is cleared after `finalize`; the source of truth lives under `files[]`).
+/// Pull the union of compact v5 finding IDs from `fs[].ts`.
 fn collect_finding_ids(report: &serde_json::Value) -> Vec<String> {
     let mut ids = Vec::new();
-    let mut walk = |arr: &serde_json::Value| {
-        if let Some(arr) = arr.as_array() {
-            for f in arr {
-                if let Some(id) = f.get("id").and_then(|v| v.as_str()) {
-                    ids.push(id.to_string());
-                }
-            }
-        }
-    };
-    walk(&report["findings"]);
-    if let Some(files) = report.get("files").and_then(|v| v.as_array()) {
+    if let Some(files) = report.get("fs").and_then(|v| v.as_array()) {
         for file in files {
-            walk(&file["findings"]);
+            if let Some(findings) = file.get("ts").and_then(|v| v.as_array()) {
+                ids.extend(
+                    findings
+                        .iter()
+                        .filter_map(|f| f.get("i").and_then(|v| v.as_str()).map(str::to_owned)),
+                );
+            }
         }
     }
     ids.sort();
@@ -132,62 +127,43 @@ fn collect_finding_ids(report: &serde_json::Value) -> Vec<String> {
     ids
 }
 
-/// Pull the maximum criticality observed across all findings.
+/// Pull the maximum criticality observed across all compact v5 findings.
 fn max_criticality(report: &serde_json::Value) -> String {
-    let mut best = "component".to_string();
-    let mut best_rank = 0u8;
-    let mut consider = |arr: &serde_json::Value| {
-        if let Some(arr) = arr.as_array() {
-            for f in arr {
-                if let Some(c) = f.get("crit").and_then(|v| v.as_str()) {
-                    let r = crit_rank(c);
-                    if r > best_rank {
-                        best_rank = r;
-                        best = c.to_string();
+    let mut best_rank = 1u8;
+    if let Some(files) = report.get("fs").and_then(|v| v.as_array()) {
+        for file in files {
+            if let Some(findings) = file.get("ts").and_then(|v| v.as_array()) {
+                for finding in findings {
+                    if let Some(level) = finding.get("l").and_then(|v| v.as_u64()) {
+                        best_rank = best_rank.max(level as u8);
                     }
                 }
             }
         }
-    };
-    consider(&report["findings"]);
-    if let Some(files) = report.get("files").and_then(|v| v.as_array()) {
-        for file in files {
-            consider(&file["findings"]);
-        }
     }
-    best
+    match best_rank {
+        0 | 1 => "component",
+        2 => "baseline",
+        3 => "notable",
+        4 => "suspicious",
+        5 => "hostile",
+        _ => "hostile",
+    }
+    .to_string()
 }
 
-/// Look up an `office.*` metric path under either `metrics` or
-/// `files[0].metrics`. Returns the JSON value at the leaf, or `Null`.
+/// Look up an `office.*` compact v5 metric path under `fs[0].ff.m`.
 fn metric_at(report: &serde_json::Value, path: &str) -> serde_json::Value {
-    let bases: Vec<&serde_json::Value> = std::iter::once(&report["metrics"])
-        .chain(
-            report
-                .get("files")
-                .and_then(|v| v.as_array())
-                .into_iter()
-                .flatten()
-                .map(|f| &f["metrics"]),
-        )
-        .collect();
-    for base in bases {
-        let mut cur = base;
-        let mut ok = true;
-        for part in path.split('.') {
-            match cur.get(part) {
-                Some(next) => cur = next,
-                None => {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-        if ok && !cur.is_null() {
-            return cur.clone();
-        }
-    }
-    serde_json::Value::Null
+    let Some((group, field)) = path.split_once(".") else {
+        return serde_json::Value::Null;
+    };
+    report
+        .get("fs")
+        .and_then(|v| v.as_array())
+        .and_then(|files| files.first())
+        .and_then(|file| file.pointer(&format!("/ff/m/{group}/{field}")))
+        .cloned()
+        .unwrap_or(serde_json::Value::Null)
 }
 
 /// Validate a manifest entry against the analyzer report. Panics with a

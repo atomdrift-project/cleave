@@ -1865,13 +1865,13 @@ fn collect_case_insensitive_overlap_issues(
                 ..
             } => {
                 if let Some(v) = exact {
-                    add_case_pattern("kv", "exact", v.clone(), *case_insensitive);
+                    add_case_pattern("value", "exact", v.clone(), *case_insensitive);
                 }
                 if let Some(v) = substr {
-                    add_case_pattern("kv", "substr", v.clone(), *case_insensitive);
+                    add_case_pattern("value", "substr", v.clone(), *case_insensitive);
                 }
                 if let Some(v) = regex {
-                    add_case_pattern("kv", "regex", v.clone(), *case_insensitive);
+                    add_case_pattern("value", "regex", v.clone(), *case_insensitive);
                 }
             }
             Condition::Ast {

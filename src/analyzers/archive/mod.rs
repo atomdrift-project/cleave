@@ -742,33 +742,35 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // Open expose once on the host archive bytes and merge its
+        // Open filefacts once on the host archive bytes and merge its
         // typed values/metrics into the report. The capability
         // mapper's `evaluate_and_merge_findings_with_precomputed`
         // does this for PE/ELF/Mach-O but archives evaluate via
         // `evaluate_container_findings`, which doesn't go through
         // that path — so we plumb the merge in here. This is what
         // makes `chm.itsf.*` / `rpm.*` / `crx.*` etc. reachable via
-        // both `report.kv_tree` (host-level kv) and
-        // `report.expose_metrics` (host-level metrics).
+        // both `report.values_tree` (host-level kv) and
+        // `report.filefacts_metrics` (host-level metrics).
         if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(archive_path, data) {
             let values_tree = ctx.values_tree();
-            let expose_map: std::collections::BTreeMap<String, f64> = ctx
+            let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
                 .parsed
                 .metrics()
                 .iter()
                 .map(|(k, v)| (k.to_string(), v))
                 .collect();
-            report.expose = Some(crate::types::ExposeView::from_ctx(&ctx));
+            report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
             drop(ctx);
             if let serde_json::Value::Object(map) = values_tree {
                 for (namespace, subtree) in map {
                     report.merge_kv_subtree(&namespace, subtree);
                 }
             }
-            if !expose_map.is_empty() {
-                let dest = report.expose_metrics.get_or_insert_with(Default::default);
-                for (k, v) in expose_map {
+            if !filefacts_map.is_empty() {
+                let dest = report
+                    .filefacts_metrics
+                    .get_or_insert_with(Default::default);
+                for (k, v) in filefacts_map {
                     dest.insert(k, v);
                 }
             }
@@ -777,8 +779,8 @@ impl ArchiveAnalyzer {
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
             // Seed `archive_contents` with the member listing. `archive.*`
             // metrics (file_count, compression_ratio, hidden_file_count,
-            // path_traversal_count, …) are produced by expose's central-
-            // directory walker and flow into `report.expose_metrics` via
+            // path_traversal_count, …) are produced by filefacts's central-
+            // directory walker and flow into `report.filefacts_metrics` via
             // `AnalysisContext` — no cleave-side flattening here.
             if let Ok(mut seeded_entries) =
                 zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
@@ -1003,7 +1005,7 @@ impl ArchiveAnalyzer {
         report.findings = container_findings;
         // Detach files so we can pass `report` immutably to the reeval; the
         // reeval evaluator only reads report-level metadata (target.path,
-        // kv_tree) so this swap is safe.
+        // values_tree) so this swap is safe.
         let mut files = std::mem::take(&mut report.files);
         for file in &mut files {
             mapper.reeval_downgrades_cross_scope(

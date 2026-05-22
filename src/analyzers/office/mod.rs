@@ -101,7 +101,7 @@ impl OfficeAnalyzer {
             ooxml_metrics,
             xlm_metrics,
             cross_counts,
-            kv_tree,
+            values_tree,
         ) = match file_type {
             FileType::OleDoc => {
                 let (t, f, v, e, om, cc, kv) = self.analyze_ole2(data);
@@ -139,22 +139,22 @@ impl OfficeAnalyzer {
             .push("office-analyzer".to_string());
         report.findings.extend(findings);
 
-        // Stash the synthesized office kv tree on the report so the
-        // kv evaluator can consult it (`type: kv path: summary.author`
+        // Stash the synthesized office values tree on the report so the
+        // value evaluator can consult it (`type: value path: summary.author`
         // etc.). Empty/null trees are dropped so JSON output stays
         // clean for non-office or unparsable files.
-        if !kv_tree.is_null() && kv_tree.as_object().is_none_or(|m| !m.is_empty()) {
-            report.kv_tree = Some(Box::new(kv_tree));
+        if !values_tree.is_null() && values_tree.as_object().is_none_or(|m| !m.is_empty()) {
+            report.values_tree = Some(Box::new(values_tree));
         }
 
-        // Open the shared expose-side parse for this document so the
+        // Open the shared filefacts-side parse for this document so the
         // VBA symbol surface comes from `parsed.imports()` /
         // `parsed.functions()` instead of a second regex pass.
-        // Expose already pre-decompressed each VBA module and ran
+        // Filefacts already pre-decompressed each VBA module and ran
         // the extractor across all of them; the typed views carry
         // every Declare / CreateObject / GetObject / Sub|Function
-        // expose found, tagged `source: "vba-*"`. Returns `None`
-        // for files expose can't open (cleave still falls back to
+        // filefacts found, tagged `source: "vba-*"`. Returns `None`
+        // for files filefacts can't open (cleave still falls back to
         // emitting per-module shape stats only).
         let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
 
@@ -172,8 +172,8 @@ impl OfficeAnalyzer {
 
         // Emit OLE2 / OOXML / XLM structural sub-metrics under the
         // flat `office.ole.*` / `office.ooxml.*` / `office.xlm.*`
-        // keys (post-#41, all metric resolution goes through expose's
-        // flat map — `expose_metrics`). Container-format-specific
+        // keys (post-#41, all metric resolution goes through filefacts's
+        // flat map — `filefacts_metrics`). Container-format-specific
         // counts (stream count, zip entry count, content-type flags,
         // XLM substring counts) come from the parsers; cross-format
         // counts (embedded executable count, external relationship
@@ -204,7 +204,9 @@ impl OfficeAnalyzer {
         // Surface count on the cross-format binary metric so ML/scoring can use it.
         if embedded_count > 0 {
             use crate::types::core::MetricsExt;
-            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            let flat = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
             flat.set_u("binary.embedded_binary_count", u64::from(embedded_count));
         }
 
@@ -228,14 +230,14 @@ impl OfficeAnalyzer {
     }
 
     /// Pull `Declare`-imported APIs, `CreateObject`/`GetObject` ProgIDs,
-    /// and Sub/Function declarations from expose's typed views and
+    /// and Sub/Function declarations from filefacts's typed views and
     /// attach them to the parent report's `imports`/`functions` lists.
     /// Folds aggregates into `OfficeMetrics::vba` and sets the cross-
     /// format `office.*` flags (has_macros, vba_module_count,
     /// vba_source_size, doc_type).
     ///
     /// The symbol surface flows entirely through
-    /// [`crate::analysis_context::AnalysisContext`] — expose already
+    /// [`crate::analysis_context::AnalysisContext`] — filefacts already
     /// ran the regex extractor across every VBA module while building
     /// the typed `Imports`/`Functions` views. Per-module shape stats
     /// (logical lines, comments, random-name heuristic) stay
@@ -256,11 +258,13 @@ impl OfficeAnalyzer {
         // sub-struct slots stay None when no VBA project is present so
         // the empty-doc JSON output is undisturbed.
         use crate::types::{flatten_into_metrics, kv_set_path, MetricsExt};
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
-        // `office.doc_type` is a string — goes to kv_tree, not the
+        let flat = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
+        // `office.doc_type` is a string — goes to values_tree, not the
         // numeric metric map. Only seed it on the first pass.
         let doc_type_seeded = report
-            .kv_tree
+            .values_tree
             .as_deref()
             .and_then(|t| t.as_object())
             .and_then(|o| o.get("office"))
@@ -291,7 +295,7 @@ impl OfficeAnalyzer {
                     ),
                 );
                 kv_set_path(
-                    &mut report.kv_tree,
+                    &mut report.values_tree,
                     "office.doc_type",
                     serde_json::Value::String(ext),
                 );
@@ -326,9 +330,9 @@ impl OfficeAnalyzer {
             agg.comment_lines = agg.comment_lines.saturating_add(shape.comment_lines);
         }
 
-        // Symbol surface comes from expose's typed views — one pass
+        // Symbol surface comes from filefacts's typed views — one pass
         // over each, filtered by the `vba-*` source-tag family.
-        // When ctx is unavailable (rare; only if expose fails to
+        // When ctx is unavailable (rare; only if filefacts fails to
         // open the document), the symbol-driven aggregates stay at
         // their defaults and the shape stats above are the only
         // signal we surface.
@@ -339,7 +343,7 @@ impl OfficeAnalyzer {
             let mut ident_stats = vba_symbols::IdentifierStats::default();
 
             for imp in c
-                .imports_from_expose()
+                .imports_from_filefacts()
                 .into_iter()
                 .filter(|i| i.source.starts_with("vba-"))
             {
@@ -388,7 +392,7 @@ impl OfficeAnalyzer {
             }
 
             for func in c
-                .functions_from_expose()
+                .functions_from_filefacts()
                 .into_iter()
                 .filter(|f| f.source.starts_with("vba-"))
             {
@@ -405,9 +409,9 @@ impl OfficeAnalyzer {
             agg.mean_identifier_length = ident_stats.mean_length();
             agg.identifier_entropy = ident_stats.entropy_bits();
 
-            // Aggregate counts come straight from expose's metric
+            // Aggregate counts come straight from filefacts's metric
             // map — they were folded across modules during the
-            // expose-side regex pass.
+            // filefacts-side regex pass.
             let m = c.parsed.metrics();
             let counter = |key: &str| -> u32 { m.get(key).map(|v| v as u32).unwrap_or(0) };
             agg.declare_count = counter("office.vba.declare_count");
@@ -432,7 +436,7 @@ impl OfficeAnalyzer {
 
     /// Emit structure-level metrics produced by `analyze_ole2` /
     /// `analyze_ooxml` under flat `office.{ole,ooxml,xlm}.*` keys
-    /// (in `expose_metrics`) and fold cross-format counts
+    /// (in `filefacts_metrics`) and fold cross-format counts
     /// (`embedded_executable_count`, the external-relationship
     /// breakdown, `dde_link_count`) into the per-file metric map.
     ///
@@ -449,7 +453,9 @@ impl OfficeAnalyzer {
         embedded_executable_count: u32,
     ) {
         use crate::types::{flatten_into_metrics, MetricsExt};
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        let flat = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
 
         // Cross-format counts derived from the parsed doc.  The
         // `embedded_executable_count` argument is what the office
@@ -954,12 +960,12 @@ impl OfficeAnalyzer {
             ..Default::default()
         };
 
-        // Synthetic kv-tree population is retired — expose's
+        // Synthetic kv-tree population is retired — filefacts's
         // `ole2::extract` populates `office.*` via the AnalysisContext
         // dual-emit, and trait rules target the unified schema there
         // (`office.kind`, `office.core.*`, `office.vba.modules[]`, …).
         // We hand back `Value::Null` so the caller's `is_null` guard
-        // skips overwriting `report.kv_tree`.
+        // skips overwriting `report.values_tree`.
         let kv = serde_json::Value::Null;
 
         (
@@ -1474,7 +1480,7 @@ impl OfficeAnalyzer {
         cross.embedded_executable_count = doc.embedded_executables.len() as u32;
         cross.is_encrypted = doc.has_encryption;
 
-        // See OLE2 path: synthetic kv emission is retired (expose's
+        // See OLE2 path: synthetic kv emission is retired (filefacts's
         // `ooxml::extract` populates the canonical `office.*` shape).
         let kv = serde_json::Value::Null;
 
@@ -1594,7 +1600,7 @@ mod tests {
     /// Per-module shape stats (logical-line count, random-name
     /// heuristic) thread through `populate_vba_symbols_and_metrics`
     /// even when no `AnalysisContext` is provided — symbol-side
-    /// aggregates require expose, but the shape side is cleave-only
+    /// aggregates require filefacts, but the shape side is cleave-only
     /// and runs from raw module source.
     #[test]
     fn populate_vba_threads_shape_stats_without_ctx() {
@@ -1633,11 +1639,11 @@ mod tests {
 
         use crate::types::MetricsExt;
         let flat = report
-            .expose_metrics
+            .filefacts_metrics
             .as_ref()
-            .expect("expose_metrics populated");
+            .expect("filefacts_metrics populated");
         let doc_type = report
-            .kv_tree
+            .values_tree
             .as_deref()
             .and_then(|t| t.pointer("/office/doc_type"))
             .and_then(|v| v.as_str())
@@ -1658,7 +1664,7 @@ mod tests {
 
     /// Verify `populate_structure_metrics` threads sub-struct metrics
     /// and cross-format counts onto the flat `office.*` keys in
-    /// `expose_metrics`.
+    /// `filefacts_metrics`.
     #[test]
     fn populate_structure_metrics_wires_subobjects_and_cross_counts() {
         let analyzer = OfficeAnalyzer::new();
@@ -1707,9 +1713,9 @@ mod tests {
 
         use crate::types::MetricsExt;
         let flat = report
-            .expose_metrics
+            .filefacts_metrics
             .as_ref()
-            .expect("expose_metrics populated");
+            .expect("filefacts_metrics populated");
         assert_eq!(flat.get_u("office.embedded_executable_count"), Some(2));
         assert_eq!(flat.get_u("office.external_ref_count"), Some(4));
         assert_eq!(flat.get_u("office.external_template_count"), Some(1));

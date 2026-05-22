@@ -242,7 +242,7 @@ pub struct Section {
     pub permissions: Option<String>,
     /// Format-native flag tokens (e.g., `["alloc", "executable",
     /// "merge"]` on ELF; `["readable", "writable"]` on PE). Lets
-    /// `type: kv` rules match by membership without parsing the
+    /// `type: value` rules match by membership without parsing the
     /// `permissions` string. Empty for sections without recognised
     /// flags.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]

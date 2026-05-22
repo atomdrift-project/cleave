@@ -95,7 +95,7 @@ pub fn run(
     // Validate arguments based on search type
     if search_type == cli::SearchType::Kv {
         if kv_path.is_none() {
-            anyhow::bail!("--kv-path is required for kv searches");
+            anyhow::bail!("--path is required for value searches");
         }
     } else if search_type == cli::SearchType::Section {
         // Section searches don't require pattern (can search by length or entropy alone)
@@ -1068,12 +1068,12 @@ pub fn run(
                 None,
             );
 
-            // Use the actual kv evaluator with caching
+            // Use the actual value evaluator with caching
             let evidence = composite_rules::evaluators::evaluate_kv(&condition, &eval_ctx);
             let _matched = evidence.is_some();
 
             let mut out = String::new();
-            out.push_str("Search: kv (structured data)\n");
+            out.push_str("Search: value\n");
             out.push_str(&format!("Path: {}\n", kv_path_str));
             if !pattern.is_empty() {
                 out.push_str(&format!(
@@ -2086,7 +2086,7 @@ pub fn run(
                 output.push_str("  Use --value-min/--value-max for thresholds\n");
                 output.push_str("  Use --min-size/--max-size for file size constraints\n");
                 let flat_keys: Vec<&str> = report
-                    .expose_metrics
+                    .filefacts_metrics
                     .as_ref()
                     .map(|m| m.keys().map(String::as_str).collect())
                     .unwrap_or_default();

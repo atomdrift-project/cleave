@@ -23,9 +23,9 @@ use std::path::Path;
 /// Seed `report.archive_contents` with the ZIP member listing.
 ///
 /// `archive.*` *metrics* (file_count, compression_ratio, hidden_file_count,
-/// path_traversal_count, …) are now produced by expose's central-directory
-/// walker — see `expose/src/formats/zip.rs`. They reach the trait engine
-/// via `AnalysisContext` → `report.expose_metrics` and don't need to be
+/// path_traversal_count, …) are now produced by filefacts's central-directory
+/// walker — see `filefacts/src/formats/zip.rs`. They reach the trait engine
+/// via `AnalysisContext` → `report.filefacts_metrics` and don't need to be
 /// recomputed cleave-side.
 pub(crate) fn inspect_zip_metadata_from_reader<R: Read + Seek>(
     reader: R,

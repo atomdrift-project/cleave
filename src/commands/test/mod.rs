@@ -29,7 +29,7 @@
 //!
 //! **Usage:**
 //! ```text
-//! cleave test-match <file> --type <string-value|symbol|raw|kv|hex|encoded|section|metrics> \
+//! cleave test-match <file> --type <string-value|symbol|raw|value|hex|encoded|section|metrics> \
 //!   --pattern <pattern> [--method <exact|contains|regex|word>] [options...]
 //! ```
 //!
@@ -37,7 +37,7 @@
 //! - `string-value`: Search extracted string literals
 //! - `symbol`: Search function/import/export symbols
 //! - `raw`: Search raw file content (bytes)
-//! - `kv`: Search structured data (JSON/YAML) by key path
+//! - `value`: Search structural values by path
 //! - `hex`: Search for hex byte patterns
 //! - `encoded`: Search decoded/encoded strings (base64, hex, xor)
 //! - `section`: Search binary sections by name/size/entropy
@@ -166,13 +166,13 @@ pub(crate) fn prepare_test_analysis(
         report.strings = string_extractor.extract_smart(&full_data);
     }
 
-    // Attach the binary kv tree so kv-sourced traits (`type: kv,
+    // Attach the binary values tree so value-sourced traits (`type: value,
     // path: …`) evaluate the same way as the production analyze
-    // pipeline. Without this, kv conditions silently fail and rules
+    // pipeline. Without this, value conditions silently fail and rules
     // like `metadata/binary/linking::ifunc` show NOT MATCHED in
     // test-rules even when they fire in `cleave analyze`.
     // Mirrors `lib.rs::analyze_file_with_resources`: trait authors
-    // read cross-format facts from `report.expose.values.*`; cleave
+    // read cross-format facts from `report.filefacts.values.*`; cleave
     // only layers on raw extractors here (ELF .comment, DWARF,
     // ifunc_symbols, init_array entries, …).
     crate::analyzers::binary_extractors::augment_report(&mut report, &full_data);

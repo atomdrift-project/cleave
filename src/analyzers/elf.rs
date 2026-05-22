@@ -3,7 +3,7 @@
 //! Every ELF-internal helper takes a non-optional
 //! [`crate::analysis_context::AnalysisContext`]: structural data
 //! (sections, segments, dynamic-section facts, notes) is read from
-//! `expose`'s typed views rather than re-walked with goblin. The
+//! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
@@ -24,7 +24,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
 /// Analyzer for Linux ELF binaries (executables, shared objects, kernel modules).
 ///
-/// Wave B routed deep-binary signal through `expose::open`: function
+/// Wave B routed deep-binary signal through `filefacts::open`: function
 /// CFG fields and recovered symbols for stripped binaries arrive on
 /// `ctx.parsed.functions()` / `imports()` / `exports()` /
 /// `sections()`. The analyzer no longer spawns rizin itself.
@@ -42,7 +42,7 @@ pub(crate) struct ElfAnalyzer {
 }
 
 /// Map an ELF `e_machine` value to its canonical short name. Used
-/// only when expose's parse fails entirely and we salvage the
+/// only when filefacts's parse fails entirely and we salvage the
 /// architecture from raw header bytes (see `analyze_elf_core`'s
 /// failure branch).
 fn arch_name_from_machine(e_machine: u16) -> String {
@@ -76,7 +76,7 @@ impl ElfAnalyzer {
                 .with_criticality(Criticality::Baseline)
                 .with_evidence(vec![Evidence {
                     method: method.to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value,
                     location: None,
                     ..Default::default()
@@ -199,24 +199,24 @@ impl ElfAnalyzer {
         let mut embedded_binary_count: u32 = 0;
         let mut embedded_archive_count: u32 = 0;
 
-        // Expose's ELF parse status drives the analyzer. A successful
+        // Filefacts's ELF parse status drives the analyzer. A successful
         // parse populates `elf.machine`; a failed/panicked parse leaves
         // it absent and instead sets `elf.parse_failed` /
         // `elf.parse_panicked`. We branch on that single signal.
         let parsed_values = ctx.parsed.values();
         let parsed_metrics = ctx.parsed.metrics();
-        let expose_ok = parsed_values.get("elf.machine").is_some();
+        let filefacts_ok = parsed_values.get("elf.machine").is_some();
         let parse_failed = parsed_metrics.get("elf.parse_failed").is_some();
         let parse_panicked = parsed_metrics.get("elf.parse_panicked").is_some();
 
-        let is_core_dump = expose_ok
+        let is_core_dump = filefacts_ok
             && parsed_values
                 .get("elf.type")
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| s == "core");
 
-        let (r2_strings, elf_content_end) = if expose_ok {
-            tools_used.push("expose".to_string());
+        let (r2_strings, elf_content_end) = if filefacts_ok {
+            tools_used.push("filefacts".to_string());
             report.target.architectures = Some(vec![parsed_values
                 .get("elf.machine")
                 .and_then(|v| v.as_str())
@@ -236,7 +236,7 @@ impl ElfAnalyzer {
                 "ELF structural phase timings",
             );
 
-            // Functions come from expose — `aflj`-derived CFG fields
+            // Functions come from filefacts — `aflj`-derived CFG fields
             // land on `Function::complexity` / `basic_blocks` / `edges`
             // / `calls` already. Symbol-table-only entries leave the
             // CFG block on the cleave mirror `None`.
@@ -244,7 +244,7 @@ impl ElfAnalyzer {
                 .parsed
                 .functions()
                 .iter()
-                .map(crate::analysis_context::project_expose_function)
+                .map(crate::analysis_context::project_filefacts_function)
                 .collect();
             if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
                 tools_used.push("radare2".to_string());
@@ -308,7 +308,7 @@ impl ElfAnalyzer {
             }
 
             // content_end = max of (sections file end, segments file end).
-            // Sources both from expose's typed view + the kv segments
+            // Sources both from filefacts's typed view + the kv segments
             // array so SHT_NOBITS sections are naturally skipped (their
             // file_size on the typed view is 0).
             let sections_end: u64 = ctx
@@ -338,7 +338,7 @@ impl ElfAnalyzer {
 
             (r2_strings_extracted, content_end)
         } else {
-            // Expose's ELF parse failed (or it didn't identify the bytes
+            // Filefacts's ELF parse failed (or it didn't identify the bytes
             // as ELF at all). Emit the structural finding, salvage
             // architecture from the raw header, and fall back to rizin
             // via the shared cached path.
@@ -370,7 +370,7 @@ impl ElfAnalyzer {
                 {
                     // Very large Linuxbrew/Go CLI builds and some legacy
                     // Android native libraries can carry metadata layouts
-                    // expose's parser rejects even though the executable is
+                    // filefacts's parser rejects even though the executable is
                     // otherwise legitimate. Keep the structural anomaly
                     // visible, but below suspicious for these known-benign
                     // contexts.
@@ -418,14 +418,14 @@ impl ElfAnalyzer {
                 "ELF parse {}: {}",
                 if parse_panicked { "panicked" } else { "error" },
                 if err_msg.is_empty() {
-                    "expose could not parse ELF"
+                    "filefacts could not parse ELF"
                 } else {
                     err_msg.as_str()
                 },
             ));
 
-            // Rizin recovery is owned by `expose::open` now: when
-            // goblin's ELF parse comes back empty, expose's internal
+            // Rizin recovery is owned by `filefacts::open` now: when
+            // goblin's ELF parse comes back empty, filefacts's internal
             // fallback re-runs through rizin and fills the typed
             // `Functions` / `Imports` / `Exports` / `Sections` views
             // before we ever look at them. Projecting from
@@ -435,7 +435,7 @@ impl ElfAnalyzer {
                 .parsed
                 .functions()
                 .iter()
-                .map(crate::analysis_context::project_expose_function)
+                .map(crate::analysis_context::project_filefacts_function)
                 .collect();
             if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
                 tools_used.push("radare2".to_string());
@@ -594,10 +594,12 @@ impl ElfAnalyzer {
 
         // Emit recursive-scan counters. Mirrors pe.rs — embedded
         // payload discovery is cleave-side recursive work, not
-        // expose's parse-time view.
+        // filefacts's parse-time view.
         if embedded_binary_count > 0 || embedded_archive_count > 0 {
             use crate::types::core::MetricsExt;
-            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            let flat = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
             if embedded_binary_count > 0 {
                 flat.set_f(
                     "binary.embedded_binary_count",
@@ -625,13 +627,13 @@ impl ElfAnalyzer {
         report
     }
 
-    /// `analyze_structure`'s expose-backed counterpart. Synthesises the
+    /// `analyze_structure`'s filefacts-backed counterpart. Synthesises the
     /// same `binary/format/elf`, `binary/arch/*`, `binary/stripped`,
     /// `binary/pie`, and `metadata/build/debug::elf-debuglink` features
-    /// but pulls every input from expose's view of the file.
+    /// but pulls every input from filefacts's view of the file.
     /// Synthesize `binary/format/elf`, `binary/arch/*`,
     /// `binary/stripped`, `binary/pie`, and `metadata/build/debug::elf-debuglink`
-    /// structural features from expose's typed view.
+    /// structural features from filefacts's typed view.
     fn fill_structure_from_ctx(&self, ctx: &Ctx<'_>, data: &[u8], report: &mut AnalysisReport) {
         let parsed = &ctx.parsed;
         let metrics = parsed.metrics();
@@ -642,15 +644,15 @@ impl ElfAnalyzer {
             desc: "ELF binary format".to_string(),
             evidence: vec![Evidence {
                 method: "magic".to_string(),
-                source: "expose".to_string(),
+                source: "filefacts".to_string(),
                 value: "0x7f".to_string(), // ELF magic byte 0
                 location: None,
                 ..Default::default()
             }],
         });
 
-        // Architecture comes from expose's `elf.machine` string (e.g.
-        // "x86_64"). Fall back to "unknown" when expose couldn't
+        // Architecture comes from filefacts's `elf.machine` string (e.g.
+        // "x86_64"). Fall back to "unknown" when filefacts couldn't
         // identify the machine.
         let arch = values
             .get("elf.machine")
@@ -661,7 +663,7 @@ impl ElfAnalyzer {
             desc: format!("{} architecture", arch),
             evidence: vec![Evidence {
                 method: "header".to_string(),
-                source: "expose".to_string(),
+                source: "filefacts".to_string(),
                 value: format!("elf.machine={}", arch),
                 location: None,
                 ..Default::default()
@@ -669,7 +671,7 @@ impl ElfAnalyzer {
         });
 
         // `binary.is_stripped` = 1.0 when `.symtab` is absent (the
-        // canonical "stripped" definition; expose computes this in
+        // canonical "stripped" definition; filefacts computes this in
         // `binary_flags`).
         if metrics.get("binary.is_stripped").unwrap_or(0.0) > 0.0 {
             report.structure.push(StructuralFeature {
@@ -677,7 +679,7 @@ impl ElfAnalyzer {
                 desc: "Symbol table stripped".to_string(),
                 evidence: vec![Evidence {
                     method: "symbols".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: "no_symtab".to_string(),
                     location: None,
                     ..Default::default()
@@ -685,7 +687,7 @@ impl ElfAnalyzer {
             });
         }
 
-        // PIE detection: expose flags `binary.is_pie = 1.0` for
+        // PIE detection: filefacts flags `binary.is_pie = 1.0` for
         // dynamically-linked ET_DYN executables (shared libraries that
         // are also ET_DYN don't count).
         if metrics.get("binary.is_pie").unwrap_or(0.0) > 0.0 {
@@ -694,7 +696,7 @@ impl ElfAnalyzer {
                 desc: "Position Independent Executable".to_string(),
                 evidence: vec![Evidence {
                     method: "header".to_string(),
-                    source: "expose".to_string(),
+                    source: "filefacts".to_string(),
                     value: "ET_DYN".to_string(),
                     location: None,
                     ..Default::default()
@@ -703,7 +705,7 @@ impl ElfAnalyzer {
         }
 
         // `.gnu_debuglink` section — present when a build was stripped
-        // with split-debug. Walk expose's typed section list, then
+        // with split-debug. Walk filefacts's typed section list, then
         // slice into `data` for the section contents.
         for section in parsed.sections().iter() {
             if section.name != ".gnu_debuglink" || section.file_size == 0 {
@@ -726,12 +728,12 @@ impl ElfAnalyzer {
         }
     }
 
-    /// Project expose's typed Imports / Exports into the report.
+    /// Project filefacts's typed Imports / Exports into the report.
     /// Capability lookup runs against each import's symbol so capability
     /// findings still attach. Exports come from `.dynsym` only —
-    /// expose's typed view doesn't expose `.symtab` exports today.
+    /// filefacts's typed view doesn't filefacts `.symtab` exports today.
     fn fill_dynamic_symbols_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
-        for imp in ctx.imports_from_expose() {
+        for imp in ctx.imports_from_filefacts() {
             // Capability lookup runs against the symbol name; the
             // source argument is used only for evidence attribution.
             if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
@@ -741,18 +743,18 @@ impl ElfAnalyzer {
             }
             report.imports.push(imp);
         }
-        for exp in ctx.exports_from_expose() {
+        for exp in ctx.exports_from_filefacts() {
             if report.exports.iter().any(|e| e.symbol == exp.symbol) {
                 continue;
             }
             report.exports.push(exp);
         }
-        // STT_GNU_IFUNC names are surfaced via the kv path
+        // STT_GNU_IFUNC names are surfaced via the value path
         // `elf.ifunc_symbols[]` (populated by binary_extractors) and
         // matched by the YAML trait `metadata/binary/linking::ifunc`.
     }
 
-    /// Walk the section table from expose's typed `Sections` view +
+    /// Walk the section table from filefacts's typed `Sections` view +
     /// per-section entropies from its metric map.
     fn fill_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let parsed = &ctx.parsed;
@@ -827,7 +829,7 @@ impl ElfAnalyzer {
                 report
                     .metadata
                     .errors
-                    .push(format!("expose open failed: {e}"));
+                    .push(format!("filefacts open failed: {e}"));
                 report
             }
         }
@@ -1018,12 +1020,12 @@ impl Analyzer for ElfAnalyzer {
         } else {
             Some(input.strings)
         };
-        // Open expose-side parse once so analyze_elf_core's helpers
-        // read structural data straight from expose. When expose can't
+        // Open filefacts-side parse once so analyze_elf_core's helpers
+        // read structural data straight from filefacts. When filefacts can't
         // open the bytes, we still produce a report so tamper findings
         // and rizin disassembly surface for triage.
         let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
-            .map_err(|e| anyhow::anyhow!("expose open failed for ELF: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("filefacts open failed for ELF: {e}"))?;
         let mut report = self.analyze_elf_core(
             input.path,
             input.backing_path(),
@@ -1064,7 +1066,7 @@ impl Analyzer for ElfAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         // ELF magic: `\x7fELF` (`7f 45 4c 46`). Read 4 bytes — the
-        // full expose-backed parse runs once we commit to analyze().
+        // full filefacts-backed parse runs once we commit to analyze().
         let Ok(mut file) = fs::File::open(file_path) else {
             return false;
         };
@@ -1224,7 +1226,10 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report.metadata.tools_used.contains(&"expose".to_string()));
+        assert!(report
+            .metadata
+            .tools_used
+            .contains(&"filefacts".to_string()));
     }
 
     #[test]

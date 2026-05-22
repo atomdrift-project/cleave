@@ -342,6 +342,39 @@ pub enum Command {
         layer: Option<String>,
     },
 
+    /// Extract imported foreign symbols
+    Imports {
+        /// Target file (binary or source)
+        #[arg(required = true)]
+        target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
+    },
+
+    /// Extract exported symbols
+    Exports {
+        /// Target file (binary or source)
+        #[arg(required = true)]
+        target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
+    },
+
+    /// Extract functions / methods defined in the file
+    Functions {
+        /// Target file (binary or source)
+        #[arg(required = true)]
+        target: String,
+
+        /// Filter to a specific layer (e.g., "upx@0" for UPX-unpacked content)
+        #[arg(short = 'L', long)]
+        layer: Option<String>,
+    },
+
     /// Extract section information (name, address, size, entropy) from a binary
     Sections {
         /// Target binary file
@@ -364,17 +397,18 @@ pub enum Command {
         layer: Option<String>,
     },
 
-    /// Dump everything expose extracts from one or more files.
+    /// Dump raw file facts for one or more files.
     ///
-    /// `cleave inspect <file> [<file>...]` dumps every top-level tree
+    /// `cleave facts <file> [<file>...]` dumps every top-level view
     /// (`fileid`, `values`, `strings`, `metrics`, `ast`, `sections`,
     /// `imports`, `exports`, `functions`, `errors`). A single file
     /// produces a pretty JSON object; multiple files produce JSONL
     /// keyed by `path`.
     ///
-    /// Pick a subcommand to filter to a single tree:
-    /// `cleave inspect imports <file> [<file>...]`.
-    Inspect {
+    /// Pick a subcommand to filter to a single view:
+    /// `cleave facts imports <file> [<file>...]`.
+    #[command(name = "facts", alias = "inspect")]
+    Facts {
         /// Optional tree filter
         #[command(subcommand)]
         tree: Option<InspectTree>,
@@ -383,17 +417,21 @@ pub enum Command {
         targets: Vec<String>,
     },
 
-    /// Dump key/value pairs from structured files (manifests, systemd units, LNK, plist, office docs)
-    Kv {
+    /// Dump or query the structural values tree.
+    #[command(name = "value")]
+    Value {
         /// Target file (package.json, Cargo.toml, manifest.json, *.plist, *.lnk, *.service,
         /// *.doc/.docx/.xls/.xlsx/.ppt/.pptx, etc.)
         #[arg(required = true)]
         target: String,
 
-        /// Optional path filter (e.g., "scripts.postinstall", "content_scripts[*].matches",
+        /// Optional value path filter (e.g., "scripts.postinstall", "content_scripts[*].matches",
         /// or "core.creator" / "ole.compobj.app_version" for office documents)
-        #[arg(short, long)]
         path: Option<String>,
+
+        /// Compatibility spelling for `cleave value <file> --path <path>`.
+        #[arg(short, long = "path", hide = true)]
+        path_flag: Option<String>,
     },
 
     /// Debug rule evaluation - trace through how rules match or fail
@@ -414,7 +452,7 @@ pub enum Command {
         #[arg(required = true)]
         target: String,
 
-        /// Type of search to perform (text, string-literal, string-value [deprecated], symbol, raw, kv, hex, encoded, section, metrics)
+        /// Type of search to perform (text, string-literal, string-value [deprecated], symbol, raw, value, hex, encoded, section, metrics)
         #[arg(short, long, value_enum, default_value = "text")]
         r#type: SearchType,
 
@@ -422,23 +460,23 @@ pub enum Command {
         #[arg(short, long, value_enum, default_value = "contains")]
         method: MatchMethod,
 
-        /// Pattern to search for (for kv: the value to match, or omit for existence check, for metrics: the field path)
+        /// Pattern to search for (for value: the value to match, or omit for existence check, for metrics: the field path)
         #[arg(short, long)]
         pattern: Option<String>,
 
-        /// Path expression for kv searches (e.g., "scripts.postinstall", "permissions[*]")
-        #[arg(long)]
+        /// Path expression for value searches (e.g., "scripts.postinstall", "permissions[*]")
+        #[arg(long = "path")]
         kv_path: Option<String>,
 
-        /// Require field to exist (true) or not exist (false) for kv searches
+        /// Require field to exist (true) or not exist (false) for value searches
         #[arg(long)]
         exists: Option<bool>,
 
-        /// Minimum collection size for kv searches (array elements or object keys)
+        /// Minimum collection size for value searches (array elements or object keys)
         #[arg(long)]
         size_min: Option<usize>,
 
-        /// Maximum collection size for kv searches (array elements or object keys)
+        /// Maximum collection size for value searches (array elements or object keys)
         #[arg(long)]
         size_max: Option<usize>,
 
@@ -617,10 +655,8 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
     Ok((start, end))
 }
 
-/// Tree filter for `cleave inspect`. Each variant maps 1:1 onto an
-/// accessor on `expose::ParsedFile`. `errors` is intentionally omitted —
-/// recovered parse errors still ship in the full dump, but a dedicated
-/// filter is low signal in practice.
+/// View filter for `cleave facts`. Each variant maps 1:1 onto an
+/// accessor on `filefacts::ParsedFile`.
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum InspectTree {
     /// File identification — file type + detection source
@@ -630,7 +666,7 @@ pub enum InspectTree {
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Structural key-value tree (paths usable by `type: kv` rules)
+    /// Structural values tree (paths usable by `type: value` rules)
     Values {
         /// File paths to inspect (1+ required).
 
@@ -651,7 +687,7 @@ pub enum InspectTree {
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// AST projections — call sites, member chains, string args
+    /// AST projections — calls, targets, members, and call strings
     Ast {
         /// File paths to inspect (1+ required).
 
@@ -686,6 +722,13 @@ pub enum InspectTree {
         #[arg(required = true)]
         targets: Vec<String>,
     },
+    /// Recoverable parser diagnostics
+    Errors {
+        /// File paths to inspect (1+ required).
+
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
 }
 
 impl InspectTree {
@@ -701,7 +744,8 @@ impl InspectTree {
             | Self::Sections { targets }
             | Self::Imports { targets }
             | Self::Exports { targets }
-            | Self::Functions { targets } => targets,
+            | Self::Functions { targets }
+            | Self::Errors { targets } => targets,
         }
     }
 
@@ -719,6 +763,7 @@ impl InspectTree {
             Self::Imports { .. } => "imports",
             Self::Exports { .. } => "exports",
             Self::Functions { .. } => "functions",
+            Self::Errors { .. } => "errors",
         }
     }
 }
@@ -736,7 +781,8 @@ pub enum SearchType {
     Symbol,
     /// Search in raw file content
     Raw,
-    /// Search in structured data (JSON/YAML/TOML manifests)
+    /// Search structural values by path
+    #[value(name = "value")]
     Kv,
     /// Search for hex byte patterns
     Hex,
@@ -902,7 +948,7 @@ mod tests {
         let args = Args::try_parse_from([
             "cleave",
             "diff",
-            "--scope=traits,kv",
+            "--scope=traits,value",
             "--limit-changes=0",
             "a",
             "b",
@@ -914,7 +960,7 @@ mod tests {
             ..
         }) = args.command
         {
-            assert_eq!(scope, "traits,kv");
+            assert_eq!(scope, "traits,value");
             assert_eq!(limit_changes, 0);
         } else {
             panic!("expected diff command");

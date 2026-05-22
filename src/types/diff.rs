@@ -55,7 +55,7 @@ impl Scope {
         match self {
             Scope::Traits => "traits",
             Scope::Metrics => "metrics",
-            Scope::Kv => "kv",
+            Scope::Kv => "value",
             Scope::Symbols => "symbols",
             Scope::Strings => "strings",
             Scope::Sections => "sections",
@@ -434,7 +434,7 @@ pub struct MetricChange {
 
 /// A change to a flattened KV-tree path. KV paths use `parent.child` for
 /// objects and `parent[i]` for arrays — the same syntax accepted by
-/// `type: kv` matchers.
+/// `type: value` matchers.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct KvChange {
     /// KV-path-syntax path.

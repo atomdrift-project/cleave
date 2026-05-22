@@ -15,6 +15,7 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use serde_json::Value;
+use std::collections::HashMap;
 use std::path::Path;
 use tempfile::NamedTempFile;
 
@@ -24,7 +25,7 @@ use tempfile::NamedTempFile;
 
 /// Build a minimal valid CHM v3 container with one user-visible
 /// uncompressed entry whose body is `entry_payload`. Used by the
-/// portable test below to exercise the parser/kv path without any
+/// portable test below to exercise the parser/value path without any
 /// real-world fixture.
 fn build_minimal_chm(entry_name: &str, entry_payload: &[u8]) -> Vec<u8> {
     // Layout we emit:
@@ -153,8 +154,8 @@ fn synthetic_chm_emits_kv_and_metrics() {
     let out = run_cleave_json(tmp.path());
     let f = first_file(&out);
 
-    // kv: ITSF version + lcid lifted directly out of the header.
-    let kv = &f["k"];
+    // values: ITSF version + lcid lifted directly out of the header.
+    let kv = compact_values(f);
     assert_eq!(
         kv["chm.itsf.version"].as_u64(),
         Some(3),
@@ -181,22 +182,18 @@ fn synthetic_chm_emits_kv_and_metrics() {
     );
 
     // metrics: user_entry_count is computed from the directory, not
-    // from kv. Per the project rule, counts go on metrics rather
-    // than kv. Compact reports serialize `expose_metrics` as a flat
-    // dotted-key map under `ms`, so `chm.user_entry_count` is one
-    // top-level key, not a nested object.
-    let m = &f["ms"];
+    // from values. Counts live in compact v5 filefacts metrics (`ff.m`).
+    let m = compact_metrics(f);
     let metric_int = |name: &str| -> u64 {
-        m[name]
-            .as_f64()
-            .unwrap_or_else(|| panic!("metric {name} missing in {m}")) as u64
+        *m.get(name)
+            .unwrap_or_else(|| panic!("metric {name} missing in {m:?}")) as u64
     };
-    assert_eq!(metric_int("chm.user_entry_count"), 1, "{m}");
-    assert_eq!(metric_int("chm.html_entry_count"), 1, "{m}");
+    assert_eq!(metric_int("chm.user_entry_count"), 1, "{m:?}");
+    assert_eq!(metric_int("chm.html_entry_count"), 1, "{m:?}");
     assert_eq!(
         metric_int("chm.max_user_entry_size"),
         "<html>hi</html>".len() as u64,
-        "{m}"
+        "{m:?}"
     );
 }
 
@@ -322,6 +319,30 @@ fn first_file(report: &Value) -> &Value {
         .as_array()
         .and_then(|a| a.first())
         .expect("report has no files")
+}
+
+fn compact_values(file: &Value) -> &Value {
+    file.pointer("/ff/v")
+        .expect("compact v5 filefacts values missing")
+}
+
+fn compact_metrics(file: &Value) -> HashMap<String, f64> {
+    let mut out = HashMap::new();
+    let groups = file
+        .pointer("/ff/m")
+        .and_then(Value::as_object)
+        .expect("compact v5 filefacts metrics missing");
+    for (group, fields) in groups {
+        let Some(fields) = fields.as_object() else {
+            continue;
+        };
+        for (field, value) in fields {
+            if let Some(value) = value.as_f64() {
+                out.insert(format!("{group}.{field}"), value);
+            }
+        }
+    }
+    out
 }
 
 fn trait_ids(f: &Value) -> Vec<String> {

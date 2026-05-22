@@ -38,24 +38,15 @@ fn get_first_file(json: &Value) -> &Value {
     json.get("fs")
         .and_then(Value::as_array)
         .and_then(|files| files.first())
-        .or_else(|| {
-            json.get("files")
-                .and_then(Value::as_array)
-                .and_then(|files| files.first())
-        })
-        .expect("analysis output should contain a file entry")
+        .expect("analysis output should contain a compact v5 file entry")
 }
 
 fn get_file_type(file: &Value) -> &str {
-    file.get("file_type")
-        .or_else(|| file.get("type"))
-        .and_then(Value::as_str)
-        .unwrap_or("")
+    file.get("type").and_then(Value::as_str).unwrap_or("")
 }
 
 fn get_findings(file: &Value) -> &[Value] {
-    file.get("traits")
-        .or_else(|| file.get("ts"))
+    file.get("ts")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .expect("analysis output should contain findings")
@@ -66,8 +57,7 @@ fn finding_ids(file: &Value) -> Vec<String> {
         .iter()
         .filter_map(|finding| {
             finding
-                .get("id")
-                .or_else(|| finding.get("i"))
+                .get("i")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })
@@ -88,30 +78,30 @@ traits:
   - id: systemd-kv/exec-start-python
     desc: ExecStart references python
     if:
-      type: kv
+      type: value
       path: "service.exec_start"
       substr: "python3"
 
   - id: systemd-kv/restart-always
     desc: Restart always in service
     if:
-      type: kv
+      type: value
       path: "service.restart"
-      exact: "always"
+      is: "always"
 
   - id: systemd-kv/wanted-by-default
     desc: Default target install
     if:
-      type: kv
+      type: value
       path: "install.wanted_by"
-      exact: "default.target"
+      is: "default.target"
 
   - id: systemd-kv/exec-start-shell
     desc: ExecStart launches shell downloader
     crit: suspicious
     conf: 0.95
     if:
-      type: kv
+      type: value
       path: "service.exec_start"
       regex: '(?i)(curl|wget).{0,80}(sh|bash)|python\s+-c|/dev/tcp/'
 
@@ -120,7 +110,7 @@ traits:
     crit: suspicious
     conf: 0.95
     if:
-      type: kv
+      type: value
       path: "service.environment.LD_PRELOAD"
       exists: true
 

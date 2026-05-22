@@ -39,7 +39,7 @@ pub(crate) fn eval_metrics<'a>(
 
     // Dynamic field lookup — `get_metric_value` consults the typed
     // `Metrics` struct first (cleave-native fields) then falls back
-    // to `report.expose_metrics` (expose's verbatim flat map).
+    // to `report.filefacts_metrics` (filefacts's verbatim flat map).
     let value = get_metric_value(ctx.report, field);
 
     let Some(value) = value else {

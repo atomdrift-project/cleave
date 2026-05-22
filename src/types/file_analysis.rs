@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, YaraMatch};
 use super::core::Criticality;
-use super::expose_view::ExposeView;
+use super::filefacts_view::FilefactsView;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 
@@ -108,16 +108,16 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub syscalls: Vec<SyscallInfo>,
 
-    /// Report-side mirror of expose's typed views. Schema v3.0
-    /// ships this verbatim under `expose: ...`. See
-    /// `crate::types::ExposeView` for the field shape.
+    /// Report-side mirror of filefacts's typed views. Schema v3.0
+    /// ships this verbatim under `filefacts: ...`. See
+    /// `crate::types::FilefactsView` for the field shape.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub expose: Option<ExposeView>,
+    pub filefacts: Option<FilefactsView>,
 
-    /// Flat metric map mirroring expose's emission convention.
+    /// Flat metric map mirroring filefacts's emission convention.
     /// Sole numeric metric surface — typed projection structs retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
+    pub filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
 
     /// Paths discovered
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -142,8 +142,8 @@ pub struct FileAnalysis {
     pub formula: Option<String>,
 
     /// Flat structural-kv map. Path → leaf value, using the same
-    /// `a.b[0].c` notation as `cleave kv`. Auto-populated at
-    /// `finalize()` time from the analyzer's `kv_tree`. Type-default
+    /// `a.b[0].c` notation as `cleave value`. Auto-populated at
+    /// `finalize()` time from the analyzer's `values_tree`. Type-default
     /// leaves (`false` / `0` / `""` / `null` / empty containers) are
     /// skipped — collimator-style ML pipelines treat absent features
     /// as default, so omitting them halves the per-file payload
@@ -160,7 +160,7 @@ pub struct FileAnalysis {
     /// flattening semantics. Skipped from output — `kv` is the
     /// canonical surface for serialization.
     #[serde(skip)]
-    pub kv_tree: Option<Box<serde_json::Value>>,
+    pub values_tree: Option<Box<serde_json::Value>>,
 }
 
 impl FileAnalysis {
@@ -189,15 +189,15 @@ impl FileAnalysis {
             exports: Vec::new(),
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
-            expose: None,
-            expose_metrics: None,
+            filefacts: None,
+            filefacts_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),
             env_vars: Vec::new(),
             extracted_path: None,
             formula: None,
             kv: std::collections::BTreeMap::new(),
-            kv_tree: None,
+            values_tree: None,
         }
     }
 
@@ -302,7 +302,7 @@ impl FileAnalysis {
     pub(crate) fn populate_file_metrics(&mut self) {
         use super::MetricsExt;
         let size = self.size;
-        self.expose_metrics
+        self.filefacts_metrics
             .get_or_insert_with(Default::default)
             .set_u("file.size", size);
     }

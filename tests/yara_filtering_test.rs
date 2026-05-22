@@ -5,58 +5,36 @@ use serde_json::Value;
 use std::fs;
 use tempfile::TempDir;
 
-/// Helper to get the first file from legacy `files` or compact `fs`.
+/// Helper to get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    if let Some(file) = json.get("fs").and_then(|f| f.get(0)) {
-        return Some(file);
-    }
-    json.get("files").and_then(|f| f.get(0))
+    json.get("fs").and_then(|f| f.get(0))
 }
 
 fn get_files(json: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    json.get("fs")
-        .or_else(|| json.get("files"))
-        .and_then(|v| v.as_array())
+    json.get("fs").and_then(|v| v.as_array())
 }
 
 fn get_file_type(file: &serde_json::Value) -> &str {
-    file.get("file_type")
-        .or_else(|| file.get("type"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
+    file.get("type").and_then(|v| v.as_str()).unwrap_or("")
 }
 
 fn get_matches(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.get("yara_matches")
-        .or_else(|| file.get("ts"))
-        .and_then(|v| v.as_array())
+    file.get("ts").and_then(|v| v.as_array())
 }
 
 fn match_rule(yara_match: &serde_json::Value) -> Option<&str> {
-    yara_match
-        .get("rule")
-        .or_else(|| yara_match.get("i"))
-        .and_then(|v| v.as_str())
+    yara_match.get("i").and_then(|v| v.as_str())
 }
 
 fn match_severity(yara_match: &serde_json::Value) -> Option<&str> {
-    if let Some(severity) = yara_match.get("severity").and_then(|v| v.as_str()) {
-        return Some(severity);
-    }
-
-    // Compact v4 encodes criticality numerically: 0=filtered, 1+=non-filtered.
-    if let Some(level) = yara_match.get("l").and_then(Value::as_u64) {
-        return Some(if level == 0 { "filtered" } else { "matched" });
-    }
-
-    None
+    yara_match
+        .get("l")
+        .and_then(Value::as_u64)
+        .map(|level| if level == 0 { "filtered" } else { "matched" })
 }
 
 fn match_description(yara_match: &serde_json::Value) -> Option<&str> {
-    yara_match
-        .get("description")
-        .or_else(|| yara_match.get("d"))
-        .and_then(|v| v.as_str())
+    yara_match.get("d").and_then(|v| v.as_str())
 }
 
 fn match_namespace(yara_match: &serde_json::Value) -> Option<String> {

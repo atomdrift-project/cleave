@@ -1,7 +1,7 @@
 //! Module-shape helpers for the office analyzer.
 //!
 //! VBA *symbol extraction* (Declare / CreateObject / GetObject / Sub /
-//! Function) lives entirely in expose and flows into cleave through
+//! Function) lives entirely in filefacts and flows into cleave through
 //! the typed `Imports` / `Functions` views on
 //! [`crate::analysis_context::AnalysisContext`]. This module retains
 //! only the cleave-side helpers the office analyzer uses alongside
@@ -11,24 +11,24 @@
 //!   per-module logical-line and identifier-randomness heuristics
 //!   (not symbol extraction)
 //! - [`IdentifierStats`] — streaming entropy/mean-length accumulator
-//!   the office analyzer feeds expose-emitted names into
+//!   the office analyzer feeds filefacts-emitted names into
 //! - [`is_trigger_handler`] — closed-set predicate over VBA's
 //!   auto-execution vocabulary
-//! - [`NON_LITERAL_SENTINEL`] — re-export of expose's sentinel so
+//! - [`NON_LITERAL_SENTINEL`] — re-export of filefacts's sentinel so
 //!   callers can compare `imp.library` against it
 //!
 //! Anything that looks like "where do imports come from?" is in
-//! `expose/src/formats/vba_symbols.rs`.
+//! `filefacts/src/formats/vba_symbols.rs`.
 
 /// Sentinel library/argument value emitted when a Declare's `Lib`
 /// clause or a CreateObject/GetObject argument is not a string
-/// literal. Re-exported from expose so cleave-side consumers don't
-/// have to import the expose-public path.
-pub(crate) const NON_LITERAL_SENTINEL: &str = expose::vba_symbols::NON_LITERAL_SENTINEL;
+/// literal. Re-exported from filefacts so cleave-side consumers don't
+/// have to import the filefacts-public path.
+pub(crate) const NON_LITERAL_SENTINEL: &str = filefacts::vba_symbols::NON_LITERAL_SENTINEL;
 
 // Trigger-handler vocabulary kept in cleave so the office analyzer's
 // distinct-trigger aggregation runs without round-tripping through
-// expose's typed views. The list mirrors expose's internal
+// filefacts's typed views. The list mirrors filefacts's internal
 // `TRIGGER_NAMES`; the two must stay in sync.
 const TRIGGER_NAMES: &[&str] = &[
     "Auto_Open",

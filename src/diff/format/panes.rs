@@ -447,7 +447,7 @@ struct KvRow<'a> {
 }
 
 fn write_kv(out: &mut String, scope: &ScopeDiff<KvChange>) {
-    let _ = writeln!(out, "{}", scope_heading("kv", ScopePill::Kv, scope));
+    let _ = writeln!(out, "{}", scope_heading("value", ScopePill::Kv, scope));
 
     let mut rows: Vec<KvRow<'_>> = Vec::new();
     for c in &scope.added {
@@ -511,7 +511,7 @@ fn write_kv(out: &mut String, scope: &ScopeDiff<KvChange>) {
     }
 }
 
-/// Top-level namespace of a kv path (the prefix before the first
+/// Top-level namespace of a value path (the prefix before the first
 /// `.` or `[`). Falls back to the whole path when no separator is
 /// present so flat namespaces don't collapse into an empty group.
 fn kv_namespace(path: &str) -> &str {

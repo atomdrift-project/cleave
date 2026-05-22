@@ -371,7 +371,7 @@ impl ArchiveAnalyzer {
             // Per-format selection of stng's XOR scan: text/source
             // members skip it entirely. The historical "pre-launch
             // rizin" optimization was retired in Wave B — rizin now
-            // runs inside `expose::open` on the member's bytes when
+            // runs inside `filefacts::open` on the member's bytes when
             // the per-analyzer parse fires; there's no separate
             // subprocess for the archive layer to overlap with.
             let stng_opts = if skip_rizin_reason.is_some() {
@@ -1236,7 +1236,7 @@ impl ArchiveAnalyzer {
             debug!("Main-Class: {}", mc);
         }
 
-        // `jar.*` kv comes from expose's dual emission in the
+        // `jar.*` kv comes from filefacts's dual emission in the
         // capability mapper — no temp-dir walk needed here.
 
         // Collect all files

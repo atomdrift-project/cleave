@@ -117,14 +117,14 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                     }
                 }
 
-                // expose::open() owns rizin now — imports / exports /
+                // filefacts::open() owns rizin now — imports / exports /
                 // functions come from its typed views regardless of
                 // whether the binary parsed cleanly with goblin or fell
                 // back through the rizin recovery path.
-                if let Ok(parsed) = expose::open(&data) {
+                if let Ok(parsed) = filefacts::open(&data) {
                     // Realize the parse so the typed views are populated.
                     let _ = parsed.values();
-                    populate_symbols_from_expose(
+                    populate_symbols_from_filefacts(
                         &parsed,
                         &mut imports,
                         &mut import_libraries,
@@ -148,13 +148,13 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
     format_strings_output(&strings, format)
 }
 
-/// Fold expose's typed `imports` / `exports` / `functions` views into
+/// Fold filefacts's typed `imports` / `exports` / `functions` views into
 /// the symbol sets the string-extractor consumes for classification.
 /// Leading-underscore stripping mirrors the historical r2-symbol
 /// normalisation; symbol names that appear in any of imports/exports
 /// are excluded from `functions` so each name is classified once.
-fn populate_symbols_from_expose(
-    parsed: &expose::ParsedFile<'_>,
+fn populate_symbols_from_filefacts(
+    parsed: &filefacts::ParsedFile<'_>,
     imports: &mut std::collections::HashSet<String>,
     import_libraries: &mut std::collections::HashMap<String, String>,
     exports: &mut std::collections::HashSet<String>,

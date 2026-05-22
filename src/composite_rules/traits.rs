@@ -874,15 +874,15 @@ impl TraitDefinition {
         // Uses binary.overall_entropy for binaries, text.char_entropy for scripts
         if self.entropy_min.is_some() || self.entropy_max.is_some() {
             // Both `binary.overall_entropy` and `text.char_entropy`
-            // flow through the flat `expose_metrics` map now.
+            // flow through the flat `filefacts_metrics` map now.
             let binary_entropy = ctx
                 .report
-                .expose_metrics
+                .filefacts_metrics
                 .as_ref()
                 .and_then(|m| m.get("binary.overall_entropy").copied());
             let text_entropy = ctx
                 .report
-                .expose_metrics
+                .filefacts_metrics
                 .as_ref()
                 .and_then(|m| m.get("text.char_entropy").copied());
             let file_entropy = binary_entropy.or(text_entropy).unwrap_or(0.0);
@@ -1523,8 +1523,8 @@ impl TraitDefinition {
                 )
             ),
             Condition::Kv { .. } => {
-                timed_eval!("kv", {
-                    // Delegate to kv evaluator with caching
+                timed_eval!("value", {
+                    // Delegate to value evaluator with caching
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
                         ConditionResult::matched_with(vec![evidence])
                     } else {
@@ -2783,8 +2783,8 @@ impl CompositeTrait {
                 )
             ),
             Condition::Kv { .. } => {
-                timed_eval!("kv", {
-                    // Delegate to kv evaluator with caching
+                timed_eval!("value", {
+                    // Delegate to value evaluator with caching
                     if let Some(evidence) = super::evaluators::evaluate_kv(condition, ctx) {
                         ConditionResult::matched_with(vec![evidence])
                     } else {

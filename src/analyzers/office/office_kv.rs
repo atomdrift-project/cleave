@@ -1,11 +1,11 @@
 //! Synthesize a `serde_json::Value` "kv tree" from parsed office docs.
 //!
-//! `type: kv` traits walk a JSON-shaped tree by path (`a.b.c`,
+//! `type: value` traits walk a JSON-shaped tree by path (`a.b.c`,
 //! `arr[*].field`, etc.). Office documents are not natively kv files —
 //! their metadata is buried in OLE2 streams and OOXML XML parts — so
 //! the office analyzer parses everything, then this module flattens
 //! the relevant string and discrete-identifier fields into a tree the
-//! kv evaluator can consume.
+//! value evaluator can consume.
 //!
 //! # Schema (stable trait-base API)
 //!
@@ -46,8 +46,8 @@ use crate::analyzers::FileType;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
-/// Best-effort dispatcher used by `cleave kv <doc>` to surface the
-/// office kv tree without running full analysis. Returns `None` when
+/// Best-effort dispatcher used by `cleave value <doc>` to surface the
+/// office values tree without running full analysis. Returns `None` when
 /// the file isn't an office document or fails to parse.
 ///
 /// Pure read path — no findings, no metric population, no
@@ -315,16 +315,16 @@ mod tests {
         };
         let kv = build_ole_kv(&doc);
         assert_eq!(
-            kv["ole"]["compobj"]["user_type"],
+            value["ole"]["compobj"]["user_type"],
             "Microsoft Office Excel Worksheet"
         );
-        assert_eq!(kv["ole"]["compobj"]["clipboard_format"], "Biff8");
-        assert_eq!(kv["ole"]["compobj"]["app_version"], "Excel.Sheet.8");
-        assert_eq!(kv["summary"]["title"], "Q4 Report");
-        assert_eq!(kv["summary"]["author"], "John Doe");
-        assert_eq!(kv["summary"]["last_author"], "Иван Иванов");
-        assert_eq!(kv["summary"]["create_time"], "2025-03-12T10:30:00Z");
-        assert_eq!(kv["summary"]["revision"], 7);
+        assert_eq!(value["ole"]["compobj"]["clipboard_format"], "Biff8");
+        assert_eq!(value["ole"]["compobj"]["app_version"], "Excel.Sheet.8");
+        assert_eq!(value["summary"]["title"], "Q4 Report");
+        assert_eq!(value["summary"]["author"], "John Doe");
+        assert_eq!(value["summary"]["last_author"], "Иван Иванов");
+        assert_eq!(value["summary"]["create_time"], "2025-03-12T10:30:00Z");
+        assert_eq!(value["summary"]["revision"], 7);
         // Empty optional sections must not appear
         assert!(kv.get("core").is_none());
         assert!(kv.get("relationships").is_none());
@@ -339,7 +339,7 @@ mod tests {
             embedded_size: 524288,
         });
         let kv = build_ole_kv(&doc);
-        let embedded = kv["embedded"].as_array().unwrap();
+        let embedded = value["embedded"].as_array().unwrap();
         assert_eq!(embedded.len(), 1);
         assert_eq!(embedded[0]["filename"], "invoice.exe");
         assert_eq!(embedded[0]["size"], 524288);
@@ -376,11 +376,11 @@ mod tests {
                 .into(),
         });
         let kv = build_ooxml_kv(&doc);
-        assert_eq!(kv["core"]["creator"], "John Doe");
-        assert_eq!(kv["core"]["last_modified_by"], "Jane");
-        assert_eq!(kv["core"]["application"], "Microsoft Office Word");
-        assert_eq!(kv["core"]["keywords"], "invoice");
-        let rels = kv["relationships"].as_array().unwrap();
+        assert_eq!(value["core"]["creator"], "John Doe");
+        assert_eq!(value["core"]["last_modified_by"], "Jane");
+        assert_eq!(value["core"]["application"], "Microsoft Office Word");
+        assert_eq!(value["core"]["keywords"], "invoice");
+        let rels = value["relationships"].as_array().unwrap();
         assert_eq!(rels.len(), 2);
         // The schema-URI prefix is stripped — trait authors match on
         // `attachedTemplate` / `image`, not the full URI.
@@ -390,7 +390,7 @@ mod tests {
     }
 
     /// `extract_office_kv` returns None for non-office formats so the
-    /// `cleave kv` command falls through to its existing manifest path.
+    /// `cleave value` command falls through to its existing manifest path.
     #[test]
     fn extract_office_kv_returns_none_for_non_office() {
         // PNG magic — not OLE2 or ZIP.
@@ -408,7 +408,7 @@ mod tests {
         doc.metadata.author = Some("   ".into());
         doc.metadata.title = Some("Real Title".into());
         let kv = build_ole_kv(&doc);
-        assert!(kv["summary"].get("author").is_none());
-        assert_eq!(kv["summary"]["title"], "Real Title");
+        assert!(value["summary"].get("author").is_none());
+        assert_eq!(value["summary"]["title"], "Real Title");
     }
 }

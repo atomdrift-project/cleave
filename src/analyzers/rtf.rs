@@ -1,10 +1,10 @@
 //! RTF document analyzer.
 //!
 //! Parsing of the RTF structure (info group, fields, objects,
-//! features) lives in `expose::formats::rtf`; this module is a
+//! features) lives in `filefacts::formats::rtf`; this module is a
 //! thin dispatcher that drives the capability mapper. The capability
-//! mapper's dual-emission step merges expose's `rtf.*` kv subtree
-//! into `report.kv_tree` before trait evaluation runs.
+//! mapper's dual-emission step merges filefacts's `rtf.*` kv subtree
+//! into `report.values_tree` before trait evaluation runs.
 
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -53,7 +53,7 @@ impl RtfAnalyzer {
             architectures: None,
         };
         let mut report = AnalysisReport::new(target);
-        report.metadata.tools_used.push("expose-rtf".to_string());
+        report.metadata.tools_used.push("filefacts-rtf".to_string());
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
         report

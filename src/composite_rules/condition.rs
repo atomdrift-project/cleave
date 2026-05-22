@@ -271,6 +271,48 @@ enum ConditionTagged {
         #[serde(default)]
         not: Option<Vec<NotException>>,
     },
+    Import {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+    },
+    Export {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+    },
+    Function {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+    },
     Text {
         #[serde(default)]
         exact: Option<String>,
@@ -616,17 +658,22 @@ enum ConditionTagged {
         compiled_regex: Option<regex::Regex>,
     },
 
-    /// Query structured data in JSON, YAML, and TOML manifests using path expressions.
+    /// Query structural values using path expressions.
     /// Supports dot notation for nested access and [*] for array iteration.
-    /// Example: { type: kv, path: "permissions", exact: "debugger" }
-    /// Example: { type: kv, path: "scripts.postinstall", substr: "curl" }
-    /// Example: { type: kv, path: "content_scripts[*].matches", exact: "<all_urls>" }
-    /// Example: { type: kv, path: "maintainers", size_min: 1, size_max: 1 }
+    /// Example: { type: value, path: "permissions", is: "debugger" }
+    /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
+    /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
+    /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
+    #[serde(rename = "value")]
     Kv {
         /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
         path: String,
         /// Value/element equals exactly
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "is",
+            alias = "exact",
+            skip_serializing_if = "Option::is_none"
+        )]
         exact: Option<String>,
         /// Value/element contains substring
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -669,6 +716,60 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
+                    not,
+                    compiled_regex: None,
+                    compiled_finder: None,
+                },
+                ConditionTagged::Import {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    not,
+                } => Condition::Symbol {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    kind: Some(SymbolKind::Import),
+                    not,
+                    compiled_regex: None,
+                    compiled_finder: None,
+                },
+                ConditionTagged::Export {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    not,
+                } => Condition::Symbol {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    kind: Some(SymbolKind::Export),
+                    not,
+                    compiled_regex: None,
+                    compiled_finder: None,
+                },
+                ConditionTagged::Function {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    not,
+                } => Condition::Symbol {
+                    exact,
+                    substr,
+                    regex,
+                    platforms,
+                    is_check,
+                    kind: Some(SymbolKind::Function),
                     not,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -1703,17 +1804,21 @@ pub(crate) enum Condition {
         compiled_regex: Option<regex::Regex>,
     },
 
-    /// Query structured data in JSON, YAML, and TOML manifests using path expressions.
+    /// Query structural values using path expressions.
     /// Supports dot notation for nested access and [*] for array iteration.
-    /// Example: { type: kv, path: "permissions", exact: "debugger" }
-    /// Example: { type: kv, path: "scripts.postinstall", substr: "curl" }
-    /// Example: { type: kv, path: "content_scripts[*].matches", exact: "<all_urls>" }
-    /// Example: { type: kv, path: "maintainers", size_min: 1, size_max: 1 }
+    /// Example: { type: value, path: "permissions", is: "debugger" }
+    /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
+    /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
+    /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
     Kv {
         /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
         path: String,
         /// Value/element equals exactly
-        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "is",
+            alias = "exact",
+            skip_serializing_if = "Option::is_none"
+        )]
         exact: Option<String>,
         /// Value/element contains substring
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -1787,7 +1892,7 @@ impl Condition {
             Condition::Section { .. } => "section",
             Condition::Encoded { .. } => "encoded",
             Condition::Basename { .. } => "basename",
-            Condition::Kv { .. } => "kv",
+            Condition::Kv { .. } => "value",
         }
     }
 
@@ -1867,21 +1972,21 @@ impl Condition {
             } => {
                 // Path must not be empty
                 if path.is_empty() {
-                    return Err(anyhow::anyhow!("kv condition requires non-empty path"));
+                    return Err(anyhow::anyhow!("value condition requires non-empty path"));
                 }
 
                 // At most one matcher
                 let matchers = [exact.is_some(), substr.is_some(), regex.is_some()];
                 if matchers.iter().filter(|&&b| b).count() > 1 {
                     return Err(anyhow::anyhow!(
-                        "kv condition can only have one of: exact, substr, regex"
+                        "value condition can only have one of: is, substr, regex"
                     ));
                 }
 
                 // Validate regex compiles
                 if let Some(re) = regex {
                     regex::Regex::new(re)
-                        .map_err(|e| anyhow::anyhow!("invalid regex in kv condition: {}", e))?;
+                        .map_err(|e| anyhow::anyhow!("invalid regex in value condition: {}", e))?;
                 }
 
                 Ok(())
@@ -2708,20 +2813,23 @@ impl Condition {
                 // Compile regex pattern for kv searches
                 *compiled_regex = Some(if *case_insensitive {
                     let compile_pattern = format!("(?i){}", regex_pattern);
-                    compile_regex_logged("kv.regex", regex_pattern, &compile_pattern, true)
+                    compile_regex_logged("value.regex", regex_pattern, &compile_pattern, true)
                         .map_err(|e| {
                             anyhow::anyhow!(
-                                "Failed to compile case-insensitive kv regex '{}': {}",
+                                "Failed to compile case-insensitive value regex '{}': {}",
                                 regex_pattern,
                                 e
                             )
                         })?
                 } else {
-                    compile_regex_logged("kv.regex", regex_pattern, regex_pattern, false).map_err(
-                        |e| {
-                            anyhow::anyhow!("Failed to compile kv regex '{}': {}", regex_pattern, e)
-                        },
-                    )?
+                    compile_regex_logged("value.regex", regex_pattern, regex_pattern, false)
+                        .map_err(|e| {
+                            anyhow::anyhow!(
+                                "Failed to compile value regex '{}': {}",
+                                regex_pattern,
+                                e
+                            )
+                        })?
                 });
             }
             Condition::Basename {
@@ -3329,6 +3437,7 @@ mod location_constraint_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
+    use crate::composite_rules::condition::SymbolKind;
     use crate::composite_rules::Condition;
 
     // ── patterns that MUST be flagged ──────────────────────────────────────
@@ -3425,6 +3534,93 @@ mod backtrack_tests {
             compiled_regex: None,
         };
         assert!(cond.check_greedy_patterns().is_none());
+    }
+
+    #[test]
+    fn symbol_family_condition_types_set_kind() {
+        let import_cond: Condition = serde_yaml::from_str(
+            r#"
+type: import
+regex: "^CreateFileW$"
+"#,
+        )
+        .unwrap();
+        let export_cond: Condition = serde_yaml::from_str(
+            r#"
+type: export
+substr: DllRegisterServer
+"#,
+        )
+        .unwrap();
+        let function_cond: Condition = serde_yaml::from_str(
+            r#"
+type: function
+exact: main
+"#,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            import_cond,
+            Condition::Symbol {
+                kind: Some(SymbolKind::Import),
+                regex: Some(ref r),
+                ..
+            } if r == "^CreateFileW$"
+        ));
+        assert!(matches!(
+            export_cond,
+            Condition::Symbol {
+                kind: Some(SymbolKind::Export),
+                substr: Some(ref s),
+                ..
+            } if s == "DllRegisterServer"
+        ));
+        assert!(matches!(
+            function_cond,
+            Condition::Symbol {
+                kind: Some(SymbolKind::Function),
+                exact: Some(ref s),
+                ..
+            } if s == "main"
+        ));
+    }
+
+    #[test]
+    fn value_condition_accepts_is() {
+        let current: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: scripts.postinstall
+is: curl
+"#,
+        )
+        .unwrap();
+        let legacy: Condition = serde_yaml::from_str(
+            r#"
+type: value
+path: scripts.postinstall
+exact: curl
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(current.type_name(), "value");
+        assert_eq!(legacy.type_name(), "value");
+        assert!(matches!(
+            current,
+            Condition::Kv {
+                exact: Some(ref s),
+                ..
+            } if s == "curl"
+        ));
+        assert!(matches!(
+            legacy,
+            Condition::Kv {
+                exact: Some(ref s),
+                ..
+            } if s == "curl"
+        ));
     }
 
     #[test]

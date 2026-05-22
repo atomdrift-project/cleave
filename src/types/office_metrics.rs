@@ -19,7 +19,7 @@ use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
 
 // `OfficeMetrics` retired — cross-format office fields
 // (`doc_type`, `has_macros`, `external_*_count`, etc.) flow through
-// `AnalysisReport::expose_metrics` under `office.*` dotted keys.
+// `AnalysisReport::filefacts_metrics` under `office.*` dotted keys.
 // The container-format sub-structs (Ole/Ooxml/Vba/Xlm) below
 // remain as crate-internal data carriers that analyzer parsers
 // build then flatten via `flatten_into_metrics`.

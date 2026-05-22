@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use cleave::cli;
 use cleave::commands::{
-    analyze_command, diff_command, expand_paths, extract_kv_command, extract_metrics_command,
-    extract_sections_command, extract_strings_command, extract_symbols_command, inspect_command,
-    iter_files_command, test_match, test_rules, validate_command, AnalyzeConfig, IterFilesConfig,
+    analyze_command, diff_command, expand_paths, extract_exports_command,
+    extract_functions_command, extract_imports_command, extract_kv_command,
+    extract_metrics_command, extract_sections_command, extract_strings_command,
+    extract_symbols_command, inspect_command, iter_files_command, test_match, test_rules,
+    validate_command, AnalyzeConfig, IterFilesConfig,
 };
 use std::fs;
 
@@ -386,13 +388,22 @@ pub(crate) fn dispatch_command(
         Some(cli::Command::Symbols { target, layer }) => {
             extract_symbols_command(&target, layer.as_deref(), ctx.format)?
         }
+        Some(cli::Command::Imports { target, layer }) => {
+            extract_imports_command(&target, layer.as_deref(), ctx.format)?
+        }
+        Some(cli::Command::Exports { target, layer }) => {
+            extract_exports_command(&target, layer.as_deref(), ctx.format)?
+        }
+        Some(cli::Command::Functions { target, layer }) => {
+            extract_functions_command(&target, layer.as_deref(), ctx.format)?
+        }
         Some(cli::Command::Sections { target, layer }) => {
             extract_sections_command(&target, layer.as_deref(), ctx.format)?
         }
         Some(cli::Command::Metrics { target, layer }) => {
             extract_metrics_command(&target, layer.as_deref(), ctx.format, ctx.disabled)?
         }
-        Some(cli::Command::Inspect { tree, targets }) => {
+        Some(cli::Command::Facts { tree, targets }) => {
             // Subtree subcommand carries its own targets; the parent
             // `targets` is used only when no subtree is selected.
             let resolved: &[String] = match &tree {
@@ -401,14 +412,19 @@ pub(crate) fn dispatch_command(
             };
             if resolved.is_empty() {
                 anyhow::bail!(
-                    "cleave inspect: at least one target file required \
-                     (e.g., `cleave inspect <file>` or `cleave inspect imports <file>`)"
+                    "cleave facts: at least one target file required \
+                     (e.g., `cleave facts <file>` or `cleave facts imports <file>`)"
                 );
             }
             inspect_command(resolved, tree.as_ref(), ctx.format)?
         }
-        Some(cli::Command::Kv { target, path }) => {
-            extract_kv_command(&target, path.as_deref(), ctx.format)?
+        Some(cli::Command::Value {
+            target,
+            path,
+            path_flag,
+        }) => {
+            let path = path.as_deref().or(path_flag.as_deref());
+            extract_kv_command(&target, path, ctx.format)?
         }
         Some(cli::Command::TestRules { target, rules }) => {
             run_test_rules_command(&target, &rules, ctx.disabled, ctx.analyze.platforms)?

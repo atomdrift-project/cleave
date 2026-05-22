@@ -1,18 +1,18 @@
-//! End-to-end test for `cleave kv` over an office document.
+//! End-to-end test for `cleave value` over an office document.
 //!
 //! Builds a minimal OOXML archive containing `[Content_Types].xml`,
 //! a relationships part, and `docProps/core.xml` populated with
-//! Cyrillic / suspicious-date metadata. Invokes the binary's `kv`
+//! Cyrillic / suspicious-date metadata. Invokes the binary's `value`
 //! subcommand, parses the JSON output, and asserts that:
 //!
-//! 1. The synthesized office kv tree drives the dump (paths under
+//! 1. The synthesized office values tree drives the dump (paths under
 //!    `core.*` etc., matching the `analyzers::office::office_kv`
 //!    schema, not whatever the generic structured-content parser
 //!    might guess from a ZIP).
-//! 2. Path filtering (`--kv-path core.creator`) works against the
+//! 2. Path filtering (`--path core.creator`) works against the
 //!    office tree.
 //! 3. The output's `path` strings are the exact strings trait
-//!    authors will use in `type: kv path:`.
+//!    authors will use in `type: value path:`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::io::Write;
@@ -91,19 +91,19 @@ fn build_minimal_docx(creator: &str, created: &str, modified: &str) -> Vec<u8> {
 fn run_kv(path: &std::path::Path, filter: Option<&str>) -> serde_json::Value {
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
     cmd.env("CLEAVE_SKIP_YARA", "1")
-        .args(["--json", "kv", path.to_str().unwrap()]);
+        .args(["--json", "value", path.to_str().unwrap()]);
     if let Some(f) = filter {
         cmd.args(["--path", f]);
     }
-    let output = cmd.output().expect("run cleave kv");
+    let output = cmd.output().expect("run cleave value");
     if !output.status.success() {
         panic!(
-            "cleave kv exited {}: stderr={}",
+            "cleave value exited {}: stderr={}",
             output.status,
             String::from_utf8_lossy(&output.stderr)
         );
     }
-    serde_json::from_slice(&output.stdout).expect("parse kv json")
+    serde_json::from_slice(&output.stdout).expect("parse value json")
 }
 
 fn paths_in(value: &serde_json::Value) -> Vec<String> {
@@ -129,7 +129,7 @@ fn cleave_kv_emits_office_schema_for_ooxml() {
     let entries = run_kv(&path, None);
     let paths = paths_in(&entries);
 
-    // Schema keys we promise trait authors. Expose namespaces OOXML
+    // Schema keys we promise trait authors. Filefacts namespaces OOXML
     // metadata under `office.*` — `office.core.*` for Dublin Core,
     // `office.application` / `office.company` for app-info.
     assert!(
@@ -144,7 +144,7 @@ fn cleave_kv_emits_office_schema_for_ooxml() {
     assert!(paths.iter().any(|p| p == "office.application"));
     assert!(paths.iter().any(|p| p == "office.company"));
 
-    // Cyrillic creator round-trips intact through the xml-to-kv path.
+    // Cyrillic creator round-trips intact through the xml-to-value path.
     let creator_entry = entries
         .as_array()
         .unwrap()

@@ -44,7 +44,7 @@ fn substr_regex_fields(
         Condition::Basename { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "basename"))
         }
-        Condition::Kv { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "kv")),
+        Condition::Kv { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "value")),
         _ => None,
     }
 }
@@ -207,7 +207,7 @@ impl<'a> RegexFacts<'a> {
 
 fn regex_search_scope(type_label: &str) -> RegexSearchScope {
     match type_label {
-        "kv" | "symbol" | "string_literal" | "basename" | "ast" | "section" => {
+        "value" | "symbol" | "string_literal" | "basename" | "ast" | "section" => {
             RegexSearchScope::Bounded
         }
         _ => RegexSearchScope::Broad,
@@ -973,9 +973,9 @@ mod tests {
 
     #[test]
     fn regex_perf_is_lenient_for_bounded_fields() {
-        assert!(issues(r".{0,2000}Invoke-Expression", "kv").is_empty());
+        assert!(issues(r".{0,2000}Invoke-Expression", "value").is_empty());
 
-        let warnings = issues(r".{0,5000}Invoke-Expression", "kv");
+        let warnings = issues(r".{0,5000}Invoke-Expression", "value");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("broad counted repeat"));
     }

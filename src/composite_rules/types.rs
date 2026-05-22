@@ -168,7 +168,7 @@ pub enum Platform {
 pub(crate) enum FileType {
     /// Applies to all file types
     All,
-    /// Generic archive/container when the analyzer does not expose a subtype
+    /// Generic archive/container when the analyzer does not filefacts a subtype
     Archive,
     /// Analyzer could not classify the file beyond opaque/unknown content
     Unknown,

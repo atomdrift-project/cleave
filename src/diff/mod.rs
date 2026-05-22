@@ -97,7 +97,7 @@ impl ScopeMask {
         }
     }
 
-    /// Parse a comma-separated scope list (`traits,kv` etc.). Accepts the
+    /// Parse a comma-separated scope list (`traits,value` etc.). Accepts the
     /// alias `all` for [`Self::all`]. Empty string maps to `all`.
     pub fn parse(spec: &str) -> Result<Self> {
         let spec = spec.trim();
@@ -125,7 +125,7 @@ impl ScopeMask {
                 Ok(scope) => mask.set(scope, true),
                 Err(()) => {
                     return Err(anyhow!(
-                        "unknown scope '{token}'; expected one of: traits, metrics, kv, symbols, strings, sections, all"
+                        "unknown scope '{token}'; expected one of: traits, metrics, value, symbols, strings, sections, all"
                     ));
                 }
             }
@@ -151,7 +151,7 @@ pub(crate) struct DiffUnit {
     pub(crate) findings: Vec<Finding>,
     /// Flat numeric metric map (dotted-path keys). Sole surface
     /// after typed `*Metrics` projections retired.
-    pub(crate) expose_metrics: Option<std::collections::BTreeMap<String, f64>>,
+    pub(crate) filefacts_metrics: Option<std::collections::BTreeMap<String, f64>>,
     /// kv tree pre-flattened with diff-friendly path encoding
     /// (membership / identity-keyed for arrays). Built once at unit
     /// construction so `diff_kv` can hash directly without re-walking
@@ -168,7 +168,7 @@ impl DiffUnit {
         Self {
             path,
             findings: Vec::new(),
-            expose_metrics: None,
+            filefacts_metrics: None,
             kv_flat: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),
@@ -336,9 +336,9 @@ fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
     out.push(DiffUnit {
         path: root_rel.to_string(),
         findings: report.findings.clone(),
-        expose_metrics: report.expose_metrics.clone(),
+        filefacts_metrics: report.filefacts_metrics.clone(),
         kv_flat: report
-            .kv_tree
+            .values_tree
             .as_deref()
             .map(scopes::flatten_kv_for_diff)
             .unwrap_or_default(),
@@ -366,14 +366,14 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
     DiffUnit {
         path,
         findings: fa.findings.clone(),
-        expose_metrics: fa.expose_metrics.clone(),
+        filefacts_metrics: fa.filefacts_metrics.clone(),
         // Archive members carry their own kv tree (preserved via
-        // `FileAnalysis.kv_tree`) so a `.class` inside a `.jar` still
+        // `FileAnalysis.values_tree`) so a `.class` inside a `.jar` still
         // contributes its `class.*` paths to the diff. Earlier
         // versions hard-coded `None` here, silently dropping nested
         // kv data.
         kv_flat: fa
-            .kv_tree
+            .values_tree
             .as_deref()
             .map(scopes::flatten_kv_for_diff)
             .unwrap_or_default(),
@@ -607,7 +607,7 @@ mod tests {
 
     #[test]
     fn scope_mask_parse_subset() {
-        let m = ScopeMask::parse("traits,kv").unwrap();
+        let m = ScopeMask::parse("traits,value").unwrap();
         assert!(m.traits);
         assert!(m.kv);
         assert!(!m.metrics);

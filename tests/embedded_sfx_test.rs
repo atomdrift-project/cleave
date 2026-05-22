@@ -28,6 +28,16 @@ fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
     (json_string, json_value)
 }
 
+fn compact_metric(file: &serde_json::Value, name: &str) -> Option<f64> {
+    let (group, field) = name.split_once(".")?;
+    file.pointer(&format!("/ff/m/{group}/{field}"))
+        .and_then(serde_json::Value::as_f64)
+}
+
+fn compact_strings(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
+    file.pointer("/ff/s")?.as_array()
+}
+
 // ── Fixture builders ───────────────────────────────────────────────────────────
 
 fn write_minimal_pe_at(buf: &mut Vec<u8>, offset: usize, section_count: u16) {
@@ -170,16 +180,18 @@ fn embedded_binary_scanning() {
         "Expected 'binary/embedded/pe' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-    let pe_metrics = report["fs"]
+    let pe_host = report["fs"]
         .as_array()
         .and_then(|files| files.first())
-        .and_then(|host| host["ms"].as_object())
-        .expect("host PE should expose binary metrics in compact report");
+        .expect("host PE should be present in compact report");
     assert_eq!(
-        pe_metrics["binary.embedded_binary_count"].as_f64(),
+        compact_metric(pe_host, "binary.embedded_binary_count"),
         Some(1.0)
     );
-    assert_eq!(pe_metrics["binary.embedded_file_count"].as_f64(), Some(1.0));
+    assert_eq!(
+        compact_metric(pe_host, "binary.embedded_file_count"),
+        Some(1.0)
+    );
 
     // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
     let mut nsis = minimal_pe_stub();
@@ -223,20 +235,22 @@ fn embedded_binary_scanning() {
         "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-    let elf_metrics = report["fs"]
+    let elf_host = report["fs"]
         .as_array()
         .and_then(|files| files.first())
-        .and_then(|host| host["ms"].as_object())
-        .expect("host ELF should expose binary metrics in compact report");
+        .expect("host ELF should be present in compact report");
     assert_eq!(
-        elf_metrics["binary.embedded_binary_count"].as_f64(),
+        compact_metric(elf_host, "binary.embedded_binary_count"),
         Some(1.0)
     );
     assert_eq!(
-        elf_metrics["binary.embedded_file_count"].as_f64(),
+        compact_metric(elf_host, "binary.embedded_file_count"),
         Some(1.0)
     );
-    assert!(!elf_metrics.contains_key("binary.embedded_archive_count"));
+    assert_eq!(
+        compact_metric(elf_host, "binary.embedded_archive_count"),
+        None
+    );
 
     // 4. Child ELF extracts its own strings.
     let files = report["fs"]
@@ -250,16 +264,13 @@ fn embedded_binary_scanning() {
                 .is_some_and(|path| path.contains("!!embedded:elf@"))
         })
         .expect("embedded ELF should be analyzed as a child file");
-    let strings = child["ss"]
-        .as_array()
-        .expect("embedded ELF child should include extracted strings");
+    let strings =
+        compact_strings(child).expect("embedded ELF child should include extracted strings");
     assert!(
         strings.iter().any(|entry| {
             entry
                 .as_array()
-                .and_then(|fields| fields.get(1))
-                .and_then(|value| value.as_str())
-                == Some("execve")
+                .is_some_and(|fields| fields.iter().any(|value| value.as_str() == Some("execve")))
         }),
         "expected child ELF strings to be extracted from the carved bytes.\nchild:\n{}",
         serde_json::to_string_pretty(child).unwrap()

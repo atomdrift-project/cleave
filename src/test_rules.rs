@@ -997,7 +997,7 @@ impl<'a> RuleDebugger<'a> {
             result
                 .details
                 .push(format!("Metric '{}' not found in report", field));
-            if let Some(flat) = &self.report.expose_metrics {
+            if let Some(flat) = &self.report.filefacts_metrics {
                 for key in [
                     "text.total_lines",
                     "functions.total",
@@ -1259,7 +1259,7 @@ impl<'a> RuleDebugger<'a> {
         result
     }
 
-    // Mirrors the full set of kv-condition operators a trait can
+    // Mirrors the full set of value-condition operators a trait can
     // declare; bundling into a struct here would just push the
     // boilerplate one layer over.
     #[allow(clippy::too_many_arguments)]
@@ -1292,12 +1292,12 @@ impl<'a> RuleDebugger<'a> {
             "(no constraint)".to_string()
         };
 
-        let desc = format!("kv: path=\"{}\" {}", path, pattern_desc);
+        let desc = format!("value: path=\"{}\" {}", path, pattern_desc);
 
-        // Use the actual kv evaluator. Earlier this discarded `exists`,
+        // Use the actual value evaluator. Earlier this discarded `exists`,
         // `size_min`, and `size_max` from the parent condition, so a
-        // YAML trait like `type: kv, path: …, exists: true, size_min: 1`
-        // was rebuilt as a no-op match — every kv-only trait reported
+        // YAML trait like `type: value, path: …, exists: true, size_min: 1`
+        // was rebuilt as a no-op match — every value-only trait reported
         // NOT MATCHED in test-rules even when it fired in production.
         let condition = Condition::Kv {
             path: path.to_string(),
@@ -1724,7 +1724,7 @@ fn describe_condition(condition: &Condition) -> String {
             } else {
                 "exists"
             };
-            format!("kv[{}]: path=\"{}\"", matcher, truncate_string(path, 30))
+            format!("value[{}]: path=\"{}\"", matcher, truncate_string(path, 30))
         }
         Condition::Hex {
             pattern,

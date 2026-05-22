@@ -941,7 +941,9 @@ fn test_excessive_line_length_skips_binary_like_unknown_blob() {
     report.target.file_type = "unknown".to_string();
     {
         use crate::types::core::MetricsExt;
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        let flat = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
         flat.set_f("text.null_byte_count", 67_036_441.0);
         flat.set_f("text.non_printable_ratio", 0.9985);
         flat.set_f("text.max_line_length", 60_237_102.0);
@@ -970,7 +972,9 @@ fn test_excessive_line_length_skips_escaped_tensor_text_blob() {
     report.target.file_type = "unknown".to_string();
     {
         use crate::types::core::MetricsExt;
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
+        let flat = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
         flat.set_f("text.char_entropy", 1.37);
         flat.set_f("text.max_line_length", 33_554_458.0);
         flat.set_f("text.lines_over_1000", 4.0);

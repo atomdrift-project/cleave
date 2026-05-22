@@ -559,7 +559,7 @@ pub(super) struct AnalyzePathRequest {
 /// Includes the analysis report plus extraction info.
 #[derive(Debug, Serialize)]
 struct AnalyzePathResponse {
-    /// The analysis report (compact v4)
+    /// The analysis report (compact v5)
     #[serde(flatten)]
     report: crate::types::compact::CompactReport,
     /// Path where the file was extracted (if extract_dir is configured)
@@ -837,7 +837,7 @@ pub(super) async fn memory_stats(State(state): State<Arc<AppState>>) -> Json<ser
     let mapper_stats = crate::shared_resources::capability_mapper_stats();
 
     let (rizin_total, rizin_ok, rizin_timeouts, rizin_failures, rizin_mem_exceeded) =
-        expose::rizin::stats();
+        filefacts::rizin::stats();
 
     Json(serde_json::json!({
         "process": {

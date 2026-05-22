@@ -90,11 +90,11 @@ fn test_utf16le_wsh_dropper_analysis() {
 
     assert!(
         has_known_function,
-        "UTF-16 LE WSH dropper should expose parsed JavaScript functions"
+        "UTF-16 LE WSH dropper should filefacts parsed JavaScript functions"
     );
     assert!(
         has_interesting_string,
-        "UTF-16 LE WSH dropper should expose string literals after normalization"
+        "UTF-16 LE WSH dropper should filefacts string literals after normalization"
     );
     assert!(
         !fixture.normalized_text.contains('\0'),

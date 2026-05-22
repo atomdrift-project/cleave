@@ -150,7 +150,7 @@ impl GenericAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // `pyc.*` kv comes from expose's dual emission in the
+        // `pyc.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
 
         // Add structural feature
@@ -325,7 +325,7 @@ impl GenericAnalyzer {
         // `content.as_bytes()` — the latter is the UTF-8-lossy view, which
         // for binary inputs (LNK / pyc / RPM / etc. routed through this
         // analyzer) replaces every non-UTF-8 byte with U+FFFD (3 bytes
-        // `EF BF BD`) and shifts every offset, corrupting expose's
+        // `EF BF BD`) and shifts every offset, corrupting filefacts's
         // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
         let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
@@ -467,15 +467,17 @@ impl GenericAnalyzer {
         original_bytes: Option<&[u8]>,
         report: &mut AnalysisReport,
     ) {
-        // Pull `text.*` directly from expose. The capability mapper
-        // also merges expose's metric map into `report.expose_metrics`
+        // Pull `text.*` directly from filefacts. The capability mapper
+        // also merges filefacts's metric map into `report.filefacts_metrics`
         // later, but `analyze_source_internal` may be called outside
         // that pipeline (tests, embedded-code re-entry), so do it
         // here too so generic-text files always carry the bytes view.
         let bytes = original_bytes.unwrap_or(content.as_bytes());
-        if let Ok(parsed) = expose::open(bytes) {
+        if let Ok(parsed) = filefacts::open(bytes) {
             use crate::types::core::MetricsExt;
-            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            let flat = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
             for (k, v) in parsed.metrics().iter() {
                 if k.starts_with("text.") {
                     flat.set_f(k.to_string(), v);
@@ -489,7 +491,9 @@ impl GenericAnalyzer {
             // non-printable bytes to U+FFFD and tanks the entropy score.
             let bytes = original_bytes.unwrap_or(content.as_bytes());
             use crate::types::core::MetricsExt;
-            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            let flat = report
+                .filefacts_metrics
+                .get_or_insert_with(Default::default);
             flat.set_f(
                 "binary.overall_entropy",
                 crate::entropy::calculate_entropy(bytes),
@@ -537,9 +541,9 @@ start payload.exe
 
         // Should extract strings (quoted strings are extracted)
         assert!(!report.strings.is_empty());
-        // text.* metrics flow through expose_metrics now
+        // text.* metrics flow through filefacts_metrics now
         assert!(report
-            .expose_metrics
+            .filefacts_metrics
             .as_ref()
             .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
     }

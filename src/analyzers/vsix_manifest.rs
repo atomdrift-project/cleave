@@ -1,10 +1,10 @@
 //! VS Code / Visual Studio extension manifest analyzer.
 //!
 //! Parsing (Identity / DisplayName / Properties / Dependencies /
-//! Assets) lives in `expose::formats::vsix`; this module is a thin
+//! Assets) lives in `filefacts::formats::vsix`; this module is a thin
 //! dispatcher that drives the capability mapper. The dual-emission
-//! step in `evaluate_and_merge_findings` merges expose's `vsix.*`
-//! kv subtree into `report.kv_tree` before trait evaluation runs.
+//! step in `evaluate_and_merge_findings` merges filefacts's `vsix.*`
+//! kv subtree into `report.values_tree` before trait evaluation runs.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
@@ -48,7 +48,10 @@ impl VsixManifestAnalyzer {
             architectures: None,
         };
         let mut report = AnalysisReport::new(target);
-        report.metadata.tools_used.push("expose-vsix".to_string());
+        report
+            .metadata
+            .tools_used
+            .push("filefacts-vsix".to_string());
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
         report

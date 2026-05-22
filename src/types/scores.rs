@@ -2,7 +2,7 @@
 //!
 //! The unified `Metrics` container retired with the typed
 //! PE/ELF/Mach-O/Binary metric projections — every numeric metric
-//! now flows through `AnalysisReport::expose_metrics` under its
+//! now flows through `AnalysisReport::filefacts_metrics` under its
 //! dotted-key namespace.
 
 use cleave_macros::ValidFieldPaths;
@@ -55,7 +55,7 @@ pub(crate) struct EncodedLanguageMetrics {
 // `EncodedMetrics::increment` / `EncodedLanguageMetrics::increment` /
 // `normalize_encoding` were the producer side of these structs, called
 // from cleave's pre-migration `UnifiedSourceAnalyzer::populate_text_metrics`.
-// That call site retired with the cleave→expose Text/AST migration;
+// That call site retired with the cleave→filefacts Text/AST migration;
 // the structs themselves remain on the schema (referenced by
 // `field_paths.rs` for trait-author auto-completion) but no longer
 // gain new state.
@@ -162,12 +162,12 @@ pub(crate) struct SupplyChainScore {
 // =============================================================================
 
 /// Get a metric value by field path (e.g., "binary.string_count", "text.total_lines").
-/// Returns `None` if the metric doesn't exist. Reads exclusively from expose's
+/// Returns `None` if the metric doesn't exist. Reads exclusively from filefacts's
 /// flat metric map; cleave-side typed metric projections have been retired.
 #[must_use]
 pub(crate) fn get_metric_value(report: &crate::types::AnalysisReport, field: &str) -> Option<f64> {
     report
-        .expose_metrics
+        .filefacts_metrics
         .as_ref()
         .and_then(|m| m.get(field).copied())
 }

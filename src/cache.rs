@@ -615,6 +615,7 @@ pub fn cleanup_old_caches(current_cache: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use std::io::Write;
     use std::time::Duration;

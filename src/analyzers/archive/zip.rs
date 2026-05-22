@@ -420,7 +420,7 @@ pub(super) fn format_zip_compression(method: zip::CompressionMethod) -> String {
 /// them as UTC is the conventional interpretation for forensic comparison.
 pub(super) fn zip_datetime_to_unix(dt: zip::DateTime) -> Option<i64> {
     let year = dt.year();
-    if year < 1970 || year > 2999 {
+    if !(1970..=2999).contains(&year) {
         return None;
     }
     let days = days_from_civil(year as i32, dt.month() as u32, dt.day() as u32)?;

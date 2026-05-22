@@ -252,6 +252,7 @@ pub fn project_expose_function(f: &expose::Function) -> Function {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
 
     /// PE imports come back library-tagged (lowercase, no `.dll`)

@@ -985,7 +985,7 @@ impl<'a> RuleDebugger<'a> {
     ) -> ConditionDebugResult {
         let desc = format!("metrics: {} (min: {:?}, max: {:?})", field, min, max);
 
-        let value = crate::types::scores::get_metric_value(&self.report, field);
+        let value = crate::types::scores::get_metric_value(self.report, field);
         let matched =
             value.is_some_and(|v| min.is_none_or(|m| v >= m) && max.is_none_or(|m| v <= m));
 

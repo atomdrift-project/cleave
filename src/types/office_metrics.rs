@@ -26,7 +26,7 @@ use super::{is_false, is_zero_f32, is_zero_u32, is_zero_u64};
 
 /// OLE2 / Compound File Binary specific metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct OleMetrics {
+pub(crate) struct OleMetrics {
     // === Stream topology ===
     /// Total number of OLE streams in the document
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -96,7 +96,7 @@ pub struct OleMetrics {
 
 /// OOXML / ZIP container metrics.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct OoxmlMetrics {
+pub(crate) struct OoxmlMetrics {
     // === ZIP topology ===
     /// Total number of ZIP entries in the OOXML package
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -152,7 +152,7 @@ pub struct OoxmlMetrics {
 /// but uses fixed-name fields instead of enum-keyed maps so the
 /// `type: metrics, field: office.vba.<name>` syntax works.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct VbaMetrics {
+pub(crate) struct VbaMetrics {
     // === Declare statements ===
     /// Total `Declare [PtrSafe] Function|Sub` count across modules.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -241,7 +241,7 @@ pub struct VbaMetrics {
 /// `office/mod.rs` so traits can express thresholds via `type: metrics,
 /// field: office.xlm.*` instead of hard-coded conditionals.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct XlmMetrics {
+pub(crate) struct XlmMetrics {
     /// Count of FORMULA.FILL cell-write XLM calls
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub formula_fill_count: u32,

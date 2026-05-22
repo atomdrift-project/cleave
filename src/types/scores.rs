@@ -12,7 +12,7 @@ use super::{is_zero_f32, is_zero_u32};
 
 /// Embedded code counts by decoded language and encoding.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct EncodedMetrics {
+pub(crate) struct EncodedMetrics {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total_count: u32,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -37,7 +37,7 @@ pub struct EncodedMetrics {
 
 /// Encoded embedded-code counts for one decoded language.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct EncodedLanguageMetrics {
+pub(crate) struct EncodedLanguageMetrics {
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub total_count: u32,
     #[serde(default, skip_serializing_if = "is_zero_u32")]
@@ -52,58 +52,13 @@ pub struct EncodedLanguageMetrics {
     pub unicode_escape_count: u32,
 }
 
-impl EncodedMetrics {
-    pub fn increment(&mut self, language: &str, encoding: &str) {
-        self.total_count = self.total_count.saturating_add(1);
-        self.increment_encoding(encoding);
-
-        let bucket = match language {
-            "python" => &mut self.python,
-            "javascript" | "typescript" => &mut self.javascript,
-            "php" => &mut self.php,
-            "shell" => &mut self.shell,
-            _ => return,
-        };
-        let language_metrics = bucket.get_or_insert_with(EncodedLanguageMetrics::default);
-        language_metrics.increment(encoding);
-    }
-
-    fn increment_encoding(&mut self, encoding: &str) {
-        match normalize_encoding(encoding) {
-            "base64" => self.base64_count = self.base64_count.saturating_add(1),
-            "hex" => self.hex_count = self.hex_count.saturating_add(1),
-            "xor" => self.xor_count = self.xor_count.saturating_add(1),
-            "url" => self.url_count = self.url_count.saturating_add(1),
-            "unicode-escape" => {
-                self.unicode_escape_count = self.unicode_escape_count.saturating_add(1)
-            }
-            _ => {}
-        }
-    }
-}
-
-impl EncodedLanguageMetrics {
-    fn increment(&mut self, encoding: &str) {
-        self.total_count = self.total_count.saturating_add(1);
-        match normalize_encoding(encoding) {
-            "base64" => self.base64_count = self.base64_count.saturating_add(1),
-            "hex" => self.hex_count = self.hex_count.saturating_add(1),
-            "xor" => self.xor_count = self.xor_count.saturating_add(1),
-            "url" => self.url_count = self.url_count.saturating_add(1),
-            "unicode-escape" => {
-                self.unicode_escape_count = self.unicode_escape_count.saturating_add(1)
-            }
-            _ => {}
-        }
-    }
-}
-
-fn normalize_encoding(encoding: &str) -> &str {
-    match encoding {
-        "base64-obf" => "base64",
-        other => other,
-    }
-}
+// `EncodedMetrics::increment` / `EncodedLanguageMetrics::increment` /
+// `normalize_encoding` were the producer side of these structs, called
+// from cleave's pre-migration `UnifiedSourceAnalyzer::populate_text_metrics`.
+// That call site retired with the cleave→expose Text/AST migration;
+// the structs themselves remain on the schema (referenced by
+// `field_paths.rs` for trait-author auto-completion) but no longer
+// gain new state.
 
 // =============================================================================
 // COMPOSITE SCORES
@@ -111,7 +66,7 @@ fn normalize_encoding(encoding: &str) -> &str {
 
 /// Composite obfuscation score for source code
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct ObfuscationScore {
+pub(crate) struct ObfuscationScore {
     /// Overall obfuscation score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,
@@ -143,7 +98,7 @@ pub struct ObfuscationScore {
 
 /// Composite packing score for binaries
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct PackingScore {
+pub(crate) struct PackingScore {
     /// Overall packing score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,
@@ -175,7 +130,7 @@ pub struct PackingScore {
 
 /// Supply chain risk score for packages/archives
 #[derive(Debug, Clone, Serialize, Deserialize, Default, ValidFieldPaths)]
-pub struct SupplyChainScore {
+pub(crate) struct SupplyChainScore {
     /// Overall risk score (0.0-1.0)
     #[serde(default, skip_serializing_if = "is_zero_f32")]
     pub score: f32,

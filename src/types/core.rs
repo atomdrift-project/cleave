@@ -186,12 +186,21 @@ pub struct AnalysisReport {
 /// Convenience writes / reads into the flat `metrics` map. Cast-from-f64
 /// boilerplate stays here so callers don't repeat it at every emit site.
 pub trait MetricsExt {
+    /// Insert `value` cast to `f64`. The flat `metrics` map stores
+    /// everything as `f64`; this hides the cast at the call site.
     fn set_u(&mut self, key: impl Into<String>, value: u64);
+    /// Insert a signed integer (cast to `f64`).
     fn set_i(&mut self, key: impl Into<String>, value: i64);
+    /// Insert an `f64` verbatim.
     fn set_f(&mut self, key: impl Into<String>, value: f64);
+    /// Insert a boolean as `0.0` / `1.0`.
     fn set_b(&mut self, key: impl Into<String>, value: bool);
+    /// Insert an `Option<bool>` — `None` leaves the map unchanged.
     fn set_b_opt(&mut self, key: impl Into<String>, value: Option<bool>);
+    /// Read a stored value back as `u64` (returns `None` when absent).
     fn get_u(&self, key: &str) -> Option<u64>;
+    /// Read a stored boolean back (returns `None` when absent;
+    /// `1.0` → `Some(true)`, anything else stored → `Some(false)`).
     fn get_b(&self, key: &str) -> Option<bool>;
 }
 
@@ -286,9 +295,14 @@ pub fn kv_set_path(
         None => return,
     };
     for part in parents {
-        let map = current
-            .as_object_mut()
-            .expect("kv_set_path: parent must be object");
+        // The match on line 289 above + the `entry → Object` rewrite at
+        // the loop tail (304-306) keep `current` an Object on every
+        // iteration, so the `as_object_mut` cannot return None. The
+        // `else return` is a belt-and-braces guard in case future
+        // edits break the invariant.
+        let Some(map) = current.as_object_mut() else {
+            return;
+        };
         let entry = map
             .entry(part.to_string())
             .or_insert_with(|| serde_json::Value::Object(Default::default()));
@@ -1280,8 +1294,8 @@ pub struct ArchiveEntry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::types::traits_findings::FindingKind;
 

@@ -3635,6 +3635,8 @@ impl super::CapabilityMapper {
                 "imports.",
                 "exports.",
                 "functions.",
+                "dependencies.",
+                "parse.",
             ];
             let in_expose_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 

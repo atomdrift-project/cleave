@@ -39,13 +39,12 @@ pub(crate) mod diff;
 pub mod expose_view;
 pub mod field_paths;
 pub(crate) mod file_analysis;
-// Retired (now sourced from expose's flat metric map under their
-// respective namespaces — `file.*`, `image.*`/`jpeg.*`/`png.*`,
-// `lnk.*`, `pdf.*`, `text.*`/`identifiers.*`/`strings.*`/`comments.*`/
-// `functions.*`/`imports.*`): file_metrics, image_metrics,
-// jpeg_metrics, png_metrics, lnk_metrics, pdf_metrics, text_metrics,
-// language_metrics. The orphaned .rs files survive on disk for a
-// follow-up commit to delete; they are no longer part of the crate.
+// Retired with the cleave→expose migration (now sourced from expose's
+// flat metric map under their respective namespaces — `file.*`,
+// `image.*`/`jpeg.*`/`png.*`, `lnk.*`, `pdf.*`, `text.*`/
+// `identifiers.*`/`strings.*`/`comments.*`/`functions.*`/`imports.*`):
+// file_metrics, image_metrics, jpeg_metrics, png_metrics, lnk_metrics,
+// pdf_metrics, text_metrics, language_metrics.
 pub(crate) mod ml_features;
 pub(crate) mod office_metrics;
 pub(crate) mod paths_env;

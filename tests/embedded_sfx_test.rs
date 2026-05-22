@@ -179,10 +179,7 @@ fn embedded_binary_scanning() {
         pe_metrics["binary.embedded_binary_count"].as_f64(),
         Some(1.0)
     );
-    assert_eq!(
-        pe_metrics["binary.embedded_file_count"].as_f64(),
-        Some(1.0)
-    );
+    assert_eq!(pe_metrics["binary.embedded_file_count"].as_f64(), Some(1.0));
 
     // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
     let mut nsis = minimal_pe_stub();

@@ -33,8 +33,7 @@ pub use input::AnalysisInput;
 // `text_metrics`, `identifier_metrics`, `string_metrics`,
 // `comment_metrics`, `function_metrics`, `import_metrics` retired —
 // all source-text metric extraction now lives in
-// `expose/src/formats/source/`. The orphaned .rs files survive on
-// disk for a follow-up commit to delete.
+// `expose/src/formats/source/`.
 pub(crate) mod symbol_extraction;
 pub(crate) mod utils;
 

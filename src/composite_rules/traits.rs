@@ -1589,10 +1589,10 @@ impl Scope {
             // Outer scope or no location info — all evidence shares one key.
             (Scope::Outer, _) | (_, None) => "",
             // Leaf: exact location match required.
-            (Scope::Leaf, Some(loc)) => loc,
+            (Scope::Leaf, Some(loc)) => strip_byte_offset_location(loc),
             // File: strip any decoded-payload suffix; what remains is
             // the leaf-file identifier.
-            (Scope::File, Some(loc)) => strip_decode_suffix(loc),
+            (Scope::File, Some(loc)) => strip_byte_offset_location(strip_decode_suffix(loc)),
             // Archive: nearest enclosing archive entry path.
             (Scope::Archive, Some(loc)) => parent_archive(loc),
         }
@@ -1625,6 +1625,40 @@ fn strip_decode_suffix(location: &str) -> &str {
     } else {
         location
     }
+}
+
+/// Strip byte-offset-only evidence detail from a scope location.
+///
+/// Byte offsets (`0x1234`, `offset:1234`) identify where evidence was
+/// found inside an analyzed unit; they do not identify a different
+/// analysis-tree leaf. Scope filtering should use the containing unit
+/// as the bucket and leave byte distance to `near_bytes`.
+///
+/// Archive aggregation prefixes nested evidence as
+/// `archive:path/to/member:<inner-location>`, so preserve the archive
+/// member key while dropping a trailing byte offset.
+fn strip_byte_offset_location(location: &str) -> &str {
+    if parse_location_as_byte_offset(location).is_some() {
+        return "";
+    }
+
+    if let Some((prefix, suffix)) = location.rsplit_once(":offset:") {
+        if parse_hex_or_dec_offset(suffix).is_some() {
+            return prefix;
+        }
+    }
+
+    if let Some((prefix, suffix)) = location.rsplit_once(':') {
+        if (suffix.starts_with("0x")
+            || suffix.starts_with("0X")
+            || suffix.bytes().all(|b| b.is_ascii_digit()))
+            && parse_location_as_byte_offset(suffix).is_some()
+        {
+            return prefix;
+        }
+    }
+
+    location
 }
 
 /// True if `location` is a pure `row:col` (or `row:col:...`) string
@@ -3377,9 +3411,29 @@ mod scope_tests {
     }
 
     #[test]
+    fn leaf_collapses_byte_offset_locations_to_containing_unit() {
+        // Byte offsets identify where evidence was found inside the
+        // leaf; they are not separate analysis-tree leaves.
+        assert_eq!(Scope::Leaf.key(Some("0x10")), "");
+        assert_eq!(Scope::Leaf.key(Some("offset:16")), "");
+        assert_eq!(
+            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:0x10")),
+            "archive:pkg.zip!bin/payload"
+        );
+        assert_eq!(
+            Scope::Leaf.key(Some("archive:pkg.zip!bin/payload:offset:16")),
+            "archive:pkg.zip!bin/payload"
+        );
+    }
+
+    #[test]
     fn file_keeps_archive_path_drops_decoded_layers() {
         // Archive entry: file-level == leaf-level.
         assert_eq!(Scope::File.key(Some("archive:foo.so")), "archive:foo.so");
+        assert_eq!(
+            Scope::File.key(Some("archive:foo.so:0x10")),
+            "archive:foo.so"
+        );
         // Encoded payloads collapse to the input-wide key.
         assert_eq!(Scope::File.key(Some("encoding_chain:base64+zlib")), "");
         assert_eq!(Scope::File.key(None), "");
@@ -3519,6 +3573,27 @@ mod scope_tests {
             .apply_scope_filter(evidence, tags)
             .expect("both in same leaf");
         assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn leaf_scope_pools_byte_offsets_in_same_raw_input() {
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![ev("0x10"), ev("0x30")];
+        let tags = vec![tag(0, "0x10"), tag(1, "0x30")];
+
+        let (filtered_ev, _) = rule
+            .apply_scope_filter(evidence, tags)
+            .expect("byte offsets share the raw input leaf");
+        assert_eq!(filtered_ev.len(), 2);
+    }
+
+    #[test]
+    fn leaf_scope_keeps_archive_member_identity_for_byte_offsets() {
+        let rule = composite_with(2, Some(Scope::Leaf));
+        let evidence = vec![ev("archive:a.bin:0x10"), ev("archive:b.bin:0x30")];
+        let tags = vec![tag(0, "archive:a.bin:0x10"), tag(1, "archive:b.bin:0x30")];
+
+        assert!(rule.apply_scope_filter(evidence, tags).is_none());
     }
 
     #[test]

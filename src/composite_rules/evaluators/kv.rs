@@ -446,7 +446,9 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
                 //   [*]                            — wildcard
                 //   [N]                            — numeric index
                 if matches!(chars.peek(), Some('"') | Some('\'')) {
-                    let quote = chars.next().expect("just peeked");
+                    // SAFETY: the `matches!(chars.peek(), Some(...))` arm
+                    // above proves `next()` returns `Some`.
+                    let Some(quote) = chars.next() else { break };
                     let mut key = String::new();
                     let mut closed = false;
                     for next_c in chars.by_ref() {
@@ -1435,52 +1437,54 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         );
     }
 
-    // Files whose metadata isn't natively a manifest format (office
-    // documents, etc.) get a synthetic kv tree built by the analyzer
-    // and stashed on `report.kv_tree`. Use it directly when present
-    // — skips both magic-byte format detection and re-parsing.
-    let parsed: &Value = match ctx.report.kv_tree.as_ref() {
-        Some(synthetic) => synthetic.as_ref(),
-        None => {
-            let detected_format = ctx
-                .cached_kv_format
-                .get_or_init(|| detect_format(file_path, content));
-            let format = if *detected_format == StructuredFormat::Unknown {
-                structured_format_from_file_type(&ctx.file_type)
-            } else {
-                *detected_format
-            };
-            if format == StructuredFormat::Unknown {
-                return None;
-            }
-            let cached = ctx.cached_kv_parsed.get_or_init(|| {
-                let parsed_value: Option<Value> = match format {
-                    StructuredFormat::Json => serde_json::from_slice(content).ok(),
-                    StructuredFormat::Yaml => serde_yaml::from_slice(content).ok(),
-                    StructuredFormat::Toml => std::str::from_utf8(content)
-                        .ok()
-                        .and_then(|s| toml::from_str(s).ok()),
-                    StructuredFormat::Plist => plist::from_bytes(content).ok(),
-                    StructuredFormat::PkgInfo => parse_pkginfo(content),
-                    StructuredFormat::SystemdService => parse_systemd_service(content),
-                    StructuredFormat::DesktopEntry => parse_desktop_entry(content),
-                    StructuredFormat::Xml => parse_xml_to_json(content),
-                    StructuredFormat::Unknown => None,
-                };
-                Box::new(parsed_value.unwrap_or(Value::Null))
-            });
-            cached.as_ref()
-        }
-    };
-
-    // If parsing failed (stored as Null sentinel), return None
-    if parsed.is_null() {
-        return None;
-    }
-
     // Navigate path
     let segments = parse_path(path).ok()?;
-    let values = navigate(parsed, &segments);
+    let mut values = Vec::new();
+
+    // Files whose metadata isn't natively a manifest format (office
+    // documents, PDFs, expose-backed formats, etc.) can have a synthetic
+    // kv tree stashed on `report.kv_tree`. Consult it first, but do not
+    // let it shadow the native parser for structured text formats. PKG-INFO
+    // is the motivating edge case: expose preserves header casing, while
+    // cleave's parser normalizes keys for stable lowercase rule paths.
+    if let Some(synthetic) = ctx.report.kv_tree.as_ref() {
+        values.extend(navigate(synthetic.as_ref(), &segments));
+    }
+
+    let detected_format = ctx
+        .cached_kv_format
+        .get_or_init(|| detect_format(file_path, content));
+    let format = if *detected_format == StructuredFormat::Unknown {
+        structured_format_from_file_type(&ctx.file_type)
+    } else {
+        *detected_format
+    };
+
+    if format != StructuredFormat::Unknown {
+        let cached = ctx.cached_kv_parsed.get_or_init(|| {
+            let parsed_value: Option<Value> = match format {
+                StructuredFormat::Json => serde_json::from_slice(content).ok(),
+                StructuredFormat::Yaml => serde_yaml::from_slice(content).ok(),
+                StructuredFormat::Toml => std::str::from_utf8(content)
+                    .ok()
+                    .and_then(|s| toml::from_str(s).ok()),
+                StructuredFormat::Plist => plist::from_bytes(content).ok(),
+                StructuredFormat::PkgInfo => parse_pkginfo(content),
+                StructuredFormat::SystemdService => parse_systemd_service(content),
+                StructuredFormat::DesktopEntry => parse_desktop_entry(content),
+                StructuredFormat::Xml => parse_xml_to_json(content),
+                StructuredFormat::Unknown => None,
+            };
+            Box::new(parsed_value.unwrap_or(Value::Null))
+        });
+        if !cached.is_null() {
+            values.extend(navigate(cached.as_ref(), &segments));
+        }
+    }
+
+    if values.is_empty() && ctx.report.kv_tree.is_none() && format == StructuredFormat::Unknown {
+        return None;
+    }
 
     // Handle exists check
     let path_found = !values.is_empty();
@@ -1588,8 +1592,8 @@ fn format_evidence_value(value: &Value) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use crate::composite_rules::context::EvaluationContext;
     use crate::composite_rules::types::FileType;
@@ -1712,6 +1716,37 @@ mod tests {
             compiled_regex: None,
         };
         assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    #[test]
+    fn native_pkginfo_parser_still_applies_with_synthetic_kv_tree() {
+        let pkginfo = b"Metadata-Version: 2.4
+Name: tap-wordpress
+Summary: Security research - dependency confusion PoC
+Author-email: security-research@example.com
+";
+        let kv = serde_json::json!({
+            "Summary": "Security research - dependency confusion PoC",
+            "Author-email": "security-research@example.com",
+        });
+        let path = std::path::Path::new("METADATA");
+        let ctx = create_test_ctx_with_kv_tree(pkginfo, path, FileType::PkgInfo, kv);
+
+        let cond = Condition::Kv {
+            path: "summary".to_string(),
+            exact: None,
+            substr: None,
+            regex: Some(r"dependency.confusion".to_string()),
+            case_insensitive: true,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: regex::RegexBuilder::new(r"dependency.confusion")
+                .case_insensitive(true)
+                .build()
+                .ok(),
+        };
+        assert!(evaluate_kv(&cond, &ctx).is_some());
     }
 
     fn evaluate_kv_test_with_file_type(

@@ -328,7 +328,7 @@ impl GenericAnalyzer {
         // `EF BF BD`) and shifts every offset, corrupting expose's
         // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
-        let eval_bytes = original_bytes.unwrap_or_else(|| content.as_bytes());
+        let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
         self.capability_mapper.evaluate_and_merge_findings(
             &mut report,
             eval_bytes,

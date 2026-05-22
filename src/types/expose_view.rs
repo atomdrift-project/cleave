@@ -104,6 +104,7 @@ fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
     use serde_json::json;
 
@@ -173,10 +174,10 @@ mod tests {
             view.values
         );
 
-        let import_count = view.metrics.get("pe.import_count").copied().unwrap_or(0.0);
+        let import_count = view.metrics.get("imports.count").copied().unwrap_or(0.0);
         assert!(
             import_count > 0.0,
-            "pe.import_count metric should be > 0 for test PE fixture"
+            "imports.count metric should be > 0 for test PE fixture"
         );
     }
 }

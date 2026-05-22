@@ -1,0 +1,372 @@
+//! Per-format regression tests for expose's canonical emission surface.
+//!
+//! These tests load representative fixtures and assert the canonical
+//! metric/kv paths trait authors are expected to read from. They lock
+//! in the "values-path-mirroring" schema established after the
+//! cleave→expose migration:
+//!
+//! - Cross-format counts: `sections.count`, `imports.count`,
+//!   `exports.count`, `functions.count`, `dependencies.count`,
+//!   `parse.error_count`.
+//! - Per-format detail under the format namespace (`pe.*`, `elf.*`,
+//!   `macho.*`, `lnk.*`, `archive.*`, …).
+//!
+//! Each test runs cleave via subprocess on a real fixture and parses
+//! the compact JSON output's `ms` (metrics) and `k` (flattened
+//! kv-tree) maps. Fixtures not present on the test host (e.g. PDFs
+//! pulled from outside-of-repo sources) silently skip — the goal is
+//! catching regressions on what the host CAN extract, not requiring
+//! every fixture everywhere.
+
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use serde_json::Value;
+use std::collections::HashMap;
+use std::path::Path;
+
+/// Run `cleave --json analyze <path>` and return the first file's
+/// compact view. Skips YARA + cache for speed and determinism.
+fn analyze(path: &Path) -> Value {
+    let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
+    let output = cmd
+        .env("CLEAVE_SKIP_YARA", "1")
+        .env("CLEAVE_SKIP_CACHE", "1")
+        .args(["--json", "analyze", path.to_str().unwrap()])
+        .output()
+        .expect("cleave run");
+    assert!(
+        output.status.success(),
+        "cleave failed: stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with('{'))
+        .expect("no JSON line in cleave output");
+    let report: Value = serde_json::from_str(line).unwrap_or_else(|e| panic!("bad JSON: {e}"));
+    report["fs"]
+        .as_array()
+        .and_then(|a| a.first())
+        .cloned()
+        .expect("report has no files")
+}
+
+/// `ms` map (flat dotted-key metrics) as a HashMap<String, f64>.
+fn metrics(file: &Value) -> HashMap<String, f64> {
+    file["ms"]
+        .as_object()
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| v.as_f64().map(|f| (k.clone(), f)))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `k` map (flat kv-tree) as a HashMap<String, Value>.
+fn kv(file: &Value) -> HashMap<String, Value> {
+    file["k"]
+        .as_object()
+        .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+        .unwrap_or_default()
+}
+
+/// `true` when every canonical cross-format count is present in `m`.
+/// Returns the list of missing keys so the calling test can produce
+/// an informative panic.
+fn missing_canonical_counts(m: &HashMap<String, f64>, expected: &[&str]) -> Vec<String> {
+    expected
+        .iter()
+        .filter(|k| !m.contains_key(**k))
+        .map(|k| (*k).to_string())
+        .collect()
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Cross-format canonical paths
+// ────────────────────────────────────────────────────────────────────
+
+/// Every binary file type (PE/ELF/Mach-O) must surface the unified
+/// `sections.*`, `imports.*`, `exports.*`, `dependencies.*` counts.
+/// These are the canonical names that replaced the format-scoped
+/// `pe.import_count` / `elf.import_count` / `macho.import_count`
+/// aliases and the legacy `binary.section_count` / `binary.dependency_count`.
+#[test]
+fn pe_emits_canonical_cross_format_counts() {
+    let f = analyze(Path::new("tests/fixtures/test.exe"));
+    assert_eq!(f["type"].as_str(), Some("pe"));
+    let m = metrics(&f);
+    let missing = missing_canonical_counts(
+        &m,
+        &[
+            "sections.count",
+            "sections.executable_count",
+            "sections.writable_count",
+            "sections.executable_writable_count",
+            "sections.code_size",
+            "sections.name_entropy",
+            "sections.nonstandard_count",
+            "imports.count",
+            "dependencies.count",
+        ],
+    );
+    assert!(missing.is_empty(), "missing canonical metrics: {missing:?}");
+    assert!(m["sections.count"] > 0.0);
+    assert!(m["imports.count"] > 0.0);
+    assert!(m["dependencies.count"] > 0.0);
+}
+
+#[test]
+fn elf_emits_canonical_cross_format_counts() {
+    let f = analyze(Path::new("tests/fixtures/test.elf"));
+    assert_eq!(f["type"].as_str(), Some("elf"));
+    let m = metrics(&f);
+    let missing = missing_canonical_counts(
+        &m,
+        &[
+            "sections.count",
+            "sections.executable_count",
+            "sections.writable_count",
+            "sections.executable_writable_count",
+            "sections.code_size",
+            "sections.name_entropy",
+            "sections.nonstandard_count",
+            "imports.count",
+            "exports.count",
+            "dependencies.count",
+        ],
+    );
+    assert!(missing.is_empty(), "missing canonical metrics: {missing:?}");
+    assert!(m["sections.count"] > 0.0);
+    assert!(m["imports.count"] > 0.0);
+    assert!(m["exports.count"] > 0.0);
+}
+
+#[test]
+fn macho_emits_canonical_cross_format_counts() {
+    let f = analyze(Path::new("tests/fixtures/test.macho"));
+    assert_eq!(f["type"].as_str(), Some("macho"));
+    let m = metrics(&f);
+    let missing = missing_canonical_counts(
+        &m,
+        &[
+            "sections.count",
+            "sections.executable_count",
+            "sections.writable_count",
+            "sections.executable_writable_count",
+            "sections.code_size",
+            "sections.name_entropy",
+            "sections.nonstandard_count",
+            "imports.count",
+            "exports.count",
+            "dependencies.count",
+        ],
+    );
+    assert!(missing.is_empty(), "missing canonical metrics: {missing:?}");
+    assert!(m["sections.count"] > 0.0);
+}
+
+/// The retired legacy aliases must NOT re-appear. If anyone re-adds
+/// `binary.section_count` / `binary.import_count` / etc., this test
+/// catches the regression immediately.
+#[test]
+fn no_retired_aliases_emit() {
+    for path in [
+        "tests/fixtures/test.exe",
+        "tests/fixtures/test.elf",
+        "tests/fixtures/test.macho",
+    ] {
+        let f = analyze(Path::new(path));
+        let m = metrics(&f);
+        for retired in [
+            "binary.section_count",
+            "binary.import_count",
+            "binary.export_count",
+            "binary.dependency_count",
+            "binary.wx_section_count",
+            "binary.has_signature",
+            "binary.signed",
+            "binary.has_executable_stack",
+            "binary.has_malformed_structure",
+            "binary.aliased_exports",
+            "binary.function_count",
+            "binary.rizin_function_count",
+            "binary.signed_with_individual_cert",
+            "pe.import_count",
+            "pe.export_count",
+            "pe.imported_library_count",
+            "elf.import_count",
+            "elf.export_count",
+            "elf.section_count",
+            "elf.needed_count",
+            "macho.import_count",
+            "macho.export_count",
+            "macho.library_count",
+            "imports.total",
+            "functions.total",
+            "archive.compression_ratio",
+            "archive.symlink_count",
+            "archive.encrypted_count",
+            "chm.itsf_lcid",
+        ] {
+            assert!(
+                !m.contains_key(retired),
+                "retired alias {retired} re-emitted for {path}"
+            );
+        }
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  PE format-specific
+// ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn pe_emits_format_specific_kv() {
+    let f = analyze(Path::new("tests/fixtures/test.exe"));
+    let k = kv(&f);
+    for key in [
+        "pe.machine",
+        "pe.subsystem",
+        "pe.timestamp",
+        "pe.entry_point",
+        "pe.entry_section",
+        "pe.image_base",
+        "pe.imphash",
+        "pe.image_hash.sha256",
+    ] {
+        assert!(k.contains_key(key), "missing PE kv key {key}");
+    }
+    // Indexed import structure should be there.
+    assert!(k.contains_key("pe.imports[0].library"));
+    assert!(k.contains_key("pe.imports[0].functions[0]"));
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  ELF format-specific
+// ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn elf_emits_format_specific_kv_and_metrics() {
+    let f = analyze(Path::new("tests/fixtures/test.elf"));
+    let m = metrics(&f);
+    let k = kv(&f);
+    assert!(k.contains_key("elf.machine"));
+    assert!(k.contains_key("elf.type"));
+    assert!(k.contains_key("elf.entry_section"));
+    // Hardening flags expressed as flat metrics — keep them locked in.
+    for key in ["elf.bits", "elf.little_endian", "elf.program_header_count"] {
+        assert!(m.contains_key(key), "missing ELF metric {key}");
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Mach-O format-specific
+// ────────────────────────────────────────────────────────────────────
+
+#[test]
+fn macho_emits_format_specific_kv() {
+    let f = analyze(Path::new("tests/fixtures/test.macho"));
+    let k = kv(&f);
+    assert!(k.contains_key("macho.cpu_type"));
+    // Indexed import structure should be there.
+    assert!(k.contains_key("macho.imports[0]") || k.contains_key("macho.libraries[0]"));
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  LNK format-specific
+// ────────────────────────────────────────────────────────────────────
+
+/// LNK extractor surfaces argument-whitespace-obfuscation metrics
+/// (CVE-2025-9491 detection signal). All four metrics must be
+/// emitted whenever the LNK has an arguments field.
+#[test]
+fn lnk_emits_argument_whitespace_metrics() {
+    let f = analyze(Path::new("tests/fixtures/lnk/powershell_hidden.lnk"));
+    assert_eq!(f["type"].as_str(), Some("lnk"));
+    let m = metrics(&f);
+    for key in [
+        "lnk.args_leading_spaces",
+        "lnk.args_leading_tabs",
+        "lnk.args_whitespace_total",
+        "lnk.args_max_whitespace_run",
+    ] {
+        assert!(m.contains_key(key), "missing LNK metric {key}");
+    }
+    // Arguments value should be in the kv tree, not just analyzed.
+    let k = kv(&f);
+    assert!(k.contains_key("lnk.arguments"));
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  ZIP archive
+// ────────────────────────────────────────────────────────────────────
+
+/// ZIP archive aggregates landed under the canonical `archive.*`
+/// namespace with the `archive.security.*` sub-namespace for hostile
+/// permission flags. The flat aliases (`archive.symlink_count`,
+/// `archive.encrypted_count`, `archive.compression_ratio`) were
+/// retired in favor of the nested forms.
+#[test]
+fn zip_emits_canonical_archive_keys() {
+    let f = analyze(Path::new("tests/fixtures/archives/test.zip"));
+    assert_eq!(f["type"].as_str(), Some("zip"));
+    let m = metrics(&f);
+    for key in [
+        "archive.file_count",
+        "archive.directory_count",
+        "archive.member_count",
+        "archive.total_uncompressed",
+        "archive.total_compressed",
+        "archive.security.symlink_count",
+        "archive.security.encrypted_count",
+        "archive.security.setuid_count",
+        "archive.security.setgid_count",
+        "archive.security.world_writable_count",
+    ] {
+        assert!(m.contains_key(key), "missing ZIP archive metric {key}");
+    }
+    // The legacy flat aliases are retired.
+    assert!(!m.contains_key("archive.symlink_count"));
+    assert!(!m.contains_key("archive.encrypted_count"));
+    assert!(!m.contains_key("archive.compression_ratio"));
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  Tar (gzipped)
+// ────────────────────────────────────────────────────────────────────
+
+/// Tar.gz is handled by cleave's archive analyzer (which decompresses
+/// and recurses); expose itself only carries `archive.*` extraction for
+/// uncompressed tar by design. The compressed wrapper still shows
+/// `archive.format.kind = "tar.gz"` in kv and surfaces member-level
+/// detail via `archive.members[N].*` — those are the keys traits
+/// targeting tar.gz actually rely on.
+#[test]
+fn targz_emits_member_level_kv_and_format_kind() {
+    let f = analyze(Path::new("tests/fixtures/archives/test.tar.gz"));
+    let k = kv(&f);
+    assert_eq!(
+        k.get("archive.format.kind").and_then(|v| v.as_str()),
+        Some("tar.gz")
+    );
+    assert!(k.contains_key("archive.member_count"));
+    assert!(k.contains_key("archive.members[0].path"));
+    assert!(k.contains_key("archive.members[0].sha256"));
+}
+
+// ────────────────────────────────────────────────────────────────────
+//  parse.error_count is the universal "malformed" signal
+// ────────────────────────────────────────────────────────────────────
+
+/// Healthy fixtures emit no parse errors; the metric is absent. A
+/// regression that introduces spurious parse errors on a benign
+/// binary catches here.
+#[test]
+fn healthy_pe_has_no_parse_errors() {
+    let f = analyze(Path::new("tests/fixtures/test.exe"));
+    let m = metrics(&f);
+    let errs = m.get("parse.error_count").copied().unwrap_or(0.0);
+    assert_eq!(errs, 0.0, "unexpected parse errors on healthy PE: {errs}");
+}

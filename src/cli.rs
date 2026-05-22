@@ -253,6 +253,8 @@ pub enum Command {
     /// Analyze files or directories
     Analyze {
         /// Target files or directories to analyze
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
@@ -267,6 +269,8 @@ pub enum Command {
     #[command(name = "iter-files")]
     IterFiles {
         /// Target files or directories to enumerate
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
@@ -621,46 +625,64 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 pub enum InspectTree {
     /// File identification — file type + detection source
     Fileid {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Structural key-value tree (paths usable by `type: kv` rules)
     Values {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Extracted strings — literals and decoded payloads
     Strings {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Flat metric map (`text.char_entropy`, `pe.import_count`, …)
     Metrics {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// AST projections — call sites, member chains, string args
     Ast {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Binary sections — name, extents, entropy, flag vocabulary
     Sections {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Imported foreign symbols
     Imports {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Locally-defined exported symbols
     Exports {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Functions / methods defined in the file
     Functions {
+        /// File paths to inspect (1+ required).
+
         #[arg(required = true)]
         targets: Vec<String>,
     },

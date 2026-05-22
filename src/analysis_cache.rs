@@ -268,7 +268,9 @@ fn options_hash(options: &AnalysisOptions) -> String {
 
 /// Get the active traits/rules revision fingerprint, or `None` if unavailable.
 fn traits_revision_key() -> Option<i64> {
-    cache_revision().ok().map(super::cache::RuleFilesRevision::cache_i64)
+    cache_revision()
+        .ok()
+        .map(super::cache::RuleFilesRevision::cache_i64)
 }
 
 /// Current time as Unix seconds.

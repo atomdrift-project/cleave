@@ -6,10 +6,10 @@
 //! subcommand, parses the JSON output, and asserts that:
 //!
 //! 1. The synthesized office values tree drives the dump (paths under
-//!    `core.*` etc., matching the `analyzers::office::office_kv`
+//!    `office.*` etc., matching the `analyzers::office::office_kv`
 //!    schema, not whatever the generic structured-content parser
 //!    might guess from a ZIP).
-//! 2. Path filtering (`--path core.creator`) works against the
+//! 2. Path filtering (`--path office.creator`) works against the
 //!    office tree.
 //! 3. The output's `path` strings are the exact strings trait
 //!    authors will use in `type: value path:`.
@@ -130,17 +130,17 @@ fn cleave_kv_emits_office_schema_for_ooxml() {
     let paths = paths_in(&entries);
 
     // Schema keys we promise trait authors. Filefacts namespaces OOXML
-    // metadata under `office.*` — `office.core.*` for Dublin Core,
-    // `office.application` / `office.company` for app-info.
+    // metadata under flat `office.*` paths; app-info and Dublin Core share
+    // the same namespace because duplicated `office.core.*` paths are absent.
     assert!(
-        paths.iter().any(|p| p == "office.core.creator"),
+        paths.iter().any(|p| p == "office.creator"),
         "paths: {:?}",
         paths
     );
-    assert!(paths.iter().any(|p| p == "office.core.last_modified_by"));
-    assert!(paths.iter().any(|p| p == "office.core.created"));
-    assert!(paths.iter().any(|p| p == "office.core.modified"));
-    assert!(paths.iter().any(|p| p == "office.core.title"));
+    assert!(paths.iter().any(|p| p == "office.last_modified_by"));
+    assert!(paths.iter().any(|p| p == "office.created"));
+    assert!(paths.iter().any(|p| p == "office.modified"));
+    assert!(paths.iter().any(|p| p == "office.title"));
     assert!(paths.iter().any(|p| p == "office.application"));
     assert!(paths.iter().any(|p| p == "office.company"));
 
@@ -149,7 +149,7 @@ fn cleave_kv_emits_office_schema_for_ooxml() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["path"] == "office.core.creator")
+        .find(|e| e["path"] == "office.creator")
         .expect("creator entry present");
     assert_eq!(creator_entry["value"], "Иван Иванов");
 }
@@ -161,9 +161,9 @@ fn cleave_kv_filter_resolves_office_paths() {
     let content = build_minimal_docx("Alice", "2024-06-01T00:00:00Z", "2024-06-02T00:00:00Z");
     std::fs::write(&path, &content).unwrap();
 
-    let entries = run_kv(&path, Some("office.core.creator"));
+    let entries = run_kv(&path, Some("office.creator"));
     let arr = entries.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["path"], "office.core.creator");
+    assert_eq!(arr[0]["path"], "office.creator");
     assert_eq!(arr[0]["value"], "Alice");
 }

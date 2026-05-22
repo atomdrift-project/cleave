@@ -343,7 +343,7 @@ pub(crate) fn configure_rayon_thread_pool() {
         builder = builder.num_threads(threads);
     } else {
         let total_parallelism = std::thread::available_parallelism()
-            .map(|p| p.get())
+            .map(std::num::NonZero::get)
             .unwrap_or(MIN_SAFE_THREADS);
 
         let p_cores = preferred_default_thread_count();

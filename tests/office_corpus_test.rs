@@ -134,7 +134,7 @@ fn max_criticality(report: &serde_json::Value) -> String {
         for file in files {
             if let Some(findings) = file.get("ts").and_then(|v| v.as_array()) {
                 for finding in findings {
-                    if let Some(level) = finding.get("l").and_then(|v| v.as_u64()) {
+                    if let Some(level) = finding.get("l").and_then(serde_json::Value::as_u64) {
                         best_rank = best_rank.max(level as u8);
                     }
                 }
@@ -146,7 +146,6 @@ fn max_criticality(report: &serde_json::Value) -> String {
         2 => "baseline",
         3 => "notable",
         4 => "suspicious",
-        5 => "hostile",
         _ => "hostile",
     }
     .to_string()

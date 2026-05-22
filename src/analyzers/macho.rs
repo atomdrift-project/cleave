@@ -714,8 +714,12 @@ fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
     let linkedit = segs
         .iter()
         .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("__LINKEDIT"))?;
-    let file_offset = linkedit.get("file_offset").and_then(serde_json::Value::as_u64)?;
-    let file_size = linkedit.get("file_size").and_then(serde_json::Value::as_u64)?;
+    let file_offset = linkedit
+        .get("file_offset")
+        .and_then(serde_json::Value::as_u64)?;
+    let file_size = linkedit
+        .get("file_size")
+        .and_then(serde_json::Value::as_u64)?;
     let end = file_offset.checked_add(file_size)?;
     let cs_off = end.checked_sub(u64::from(size))?;
     Some((cs_off as u32, size))
@@ -936,7 +940,10 @@ impl MachOAnalyzer {
                 .get("file_offset")
                 .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as usize;
-            let size = slice.get("file_size").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
+            let size = slice
+                .get("file_size")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0) as usize;
             if size > 0 && off.saturating_add(size) <= data.len() {
                 return off..off + size;
             }
@@ -967,7 +974,8 @@ impl MachOAnalyzer {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|s| {
-                        let off = s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
+                        let off =
+                            s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
                         let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         let name = s.get("cpu_type").and_then(|v| v.as_str())?;
                         if size > 0 && off.saturating_add(size) <= data.len() {
@@ -997,7 +1005,8 @@ impl MachOAnalyzer {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|s| {
-                        let off = s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
+                        let off =
+                            s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
                         let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         if size > 0 && off.saturating_add(size) <= data.len() {
                             Some(off..off + size)

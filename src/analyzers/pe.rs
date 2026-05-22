@@ -316,7 +316,12 @@ impl PEAnalyzer {
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         match crate::analysis_context::AnalysisContext::open(file_path, data) {
-            Ok(ctx) => self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx),
+            Ok(ctx) => self.analyze_structural_with_ctx(
+                file_path,
+                data,
+                precomputed_sha256.as_deref(),
+                &ctx,
+            ),
             Err(e) => {
                 let mut report = AnalysisReport::new(TargetInfo {
                     path: file_path.display().to_string(),
@@ -349,7 +354,7 @@ impl PEAnalyzer {
         &self,
         file_path: &'a Path,
         data: &'a [u8],
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
@@ -374,7 +379,7 @@ impl PEAnalyzer {
             data,
             None,
             true,
-            precomputed_sha256.clone(),
+            precomputed_sha256,
             ctx,
         );
 
@@ -518,7 +523,7 @@ impl PEAnalyzer {
         data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
@@ -569,7 +574,7 @@ impl PEAnalyzer {
         start: std::time::Instant,
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         // `filefacts_ok` is true whenever filefacts identified the bytes as
@@ -611,7 +616,7 @@ impl PEAnalyzer {
             file_type: "pe".to_string(),
             size_bytes: original_data.len() as u64,
             sha256: precomputed_sha256
-                .clone()
+                .map(ToString::to_string)
                 .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(original_data)),
             architectures: filefacts_ok.then(|| vec![self.arch_name(ctx)]),
         };
@@ -1452,7 +1457,7 @@ impl Analyzer for PEAnalyzer {
             input.data,
             strings,
             !input.skip_rizin,
-            input.sha256.clone(),
+            input.sha256.as_deref(),
             &ctx,
         );
 

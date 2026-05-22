@@ -896,7 +896,11 @@ mod formula_tests {
             ..FilefactsView::default()
         });
 
-        let value = serde_json::to_value(compact_from_files(&[fa])).expect("serialize compact");
+        let value = serde_json::to_value(compact_from_files(&[fa]));
+        assert!(value.is_ok(), "serialize compact: {value:?}");
+        let Ok(value) = value else {
+            return;
+        };
         assert_eq!(
             value.get("v").and_then(serde_json::Value::as_str),
             Some("5")

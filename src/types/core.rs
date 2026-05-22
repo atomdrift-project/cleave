@@ -1874,7 +1874,9 @@ mod tests {
 
         // Member count + aggregates.
         assert_eq!(
-            archive.get("member_count").and_then(serde_json::Value::as_u64),
+            archive
+                .get("member_count")
+                .and_then(serde_json::Value::as_u64),
             Some(3)
         );
 
@@ -1910,11 +1912,15 @@ mod tests {
             Some(1_700_000_300)
         );
         assert_eq!(
-            timing.get("mtime_spread_seconds").and_then(serde_json::Value::as_i64),
+            timing
+                .get("mtime_spread_seconds")
+                .and_then(serde_json::Value::as_i64),
             Some(300)
         );
         assert_eq!(
-            timing.get("mtime_unique_count").and_then(serde_json::Value::as_u64),
+            timing
+                .get("mtime_unique_count")
+                .and_then(serde_json::Value::as_u64),
             Some(3)
         );
 
@@ -1924,11 +1930,15 @@ mod tests {
             .get("security")
             .expect("archive.security should be present");
         assert_eq!(
-            security.get("setuid_count").and_then(serde_json::Value::as_u64),
+            security
+                .get("setuid_count")
+                .and_then(serde_json::Value::as_u64),
             Some(1)
         );
         assert_eq!(
-            security.get("symlink_count").and_then(serde_json::Value::as_u64),
+            security
+                .get("symlink_count")
+                .and_then(serde_json::Value::as_u64),
             Some(1)
         );
         assert_eq!(

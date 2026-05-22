@@ -954,7 +954,7 @@ fn detect_base64_binary(
             inner_file_type,
             &format!("embedded@{:#x}", offset),
             depth + 1,
-            capability_mapper.clone(),
+            capability_mapper,
         );
         out.extend(sub_entries);
     }
@@ -976,10 +976,8 @@ fn inner_type_to_file_type(
     // Re-detect from the full byte buffer (magic_type only inspects
     // the leading magic; the full detector also distinguishes
     // bare-gz from tar.gz, plain-tar from .gem, etc.).
-    let detected = crate::analyzers::detect_file_type_from_data(
-        std::path::Path::new(virtual_path),
-        decoded,
-    );
+    let detected =
+        crate::analyzers::detect_file_type_from_data(std::path::Path::new(virtual_path), decoded);
     if detected != crate::analyzers::FileType::Unknown {
         return Some(detected);
     }
@@ -1270,8 +1268,12 @@ pub(crate) fn process_all_strings_with_host(
         // produced from a container payload (tar.gz members,
         // archive contents, sub-sub-files). All entries already
         // carry their final depth.
-        let bin_entries =
-            detect_base64_binary(parent_path, string_info, current_depth as u32, capability_mapper);
+        let bin_entries = detect_base64_binary(
+            parent_path,
+            string_info,
+            current_depth as u32,
+            capability_mapper,
+        );
         if let Some(bin_layer) = bin_entries.first() {
             let payload_key = (
                 bin_layer.file_type.clone(),

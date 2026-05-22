@@ -88,8 +88,7 @@ exfiltrate()
     // tar.gz
     let mut gz_bytes: Vec<u8> = Vec::new();
     {
-        let mut gz =
-            flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::default());
+        let mut gz = flate2::write::GzEncoder::new(&mut gz_bytes, flate2::Compression::default());
         gz.write_all(&tar_bytes).unwrap();
         gz.finish().unwrap();
     }
@@ -153,10 +152,7 @@ fn pdf_javascript_subfile_lands_at_depth_one() {
         .iter()
         .find(|f| f.file_type == "javascript")
         .unwrap();
-    let language = js_file
-        .kv
-        .get("source.language")
-        .and_then(|v| v.as_str());
+    let language = js_file.kv.get("source.language").and_then(|v| v.as_str());
     assert_eq!(
         language,
         Some("javascript"),

@@ -1,11 +1,9 @@
 //! End-to-end test for `cleave value` over a tree-sitter source file.
 //!
-//! Pins the contract that source-code files (here: a tiny `.c`) flow
-//! through the unified analyzer and surface a `source.*` kv subtree
-//! with imports, functions, and strings populated. A regression in
-//! `tree-sitter-c`, `extract_c_import`, or `source_kv::attach_to_report`
-//! would silently zero out `source.imports` for every C file in the
-//! wild — this test catches that.
+//! Pins the contract that source-code files keep residual `source.*` values
+//! small while imports/functions live in their own typed command output.
+//! This catches accidental re-duplication of symbols into `cleave value`
+//! and verifies source imports still surface through `cleave imports`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 #[test]
@@ -27,48 +25,55 @@ int main(int argc, char **argv) {
     )
     .unwrap();
 
-    let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
-    cmd.env("CLEAVE_SKIP_YARA", "1")
+    let mut value_cmd = assert_cmd::cargo_bin_cmd!("cleave");
+    value_cmd
+        .env("CLEAVE_SKIP_YARA", "1")
         .args(["--json", "value", path.to_str().unwrap()]);
-    let output = cmd.output().expect("run cleave value");
+    let value_output = value_cmd.output().expect("run cleave value");
     assert!(
-        output.status.success(),
+        value_output.status.success(),
         "cleave value exited {}: stderr={}",
-        output.status,
-        String::from_utf8_lossy(&output.stderr)
+        value_output.status,
+        String::from_utf8_lossy(&value_output.stderr)
     );
 
     let entries: serde_json::Value =
-        serde_json::from_slice(&output.stdout).expect("parse value json");
+        serde_json::from_slice(&value_output.stdout).expect("parse value json");
     let arr = entries.as_array().expect("entries array");
     let paths: Vec<&str> = arr.iter().map(|e| e["path"].as_str().unwrap()).collect();
 
-    // The unified analyzer populated `source.*` from the file's call
-    // sites and string constants. Assert the keys trait authors rely on.
     assert!(
-        paths.iter().any(|p| p.starts_with("source.imports[")),
-        "missing source.imports[*]: {paths:?}"
+        paths.contains(&"source.language"),
+        "missing source.language: {paths:?}"
     );
     assert!(
-        paths.iter().any(|p| p.starts_with("source.functions[")),
-        "missing source.functions[*]: {paths:?}"
+        paths.iter().all(|p| !p.starts_with("source.imports[")),
+        "imports must not be duplicated into values: {paths:?}"
     );
     assert!(
-        paths.contains(&"source.has_imports"),
-        "missing source.has_imports flag: {paths:?}"
+        paths.iter().all(|p| !p.starts_with("source.functions[")),
+        "functions must not be duplicated into values: {paths:?}"
     );
 
-    // The `system` and `execl` call sites should both surface as imports —
-    // a single-call regression would still pass a "non-empty" check but
-    // miss the multi-call-site path through `extract_c_import`.
-    let imports: Vec<&str> = arr
+    let mut imports_cmd = assert_cmd::cargo_bin_cmd!("cleave");
+    imports_cmd
+        .env("CLEAVE_SKIP_YARA", "1")
+        .args(["--json", "imports", path.to_str().unwrap()]);
+    let imports_output = imports_cmd.output().expect("run cleave imports");
+    assert!(
+        imports_output.status.success(),
+        "cleave imports exited {}: stderr={}",
+        imports_output.status,
+        String::from_utf8_lossy(&imports_output.stderr)
+    );
+
+    let import_entries: serde_json::Value =
+        serde_json::from_slice(&imports_output.stdout).expect("parse imports json");
+    let imports: Vec<&str> = import_entries
+        .as_array()
+        .expect("imports array")
         .iter()
-        .filter(|e| {
-            e["path"]
-                .as_str()
-                .is_some_and(|p| p.starts_with("source.imports["))
-        })
-        .filter_map(|e| e["value"].as_str())
+        .filter_map(|entry| entry["name"].as_str())
         .collect();
     assert!(
         imports.contains(&"system"),
@@ -92,7 +97,7 @@ fn cleave_kv_path_filter_works_on_source_files() {
         "value",
         path.to_str().unwrap(),
         "--path",
-        "source.imports",
+        "source.language",
     ]);
     let output = cmd.output().expect("run cleave value");
     assert!(
@@ -105,14 +110,7 @@ fn cleave_kv_path_filter_works_on_source_files() {
     let entries: serde_json::Value =
         serde_json::from_slice(&output.stdout).expect("parse value json");
     let arr = entries.as_array().expect("entries array");
-    // Every returned entry must live under the requested prefix —
-    // confirms the filter applies to source-file value output the same way
-    // it does to office / structured-document trees.
-    for entry in arr {
-        let p = entry["path"].as_str().unwrap();
-        assert!(
-            p.starts_with("source.imports"),
-            "filtered path leaked outside prefix: {p}"
-        );
-    }
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["path"], "source.language");
+    assert_eq!(arr[0]["value"], "c");
 }

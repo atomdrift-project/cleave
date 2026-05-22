@@ -816,7 +816,12 @@ impl ElfAnalyzer {
         precomputed_sha256: Option<String>,
     ) -> AnalysisReport {
         match crate::analysis_context::AnalysisContext::open(file_path, data) {
-            Ok(ctx) => self.analyze_structural_with_ctx(file_path, data, precomputed_sha256, &ctx),
+            Ok(ctx) => self.analyze_structural_with_ctx(
+                file_path,
+                data,
+                precomputed_sha256.as_deref(),
+                &ctx,
+            ),
             Err(e) => {
                 let mut report = AnalysisReport::new(TargetInfo {
                     path: file_path.display().to_string(),
@@ -849,7 +854,7 @@ impl ElfAnalyzer {
         &self,
         file_path: &'a Path,
         data: &'a [u8],
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         use crate::types::file_analysis::encode_upx_path;
@@ -862,7 +867,7 @@ impl ElfAnalyzer {
                 data,
                 None,
                 true,
-                precomputed_sha256.as_deref(),
+                precomputed_sha256,
                 ctx,
             );
         }
@@ -874,7 +879,7 @@ impl ElfAnalyzer {
             data,
             None,
             true,
-            precomputed_sha256.as_deref(),
+            precomputed_sha256,
             ctx,
         );
 

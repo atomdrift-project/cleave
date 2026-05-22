@@ -1491,7 +1491,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                     let report = analyzer.analyze_structural_with_ctx(
                         path,
                         file_data,
-                        input.sha256.clone(),
+                        input.sha256.as_deref(),
                         &ctx,
                     );
                     let view = crate::types::FilefactsView::from_ctx(&ctx);
@@ -1558,7 +1558,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,
-                input.sha256.clone(),
+                input.sha256.as_deref(),
                 &ctx,
             ));
             let filefacts_view = crate::types::FilefactsView::from_ctx(&ctx);

@@ -123,10 +123,9 @@ impl PdfAnalyzer {
             return;
         }
 
-        let Some(analyzer) = analyzer_for_file_type_arc(
-            &FileType::JavaScript,
-            Some(self.capability_mapper.clone()),
-        ) else {
+        let Some(analyzer) =
+            analyzer_for_file_type_arc(&FileType::JavaScript, Some(self.capability_mapper.clone()))
+        else {
             tracing::warn!("JavaScript analyzer unavailable; skipping PDF JS sub-files");
             return;
         };
@@ -155,12 +154,8 @@ impl PdfAnalyzer {
                     None,
                 ),
             );
-            let input = AnalysisInput::with_strings(
-                virtual_path,
-                js_bytes,
-                &strings,
-                FileType::JavaScript,
-            );
+            let input =
+                AnalysisInput::with_strings(virtual_path, js_bytes, &strings, FileType::JavaScript);
 
             match analyzer.analyze_input(&input) {
                 Ok(mut sub_report) => {
@@ -391,8 +386,13 @@ mod tests {
         let js = b"app.alert('this is in a compressed stream'); var pwned = true;";
         let mut encoder =
             flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-        encoder.write_all(js).unwrap();
-        let flate = encoder.finish().unwrap();
+        let write_result = encoder.write_all(js);
+        assert!(write_result.is_ok(), "write JS stream: {write_result:?}");
+        let flate_result = encoder.finish();
+        assert!(flate_result.is_ok(), "finish JS stream: {flate_result:?}");
+        let Ok(flate) = flate_result else {
+            return;
+        };
         let mut pdf: Vec<u8> = Vec::new();
         pdf.extend_from_slice(b"%PDF-1.5\n");
         pdf.extend_from_slice(b"3 0 obj << /Type /Action /S /JavaScript /JS 4 0 R >> endobj\n");
@@ -486,20 +486,14 @@ mod tests {
         // for any parsed JS file. Their presence is proof the sub-file
         // went through real source-code extraction (and not, say, a
         // generic binary path that wouldn't tree-sitter-parse).
-        let language = js_file
-            .kv
-            .get("source.language")
-            .and_then(|v| v.as_str());
+        let language = js_file.kv.get("source.language").and_then(|v| v.as_str());
         assert_eq!(
             language,
             Some("javascript"),
             "expected `source.language=javascript` after JS sub-analysis; got {:?}",
             js_file.kv.keys().collect::<Vec<_>>(),
         );
-        let has_function_extraction = js_file
-            .kv
-            .keys()
-            .any(|k| k.starts_with("source.functions"));
+        let has_function_extraction = js_file.kv.keys().any(|k| k.starts_with("source.functions"));
         assert!(
             has_function_extraction,
             "expected `source.functions[]` from tree-sitter parse; got {:?}",
@@ -532,12 +526,11 @@ mod tests {
                 if let Some(loc) = &evidence.location {
                     if loc.starts_with("pdf-js:object9") {
                         tagged_count += 1;
-                    } else if loc.starts_with("pdf-js:") {
-                        // Sub-file came from a different carrier — not
-                        // possible here since this PDF has only one /JS
-                        // site. Fail loudly if it happens.
-                        panic!("unexpected pdf-js location prefix: {loc}");
                     } else {
+                        assert!(
+                            !loc.starts_with("pdf-js:"),
+                            "unexpected pdf-js location prefix: {loc}"
+                        );
                         untagged_count += 1;
                     }
                 }

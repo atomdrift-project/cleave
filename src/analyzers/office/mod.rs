@@ -780,7 +780,11 @@ impl OfficeAnalyzer {
                     module_names.join(", ")
                 ),
                 conf: 1.0,
-                crit: Criticality::Suspicious,
+                crit: if module_count == 0 {
+                    Criticality::Notable
+                } else {
+                    Criticality::Suspicious
+                },
                 mbc: None,
                 attack: Some("T1059.005".to_string()),
                 trait_refs: vec![],
@@ -879,6 +883,9 @@ impl OfficeAnalyzer {
                     clsid_match.description, clsid_match.clsid, clsid_match.storage_path
                 ),
                 conf: 1.0,
+                // `module_count` is only in scope inside the
+                // `if doc.has_vba` block above; for dangerous-CLSID
+                // findings we default to Suspicious.
                 crit: Criticality::Suspicious,
                 mbc: None,
                 attack: None,
@@ -1017,7 +1024,11 @@ impl OfficeAnalyzer {
                     module_names.join(", ")
                 ),
                 conf: 1.0,
-                crit: Criticality::Suspicious,
+                crit: if module_count == 0 {
+                    Criticality::Notable
+                } else {
+                    Criticality::Suspicious
+                },
                 mbc: None,
                 attack: Some("T1059.005".to_string()),
                 trait_refs: vec![],

@@ -462,9 +462,7 @@ pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
                     match chars.next() {
                         Some(']') => {}
                         Some(other) => {
-                            return Err(format!(
-                                "expected ']' after quoted key, got {other:?}",
-                            ));
+                            return Err(format!("expected ']' after quoted key, got {other:?}",));
                         }
                         None => {
                             return Err("expected ']' after quoted key, got EOF".into());
@@ -1755,9 +1753,7 @@ mod tests {
                 PathSegment::Key("macho".into()),
                 PathSegment::Key("code_signature".into()),
                 PathSegment::Key("entitlements".into()),
-                PathSegment::Key(
-                    "com.apple.security.cs.disable-library-validation".into(),
-                ),
+                PathSegment::Key("com.apple.security.cs.disable-library-validation".into(),),
             ],
         );
     }

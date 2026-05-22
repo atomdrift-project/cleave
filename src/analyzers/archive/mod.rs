@@ -742,22 +742,48 @@ impl ArchiveAnalyzer {
 
         let mut report = AnalysisReport::new(target);
 
-        // `rpm.*` kv comes from expose's dual emission in the
-        // capability mapper — no synthesis needed here.
-
-        // `chm.*` kv and metrics both come from expose's dual
-        // emission in the capability mapper — no synthesis here.
+        // Open expose once on the host archive bytes and merge its
+        // typed values/metrics into the report. The capability
+        // mapper's `evaluate_and_merge_findings_with_precomputed`
+        // does this for PE/ELF/Mach-O but archives evaluate via
+        // `evaluate_container_findings`, which doesn't go through
+        // that path — so we plumb the merge in here. This is what
+        // makes `chm.itsf.*` / `rpm.*` / `crx.*` etc. reachable via
+        // both `report.kv_tree` (host-level kv) and
+        // `report.expose_metrics` (host-level metrics).
+        if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(archive_path, data) {
+            let values_tree = ctx.values_tree();
+            let expose_map: std::collections::BTreeMap<String, f64> = ctx
+                .parsed
+                .metrics()
+                .iter()
+                .map(|(k, v)| (k.to_string(), v))
+                .collect();
+            report.expose = Some(crate::types::ExposeView::from_ctx(&ctx));
+            drop(ctx);
+            if let serde_json::Value::Object(map) = values_tree {
+                for (namespace, subtree) in map {
+                    report.merge_kv_subtree(&namespace, subtree);
+                }
+            }
+            if !expose_map.is_empty() {
+                let dest = report.expose_metrics.get_or_insert_with(Default::default);
+                for (k, v) in expose_map {
+                    dest.insert(k, v);
+                }
+            }
+        }
 
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
-            if let Ok((mut seeded_entries, archive_metrics)) =
+            // Seed `archive_contents` with the member listing. `archive.*`
+            // metrics (file_count, compression_ratio, hidden_file_count,
+            // path_traversal_count, …) are produced by expose's central-
+            // directory walker and flow into `report.expose_metrics` via
+            // `AnalysisContext` — no cleave-side flattening here.
+            if let Ok(mut seeded_entries) =
                 zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
             {
                 report.archive_contents.append(&mut seeded_entries);
-                // Flatten ArchiveMetrics into `archive.*` keys in
-                // the report's flat metric map (#41).
-                use crate::types::flatten_into_metrics;
-                let flat = report.expose_metrics.get_or_insert_with(Default::default);
-                flatten_into_metrics(&archive_metrics, "archive", flat);
             }
         }
 

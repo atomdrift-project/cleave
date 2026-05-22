@@ -467,15 +467,19 @@ impl GenericAnalyzer {
         original_bytes: Option<&[u8]>,
         report: &mut AnalysisReport,
     ) {
-        let text = crate::analyzers::text_metrics::analyze_text(content);
-        {
-            use crate::types::core::flatten_into_metrics;
+        // Pull `text.*` directly from expose. The capability mapper
+        // also merges expose's metric map into `report.expose_metrics`
+        // later, but `analyze_source_internal` may be called outside
+        // that pipeline (tests, embedded-code re-entry), so do it
+        // here too so generic-text files always carry the bytes view.
+        let bytes = original_bytes.unwrap_or(content.as_bytes());
+        if let Ok(parsed) = expose::open(bytes) {
+            use crate::types::core::MetricsExt;
             let flat = report.expose_metrics.get_or_insert_with(Default::default);
-            flatten_into_metrics(&text, "text", flat);
-            if let Some(c) = text.most_common_char {
-                use crate::types::core::MetricsExt;
-                flat.set_u("text.most_common_char_codepoint", u64::from(c as u32));
-                flat.set_b("text.most_common_char_is_null", c == '\0');
+            for (k, v) in parsed.metrics().iter() {
+                if k.starts_with("text.") {
+                    flat.set_f(k.to_string(), v);
+                }
             }
         }
         if matches!(self.file_type, FileType::Data) {
@@ -486,7 +490,10 @@ impl GenericAnalyzer {
             let bytes = original_bytes.unwrap_or(content.as_bytes());
             use crate::types::core::MetricsExt;
             let flat = report.expose_metrics.get_or_insert_with(Default::default);
-            flat.set_f("binary.overall_entropy", crate::entropy::calculate_entropy(bytes));
+            flat.set_f(
+                "binary.overall_entropy",
+                crate::entropy::calculate_entropy(bytes),
+            );
         }
     }
 }

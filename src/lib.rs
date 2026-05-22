@@ -75,7 +75,10 @@ pub use types::diff::{
     ScopeDiff, ScopeDiffs, ScopeRocs, SectionChange, StringChange, SymbolChange, SymbolKind,
     TraitChange,
 };
-pub use types::text_metrics::TextMetrics;
+// `TextMetrics` typed struct retired with the cleave→expose
+// text-metrics migration; downstream consumers should read keys
+// from `report.expose_metrics` (BTreeMap<String, f64>) under the
+// `text.*` prefix instead.
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 pub use types::FileAnalysis;
 pub use types::SampleExtractionConfig;
@@ -405,9 +408,7 @@ struct AnalysisDisableGuards {
 impl AnalysisDisableGuards {
     fn from_options(options: &AnalysisOptions) -> Self {
         Self {
-            _radare2: options
-                .disable_radare2
-                .then(expose::rizin::scoped_disable),
+            _radare2: options.disable_radare2.then(expose::rizin::scoped_disable),
             _upx: options.disable_upx.then(upx::scoped_disable_upx),
         }
     }

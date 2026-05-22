@@ -8,7 +8,7 @@ mod tests {
     use crate::types::{AnalysisReport, TargetInfo};
     use std::path::Path;
 
-    use super::super::parsing::ClassInfo;
+    use super::super::parsing::{ClassInfo, MethodInfo};
 
     // =============================================================================
     // Basic analyzer tests
@@ -415,6 +415,68 @@ mod tests {
         assert!(
             report.findings.iter().any(|f| f.id == "intel/system"),
             "expected benign class reference detections to remain"
+        );
+    }
+
+    #[test]
+    fn test_generic_keystroke_and_capture_strings_are_not_keyloggers() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_info = ClassInfo {
+            strings: ["keyStroke".to_string(), "Keystroke: ".to_string()]
+                .into_iter()
+                .collect(),
+            class_refs: [].into_iter().collect(),
+            methods: vec![MethodInfo {
+                name: "captureShortcut".to_string(),
+            }],
+        };
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/app/ShortcutManager.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities(&class_info, &mut report);
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "credential/keylogger"),
+            "shortcut handling should not emit keylogger findings: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_browser_bypass_class_is_not_password_theft() {
+        let analyzer = JavaClassAnalyzer::new();
+        let class_info = ClassInfo {
+            strings: ["Lcom/github/proxy/search/browser/ie/IELocalByPassFilter;".to_string()]
+                .into_iter()
+                .collect(),
+            class_refs: [].into_iter().collect(),
+            methods: vec![],
+        };
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/tmp/app/IELocalByPassFilter.class".to_string(),
+            file_type: "java_class".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+
+        analyzer.detect_capabilities(&class_info, &mut report);
+
+        assert!(
+            report
+                .findings
+                .iter()
+                .all(|f| f.id != "credential/password"),
+            "browser bypass class names should not emit password theft: {:?}",
+            report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }
 

@@ -20,10 +20,6 @@ pub(crate) fn is_zero_f32(n: &f32) -> bool {
     *n == 0.0
 }
 
-pub(crate) fn is_zero_f64(n: &f64) -> bool {
-    *n == 0.0
-}
-
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn is_zero_i32(v: &i32) -> bool {
     *v == 0
@@ -38,28 +34,22 @@ pub(crate) fn is_zero_i64(v: &i64) -> bool {
 pub mod binary;
 pub(crate) mod code_structure;
 pub mod compact;
-pub(crate) mod container_metrics;
 pub(crate) mod core;
 pub(crate) mod diff;
 pub mod expose_view;
 pub mod field_paths;
 pub(crate) mod file_analysis;
-// file_metrics retired — `file.size` flows through expose_metrics.
-// image_metrics, jpeg_metrics, png_metrics retired —
-// pixel-stat metrics flow through `AnalysisReport::expose_metrics`
-// under `image.*`, `jpeg.*`, `png.*` keys.
-pub(crate) mod language_metrics;
-// lnk_metrics retired — LNK whitespace/presence metrics flow through
-// expose's flat metric map under `lnk.*` keys (`AnalysisReport::expose_metrics`).
+// Retired (now sourced from expose's flat metric map under their
+// respective namespaces — `file.*`, `image.*`/`jpeg.*`/`png.*`,
+// `lnk.*`, `pdf.*`, `text.*`/`identifiers.*`/`strings.*`/`comments.*`/
+// `functions.*`/`imports.*`): file_metrics, image_metrics,
+// jpeg_metrics, png_metrics, lnk_metrics, pdf_metrics, text_metrics,
+// language_metrics. The orphaned .rs files survive on disk for a
+// follow-up commit to delete; they are no longer part of the crate.
 pub(crate) mod ml_features;
 pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
-// pdf_metrics retired — PDF metrics live in
-// `AnalysisReport::expose_metrics` under `pdf.*` keys, populated by
-// `analyzers::pdf::pdf_kv::populate_pdf_metrics`.
-// png_metrics retired (see image_metrics block above).
 pub(crate) mod scores;
-pub(crate) mod text_metrics;
 pub(crate) mod traits_findings;
 
 // Re-export all public types to maintain API compatibility
@@ -112,19 +102,11 @@ pub(crate) use ml_features::{
 
 #[allow(unused_imports)]
 pub(crate) use code_structure::{
-    BinaryAnomaly, BinaryProperties, CodeMetrics, GoIdioms, JavaScriptIdioms, LinkingInfo,
-    SecurityFeatures, ShellIdioms, SourceCodeMetrics,
-};
-
-pub(crate) use text_metrics::{
-    CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StringMetrics, TextMetrics,
+    BinaryAnomaly, BinaryProperties, GoIdioms, JavaScriptIdioms, LinkingInfo, SecurityFeatures,
+    ShellIdioms, SourceCodeMetrics,
 };
 
 #[allow(unused_imports)]
-pub(crate) use language_metrics::{
-    GoMetrics, JavaScriptMetrics, PythonMetrics, RustMetrics, ShellMetrics,
-};
-
 pub(crate) use scores::EncodedMetrics;
 
 use std::path::PathBuf;

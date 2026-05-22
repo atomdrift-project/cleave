@@ -14,16 +14,22 @@ use super::guards::{
     sanitize_entry_path, symlink_escapes, CancellableReader, ExtractedMemberMetadata,
     ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
-use crate::types::{container_metrics::ArchiveMetrics, ArchiveEntry};
+use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::Path;
 
-/// Read ZIP central directory metadata from an in-memory reader.
+/// Seed `report.archive_contents` with the ZIP member listing.
+///
+/// `archive.*` *metrics* (file_count, compression_ratio, hidden_file_count,
+/// path_traversal_count, …) are now produced by expose's central-directory
+/// walker — see `expose/src/formats/zip.rs`. They reach the trait engine
+/// via `AnalysisContext` → `report.expose_metrics` and don't need to be
+/// recomputed cleave-side.
 pub(crate) fn inspect_zip_metadata_from_reader<R: Read + Seek>(
     reader: R,
-) -> Result<(Vec<ArchiveEntry>, ArchiveMetrics)> {
+) -> Result<Vec<ArchiveEntry>> {
     let mut archive = zip::ZipArchive::new(reader).context("Failed to read ZIP archive")?;
     if archive.len() > super::guards::MAX_ZIP_ENTRIES {
         anyhow::bail!(
@@ -34,46 +40,20 @@ pub(crate) fn inspect_zip_metadata_from_reader<R: Read + Seek>(
     }
 
     let mut entries = Vec::with_capacity(archive.len());
-    let mut metrics = ArchiveMetrics {
-        has_comment: !archive.comment().is_empty(),
-        ..ArchiveMetrics::default()
-    };
-
     for i in 0..archive.len() {
         let entry = archive.by_index(i)?;
-        let name = entry.name().to_string();
-
         if entry.is_dir() {
-            metrics.directory_count += 1;
             continue;
         }
-
-        metrics.file_count += 1;
-        metrics.total_uncompressed += entry.size();
-        metrics.total_compressed += entry.compressed_size();
-        metrics.max_filename_length = metrics.max_filename_length.max(name.len() as u32);
-        if name.starts_with('.') || name.split('/').any(|part| part.starts_with('.')) {
-            metrics.hidden_files += 1;
-        }
-        if entry.encrypted() {
-            metrics.encrypted_entries += 1;
-        }
-
         entries.push(ArchiveEntry {
-            path: name,
+            path: entry.name().to_string(),
             file_type: "unknown".to_string(),
             sha256: String::new(),
             size_bytes: entry.size(),
             ..ArchiveEntry::default()
         });
     }
-
-    if metrics.total_uncompressed > 0 {
-        metrics.compression_ratio =
-            metrics.total_compressed as f32 / metrics.total_uncompressed as f32;
-    }
-
-    Ok((entries, metrics))
+    Ok(entries)
 }
 
 /// Extract a ZIP archive from in-memory data.

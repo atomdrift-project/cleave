@@ -358,39 +358,3 @@ pub(crate) fn extract_strings_from_ast(
         }
     }
 }
-
-// ============================================================================
-// Metrics Utilities
-// ============================================================================
-
-/// Flatten a JSON value into a flat list of key-value pairs.
-///
-/// This is useful for extracting metrics from nested JSON structures
-/// and converting them to a format suitable for ML/analysis.
-pub(crate) fn flatten_json_to_metrics(
-    value: &serde_json::Value,
-    prefix: &str,
-    result: &mut Vec<(String, serde_json::Value)>,
-) {
-    match value {
-        serde_json::Value::Object(map) => {
-            for (key, val) in map {
-                let new_prefix = if prefix.is_empty() {
-                    key.clone()
-                } else {
-                    format!("{}.{}", prefix, key)
-                };
-                flatten_json_to_metrics(val, &new_prefix, result);
-            }
-        }
-        serde_json::Value::Null => {
-            // Skip null values
-        }
-        _ => {
-            // Leaf value - add to result
-            if !prefix.is_empty() {
-                result.push((prefix.to_string(), value.clone()));
-            }
-        }
-    }
-}

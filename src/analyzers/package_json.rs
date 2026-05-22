@@ -997,6 +997,7 @@ impl PackageJsonAnalyzer {
                     .filter(|s| {
                         s.contains("/.")
                             && !s.contains("node_modules/.bin/")
+                            && !s.contains("/.husky")
                             && !s.starts_with("./.github/")
                             && !s.starts_with(".github/")
                             && !s.contains("../")
@@ -1826,6 +1827,27 @@ mod tests {
             .unwrap();
 
         assert!(report
+            .findings
+            .iter()
+            .any(|f| f.id == "evasion/hidden-file"));
+    }
+
+    #[test]
+    fn test_husky_prepare_script_is_not_hidden_file_evasion() {
+        let content = r#"{
+            "name": "benign-package",
+            "version": "1.0.0",
+            "scripts": {
+                "prepare": "cd .. && husky ui/.husky"
+            }
+        }"#;
+
+        let analyzer = PackageJsonAnalyzer::new();
+        let report = analyzer
+            .analyze_package(Path::new("package.json"), content)
+            .unwrap();
+
+        assert!(!report
             .findings
             .iter()
             .any(|f| f.id == "evasion/hidden-file"));

@@ -11,19 +11,10 @@
 //! 3. Rely on the trait/YAML system for capability detection
 //! 4. Keep binary analyzers (ELF, PE, Mach-O) and manifest analyzers separate
 
-use crate::analyzers::comment_metrics::{self, CommentStyle};
-use crate::analyzers::function_metrics::{self, FunctionInfo};
 use crate::analyzers::symbol_extraction;
-use crate::analyzers::{
-    identifier_metrics, import_metrics, string_metrics, text_metrics, AnalysisInput, Analyzer,
-    FileType, FileTypeExt,
-};
+use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
-use crate::types::core::{flatten_into_metrics, MetricsExt};
-use crate::types::text_metrics::{
-    CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StringMetrics, TextMetrics,
-};
-use crate::types::{AnalysisReport, EncodedMetrics, Function, StringInfo, TargetInfo};
+use crate::types::{AnalysisReport, Function, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::cell::RefCell;
 use std::path::Path;
@@ -73,8 +64,6 @@ pub(crate) struct LanguageConfig {
     pub function_name_field: &'static str,
     /// Node types for string literals
     pub string_node_types: &'static [&'static str],
-    /// Comment style for metrics
-    pub comment_style: CommentStyle,
 }
 
 /// Get the language configuration for a file type.
@@ -94,7 +83,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition", "async_function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "string_content"],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::JavaScript => Some(LanguageConfig {
             name: "javascript",
@@ -114,7 +102,6 @@ pub(crate) fn config_for_file_type(
             ],
             function_name_field: "name",
             string_node_types: &["string", "template_string"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::TypeScript => Some(LanguageConfig {
             name: "typescript",
@@ -130,7 +117,6 @@ pub(crate) fn config_for_file_type(
             ],
             function_name_field: "name",
             string_node_types: &["string", "template_string"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Go => Some(LanguageConfig {
             name: "go",
@@ -141,7 +127,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_declaration", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["raw_string_literal", "interpreted_string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Rust => Some(LanguageConfig {
             name: "rust",
@@ -152,7 +137,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_item"],
             function_name_field: "name",
             string_node_types: &["string_literal", "raw_string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Ruby => Some(LanguageConfig {
             name: "ruby",
@@ -170,7 +154,6 @@ pub(crate) fn config_for_file_type(
                 "bare_symbol",
                 "hash_key_symbol",
             ],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::Php => Some(LanguageConfig {
             name: "php",
@@ -181,7 +164,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["string", "encapsed_string"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Shell => Some(LanguageConfig {
             name: "shell",
@@ -192,7 +174,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "raw_string"],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::Lua => Some(LanguageConfig {
             name: "lua",
@@ -203,7 +184,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_declaration", "local_function"],
             function_name_field: "name",
             string_node_types: &["string"],
-            comment_style: CommentStyle::Lua,
         }),
         FileType::Perl => Some(LanguageConfig {
             name: "perl",
@@ -214,7 +194,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["subroutine_declaration", "method_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal", "interpolated_string"],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::PowerShell => Some(LanguageConfig {
             name: "powershell",
@@ -225,7 +204,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_statement"],
             function_name_field: "name",
             string_node_types: &["string_literal", "expandable_string_literal"],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::Java => Some(LanguageConfig {
             name: "java",
@@ -236,7 +214,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::CSharp => Some(LanguageConfig {
             name: "csharp",
@@ -247,7 +224,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
             string_node_types: &["string_literal", "verbatim_string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::C => Some(LanguageConfig {
             name: "c",
@@ -258,7 +234,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition"],
             function_name_field: "declarator",
             string_node_types: &["string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Swift => Some(LanguageConfig {
             name: "swift",
@@ -269,7 +244,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_declaration"],
             function_name_field: "name",
             string_node_types: &["line_string_literal", "multi_line_string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::ObjectiveC => Some(LanguageConfig {
             name: "objc",
@@ -280,7 +254,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition", "method_definition"],
             function_name_field: "declarator",
             string_node_types: &["string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Groovy => Some(LanguageConfig {
             name: "groovy",
@@ -291,7 +264,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["method_declaration", "function_declaration"],
             function_name_field: "name",
             string_node_types: &["string", "gstring"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Scala => Some(LanguageConfig {
             name: "scala",
@@ -302,7 +274,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["function_definition"],
             function_name_field: "name",
             string_node_types: &["string", "interpolated_string"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Kotlin => Some(LanguageConfig {
             name: "kotlin",
@@ -313,7 +284,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["fun_declaration", "function_declaration"],
             function_name_field: "name",
             string_node_types: &["line_string_literal", "multi_line_string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Zig => Some(LanguageConfig {
             name: "zig",
@@ -324,7 +294,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["fn_decl"],
             function_name_field: "name",
             string_node_types: &["string_literal"],
-            comment_style: CommentStyle::CStyle,
         }),
         FileType::Elixir => Some(LanguageConfig {
             name: "elixir",
@@ -335,7 +304,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["call"], // def/defp are calls in Elixir's AST
             function_name_field: "target",
             string_node_types: &["string", "charlist"],
-            comment_style: CommentStyle::Hash,
         }),
         FileType::Makefile => Some(LanguageConfig {
             name: "makefile",
@@ -346,7 +314,6 @@ pub(crate) fn config_for_file_type(
             function_node_types: &["rule"],
             function_name_field: "target",
             string_node_types: &["string"],
-            comment_style: CommentStyle::Hash,
         }),
         _ => None,
     }
@@ -597,9 +564,9 @@ impl UnifiedSourceAnalyzer {
                 f
             };
             report.findings.push(finding);
-
-            let text = crate::analyzers::text_metrics::analyze_text(content);
-            emit_text_to_expose(&text, &mut report);
+            // `text.*` metrics still flow in via expose's `extract` —
+            // it falls back to a tree-less text emission when the
+            // parse is skipped or fails.
         }
 
         if timed_out {
@@ -615,13 +582,7 @@ impl UnifiedSourceAnalyzer {
             );
             finding.crit = crate::types::Criticality::Component;
             report.findings.push(finding);
-
-            // Still compute text metrics even without the AST — they are pure O(n)
-            // text passes (no tree-sitter) and give metric-based rules something to
-            // evaluate.  For a large single-line minified/obfuscated file the
-            // resulting max_line_length alone is a strong indicator.
-            let text = crate::analyzers::text_metrics::analyze_text(content);
-            emit_text_to_expose(&text, &mut report);
+            // Text-only metrics still come from expose's source extractor.
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -887,8 +848,6 @@ impl UnifiedSourceAnalyzer {
         }
 
         if let Some(ref tree) = tree {
-            let root = tree.root_node();
-
             // Extract function calls for capability matching (type: symbol conditions)
             // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
             symbol_extraction::extract_symbols_from_tree(
@@ -911,29 +870,10 @@ impl UnifiedSourceAnalyzer {
             crate::path_mapper::analyze_and_link_paths(&mut report);
             crate::env_mapper::analyze_and_link_env_vars(&mut report);
 
-            // Compute text-side metrics into report.expose_metrics.
-            // All text/identifier/string/comment/function/import/encoded
-            // counters flow through the flat metric map under their
-            // respective `text.*`/`identifiers.*`/etc. dotted keys.
-            let imports_opt = if report.imports.is_empty() {
-                None
-            } else {
-                let file_type_str = match self.file_type {
-                    crate::analyzers::FileType::Python => "python",
-                    crate::analyzers::FileType::JavaScript
-                    | crate::analyzers::FileType::TypeScript => "javascript",
-                    crate::analyzers::FileType::Go => "go",
-                    crate::analyzers::FileType::Ruby => "ruby",
-                    crate::analyzers::FileType::Perl => "perl",
-                    crate::analyzers::FileType::Lua => "lua",
-                    _ => "unknown",
-                };
-                Some(import_metrics::analyze_imports(
-                    &report.imports,
-                    file_type_str,
-                ))
-            };
-            self.populate_text_metrics(&root, content, imports_opt.as_ref(), &mut report);
+            // `text.*` / `identifiers.*` / `strings.*` / `comments.*` /
+            // `functions.*` / `imports.*` metrics all flow through
+            // expose's source extractor now and get merged into
+            // `report.expose_metrics` inside the capability mapper.
         }
         // Detect base64 binary payloads and PowerShell -EncodedCommand blobs.
         // Guard against recursion: when this analyzer was created for inner analysis
@@ -1146,248 +1086,6 @@ impl UnifiedSourceAnalyzer {
                 }
             }
         }
-    }
-
-    /// Build all text-side metrics (text/identifiers/strings/comments/
-    /// functions/imports/encoded) and flatten them into
-    /// `report.expose_metrics` under their respective dotted prefixes.
-    /// Cross-component ratios on `text.*` are computed before flattening.
-    fn populate_text_metrics<'a>(
-        &self,
-        root: &tree_sitter::Node<'a>,
-        content: &str,
-        imports: Option<&ImportMetrics>,
-        report: &mut AnalysisReport,
-    ) {
-        let source = content.as_bytes();
-        let mut text = text_metrics::analyze_text(content);
-
-        // Single-pass AST walk extracts identifiers, strings, and functions together
-        let (identifiers, strings, func_infos) = self.extract_all_from_tree(root, source);
-
-        let ident_refs: Vec<&str> = identifiers
-            .iter()
-            .map(std::string::String::as_str)
-            .collect();
-        let identifier_metrics = identifier_metrics::analyze_identifiers(&ident_refs);
-
-        let str_refs: Vec<&str> = strings.iter().map(std::string::String::as_str).collect();
-        let string_metrics = string_metrics::analyze_strings(&str_refs);
-
-        let comment_metrics = comment_metrics::analyze_comments(content, self.config.comment_style);
-
-        let func_metrics = function_metrics::analyze_functions(&func_infos, text.total_lines);
-
-        let encoded = self
-            .encoded_context
-            .as_ref()
-            .and_then(|chain| chain.first())
-            .map(|encoding| {
-                let mut e = EncodedMetrics::default();
-                e.increment(self.config.file_type, encoding);
-                e
-            });
-
-        Self::compute_text_ratios(
-            &mut text,
-            &identifier_metrics,
-            &string_metrics,
-            &comment_metrics,
-            &func_metrics,
-            imports,
-        );
-
-        emit_text_to_expose(&text, report);
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
-        flatten_into_metrics(&identifier_metrics, "identifiers", flat);
-        flatten_into_metrics(&string_metrics, "strings", flat);
-        flatten_into_metrics(&comment_metrics, "comments", flat);
-        flatten_into_metrics(&func_metrics, "functions", flat);
-        if let Some(imps) = imports {
-            flatten_into_metrics(imps, "imports", flat);
-        }
-        if let Some(e) = &encoded {
-            flatten_into_metrics(e, "encoded", flat);
-        }
-    }
-
-    /// Single-pass AST walk that extracts identifiers, string values, and function info
-    /// in one traversal instead of three separate walks.
-    fn extract_all_from_tree<'a>(
-        &self,
-        root: &tree_sitter::Node<'a>,
-        source: &[u8],
-    ) -> (Vec<String>, Vec<String>, Vec<FunctionInfo>) {
-        let mut identifiers = Vec::new();
-        let mut strings = Vec::new();
-        let mut functions = Vec::new();
-        let mut func_depth: u32 = 0;
-        let mut cursor = root.walk();
-
-        loop {
-            let node = cursor.node();
-            let kind = node.kind();
-
-            // Identifiers
-            if kind == "identifier" || kind == "name" {
-                if let Ok(text) = node.utf8_text(source) {
-                    if !text.is_empty() {
-                        identifiers.push(text.to_string());
-                    }
-                }
-            }
-
-            // Strings
-            if self.config.string_node_types.contains(&kind) || kind.contains("string") {
-                if let Ok(text) = node.utf8_text(source) {
-                    let s = text
-                        .trim_start_matches('"')
-                        .trim_end_matches('"')
-                        .trim_start_matches('\'')
-                        .trim_end_matches('\'');
-                    if !s.is_empty() {
-                        strings.push(s.to_string());
-                    }
-                }
-            }
-
-            // Functions
-            if self.config.function_node_types.contains(&kind) {
-                let mut info = FunctionInfo::default();
-                if let Some(name) = self.extract_function_name(&node, source) {
-                    info.name = name;
-                }
-                info.is_anonymous = info.name.is_empty();
-                info.start_line = node.start_position().row as u32;
-                info.end_line = node.end_position().row as u32;
-                info.line_count = info.end_line.saturating_sub(info.start_line) + 1;
-                info.nesting_depth = func_depth;
-                functions.push(info);
-            }
-
-            if cursor.goto_first_child() {
-                if self.config.function_node_types.contains(&kind) {
-                    func_depth += 1;
-                }
-                continue;
-            }
-            if cursor.goto_next_sibling() {
-                continue;
-            }
-            loop {
-                if !cursor.goto_parent() {
-                    return (identifiers, strings, functions);
-                }
-                let parent_kind = cursor.node().kind();
-                if self.config.function_node_types.contains(&parent_kind) {
-                    func_depth = func_depth.saturating_sub(1);
-                }
-                if cursor.goto_next_sibling() {
-                    break;
-                }
-            }
-        }
-    }
-
-    /// Compute cross-component ratio and normalized metrics on `text`
-    /// using already-populated sub-metrics. Pure division — zero parsing
-    /// overhead.
-    fn compute_text_ratios(
-        text: &mut TextMetrics,
-        identifiers: &IdentifierMetrics,
-        strings: &StringMetrics,
-        comments: &CommentMetrics,
-        functions: &FunctionMetrics,
-        imports: Option<&ImportMetrics>,
-    ) {
-        // Cross-component ratios (per function)
-        if functions.total > 0 {
-            text.strings_to_functions_ratio = strings.total as f32 / functions.total as f32;
-            text.identifiers_to_functions_ratio =
-                identifiers.unique_count as f32 / functions.total as f32;
-            if let Some(imps) = imports {
-                text.imports_to_functions_ratio = imps.total as f32 / functions.total as f32;
-            }
-        }
-
-        // Per-line density ratios
-        if text.total_lines > 0 {
-            text.identifier_density = identifiers.total as f32 / text.total_lines as f32;
-            text.string_density = strings.total as f32 / text.total_lines as f32;
-            if let Some(imps) = imports {
-                text.import_density = (imps.total as f32 * 100.0) / text.total_lines as f32;
-            }
-
-            // Size-independent normalized metrics
-            let lines_sqrt = (text.total_lines as f32).sqrt();
-            if lines_sqrt > 0.0 {
-                text.normalized_function_count = functions.total as f32 / lines_sqrt;
-                if let Some(imps) = imports {
-                    text.normalized_import_count = imps.total as f32 / lines_sqrt;
-                }
-                text.normalized_string_count = strings.total as f32 / lines_sqrt;
-            }
-
-            let lines_log = (text.total_lines as f32).log2();
-            if lines_log > 0.0 {
-                text.normalized_unique_identifiers = identifiers.unique_count as f32 / lines_log;
-            }
-        }
-
-        // Obfuscation indicator ratios
-        if identifiers.unique_count > 0 {
-            let suspicious = identifiers.hex_like_names
-                + identifiers.base64_like_names
-                + identifiers.sequential_names
-                + identifiers.keyboard_pattern_names
-                + identifiers.repeated_char_names;
-            text.suspicious_identifier_ratio = suspicious as f32 / identifiers.unique_count as f32;
-        }
-
-        if strings.total > 0 {
-            let encoded =
-                strings.base64_candidates + strings.hex_strings + strings.url_encoded_strings;
-            text.encoded_string_ratio = encoded as f32 / strings.total as f32;
-
-            let suspicious = strings.embedded_code_candidates
-                + strings.shell_command_strings
-                + strings.sql_strings;
-            text.suspicious_string_ratio = suspicious as f32 / strings.total as f32;
-
-            let dynamic = strings.concat_operations
-                + strings.char_construction
-                + strings.array_join_construction;
-            text.dynamic_string_ratio = dynamic as f32 / strings.total as f32;
-        }
-
-        if comments.total > 0 {
-            let suspicious = comments.high_entropy_comments + comments.base64_in_comments;
-            text.suspicious_comment_ratio = suspicious as f32 / comments.total as f32;
-        }
-
-        if let Some(imps) = imports {
-            if imps.total > 0 {
-                let dynamic = imps.dynamic_imports + imps.conditional_imports;
-                text.dynamic_import_ratio = dynamic as f32 / imps.total as f32;
-            }
-        }
-
-        if functions.total > 0 {
-            text.anonymous_function_ratio = functions.anonymous as f32 / functions.total as f32;
-        }
-    }
-}
-
-/// Flatten a `TextMetrics` builder into `report.expose_metrics` under
-/// the `text.*` prefix. `most_common_char` is not numeric, so we emit
-/// derived `text.most_common_char_codepoint` (u32) and
-/// `text.most_common_char_is_null` (bool-as-0/1) explicitly.
-fn emit_text_to_expose(text: &TextMetrics, report: &mut AnalysisReport) {
-    let flat = report.expose_metrics.get_or_insert_with(Default::default);
-    flatten_into_metrics(text, "text", flat);
-    if let Some(c) = text.most_common_char {
-        flat.set_u("text.most_common_char_codepoint", u64::from(c as u32));
-        flat.set_b("text.most_common_char_is_null", c == '\0');
     }
 }
 

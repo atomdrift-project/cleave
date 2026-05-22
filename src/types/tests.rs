@@ -440,21 +440,3 @@ fn test_directory_access_creation() {
     assert_eq!(dir_access.files.len(), 2);
     assert!(!dir_access.enumerated);
 }
-
-#[test]
-fn test_code_metrics_creation() {
-    let metrics = CodeMetrics {
-        total_functions: 50,
-        total_basic_blocks: 200,
-        avg_complexity: 3.5,
-        max_complexity: 12,
-        total_instructions: 5000,
-        code_density: 0.75,
-        functions_with_loops: 15,
-        functions_with_anomalies: 2,
-    };
-
-    assert_eq!(metrics.total_functions, 50);
-    assert_eq!(metrics.avg_complexity, 3.5);
-    assert_eq!(metrics.max_complexity, 12);
-}

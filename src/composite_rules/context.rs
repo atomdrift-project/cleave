@@ -64,20 +64,6 @@ pub(crate) struct EvaluationContext<'a> {
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
-    /// Single-pass metadata projection of the input bytes (file ID,
-    /// format-specific structural values, section table, strings,
-    /// AST, metrics). Populated when the analyzer-side caller has
-    /// constructed a [`expose::ParsedFile`]; evaluators that
-    /// consult it skip their own re-parsing of the same bytes.
-    ///
-    /// During the migration this stays `None` for any call site that
-    /// hasn't been wired yet — evaluators fall through to the legacy
-    /// per-format parsers (`goblin`, the structured-format crates,
-    /// the in-tree `tree_sitter` setup) when the field is absent.
-    /// Each migration of an evaluator should make it prefer
-    /// `parsed` over the legacy path and delete the latter once the
-    /// last caller is converted.
-    pub parsed: Option<&'a expose::ParsedFile<'a>>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -153,20 +139,7 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8,
-            parsed: None,
         }
-    }
-
-    /// Attach a [`expose::ParsedFile`] for evaluators to consult.
-    ///
-    /// The reference must outlive the `EvaluationContext`. Callers
-    /// typically construct the `ParsedFile` once per analysis at the
-    /// analyzer-level entry point (where the file bytes are read) and
-    /// hand it to every `EvaluationContext::new` for that file via
-    /// this setter.
-    pub(crate) fn with_parsed(mut self, parsed: &'a expose::ParsedFile<'a>) -> Self {
-        self.parsed = Some(parsed);
-        self
     }
 
     /// Set the slow rule threshold
@@ -401,7 +374,6 @@ impl<'a> EvaluationContext<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
         }
     }
 }

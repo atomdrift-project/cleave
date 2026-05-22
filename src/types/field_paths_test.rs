@@ -3,25 +3,17 @@
 
 #[cfg(test)]
 mod tests {
-    use super::super::field_paths::ValidFieldPaths;
-    use super::super::text_metrics::TextMetrics;
 
     #[test]
-    fn test_text_metrics_field_paths() {
-        let fields = TextMetrics::valid_field_paths();
-
-        // Should include all public fields
-        assert!(fields.contains(&"char_entropy"));
-        assert!(fields.contains(&"total_lines"));
-        assert!(fields.contains(&"avg_line_length"));
-        assert!(fields.contains(&"whitespace_ratio"));
-
-        // Should have extracted many fields
-        assert!(
-            fields.len() > 20,
-            "Expected 20+ fields, got {}",
-            fields.len()
-        );
+    fn test_text_metrics_field_paths_in_manifest() {
+        // Text-side typed structs retired; the manifest is now a
+        // hardcoded list inside `field_paths.rs`. Verify the canonical
+        // `text.*` keys are still claimed.
+        let paths = super::super::field_paths::all_valid_metric_paths();
+        assert!(paths.contains("text.char_entropy"));
+        assert!(paths.contains("text.total_lines"));
+        assert!(paths.contains("text.avg_line_length"));
+        assert!(paths.contains("text.whitespace_ratio"));
     }
 
     #[test]
@@ -35,11 +27,7 @@ mod tests {
         // Should have many paths (text + container + language + score
         // manifests still contribute even after the binary-format
         // projections retired).
-        assert!(
-            paths.len() > 50,
-            "Expected 50+ paths, got {}",
-            paths.len()
-        );
+        assert!(paths.len() > 50, "Expected 50+ paths, got {}", paths.len());
     }
 
     #[test]

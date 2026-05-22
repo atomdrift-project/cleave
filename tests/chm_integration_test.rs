@@ -180,20 +180,21 @@ fn synthetic_chm_emits_kv_and_metrics() {
         "expected /hello.html in listed entries: {listed:?}"
     );
 
-    // metrics: user_entry_count is computed from the directory, not from kv.
-    // Per the project rule, counts go on metrics rather than kv.
-    // (cleave's report format serializes integer metrics as floats,
-    //  so use `as_f64` and round-trip to compare numerically.)
-    let m = &f["ms"]["chm"];
+    // metrics: user_entry_count is computed from the directory, not
+    // from kv. Per the project rule, counts go on metrics rather
+    // than kv. Compact reports serialize `expose_metrics` as a flat
+    // dotted-key map under `ms`, so `chm.user_entry_count` is one
+    // top-level key, not a nested object.
+    let m = &f["ms"];
     let metric_int = |name: &str| -> u64 {
         m[name]
             .as_f64()
             .unwrap_or_else(|| panic!("metric {name} missing in {m}")) as u64
     };
-    assert_eq!(metric_int("user_entry_count"), 1, "{m}");
-    assert_eq!(metric_int("html_entry_count"), 1, "{m}");
+    assert_eq!(metric_int("chm.user_entry_count"), 1, "{m}");
+    assert_eq!(metric_int("chm.html_entry_count"), 1, "{m}");
     assert_eq!(
-        metric_int("max_user_entry_size"),
+        metric_int("chm.max_user_entry_size"),
         "<html>hi</html>".len() as u64,
         "{m}"
     );

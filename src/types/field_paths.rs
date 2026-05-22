@@ -21,6 +21,184 @@ pub trait ValidFieldPaths {
     }
 }
 
+// Canonical source-text metric field lists. Kept in sync with the
+// dotted keys expose's source extractors emit
+// (`expose/src/formats/source/{text,identifier,string,comment,function,import}_metrics.rs`).
+// New emitter additions in expose must show up here too — the trait
+// engine rejects unknown field paths.
+
+const TEXT_METRIC_FIELDS: &[&str] = &[
+    "char_entropy",
+    "unique_chars",
+    "most_common_char_codepoint",
+    "most_common_char_is_null",
+    "most_common_ratio",
+    "non_ascii_ratio",
+    "non_printable_ratio",
+    "null_byte_count",
+    "high_byte_ratio",
+    "total_lines",
+    "avg_line_length",
+    "max_line_length",
+    "line_length_stddev",
+    "lines_over_200",
+    "lines_over_500",
+    "lines_over_1000",
+    "last_line_length",
+    "ast_parse_errors",
+    "ast_max_depth",
+    "empty_line_ratio",
+    "whitespace_ratio",
+    "tab_count",
+    "space_count",
+    "mixed_indent",
+    "trailing_whitespace_lines",
+    "unusual_whitespace",
+    "max_inline_whitespace_run",
+    "hex_escape_count",
+    "unicode_escape_count",
+    "octal_escape_count",
+    "escape_density",
+    "invisible_chars",
+    "long_token_count",
+    "repeated_char_sequences",
+    "digit_ratio",
+    "ascii_art_lines",
+    "strings_to_functions_ratio",
+    "identifiers_to_functions_ratio",
+    "imports_to_functions_ratio",
+    "identifier_density",
+    "string_density",
+    "import_density",
+    "suspicious_identifier_ratio",
+    "encoded_string_ratio",
+    "suspicious_string_ratio",
+    "suspicious_comment_ratio",
+    "normalized_function_count",
+    "normalized_import_count",
+    "normalized_string_count",
+    "normalized_unique_identifiers",
+    "dynamic_string_ratio",
+    "dynamic_import_ratio",
+    "anonymous_function_ratio",
+];
+
+const IDENTIFIER_METRIC_FIELDS: &[&str] = &[
+    "total",
+    "unique_count",
+    "reuse_ratio",
+    "avg_length",
+    "min_length",
+    "max_length",
+    "length_stddev",
+    "single_char_count",
+    "single_char_ratio",
+    "avg_entropy",
+    "high_entropy_count",
+    "high_entropy_ratio",
+    "all_lowercase_ratio",
+    "all_uppercase_ratio",
+    "has_digit_ratio",
+    "underscore_prefix_count",
+    "double_underscore_count",
+    "numeric_suffix_count",
+    "hex_like_names",
+    "base64_like_names",
+    "sequential_names",
+    "keyboard_pattern_names",
+    "repeated_char_names",
+];
+
+const STRING_METRIC_FIELDS: &[&str] = &[
+    "total",
+    "total_bytes",
+    "avg_length",
+    "max_length",
+    "empty_count",
+    "avg_entropy",
+    "entropy_stddev",
+    "high_entropy_count",
+    "very_high_entropy_count",
+    "base64_candidates",
+    "hex_strings",
+    "url_encoded_strings",
+    "unicode_heavy_strings",
+    "url_count",
+    "path_count",
+    "ip_count",
+    "email_count",
+    "domain_count",
+    "concat_operations",
+    "format_strings",
+    "char_construction",
+    "array_join_construction",
+    "very_long_strings",
+    "embedded_code_candidates",
+    "shell_command_strings",
+    "sql_strings",
+];
+
+const COMMENT_METRIC_FIELDS: &[&str] = &[
+    "total",
+    "lines",
+    "chars",
+    "to_code_ratio",
+    "todo_count",
+    "fixme_count",
+    "hack_count",
+    "xxx_count",
+    "empty_comments",
+    "high_entropy_comments",
+    "code_in_comments",
+    "url_in_comments",
+    "base64_in_comments",
+];
+
+const FUNCTION_METRIC_FIELDS: &[&str] = &[
+    "total",
+    "anonymous",
+    "async_count",
+    "generator_count",
+    "avg_length_lines",
+    "max_length_lines",
+    "min_length_lines",
+    "length_stddev",
+    "over_100_lines",
+    "over_500_lines",
+    "one_liners",
+    "avg_params",
+    "max_params",
+    "no_params_count",
+    "many_params_count",
+    "avg_param_name_length",
+    "single_char_params",
+    "avg_name_length",
+    "single_char_names",
+    "high_entropy_names",
+    "numeric_suffix_names",
+    "max_nesting_depth",
+    "avg_nesting_depth",
+    "nested_functions",
+    "recursive_count",
+    "density_per_100_lines",
+    "code_in_functions_ratio",
+];
+
+const IMPORT_METRIC_FIELDS: &[&str] = &[
+    "total",
+    "unique_modules",
+    "stdlib_count",
+    "third_party_count",
+    "relative_imports",
+    "wildcard_imports",
+    "dynamic_imports",
+    "aliased_imports",
+    "conditional_imports",
+    "stdlib_ratio",
+    "third_party_ratio",
+    "relative_ratio",
+];
+
 /// Returns all valid metric field paths for use in YAML rules
 /// Returns paths like "binary.code_to_data_ratio", "text.line_count", etc.
 #[must_use]
@@ -30,41 +208,31 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
 
     let mut paths = HashSet::new();
 
-    // Import surviving manifest types
-    use super::container_metrics::ArchiveMetrics;
-    use super::language_metrics::{
-        CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
-        PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
-        ShellMetrics,
-    };
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
-    use super::text_metrics::{
-        CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
-        StringMetrics, TextMetrics,
-    };
 
-    // Add paths for each metrics section
-    for field in TextMetrics::valid_field_paths() {
+    // Source-text metrics live in expose
+    // (`expose/src/formats/source/`). The canonical key list is
+    // hardcoded below — kept in sync with the dotted keys those
+    // emitters write to. New emitters must be reflected here so
+    // trait field validation accepts their paths.
+    for field in TEXT_METRIC_FIELDS {
         paths.insert(format!("text.{}", field));
     }
-    for field in IdentifierMetrics::valid_field_paths() {
+    for field in IDENTIFIER_METRIC_FIELDS {
         paths.insert(format!("identifiers.{}", field));
     }
-    for field in StringMetrics::valid_field_paths() {
+    for field in STRING_METRIC_FIELDS {
         paths.insert(format!("strings.{}", field));
     }
-    for field in CommentMetrics::valid_field_paths() {
+    for field in COMMENT_METRIC_FIELDS {
         paths.insert(format!("comments.{}", field));
     }
-    for field in FunctionMetrics::valid_field_paths() {
+    for field in FUNCTION_METRIC_FIELDS {
         paths.insert(format!("functions.{}", field));
     }
-    for field in StatementMetrics::valid_field_paths() {
-        paths.insert(format!("statements.{}", field));
-    }
-    for field in ImportMetrics::valid_field_paths() {
+    for field in IMPORT_METRIC_FIELDS {
         paths.insert(format!("imports.{}", field));
     }
     for field in EncodedMetrics::valid_field_paths() {
@@ -78,56 +246,63 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         }
     }
 
-    // Language-specific metrics
-    for field in PythonMetrics::valid_field_paths() {
-        paths.insert(format!("python.{}", field));
-    }
-    for field in JavaScriptMetrics::valid_field_paths() {
-        paths.insert(format!("javascript.{}", field));
-    }
-    for field in PowerShellMetrics::valid_field_paths() {
-        paths.insert(format!("powershell.{}", field));
-    }
-    for field in ShellMetrics::valid_field_paths() {
-        paths.insert(format!("shell.{}", field));
-    }
-    for field in PhpMetrics::valid_field_paths() {
-        paths.insert(format!("php.{}", field));
-    }
-    for field in RubyMetrics::valid_field_paths() {
-        paths.insert(format!("ruby.{}", field));
-    }
-    for field in PerlMetrics::valid_field_paths() {
-        paths.insert(format!("perl.{}", field));
-    }
-    for field in GoMetrics::valid_field_paths() {
-        paths.insert(format!("go_metrics.{}", field));
-    }
-    for field in RustMetrics::valid_field_paths() {
-        paths.insert(format!("rust_metrics.{}", field));
-    }
-    for field in CMetrics::valid_field_paths() {
-        paths.insert(format!("c_metrics.{}", field));
-    }
-    for field in JavaSourceMetrics::valid_field_paths() {
-        paths.insert(format!("java.{}", field));
-    }
-    for field in LuaMetrics::valid_field_paths() {
-        paths.insert(format!("lua.{}", field));
-    }
-    for field in CSharpMetrics::valid_field_paths() {
-        paths.insert(format!("csharp.{}", field));
-    }
+    // Per-language metric structs (PythonMetrics / JavaScriptMetrics /
+    // …) retired with the cleave→expose migration. No production code
+    // ever emitted them — the surface is gone.
 
     // Binary-format metrics (`binary.*`, `pe.*`, `elf.*`, `macho.*`,
     // `java_class.*`) live exclusively in expose's flat metric map —
     // trait validation accepts any path under those namespaces.
 
-    // Container/Archive metrics
-    // `archive.*` flows through expose_metrics via flattened
-    // `ArchiveMetrics`. The struct's field set still acts as the
-    // canonical path manifest.
-    for field in ArchiveMetrics::valid_field_paths() {
+    // Container/Archive metrics. `archive.*` paths are emitted by
+    // expose's zip/tar extractors directly into `report.expose_metrics`.
+    // The list below is the canonical manifest the trait engine accepts;
+    // it mirrors the keys expose's `formats::zip` and `formats::tar`
+    // write. Keep in sync when expose adds a new `archive.*` metric.
+    for field in [
+        // Index/size aggregates.
+        "member_count",
+        "file_count",
+        "directory_count",
+        "total_uncompressed",
+        "total_compressed",
+        "compression_ratio",
+        "compression.ratio",
+        // Compression breakdowns (the actual concrete keys are
+        // `archive.compression.method_counts.<method>` and
+        // `archive.format.<entry-type>_count`; those go through the
+        // unrestricted-prefix path below).
+        // Security / forensic counts (legacy flat names).
+        "symlink_count",
+        "encrypted_count",
+        "max_filename_length",
+        "hidden_file_count",
+        "path_traversal_count",
+        "symlink_escape_count",
+        "executable_count",
+        "script_count",
+        "unicode_filename_count",
+        "homoglyph_filename_count",
+        "double_extension_count",
+        "rtlo_filename_count",
+        "nested_archive_count",
+        "misplaced_executable_count",
+        "zip_bomb_ratio",
+        "extra_field_size",
+        "uses_zip64",
+        "has_comment",
+        // Security sub-namespace expose emits alongside the flat names.
+        "security.setuid_count",
+        "security.setgid_count",
+        "security.sticky_count",
+        "security.world_writable_count",
+        "security.symlink_count",
+        "security.encrypted_count",
+        "security.external_symlink_count",
+        // Timing spread metrics computed from member mtimes.
+        "timing.mtime_spread_seconds",
+        "timing.mtime_unique_count",
+    ] {
         paths.insert(format!("archive.{}", field));
     }
     // `chm.*` and `package_json.*` paths come from expose's
@@ -170,7 +345,8 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // LNK whitespace/presence metrics live in expose's flat metric
     // map (`lnk.*` keys); no typed marker struct here.
     // PDF metrics similarly live in cleave's flat metric map under
-    // `pdf.*` keys, populated by `analyzers::pdf::pdf_kv::populate_pdf_metrics`.
+    // `pdf.*` keys, populated by expose's `formats::pdf` extractor
+    // and surfaced via `report.expose_metrics`.
     for field in [
         "lnk.args_leading_spaces",
         "lnk.args_leading_tabs",
@@ -293,46 +469,16 @@ pub(crate) fn all_metric_descriptions() -> std::collections::HashMap<String, &'s
         };
     }
 
-    use super::container_metrics::ArchiveMetrics;
-    use super::language_metrics::{
-        CMetrics, CSharpMetrics, GoMetrics, JavaScriptMetrics, JavaSourceMetrics, LuaMetrics,
-        PerlMetrics, PhpMetrics, PowerShellMetrics, PythonMetrics, RubyMetrics, RustMetrics,
-        ShellMetrics,
-    };
     use super::scores::{
         EncodedLanguageMetrics, EncodedMetrics, ObfuscationScore, PackingScore, SupplyChainScore,
     };
-    use super::text_metrics::{
-        CommentMetrics, FunctionMetrics, IdentifierMetrics, ImportMetrics, StatementMetrics,
-        StringMetrics, TextMetrics,
-    };
 
-    add!("text", TextMetrics);
-    add!("identifiers", IdentifierMetrics);
-    add!("strings", StringMetrics);
-    add!("comments", CommentMetrics);
-    add!("functions", FunctionMetrics);
-    add!("statements", StatementMetrics);
-    add!("imports", ImportMetrics);
-    // Binary-format metric descriptions live in expose now; the
-    // typed `*Metrics` projection structs that supplied them retired.
-    add!("archive", ArchiveMetrics);
-    // chm and package_json descriptions retired (typed structs gone).
-    // PDF descriptions live in expose's emission rather than a typed
-    // marker struct.
-    add!("python", PythonMetrics);
-    add!("javascript", JavaScriptMetrics);
-    add!("powershell", PowerShellMetrics);
-    add!("shell", ShellMetrics);
-    add!("php", PhpMetrics);
-    add!("ruby", RubyMetrics);
-    add!("perl", PerlMetrics);
-    add!("go_metrics", GoMetrics);
-    add!("rust_metrics", RustMetrics);
-    add!("c_metrics", CMetrics);
-    add!("java", JavaSourceMetrics);
-    add!("lua", LuaMetrics);
-    add!("csharp", CSharpMetrics);
+    // Source-text metric descriptions retired with the cleave→expose
+    // migration. Trait-engine field descriptions for `text.*` /
+    // `identifiers.*` / `strings.*` / `comments.*` / `functions.*` /
+    // `imports.*` come from expose's emission, not from typed-struct
+    // doc comments. The validation manifest is still maintained
+    // above via the hardcoded `_METRIC_FIELDS` constants.
     add!("obfuscation", ObfuscationScore);
     add!("packing", PackingScore);
     add!("supply_chain", SupplyChainScore);

@@ -106,12 +106,6 @@ impl MachOAnalyzer {
         self
     }
 
-    fn is_cancelled(&self) -> bool {
-        self.cancellation
-            .as_ref()
-            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-    }
-
     /// Structural analysis of a thin Mach-O binary (no YARA scan, no trait evaluation).
     /// Only handles thin binaries — fat binary dispatch is done by the caller.
     /// Callers are responsible for running YARA and calling `evaluate_and_merge_findings`.
@@ -295,12 +289,7 @@ impl MachOAnalyzer {
             .iter()
             .map(crate::analysis_context::project_expose_function)
             .collect();
-        if ctx
-            .parsed
-            .functions()
-            .iter()
-            .any(|f| f.source == "rizin")
-        {
+        if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
             tools_used.push("radare2".to_string());
         }
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;
@@ -906,9 +895,7 @@ fn determine_entitlement_criticality(
     }
 
     if entitlement_key.contains("allow-unsigned-executable-memory") {
-        if matches!(signature_type, macho_codesign::SignatureType::DeveloperID)
-            && has_disable_library_validation
-        {
+        if has_disable_library_validation {
             return Criticality::Notable;
         }
         return Criticality::Suspicious;
@@ -1774,6 +1761,14 @@ mod tests {
             determine_entitlement_criticality(
                 "com.apple.security.cs.allow-unsigned-executable-memory",
                 &macho_codesign::SignatureType::DeveloperID,
+                true,
+            ),
+            Criticality::Notable,
+        );
+        assert_eq!(
+            determine_entitlement_criticality(
+                "com.apple.security.cs.allow-unsigned-executable-memory",
+                &macho_codesign::SignatureType::Adhoc,
                 true,
             ),
             Criticality::Notable,

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{is_false, is_zero_f32, is_zero_f64, is_zero_u32, is_zero_u64};
+use super::{is_false, is_zero_f32, is_zero_u32};
 
 /// Binary-wide properties for ML analysis
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -65,64 +65,6 @@ pub struct BinaryAnomaly {
     pub desc: String,
     /// Severity (low, medium, high)
     pub severity: String,
-}
-
-/// Overlay/appended data metrics for supply chain attack detection
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct OverlayMetrics {
-    /// Size of overlay in bytes
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub size_bytes: u64,
-    /// Overlay as ratio of total file size (0.0-1.0)
-    #[serde(default, skip_serializing_if = "is_zero_f64")]
-    pub ratio_of_file: f64,
-    /// Average entropy of overlay data
-    #[serde(default, skip_serializing_if = "is_zero_f64")]
-    pub avg_entropy: f64,
-    /// Variance in entropy across chunks (indicates mixed content)
-    #[serde(default, skip_serializing_if = "is_zero_f64")]
-    pub entropy_variance: f64,
-    /// Count of embedded files found via magic bytes
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub embedded_file_count: u32,
-    /// Types of embedded files found (zstd, gzip, elf, etc)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub embedded_for: Vec<String>,
-    /// Offset where overlay begins
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub overlay_start: u64,
-    /// Suspicion score (0.0-1.0)
-    #[serde(default, skip_serializing_if = "is_zero_f64")]
-    pub suspicion_score: f64,
-}
-
-/// Aggregate code metrics across entire binary
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct CodeMetrics {
-    /// Total number of functions
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_functions: u32,
-    /// Total basic blocks across all functions
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_basic_blocks: u32,
-    /// Average cyclomatic complexity
-    #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub avg_complexity: f32,
-    /// Maximum complexity seen
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub max_complexity: u32,
-    /// Total instruction count
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub total_instructions: u32,
-    /// Code-to-data ratio
-    #[serde(default, skip_serializing_if = "is_zero_f32")]
-    pub code_density: f32,
-    /// Functions with loops
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub functions_with_loops: u32,
-    /// Functions with unusual patterns
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub functions_with_anomalies: u32,
 }
 
 /// Source code metrics for scripts (Python, JavaScript, etc.)
@@ -513,57 +455,6 @@ mod tests {
         };
         assert!(props.security.nx);
         assert_eq!(props.linking.libraries.len(), 1);
-    }
-
-    // ==================== OverlayMetrics Tests ====================
-
-    #[test]
-    fn test_overlay_metrics_default() {
-        let metrics = OverlayMetrics::default();
-        assert_eq!(metrics.size_bytes, 0);
-        assert_eq!(metrics.embedded_file_count, 0);
-    }
-
-    #[test]
-    fn test_overlay_metrics_creation() {
-        let metrics = OverlayMetrics {
-            size_bytes: 65536,
-            ratio_of_file: 0.25,
-            avg_entropy: 7.5,
-            entropy_variance: 0.5,
-            embedded_file_count: 2,
-            embedded_for: vec!["zstd".to_string(), "gzip".to_string()],
-            overlay_start: 100000,
-            suspicion_score: 0.8,
-        };
-        assert_eq!(metrics.size_bytes, 65536);
-        assert_eq!(metrics.embedded_file_count, 2);
-        assert!((metrics.suspicion_score - 0.8).abs() < f64::EPSILON);
-    }
-
-    // ==================== CodeMetrics Tests ====================
-
-    #[test]
-    fn test_code_metrics_default() {
-        let metrics = CodeMetrics::default();
-        assert_eq!(metrics.total_functions, 0);
-        assert_eq!(metrics.total_instructions, 0);
-    }
-
-    #[test]
-    fn test_code_metrics_creation() {
-        let metrics = CodeMetrics {
-            total_functions: 100,
-            total_basic_blocks: 500,
-            avg_complexity: 8.5,
-            max_complexity: 50,
-            total_instructions: 10000,
-            code_density: 0.75,
-            functions_with_loops: 30,
-            functions_with_anomalies: 5,
-        };
-        assert_eq!(metrics.total_functions, 100);
-        assert_eq!(metrics.max_complexity, 50);
     }
 
     // ==================== SourceCodeMetrics Tests ====================

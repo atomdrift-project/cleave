@@ -252,7 +252,6 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
             cancellation: None,
         }
     }
@@ -577,7 +576,6 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
             cancellation: None,
         };
 
@@ -1055,7 +1053,6 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
             cancellation: None,
         };
 
@@ -1432,7 +1429,6 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
             cancellation: None,
         };
 
@@ -1561,7 +1557,6 @@ impl<'a> RuleDebugger<'a> {
             cached_evidence: None,
             current_trait_idx: None,
             cached_source_utf8: None,
-            parsed: None,
             cancellation: None,
         };
 

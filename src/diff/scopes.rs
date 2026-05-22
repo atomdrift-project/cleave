@@ -175,13 +175,6 @@ fn flatten_metrics(
     out
 }
 
-/// `true` for value kinds that belong in the metrics scope: numbers and
-/// booleans (counters, totals, ratios, flags). Strings, arrays, and
-/// objects are routed through the kv scope instead.
-fn is_metric_scalar(v: &Value) -> bool {
-    matches!(v, Value::Number(_) | Value::Bool(_))
-}
-
 /// Flatten a JSON value into `parent.child` paths for metrics. For arrays,
 /// the representation depends on the contents:
 ///

@@ -3636,8 +3636,7 @@ impl super::CapabilityMapper {
                 "exports.",
                 "functions.",
             ];
-            let in_expose_namespace =
-                |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
+            let in_expose_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 
             for trait_def in &trait_definitions {
                 if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if {

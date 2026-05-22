@@ -22,7 +22,6 @@ use std::sync::Arc;
 
 type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 
-
 /// Analyzer for Linux ELF binaries (executables, shared objects, kernel modules).
 ///
 /// Wave B routed deep-binary signal through `expose::open`: function
@@ -61,29 +60,6 @@ fn arch_name_from_machine(e_machine: u16) -> String {
         22 => "s390".to_string(),
         42 => "superh".to_string(),
         _ => format!("unknown_{}", e_machine),
-    }
-}
-
-/// Convert expose's lowercase program-header type name (`"load"`,
-/// `"interp"`, `"gnu_stack"`, …) into cleave's canonical
-/// `PT_LOAD`-style form. Used when projecting expose's `elf.segments[]`
-/// emission into the `ElfSegmentEntry` carrier the trait engine
-/// reads as `elf.segments[].p_type`.
-fn phdr_type_name_from_expose(name: &str) -> String {
-    match name {
-        "null" => "PT_NULL".to_string(),
-        "load" => "PT_LOAD".to_string(),
-        "dynamic" => "PT_DYNAMIC".to_string(),
-        "interp" => "PT_INTERP".to_string(),
-        "note" => "PT_NOTE".to_string(),
-        "shlib" => "PT_SHLIB".to_string(),
-        "phdr" => "PT_PHDR".to_string(),
-        "tls" => "PT_TLS".to_string(),
-        "gnu_eh_frame" => "PT_GNU_EH_FRAME".to_string(),
-        "gnu_stack" => "PT_GNU_STACK".to_string(),
-        "gnu_relro" => "PT_GNU_RELRO".to_string(),
-        "gnu_property" => "PT_GNU_PROPERTY".to_string(),
-        other => format!("PT_{other}"),
     }
 }
 
@@ -270,12 +246,7 @@ impl ElfAnalyzer {
                 .iter()
                 .map(crate::analysis_context::project_expose_function)
                 .collect();
-            if ctx
-                .parsed
-                .functions()
-                .iter()
-                .any(|f| f.source == "rizin")
-            {
+            if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
                 tools_used.push("radare2".to_string());
             }
             let r2_strings_extracted: Option<Vec<stng::ExtractedString>> = None;
@@ -389,12 +360,20 @@ impl ElfAnalyzer {
                 let has_linuxbrew_marker = data
                     .windows(b"/home/linuxbrew/.linuxbrew/Cellar/".len())
                     .any(|w| w == b"/home/linuxbrew/.linuxbrew/Cellar/");
-                if data.len() >= 50 * 1024 * 1024 && (has_go_cli_markers || has_linuxbrew_marker) {
-                    // Very large Linuxbrew/Go CLI builds can carry
-                    // metadata layouts expose's parser rejects even though
-                    // the executable is otherwise legitimate. Keep the
-                    // structural anomaly visible, but below suspicious
-                    // for these known-benign contexts.
+                let has_android_gif_drawable_marker =
+                    report.target.path.contains("libpl_droidsonroids_gif.so")
+                        || data
+                            .windows(b"android-gif-drawable".len())
+                            .any(|w| w == b"android-gif-drawable");
+                if (data.len() >= 50 * 1024 * 1024 && (has_go_cli_markers || has_linuxbrew_marker))
+                    || has_android_gif_drawable_marker
+                {
+                    // Very large Linuxbrew/Go CLI builds and some legacy
+                    // Android native libraries can carry metadata layouts
+                    // expose's parser rejects even though the executable is
+                    // otherwise legitimate. Keep the structural anomaly
+                    // visible, but below suspicious for these known-benign
+                    // contexts.
                     crit = Criticality::Notable;
                 }
             }
@@ -458,12 +437,7 @@ impl ElfAnalyzer {
                 .iter()
                 .map(crate::analysis_context::project_expose_function)
                 .collect();
-            if ctx
-                .parsed
-                .functions()
-                .iter()
-                .any(|f| f.source == "rizin")
-            {
+            if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
                 tools_used.push("radare2".to_string());
             }
             let _ = (parse_failed, allow_rizin, precomputed_sha256.clone());
@@ -617,8 +591,30 @@ impl ElfAnalyzer {
         }
 
         let _ = elf_content_end;
-        let _ = embedded_binary_count;
-        let _ = embedded_archive_count;
+
+        // Emit recursive-scan counters. Mirrors pe.rs — embedded
+        // payload discovery is cleave-side recursive work, not
+        // expose's parse-time view.
+        if embedded_binary_count > 0 || embedded_archive_count > 0 {
+            use crate::types::core::MetricsExt;
+            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            if embedded_binary_count > 0 {
+                flat.set_f(
+                    "binary.embedded_binary_count",
+                    f64::from(embedded_binary_count),
+                );
+                flat.set_f(
+                    "binary.embedded_file_count",
+                    f64::from(embedded_binary_count + embedded_archive_count),
+                );
+            }
+            if embedded_archive_count > 0 {
+                flat.set_f(
+                    "binary.embedded_archive_count",
+                    f64::from(embedded_archive_count),
+                );
+            }
+        }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
@@ -795,32 +791,6 @@ impl ElfAnalyzer {
                 });
             }
         }
-    }
-}
-
-/// Decode a contiguous hex string into bytes. Returns `None` on odd
-/// length or non-hex characters. Used to recover the raw GNU build-id
-/// bytes from `elf.build_id` (which expose stores hex-encoded).
-fn decode_hex_string(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    let mut out = Vec::with_capacity(s.len() / 2);
-    let bytes = s.as_bytes();
-    for pair in bytes.chunks_exact(2) {
-        let hi = hex_nibble(pair[0])?;
-        let lo = hex_nibble(pair[1])?;
-        out.push((hi << 4) | lo);
-    }
-    Some(out)
-}
-
-fn hex_nibble(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
     }
 }
 
@@ -1109,20 +1079,6 @@ impl Analyzer for ElfAnalyzer {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-
-    #[test]
-    fn test_phdr_type_name_from_expose_known() {
-        assert_eq!(phdr_type_name_from_expose("load"), "PT_LOAD");
-        assert_eq!(phdr_type_name_from_expose("interp"), "PT_INTERP");
-        assert_eq!(phdr_type_name_from_expose("gnu_stack"), "PT_GNU_STACK");
-        assert_eq!(phdr_type_name_from_expose("gnu_relro"), "PT_GNU_RELRO");
-    }
-
-    #[test]
-    fn test_phdr_type_name_from_expose_unknown_passes_through() {
-        let s = phdr_type_name_from_expose("xyz");
-        assert_eq!(s, "PT_xyz");
-    }
 
     #[test]
     fn test_arch_name_from_machine_known() {

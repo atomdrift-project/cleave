@@ -129,25 +129,27 @@ fn cleave_kv_emits_office_schema_for_ooxml() {
     let entries = run_kv(&path, None);
     let paths = paths_in(&entries);
 
-    // Schema keys we promised trait authors.
+    // Schema keys we promise trait authors. Expose namespaces OOXML
+    // metadata under `office.*` — `office.core.*` for Dublin Core,
+    // `office.application` / `office.company` for app-info.
     assert!(
-        paths.iter().any(|p| p == "core.creator"),
+        paths.iter().any(|p| p == "office.core.creator"),
         "paths: {:?}",
         paths
     );
-    assert!(paths.iter().any(|p| p == "core.last_modified_by"));
-    assert!(paths.iter().any(|p| p == "core.created"));
-    assert!(paths.iter().any(|p| p == "core.modified"));
-    assert!(paths.iter().any(|p| p == "core.title"));
-    assert!(paths.iter().any(|p| p == "core.application"));
-    assert!(paths.iter().any(|p| p == "core.company"));
+    assert!(paths.iter().any(|p| p == "office.core.last_modified_by"));
+    assert!(paths.iter().any(|p| p == "office.core.created"));
+    assert!(paths.iter().any(|p| p == "office.core.modified"));
+    assert!(paths.iter().any(|p| p == "office.core.title"));
+    assert!(paths.iter().any(|p| p == "office.application"));
+    assert!(paths.iter().any(|p| p == "office.company"));
 
     // Cyrillic creator round-trips intact through the xml-to-kv path.
     let creator_entry = entries
         .as_array()
         .unwrap()
         .iter()
-        .find(|e| e["path"] == "core.creator")
+        .find(|e| e["path"] == "office.core.creator")
         .expect("creator entry present");
     assert_eq!(creator_entry["value"], "Иван Иванов");
 }
@@ -159,9 +161,9 @@ fn cleave_kv_filter_resolves_office_paths() {
     let content = build_minimal_docx("Alice", "2024-06-01T00:00:00Z", "2024-06-02T00:00:00Z");
     std::fs::write(&path, &content).unwrap();
 
-    let entries = run_kv(&path, Some("core.creator"));
+    let entries = run_kv(&path, Some("office.core.creator"));
     let arr = entries.as_array().unwrap();
     assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["path"], "core.creator");
+    assert_eq!(arr[0]["path"], "office.core.creator");
     assert_eq!(arr[0]["value"], "Alice");
 }

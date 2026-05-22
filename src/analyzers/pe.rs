@@ -70,167 +70,6 @@ fn pe_certificate_range_from_ctx(ctx: &Ctx<'_>, data: &[u8]) -> Option<(usize, u
     None
 }
 
-/// Canonical list of Microsoft-shipped DLLs commonly abused as
-/// sideload forward targets. Matching is case-insensitive and
-/// ignores any `.dll` suffix (forward targets may arrive with or
-/// without the suffix depending on the source binary).
-fn is_system_dll(name: &str) -> bool {
-    // Forward targets may arrive with or without the `.dll` suffix
-    // depending on the source binary; strip a trailing `.dll`
-    // before matching.
-    let stem = name.strip_suffix(".dll").unwrap_or(name);
-    let stem = stem.strip_suffix(".DLL").unwrap_or(stem);
-    matches!(
-        stem.to_ascii_lowercase().as_str(),
-        "kernel32"
-            | "kernelbase"
-            | "ntdll"
-            | "user32"
-            | "advapi32"
-            | "gdi32"
-            | "shell32"
-            | "shlwapi"
-            | "ole32"
-            | "oleaut32"
-            | "comctl32"
-            | "comdlg32"
-            | "ws2_32"
-            | "wininet"
-            | "winhttp"
-            | "crypt32"
-            | "version"
-            | "msvcrt"
-            | "rpcrt4"
-            | "secur32"
-            | "iphlpapi"
-            | "dnsapi"
-            | "netapi32"
-            | "mswsock"
-            | "psapi"
-            | "userenv"
-            | "winmm"
-            | "uxtheme"
-            | "setupapi"
-            | "imm32"
-    )
-}
-
-/// True when `name` looks like a CA, timestamp authority, or other chain
-/// entry rather than a code-signing identity. Used to pick the "who really
-/// signed this" organization out of the Authenticode chain.
-fn is_ca_identity(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    // Role keywords that only appear in CA / intermediate / timestamp CNs.
-    const ROLE_MARKERS: &[&str] = &[
-        "root ca",
-        "intermediate",
-        "certificate authority",
-        "certification authority",
-        "timestamp",
-        "timestamping",
-        "time stamping",
-        "time-stamping",
-        "code signing ca",
-        "code signing pca",
-        "assured id",
-        "worldwide developer relations",
-    ];
-    for marker in ROLE_MARKERS {
-        if lower.contains(marker) {
-            return true;
-        }
-    }
-    // Standalone " ca" token (e.g. "Some Vendor CA") — match word-boundary
-    // only, to avoid swallowing names like "California Corp".
-    if lower.ends_with(" ca") || lower.contains(" ca ") {
-        return true;
-    }
-    // Well-known CA vendor brand names. If the name *is* one of these (or
-    // starts with one as a brand prefix), treat it as a CA identity.
-    const CA_BRANDS: &[&str] = &[
-        "digicert",
-        "sectigo",
-        "comodo",
-        "globalsign",
-        "verisign",
-        "symantec",
-        "thawte",
-        "geotrust",
-        "entrust",
-        "usertrust",
-        "addtrust",
-        "starfield",
-        "godaddy secure",
-        "go daddy secure",
-        "quovadis",
-        "letsencrypt",
-        "let's encrypt",
-        "amazon trust",
-        "actalis",
-    ];
-    for brand in CA_BRANDS {
-        if lower.starts_with(brand) {
-            let next = lower.as_bytes().get(brand.len()).copied();
-            if next.is_none_or(|c| !c.is_ascii_alphanumeric()) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Strip a trailing `.dll` suffix (case-insensitive) and lowercase the result.
-fn normalize_dll_stem(name: &str) -> String {
-    let stem = name.strip_suffix(".dll").unwrap_or(name);
-    let stem = stem.strip_suffix(".DLL").unwrap_or(stem);
-    stem.to_ascii_lowercase()
-}
-
-/// Lowercased basename of `path` with any `.dll` / `.DLL` suffix removed.
-/// Empty string if the path has no file component.
-fn self_basename_stem(path: &Path) -> String {
-    path.file_name()
-        .and_then(|f| f.to_str())
-        .map(normalize_dll_stem)
-        .unwrap_or_default()
-}
-
-/// True when `target` is a version-suffixed variant of `self_stem` —
-/// i.e. both names strip to the same non-empty alphabetic prefix once any
-/// trailing ASCII digits are removed. `python3` vs `python312` → match;
-/// `version` vs `version_orig` → no match (the malicious sideload pattern).
-fn is_version_variant(self_stem: &str, target: &str) -> bool {
-    if self_stem.is_empty() || target.is_empty() {
-        return false;
-    }
-    let self_alpha = self_stem.trim_end_matches(|c: char| c.is_ascii_digit());
-    let target_alpha = target.trim_end_matches(|c: char| c.is_ascii_digit());
-    !self_alpha.is_empty() && self_alpha == target_alpha
-}
-
-fn is_standard_entry_section(name: &str) -> bool {
-    matches!(
-        name.to_ascii_lowercase().as_str(),
-        ".text" | "text" | ".code" | "code" | ".itext" | "init" | ".init"
-    )
-}
-
-/// True if a section is "BSS-like" (raw=0, virt>0) AND doesn't carry
-/// one of the conventional BSS-style PE section names. The metric
-/// targets packer/runtime-decompression patterns where a non-standard
-/// section name claims virtual memory the file doesn't back.
-/// `.bss` and `.tls` are excluded because Borland/Delphi/InnoSetup
-/// binaries routinely have them zero-raw.
-fn is_unusual_bss_like(name: &str, raw_size: u32, virtual_size: u32) -> bool {
-    if raw_size != 0 || virtual_size == 0 {
-        return false;
-    }
-    !matches!(
-        name.to_ascii_lowercase().as_str(),
-        ".bss" | "bss" | ".tls" | "tls"
-    )
-}
-
 fn looks_like_dos_executable(data: &[u8]) -> bool {
     if data.len() < 0x40 || !data.starts_with(b"MZ") {
         return false;
@@ -855,12 +694,7 @@ impl PEAnalyzer {
             .iter()
             .map(crate::analysis_context::project_expose_function)
             .collect();
-        if ctx
-            .parsed
-            .functions()
-            .iter()
-            .any(|f| f.source == "rizin")
-        {
+        if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
             tools_used.push("radare2".to_string());
         }
 
@@ -1337,8 +1171,30 @@ impl PEAnalyzer {
             }
         }
 
-        let _ = embedded_binary_count;
-        let _ = embedded_archive_count;
+        // Emit recursive-scan counters. Embedded-binary detection is
+        // cleave's job (it spawns child analyses on each find), so
+        // these counts live on cleave's flat metric map alongside the
+        // expose-emitted `binary.*` keys.
+        if embedded_binary_count > 0 || embedded_archive_count > 0 {
+            use crate::types::core::MetricsExt;
+            let flat = report.expose_metrics.get_or_insert_with(Default::default);
+            if embedded_binary_count > 0 {
+                flat.set_f(
+                    "binary.embedded_binary_count",
+                    f64::from(embedded_binary_count),
+                );
+                flat.set_f(
+                    "binary.embedded_file_count",
+                    f64::from(embedded_binary_count + embedded_archive_count),
+                );
+            }
+            if embedded_archive_count > 0 {
+                flat.set_f(
+                    "binary.embedded_archive_count",
+                    f64::from(embedded_archive_count),
+                );
+            }
+        }
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
@@ -1642,61 +1498,6 @@ impl Analyzer for PEAnalyzer {
     }
 }
 
-/// Resolve a Rich Header product ID (low 16 bits of CompID) to a
-/// human-readable toolchain name. Coverage focuses on the products
-/// trait authors care about for build-pipeline fingerprinting:
-/// MSVC compilers, the linker, MASM, the resource compiler, and
-/// import-library entries.
-fn rich_product_name(product_id: u16) -> Option<&'static str> {
-    let name = match product_id {
-        0x0000 => "Unknown",
-        0x0001 => "Import (object from .lib)",
-        0x0002 => "Linker (LINK)",
-        0x0003 => "MASM (object)",
-        0x0004 => "MSVC C compiler (CL)",
-        0x0005 => "MSVC C++ compiler (CL)",
-        0x0006 => "Linker 5.10",
-        0x0007 => "MASM 6.13",
-        0x0008 => "MSVC 6.0 compiler",
-        0x0009 => "MSVC 6.0 C++ compiler",
-        0x000A => "MSVC 6.0 export",
-        0x000B | 0x000C => "Linker 6.0",
-        0x000D => "MSVC 7.0 compiler",
-        0x000E => "MSVC 7.0 C++ compiler",
-        0x000F => "MSVC 7.0 export",
-        0x0010 => "Linker 7.0",
-        0x0019 => "Linker 7.10",
-        0x001C => "MASM 8.0",
-        0x001D => "MSVC 8.0 C compiler",
-        0x001E => "MSVC 8.0 C++ compiler",
-        0x0021 => "Linker 8.0",
-        0x0022 => "Resource compiler (RC)",
-        0x0023 => "MSVC 9.0 C compiler",
-        0x0024 => "MSVC 9.0 C++ compiler",
-        0x0027 => "Linker 9.0",
-        0x0028 => "MASM 9.0",
-        0x0029..=0x002B => "MSVC 10.0 toolchain",
-        0x002C => "Linker 10.0",
-        0x002D => "MASM 10.0",
-        0x0035 => "MSVC 11.0 C compiler",
-        0x0036 => "MSVC 11.0 C++ compiler",
-        0x0038 => "Linker 11.0",
-        0x003A | 0x003B => "MSVC 12.0 toolchain",
-        0x003D => "Linker 12.0",
-        0x0040 => "MSVC 14.0 C compiler",
-        0x0041 => "MSVC 14.0 C++ compiler",
-        0x0043 => "Linker 14.0",
-        0x0078 | 0x007A => "MSVC 14.x C/C++ compiler (VS2017+)",
-        0x007B | 0x007C => "Linker 14.x (VS2017+)",
-        0x009B..=0x009E => "MSVC 14.2x C/C++ compiler (VS2019)",
-        0x009F..=0x00A0 => "Linker 14.2x (VS2019)",
-        0x00FF..=0x0102 => "MSVC 14.3x C/C++ compiler (VS2022)",
-        0x0103 => "Linker 14.3x (VS2022)",
-        _ => return None,
-    };
-    Some(name)
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1705,48 +1506,6 @@ mod tests {
 
     fn test_pe_path() -> PathBuf {
         PathBuf::from("tests/fixtures/test.exe")
-    }
-
-    #[test]
-    fn test_rich_product_name_resolution() {
-        assert_eq!(rich_product_name(0x0002), Some("Linker (LINK)"));
-        assert_eq!(rich_product_name(0x0040), Some("MSVC 14.0 C compiler"));
-        assert_eq!(rich_product_name(0xFFFE), None);
-    }
-
-    #[test]
-    fn test_is_unusual_bss_like_excludes_dot_bss() {
-        // Standard `.bss` with rsize=0, vsize>0 must NOT count as unusual.
-        assert!(!is_unusual_bss_like(".bss", 0, 0x1000));
-        assert!(!is_unusual_bss_like("bss", 0, 0x1000));
-        assert!(!is_unusual_bss_like(".BSS", 0, 0x1000));
-    }
-
-    #[test]
-    fn test_is_unusual_bss_like_excludes_dot_tls() {
-        assert!(!is_unusual_bss_like(".tls", 0, 0x100));
-        assert!(!is_unusual_bss_like("tls", 0, 0x100));
-        assert!(!is_unusual_bss_like(".TLS", 0, 0x100));
-    }
-
-    #[test]
-    fn test_is_unusual_bss_like_flags_unusual_name() {
-        // Random/packer-style section name with rsize=0 vsize>0 IS unusual.
-        assert!(is_unusual_bss_like(".upx0", 0, 0x10000));
-        assert!(is_unusual_bss_like(".x", 0, 0x100));
-        assert!(is_unusual_bss_like(".decompr", 0, 0x10000));
-    }
-
-    #[test]
-    fn test_is_unusual_bss_like_requires_zero_raw() {
-        // Non-zero raw_size means the section is backed by file data.
-        assert!(!is_unusual_bss_like(".upx0", 1, 0x10000));
-    }
-
-    #[test]
-    fn test_is_unusual_bss_like_requires_nonzero_virtual() {
-        // Both raw and virtual zero is just an empty section, not BSS.
-        assert!(!is_unusual_bss_like(".upx0", 0, 0));
     }
 
     #[test]

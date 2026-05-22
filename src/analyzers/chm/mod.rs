@@ -49,22 +49,6 @@ impl ChmEntry {
     }
 }
 
-/// Raw fields from the ITSF v3 header that downstream consumers
-/// (kv emission, integrity checks) want without reparsing.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct ItsfHeader {
-    pub version: u32,
-    /// Last-modified counter from the ITSF header (offset 0x10). This
-    /// is *not* a Unix epoch — it's a 32-bit "version counter" that
-    /// CHM compilers bump on each rebuild. Useful as a same-source
-    /// fingerprint, treat the absolute value as opaque.
-    pub timestamp_counter: u32,
-    /// Windows LCID at ITSF offset 0x14. The locale of the compiling
-    /// machine, often more honest than the `#SYSTEM` lcid because
-    /// it's set automatically.
-    pub lcid: u32,
-}
-
 /// Parsed CHM container with directory listing and pointers needed to
 /// resolve entry data.
 pub(crate) struct Chm<'a> {
@@ -72,7 +56,6 @@ pub(crate) struct Chm<'a> {
     /// File offset where Uncompressed-section file bytes begin (ITSF
     /// `additional_data_offset`).
     data_offset: u64,
-    pub itsf: ItsfHeader,
     pub entries: Vec<ChmEntry>,
 }
 
@@ -87,12 +70,6 @@ impl<'a> Chm<'a> {
             bail!("unsupported CHM version {version} (only v3 supported)");
         }
 
-        let itsf = ItsfHeader {
-            version,
-            timestamp_counter: u32_le(data, 0x10),
-            lcid: u32_le(data, 0x14),
-        };
-
         // Section 1 of the ITSF header table holds the ITSP + directory.
         let section1_offset = u64_le(data, 0x48);
         let section1_length = u64_le(data, 0x50);
@@ -105,35 +82,7 @@ impl<'a> Chm<'a> {
         Ok(Self {
             data,
             data_offset,
-            itsf,
             entries,
-        })
-    }
-
-    /// Accessor used by `chm_kv` to surface LZX framing parameters
-    /// without re-parsing the ControlData blob.
-    pub(super) fn lzx_params(&self) -> Option<LzxParams> {
-        let control_entry = self.find("::DataSpace/Storage/MSCompressed/ControlData")?;
-        let reset_entry = self.entries.iter().find(|e| {
-            e.name
-                .starts_with("::DataSpace/Storage/MSCompressed/Transform/")
-                && e.name.ends_with("/InstanceData/ResetTable")
-        })?;
-        let content_entry = self.find("::DataSpace/Storage/MSCompressed/Content")?;
-
-        let cd_bytes = self.read_uncompressed(control_entry)?;
-        let rt_bytes = self.read_uncompressed(reset_entry)?;
-
-        let cd = ControlData::parse(cd_bytes).ok()?;
-        let rt = ResetTable::parse(rt_bytes).ok()?;
-
-        Some(LzxParams {
-            window_bytes: cd.window as u64,
-            reset_interval_bytes: u64::from(cd.reset_interval_chunks) * 0x8000,
-            block_len: rt.block_len,
-            uncompressed_size: rt.uncompressed_size,
-            compressed_size: content_entry.length,
-            reset_count: rt.reset_offsets.len() as u32,
         })
     }
 
@@ -144,12 +93,6 @@ impl<'a> Chm<'a> {
     /// Read raw bytes for an entry from the Uncompressed section (section 0).
     fn read_uncompressed(&self, entry: &ChmEntry) -> Option<&'a [u8]> {
         slice_at(self.data, self.data_offset + entry.offset, entry.length)
-    }
-
-    /// Public-to-submodule wrapper around `read_uncompressed`, used by
-    /// `chm_kv` to surface metadata without touching internals.
-    pub(super) fn read_uncompressed_for(&self, entry: &ChmEntry) -> Option<&'a [u8]> {
-        self.read_uncompressed(entry)
     }
 
     /// Decompress the entire `::DataSpace/Storage/MSCompressed/Content`
@@ -185,18 +128,6 @@ impl<'a> Chm<'a> {
         let rt = ResetTable::parse(reset_bytes)?;
         decompress_lzx(content, &cd, &rt).map(Some)
     }
-}
-
-/// LZX framing parameters resolved from the CHM `ControlData` +
-/// `ResetTable`, surfaced to `chm_kv` without re-parsing.
-#[derive(Debug, Clone, Copy)]
-pub(super) struct LzxParams {
-    pub window_bytes: u64,
-    pub reset_interval_bytes: u64,
-    pub block_len: u64,
-    pub uncompressed_size: u64,
-    pub compressed_size: u64,
-    pub reset_count: u32,
 }
 
 /// LZX `ControlData` for the MSCompressed section.

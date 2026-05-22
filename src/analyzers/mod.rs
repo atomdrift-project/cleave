@@ -30,14 +30,12 @@ pub(crate) mod chm;
 mod input;
 pub use input::AnalysisInput;
 
-// Universal metrics analyzers
-pub(crate) mod comment_metrics;
-pub(crate) mod function_metrics;
-pub(crate) mod identifier_metrics;
-pub(crate) mod import_metrics;
-pub(crate) mod string_metrics;
+// `text_metrics`, `identifier_metrics`, `string_metrics`,
+// `comment_metrics`, `function_metrics`, `import_metrics` retired —
+// all source-text metric extraction now lives in
+// `expose/src/formats/source/`. The orphaned .rs files survive on
+// disk for a follow-up commit to delete.
 pub(crate) mod symbol_extraction;
-pub(crate) mod text_metrics;
 pub(crate) mod utils;
 
 // Source-code kv-tree synthesis (imports/exports/functions).

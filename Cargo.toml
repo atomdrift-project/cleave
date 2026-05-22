@@ -93,8 +93,6 @@ expose = { path = "../expose" }
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
 cfb = "0.10"  # Microsoft OLE2/CFBF compound document parsing
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing
-png = "0.17"  # PNG image parsing for steganography detection
-jpeg-decoder = "0.3"  # JPEG image parsing for steganography detection
 
 # File format identification
 fileid = { path = "crates/fileid", features = ["serde"] }

@@ -49,7 +49,6 @@
 //! - `find_rules_in_directory` - Discovers rules in a specified directory
 //!
 //! ### Data Processing
-//! - `flatten_json_to_metrics` - Flattens nested JSON to flat metric structure
 //! - `extract_strings_from_ast` - Extracts string literals from syntax trees
 //!
 //! ## Data Types

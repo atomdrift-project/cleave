@@ -155,7 +155,11 @@ impl super::JavaClassAnalyzer {
                     Criticality::Suspicious,
                 );
             }
-            if method_lower.contains("keylog") || method_lower.contains("capture") {
+            if method_lower.contains("keylog")
+                || method_lower.contains("key-log")
+                || method_lower.contains("keyboardcapture")
+                || method_lower.contains("capturekey")
+            {
                 self.add_capability(
                     report,
                     "credential/keylogger",
@@ -201,7 +205,7 @@ impl super::JavaClassAnalyzer {
             }
             if s_lower.contains("chrome-pass")
                 || s_lower.contains("fox-pass")
-                || s_lower.contains("browser") && s_lower.contains("pass")
+                || (s_lower.contains("browser") && s_lower.contains("password"))
             {
                 self.add_capability(
                     report,
@@ -246,6 +250,7 @@ impl super::JavaClassAnalyzer {
                     && !s_lower.contains("javax.swing")
                     && !s_lower.contains("jline/console")
                     && !s_lower.contains("ljline/console")
+                    && s_lower != "keystroke"
                     && s_lower != "keystroke: ")
             {
                 self.add_capability(

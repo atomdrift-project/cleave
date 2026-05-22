@@ -1,16 +1,14 @@
-//! JPEG image analyzer for steganography detection
+//! JPEG analyzer entry point.
 //!
-//! Analyzes JPEG images for indicators of steganographic payloads:
-//! - Data appended after the EOI marker (FF D9)
-//! - Unusually large JFIF comment (COM) markers
-//! - Unusually large APP1/EXIF blocks
-//! - High pixel entropy (LSB steganography in DCT coefficients)
-//! - Flat color histogram (uniform distribution)
-//! - Lack of visual structure (no edges/gradients)
+//! All JPEG metric extraction (marker walk, EXIF parsing, pixel-stat
+//! decode for steganography signals) lives in expose. This module is
+//! now a thin shell that runs the trait engine — expose's
+//! dual-emission step in `evaluate_and_merge_findings` populates
+//! `report.expose_metrics` with every `jpeg.*` / `image.*` /
+//! `binary.overall_entropy` field that the trait rules consume.
 
 use super::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::entropy::calculate_entropy;
 use crate::strings::StringExtractor;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;
@@ -18,7 +16,8 @@ use sha2::{Digest, Sha256};
 use std::path::Path;
 use std::sync::Arc;
 
-/// JPEG analyzer for steganography detection
+/// JPEG analyzer — defers extraction to expose and runs trait
+/// evaluation against the merged metric set.
 #[derive(Debug)]
 pub(crate) struct JpegAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
@@ -67,20 +66,13 @@ impl JpegAnalyzer {
         let mut report = AnalysisReport::new(target);
         report.metadata.tools_used.push("jpeg-analyzer".to_string());
 
-        // `jpeg.*` kv (marker walk, EXIF, ICC/IPTC/XMP flags, comment)
-        // comes from expose's dual emission. Pixel-stat metrics
-        // (entropy / dimensions / DCT histograms) flow into the
-        // report's flat metric map cleave-side.
-        let flat = report.expose_metrics.get_or_insert_with(Default::default);
-        if analyze_jpeg_data(data, flat).is_some() {
-            use crate::types::MetricsExt;
-            flat.set_f("binary.overall_entropy", calculate_entropy(data));
-        }
-
         if let Some(strings) = stng_strings {
             report.strings = self.string_extractor.convert_stng_strings(strings);
         }
 
+        // Expose's dual-emission inside `evaluate_and_merge_findings`
+        // populates every `jpeg.*` / `image.*` / `binary.overall_entropy`
+        // metric onto `report.expose_metrics` for the trait engine.
         self.capability_mapper
             .evaluate_and_merge_findings(&mut report, data, None, None);
 
@@ -116,268 +108,9 @@ impl Analyzer for JpegAnalyzer {
     }
 }
 
-/// Scan JPEG markers to find appended data, comment size, and EXIF size.
-///
-/// Returns `(appended_bytes, comment_bytes, exif_size)`.
-fn scan_jpeg_markers(data: &[u8]) -> (u64, u64, u64) {
-    let mut pos = 0;
-    let mut comment_bytes: u64 = 0;
-    let mut exif_size: u64 = 0;
-
-    // JPEG must start with SOI (FF D8)
-    if data.len() < 2 || data[0] != 0xFF || data[1] != 0xD8 {
-        return (0, 0, 0);
-    }
-    pos += 2;
-
-    loop {
-        // Find next marker (FF byte, skip any padding FF bytes)
-        while pos < data.len() && data[pos] != 0xFF {
-            pos += 1;
-        }
-        while pos < data.len() && data[pos] == 0xFF {
-            pos += 1;
-        }
-        if pos >= data.len() {
-            break;
-        }
-
-        let marker = data[pos];
-        pos += 1;
-
-        match marker {
-            // EOI — end of image; anything after is appended data
-            0xD9 => {
-                let appended = data.len().saturating_sub(pos) as u64;
-                return (appended, comment_bytes, exif_size);
-            }
-            // Markers with no length field (standalone)
-            0xD0..=0xD8 | 0x01 => continue,
-            // SOS — start of scan: entropy-coded data follows, scan for next EOI
-            0xDA => {
-                // Skip the SOS header
-                if pos + 1 >= data.len() {
-                    break;
-                }
-                let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-                pos += seg_len;
-                // The compressed bitstream follows; skip to the next marker
-                // by scanning for FF xx where xx != 00 and xx != FF
-                while pos + 1 < data.len() {
-                    if data[pos] == 0xFF && data[pos + 1] != 0x00 && data[pos + 1] != 0xFF {
-                        break;
-                    }
-                    pos += 1;
-                }
-            }
-            _ => {
-                // Normal segment: 2-byte length (includes the length bytes)
-                if pos + 1 >= data.len() {
-                    break;
-                }
-                let seg_len = u16::from_be_bytes([data[pos], data[pos + 1]]) as usize;
-                if seg_len < 2 {
-                    break;
-                }
-                let payload_len = seg_len - 2;
-
-                // COM marker (FF FE): comment field
-                if marker == 0xFE {
-                    comment_bytes += payload_len as u64;
-                }
-                // APP1 (FF E1): typically EXIF
-                if marker == 0xE1 {
-                    exif_size += payload_len as u64;
-                }
-
-                pos += seg_len;
-            }
-        }
-    }
-
-    (0, comment_bytes, exif_size)
-}
-
-/// Analyze JPEG data and push steganography-relevant metrics into
-/// the report's flat metric map under `image.*` and `jpeg.*` keys.
-/// Returns `Some(())` when the JPEG header parsed; `None` when the
-/// bytes aren't a recognisable JPEG.
-fn analyze_jpeg_data(
-    data: &[u8],
-    metrics: &mut std::collections::BTreeMap<String, f64>,
-) -> Option<()> {
-    use crate::types::MetricsExt;
-    use jpeg_decoder::Decoder;
-    use std::io::Cursor;
-
-    let (appended_bytes, comment_bytes, exif_size) = scan_jpeg_markers(data);
-
-    let mut decoder = Decoder::new(Cursor::new(data));
-    decoder.read_info().ok()?;
-    let info = decoder.info()?;
-
-    let width = info.width as u32;
-    let height = info.height as u32;
-    let channels = match info.pixel_format {
-        jpeg_decoder::PixelFormat::L8 | jpeg_decoder::PixelFormat::L16 => 1u32,
-        jpeg_decoder::PixelFormat::RGB24 => 3,
-        jpeg_decoder::PixelFormat::CMYK32 => 4,
-    };
-
-    // Header-derived metrics emit unconditionally — they don't
-    // depend on the heavy pixel decode below.
-    metrics.set_u("image.width", width.into());
-    metrics.set_u("image.height", height.into());
-    metrics.set_u("image.channels", channels.into());
-    metrics.set_u("jpeg.appended_bytes", appended_bytes);
-    metrics.set_u("jpeg.comment_bytes", comment_bytes);
-    metrics.set_u("jpeg.exif_size", exif_size);
-
-    // Skip pixel decode for outsized images: a malicious or merely huge JPEG
-    // (decompression bomb, 16K photo) shouldn't get to allocate hundreds of
-    // megabytes per worker just so we can compute entropy on it. Structural
-    // metadata is preserved; only the per-channel entropy/edge density is
-    // skipped.
-    const MAX_DECODE_BYTES: usize = 32 * 1024 * 1024;
-    let predicted = (width as usize)
-        .saturating_mul(height as usize)
-        .saturating_mul(channels as usize);
-    if predicted > MAX_DECODE_BYTES {
-        tracing::debug!(
-            width,
-            height,
-            channels,
-            predicted_mb = predicted / 1024 / 1024,
-            "Skipping JPEG pixel-entropy analysis: decoded buffer exceeds cap"
-        );
-        return Some(());
-    }
-    let pixels = decoder.decode().ok()?;
-
-    let pixel_entropy = calculate_entropy(&pixels) as f32;
-    let histogram_flatness = {
-        let entropy = calculate_entropy(&pixels);
-        (entropy / 8.0) as f32
-    };
-    let edge_density =
-        calculate_edge_density(&pixels, width as usize, height as usize, channels as usize);
-
-    let (r_entropy, g_entropy, b_entropy) = if channels >= 3 {
-        calculate_channel_entropy(&pixels, channels as usize)
-    } else {
-        (0.0, 0.0, 0.0)
-    };
-
-    metrics.set_f("image.pixel_entropy", f64::from(pixel_entropy));
-    metrics.set_f("image.histogram_flatness", f64::from(histogram_flatness));
-    metrics.set_f("image.edge_density", f64::from(edge_density));
-    metrics.set_f("image.r_entropy", f64::from(r_entropy));
-    metrics.set_f("image.g_entropy", f64::from(g_entropy));
-    metrics.set_f("image.b_entropy", f64::from(b_entropy));
-    Some(())
-}
-
-/// Calculate entropy for each color channel separately
-fn calculate_channel_entropy(pixels: &[u8], channels: usize) -> (f32, f32, f32) {
-    if channels < 3 {
-        return (0.0, 0.0, 0.0);
-    }
-    let mut hr = [0u32; 256];
-    let mut hg = [0u32; 256];
-    let mut hb = [0u32; 256];
-    let mut count: u32 = 0;
-    for chunk in pixels.chunks_exact(channels) {
-        hr[chunk[0] as usize] += 1;
-        hg[chunk[1] as usize] += 1;
-        hb[chunk[2] as usize] += 1;
-        count += 1;
-    }
-    (
-        entropy_from_histogram(&hr, count),
-        entropy_from_histogram(&hg, count),
-        entropy_from_histogram(&hb, count),
-    )
-}
-
-/// Shannon entropy directly from a 256-bin byte histogram. Avoids the per-channel
-/// `Vec<u8>` materialization that the simple per-byte path would do.
-fn entropy_from_histogram(freq: &[u32; 256], total: u32) -> f32 {
-    if total == 0 {
-        return 0.0;
-    }
-    let total = total as f32;
-    freq.iter().filter(|&&c| c > 0).fold(0.0f32, |e, &c| {
-        let p = c as f32 / total;
-        e - p * p.log2()
-    })
-}
-
-/// Calculate edge density using simple gradient detection (mirrors PNG analyzer)
-fn calculate_edge_density(pixels: &[u8], width: usize, height: usize, channels: usize) -> f32 {
-    if width < 2 || height < 2 || pixels.is_empty() || channels == 0 {
-        return 0.0;
-    }
-
-    let row_stride = width * channels;
-    let mut edge_count = 0u64;
-    let mut total_pairs = 0u64;
-    const EDGE_THRESHOLD: i32 = 30;
-
-    for y in 0..height {
-        for x in 0..(width - 1) {
-            let idx1 = y * row_stride + x * channels;
-            let idx2 = y * row_stride + (x + 1) * channels;
-            if idx2 + channels <= pixels.len() {
-                let diff = (pixels[idx1] as i32 - pixels[idx2] as i32).abs();
-                if diff > EDGE_THRESHOLD {
-                    edge_count += 1;
-                }
-                total_pairs += 1;
-            }
-        }
-    }
-
-    for y in 0..(height - 1) {
-        for x in 0..width {
-            let idx1 = y * row_stride + x * channels;
-            let idx2 = (y + 1) * row_stride + x * channels;
-            if idx2 + channels <= pixels.len() {
-                let diff = (pixels[idx1] as i32 - pixels[idx2] as i32).abs();
-                if diff > EDGE_THRESHOLD {
-                    edge_count += 1;
-                }
-                total_pairs += 1;
-            }
-        }
-    }
-
-    if total_pairs == 0 {
-        return 0.0;
-    }
-
-    edge_count as f32 / total_pairs as f32
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Minimal valid 1×1 white JPEG (JFIF, no EXIF)
-    const MINIMAL_JPEG: &[u8] = &[
-        0xFF, 0xD8, // SOI
-        0xFF, 0xE0, 0x00, 0x10, // APP0 marker, length=16
-        0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
-        0x01, 0x01, // version 1.1
-        0x00, // aspect ratio units
-        0x00, 0x01, 0x00, 0x01, // X/Y density
-        0x00, 0x00, // thumbnail size
-        0xFF, 0xDB, 0x00, 0x43, 0x00, // DQT marker, length=67
-        // quantization table (64 bytes, quality 50)
-        16, 11, 10, 16, 24, 40, 51, 61, 12, 12, 14, 19, 26, 58, 60, 55, 14, 13, 16, 24, 40, 57, 69,
-        56, 14, 17, 22, 29, 51, 87, 80, 62, 18, 22, 37, 56, 68, 109, 103, 77, 24, 35, 55, 64, 81,
-        104, 113, 92, 49, 64, 78, 87, 103, 121, 120, 101, 72, 92, 95, 98, 112, 100, 103, 99, 0xFF,
-        0xD9, // EOI
-    ];
 
     #[test]
     fn test_can_analyze() {
@@ -386,47 +119,5 @@ mod tests {
         assert!(analyzer.can_analyze(Path::new("/tmp/test.jpeg")));
         assert!(analyzer.can_analyze(Path::new("/tmp/test.JPG")));
         assert!(!analyzer.can_analyze(Path::new("/tmp/test.png")));
-    }
-
-    #[test]
-    fn test_scan_jpeg_markers_no_appended_data() {
-        let (appended, comment, exif) = scan_jpeg_markers(MINIMAL_JPEG);
-        assert_eq!(appended, 0, "No data should be appended");
-        assert_eq!(comment, 0, "No comment marker");
-        assert_eq!(exif, 0, "No EXIF");
-    }
-
-    #[test]
-    fn test_scan_jpeg_markers_appended_data() {
-        let mut data = MINIMAL_JPEG.to_vec();
-        data.extend_from_slice(b"hidden payload here");
-        let (appended, _, _) = scan_jpeg_markers(&data);
-        assert_eq!(appended, 19, "Should detect 19 bytes after EOI");
-    }
-
-    #[test]
-    fn test_scan_jpeg_markers_comment() {
-        // Build a JPEG with a COM marker before EOI
-        let comment = b"this is a comment";
-        let com_len = (comment.len() + 2) as u16;
-        let mut data = Vec::new();
-        data.extend_from_slice(&[0xFF, 0xD8]); // SOI
-        data.extend_from_slice(&[0xFF, 0xFE]); // COM
-        data.extend_from_slice(&com_len.to_be_bytes());
-        data.extend_from_slice(comment);
-        data.extend_from_slice(&[0xFF, 0xD9]); // EOI
-        let (appended, comment_bytes, _) = scan_jpeg_markers(&data);
-        assert_eq!(appended, 0);
-        assert_eq!(comment_bytes, comment.len() as u64);
-    }
-
-    #[test]
-    fn test_edge_density_constant() {
-        let pixels = vec![128u8; 100 * 100 * 3];
-        let density = calculate_edge_density(&pixels, 100, 100, 3);
-        assert!(
-            density < 0.01,
-            "Constant image should have near-zero edge density: {density}"
-        );
     }
 }

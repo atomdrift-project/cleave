@@ -173,10 +173,16 @@ fn embedded_binary_scanning() {
     let pe_metrics = report["fs"]
         .as_array()
         .and_then(|files| files.first())
-        .and_then(|host| host["ms"]["binary"].as_object())
+        .and_then(|host| host["ms"].as_object())
         .expect("host PE should expose binary metrics in compact report");
-    assert_eq!(pe_metrics["embedded_binary_count"].as_f64(), Some(1.0));
-    assert_eq!(pe_metrics["embedded_file_count"].as_f64(), Some(1.0));
+    assert_eq!(
+        pe_metrics["binary.embedded_binary_count"].as_f64(),
+        Some(1.0)
+    );
+    assert_eq!(
+        pe_metrics["binary.embedded_file_count"].as_f64(),
+        Some(1.0)
+    );
 
     // 2. Embedded PE in NSIS overlay should downgrade to notable (level 3).
     let mut nsis = minimal_pe_stub();
@@ -223,11 +229,17 @@ fn embedded_binary_scanning() {
     let elf_metrics = report["fs"]
         .as_array()
         .and_then(|files| files.first())
-        .and_then(|host| host["ms"]["binary"].as_object())
+        .and_then(|host| host["ms"].as_object())
         .expect("host ELF should expose binary metrics in compact report");
-    assert_eq!(elf_metrics["embedded_binary_count"].as_f64(), Some(1.0));
-    assert_eq!(elf_metrics["embedded_file_count"].as_f64(), Some(1.0));
-    assert!(!elf_metrics.contains_key("embedded_archive_count"));
+    assert_eq!(
+        elf_metrics["binary.embedded_binary_count"].as_f64(),
+        Some(1.0)
+    );
+    assert_eq!(
+        elf_metrics["binary.embedded_file_count"].as_f64(),
+        Some(1.0)
+    );
+    assert!(!elf_metrics.contains_key("binary.embedded_archive_count"));
 
     // 4. Child ELF extracts its own strings.
     let files = report["fs"]

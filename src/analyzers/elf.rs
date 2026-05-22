@@ -177,12 +177,12 @@ impl ElfAnalyzer {
         data: &'a [u8],
         stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
-        precomputed_sha256: Option<String>,
+        precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         let sha256 = precomputed_sha256
-            .clone()
+            .map(ToString::to_string)
             .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(data));
 
         // Create target info with default/empty values for fields that require parsing
@@ -440,7 +440,7 @@ impl ElfAnalyzer {
             if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
                 tools_used.push("radare2".to_string());
             }
-            let _ = (parse_failed, allow_rizin, precomputed_sha256.clone());
+            let _ = (parse_failed, allow_rizin, precomputed_sha256);
             (None, 0u64)
         };
 
@@ -862,7 +862,7 @@ impl ElfAnalyzer {
                 data,
                 None,
                 true,
-                precomputed_sha256,
+                precomputed_sha256.as_deref(),
                 ctx,
             );
         }
@@ -874,7 +874,7 @@ impl ElfAnalyzer {
             data,
             None,
             true,
-            precomputed_sha256.clone(),
+            precomputed_sha256.as_deref(),
             ctx,
         );
 
@@ -914,12 +914,11 @@ impl ElfAnalyzer {
                         // bytes; open a fresh context on the
                         // decompressed payload so the downstream
                         // helpers see a self-consistent view.
-                        let unpacked_ctx = match crate::analysis_context::AnalysisContext::open(
+                        let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
                             temp_file.path(),
                             &unpacked_data,
-                        ) {
-                            Ok(c) => c,
-                            Err(_) => return report,
+                        ) else {
+                            return report;
                         };
                         let unpacked_report = self.analyze_elf_core(
                             temp_file.path(),
@@ -1032,7 +1031,7 @@ impl Analyzer for ElfAnalyzer {
             input.data,
             strings,
             !input.skip_rizin,
-            input.sha256.clone(),
+            input.sha256.as_deref(),
             &ctx,
         );
 

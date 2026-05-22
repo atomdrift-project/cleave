@@ -860,9 +860,10 @@ fn detect_base64_binary(
     parent_path: &str,
     string_info: &StringInfo,
     depth: u32,
-) -> Option<FileAnalysis> {
+    capability_mapper: &Arc<CapabilityMapper>,
+) -> Vec<FileAnalysis> {
     if depth > 0 {
-        return None;
+        return Vec::new();
     }
 
     // Path 1: stng already decoded the base64 for us — value bytes ARE the payload.
@@ -875,24 +876,27 @@ fn detect_base64_binary(
     } else {
         // Path 2: raw base64 text — decode it ourselves.
         if !looks_like_base64(&string_info.value) {
-            return None;
+            return Vec::new();
         }
         let clean = strip_whitespace(&string_info.value);
-        base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean)
-            .or_else(|_| {
-                base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &clean)
-            })
-            .ok()?
+        match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, &clean).or_else(
+            |_| base64::Engine::decode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, &clean),
+        ) {
+            Ok(d) => d,
+            Err(_) => return Vec::new(),
+        }
     };
 
-    let inner_type = magic_type(&decoded)?;
+    let Some(inner_type) = magic_type(&decoded) else {
+        return Vec::new();
+    };
     if matches!(inner_type, "elf" | "pe") && decoded.len() < MIN_BASE64_EXECUTABLE_SIZE {
-        return None;
+        return Vec::new();
     }
     if matches!(inner_type, "gz" | "zip" | "xz" | "bz2")
         && decoded.len() < MIN_BASE64_COMPRESSED_SIZE
     {
-        return None;
+        return Vec::new();
     }
     let offset = string_info.offset.unwrap_or(0);
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
@@ -925,7 +929,7 @@ fn detect_base64_binary(
 
     let mut entry = FileAnalysis::new(
         0,
-        virtual_path,
+        virtual_path.clone(),
         inner_type.to_string(),
         sha256,
         decoded.len() as u64,
@@ -934,7 +938,65 @@ fn detect_base64_binary(
     entry.encoding = Some(vec!["base64".to_string()]);
     entry.findings = vec![finding];
     entry.compute_summary();
-    Some(entry)
+
+    // For container payloads (gz / zip / tar / xz / bz2 / elf / pe),
+    // hand the decoded bytes to the unified sub-file dispatcher so
+    // the archive is walked and its members get the full analyzer
+    // treatment — this is how shell→base64→tar.gz→python reaches
+    // the innermost python file. Source-language payloads (Python /
+    // Shell / JS in raw base64) are handled by the embedded-code
+    // path immediately above and don't go through this dispatcher.
+    let mut out = vec![entry];
+    if let Some(inner_file_type) = inner_type_to_file_type(inner_type, &decoded, &virtual_path) {
+        let sub_entries = crate::analyzers::subfile::analyze_subfile_bytes(
+            &decoded,
+            &virtual_path,
+            inner_file_type,
+            &format!("embedded@{:#x}", offset),
+            depth + 1,
+            capability_mapper.clone(),
+        );
+        out.extend(sub_entries);
+    }
+    out
+}
+
+/// Map the `magic_type` string ("gz", "zip", …) back to a
+/// [`FileType`] using filefacts's magic detector. `magic_type`
+/// returned a stable string label ("gz", "tar.gz", "elf", "pe", …);
+/// re-running detect_file_type_from_data is the right way to get a
+/// strongly-typed [`FileType`] that the analyzer dispatcher
+/// understands — single source of truth for the byte-pattern →
+/// FileType mapping.
+fn inner_type_to_file_type(
+    inner_type: &str,
+    decoded: &[u8],
+    virtual_path: &str,
+) -> Option<crate::analyzers::FileType> {
+    // Re-detect from the full byte buffer (magic_type only inspects
+    // the leading magic; the full detector also distinguishes
+    // bare-gz from tar.gz, plain-tar from .gem, etc.).
+    let detected = crate::analyzers::detect_file_type_from_data(
+        std::path::Path::new(virtual_path),
+        decoded,
+    );
+    if detected != crate::analyzers::FileType::Unknown {
+        return Some(detected);
+    }
+    // Fall back to the magic_type label so callers get *some*
+    // dispatch decision — better an over-broad attempt than no
+    // recursion at all for unusual file headers.
+    match inner_type {
+        "gz" => Some(crate::analyzers::FileType::Gz),
+        "zip" => Some(crate::analyzers::FileType::Zip),
+        "xz" => Some(crate::analyzers::FileType::Xz),
+        "bz2" => Some(crate::analyzers::FileType::Bz2),
+        "tar.gz" => Some(crate::analyzers::FileType::TarGz),
+        "tar" => Some(crate::analyzers::FileType::Tar),
+        "elf" => Some(crate::analyzers::FileType::Elf),
+        "pe" => Some(crate::analyzers::FileType::Pe),
+        _ => None,
+    }
 }
 
 // ── PowerShell -EncodedCommand detection ─────────────────────────────────────
@@ -1202,10 +1264,15 @@ pub(crate) fn process_all_strings_with_host(
             continue;
         }
 
-        // Check for base64-encoded binary payloads (PE, ELF, archives)
-        if let Some(bin_layer) =
-            detect_base64_binary(parent_path, string_info, current_depth as u32)
-        {
+        // Check for base64-encoded binary payloads (PE, ELF, archives).
+        // detect_base64_binary returns the carrier-layer FileAnalysis
+        // plus any nested files the unified sub-file dispatcher
+        // produced from a container payload (tar.gz members,
+        // archive contents, sub-sub-files). All entries already
+        // carry their final depth.
+        let bin_entries =
+            detect_base64_binary(parent_path, string_info, current_depth as u32, capability_mapper);
+        if let Some(bin_layer) = bin_entries.first() {
             let payload_key = (
                 bin_layer.file_type.clone(),
                 bin_layer.sha256.clone(),
@@ -1221,7 +1288,7 @@ pub(crate) fn process_all_strings_with_host(
             detected_count += 1;
             total_bytes += string_info.value.len();
             total_analyzed += 1;
-            encoded_layers.push(bin_layer);
+            encoded_layers.extend(bin_entries);
             continue;
         }
 
@@ -1330,8 +1397,26 @@ mod tests {
             process_all_strings("sample.ts", &strings, &mapper, 0, None, None);
 
         assert!(plain_findings.is_empty());
-        assert_eq!(encoded_layers.len(), 1);
-        assert_eq!(encoded_layers[0].file_type, "gz");
+        // Dedup contract — two identical base64 strings produce one
+        // *carrier* layer with file_type=gz, regardless of any extra
+        // archive-analyzer entries the unified sub-file dispatcher
+        // may append below the carrier. Count carriers, not total
+        // entries, so this test stays stable across dispatcher
+        // changes that add or remove nested-extraction entries.
+        let carriers: Vec<_> = encoded_layers
+            .iter()
+            .filter(|f| f.file_type == "gz" && f.encoding.is_some())
+            .collect();
+        assert_eq!(
+            carriers.len(),
+            1,
+            "expected exactly one gz carrier, got {} (full layers: {:?})",
+            carriers.len(),
+            encoded_layers
+                .iter()
+                .map(|f| (&f.path, &f.file_type, &f.encoding))
+                .collect::<Vec<_>>(),
+        );
     }
 
     #[test]
@@ -1489,6 +1574,10 @@ mod tests {
         assert!(!looks_like_base64(prose));
     }
 
+    fn test_mapper() -> Arc<CapabilityMapper> {
+        Arc::new(CapabilityMapper::empty())
+    }
+
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_detect_base64_binary_gzip() {
@@ -1504,16 +1593,16 @@ mod tests {
             encoded.len()
         );
         let info = make_string_info(&encoded);
-        let result = detect_base64_binary("test.sh", &info, 0);
+        let entries = detect_base64_binary("test.sh", &info, 0, &test_mapper());
         assert!(
-            result.is_some(),
+            !entries.is_empty(),
             "should detect base64-encoded gzip payload"
         );
-        let entry = result.unwrap();
+        let carrier = &entries[0];
         assert!(
-            entry.findings.iter().any(|f| f.id.contains("base64-gz")),
+            carrier.findings.iter().any(|f| f.id.contains("base64-gz")),
             "expected base64-gz finding, got: {:?}",
-            entry.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+            carrier.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
     }
 
@@ -1524,7 +1613,7 @@ mod tests {
         let random_bytes: Vec<u8> = (0u8..=127).collect();
         let encoded = base64::engine::general_purpose::STANDARD.encode(&random_bytes);
         let info = make_string_info(&encoded);
-        assert!(detect_base64_binary("test.sh", &info, 0).is_none());
+        assert!(detect_base64_binary("test.sh", &info, 0, &test_mapper()).is_empty());
     }
 
     #[test]
@@ -1535,7 +1624,7 @@ mod tests {
 AAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAfQAAAAAAAAB9AAAAAAAAAAAA\
 IAAAAAAAsDyZDwU=";
         let info = make_string_info(encoded);
-        assert!(detect_base64_binary("test.go", &info, 0).is_none());
+        assert!(detect_base64_binary("test.go", &info, 0, &test_mapper()).is_empty());
     }
 
     #[test]
@@ -1546,7 +1635,7 @@ IAAAAAAAsDyZDwU=";
         payload.resize(75, 0u8);
         let encoded = base64::engine::general_purpose::STANDARD.encode(&payload);
         let info = make_string_info(&encoded);
-        assert!(detect_base64_binary("test.sh", &info, 1).is_none());
+        assert!(detect_base64_binary("test.sh", &info, 1, &test_mapper()).is_empty());
     }
 
     // ── PowerShell -EncodedCommand tests ──────────────────────────────────────

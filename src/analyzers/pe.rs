@@ -47,7 +47,7 @@ fn is_dll_from_ctx(ctx: &Ctx<'_>) -> bool {
     ctx.parsed
         .values()
         .get("pe.characteristics_raw")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .is_some_and(|c| c & 0x2000 != 0)
 }
 
@@ -414,12 +414,11 @@ impl PEAnalyzer {
                         // bytes; open a fresh context on the
                         // decompressed payload so the downstream
                         // helpers see a self-consistent view.
-                        let unpacked_ctx = match crate::analysis_context::AnalysisContext::open(
+                        let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
                             temp_file.path(),
                             &unpacked_data,
-                        ) {
-                            Ok(c) => c,
-                            Err(_) => return report,
+                        ) else {
+                            return report;
                         };
                         let mut unpacked_report = self.analyze_structural_with_strings(
                             temp_file.path(),

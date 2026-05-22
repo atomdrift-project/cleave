@@ -290,9 +290,8 @@ pub fn kv_set_path(
         *current = serde_json::Value::Object(Default::default());
     }
     let parts: Vec<&str> = dotted.split('.').collect();
-    let (last, parents) = match parts.split_last() {
-        Some(p) => p,
-        None => return,
+    let Some((last, parents)) = parts.split_last() else {
+        return;
     };
     for part in parents {
         // The match on line 289 above + the `entry → Object` rewrite at
@@ -1865,7 +1864,7 @@ mod tests {
         );
         assert_eq!(first.get("uname").and_then(|v| v.as_str()), Some("alice"));
         assert_eq!(
-            first.get("mode_octal").and_then(|v| v.as_u64()),
+            first.get("mode_octal").and_then(serde_json::Value::as_u64),
             Some(0o755)
         );
         assert_eq!(
@@ -1875,7 +1874,7 @@ mod tests {
 
         // Member count + aggregates.
         assert_eq!(
-            archive.get("member_count").and_then(|v| v.as_u64()),
+            archive.get("member_count").and_then(serde_json::Value::as_u64),
             Some(3)
         );
 
@@ -1894,7 +1893,7 @@ mod tests {
         assert_eq!(
             comp.get("method_counts")
                 .and_then(|v| v.get("stored"))
-                .and_then(|v| v.as_u64()),
+                .and_then(serde_json::Value::as_u64),
             Some(2)
         );
 
@@ -1903,19 +1902,19 @@ mod tests {
             .get("timing")
             .expect("archive.timing should be present when mtimes exist");
         assert_eq!(
-            timing.get("mtime_min").and_then(|v| v.as_i64()),
+            timing.get("mtime_min").and_then(serde_json::Value::as_i64),
             Some(1_700_000_000)
         );
         assert_eq!(
-            timing.get("mtime_max").and_then(|v| v.as_i64()),
+            timing.get("mtime_max").and_then(serde_json::Value::as_i64),
             Some(1_700_000_300)
         );
         assert_eq!(
-            timing.get("mtime_spread_seconds").and_then(|v| v.as_i64()),
+            timing.get("mtime_spread_seconds").and_then(serde_json::Value::as_i64),
             Some(300)
         );
         assert_eq!(
-            timing.get("mtime_unique_count").and_then(|v| v.as_u64()),
+            timing.get("mtime_unique_count").and_then(serde_json::Value::as_u64),
             Some(3)
         );
 
@@ -1925,17 +1924,17 @@ mod tests {
             .get("security")
             .expect("archive.security should be present");
         assert_eq!(
-            security.get("setuid_count").and_then(|v| v.as_u64()),
+            security.get("setuid_count").and_then(serde_json::Value::as_u64),
             Some(1)
         );
         assert_eq!(
-            security.get("symlink_count").and_then(|v| v.as_u64()),
+            security.get("symlink_count").and_then(serde_json::Value::as_u64),
             Some(1)
         );
         assert_eq!(
             security
                 .get("external_symlink_count")
-                .and_then(|v| v.as_u64()),
+                .and_then(serde_json::Value::as_u64),
             Some(1)
         );
 

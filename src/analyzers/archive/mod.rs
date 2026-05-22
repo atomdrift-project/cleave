@@ -1206,7 +1206,7 @@ fn merge_archive_member_metadata(
                 .rsplit('!')
                 .next()
                 .filter(|s| by_path.contains_key(*s))
-                .map(|s| s.to_string())
+                .map(ToString::to_string)
         };
         let Some(key) = key else { continue };
         let Some(meta) = by_path.remove(&key) else {

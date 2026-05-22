@@ -395,7 +395,7 @@ impl MachOAnalyzer {
                 value: format!(
                     "filetype=0x{:x}",
                     v.get("macho.file_type_raw")
-                        .and_then(|x| x.as_u64())
+                        .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0)
                 ),
                 location: None,
@@ -406,7 +406,7 @@ impl MachOAnalyzer {
         let arch = arch_name_from_ctx(ctx);
         let cputype_raw = v
             .get("macho.cpu_type_raw")
-            .and_then(|x| x.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
         report.structure.push(StructuralFeature {
             id: format!("binary/arch/{}", arch),
@@ -674,7 +674,7 @@ fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
     }
     let raw = v
         .get("macho.cpu_type_raw")
-        .and_then(|x| x.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     format!("unknown_0x{:x}", raw)
 }
@@ -703,7 +703,7 @@ fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
     // present; absence here means there's no signature to parse.
     let size = v
         .get("macho.code_signature_size")
-        .and_then(|x| x.as_u64())? as u32;
+        .and_then(serde_json::Value::as_u64)? as u32;
     if size == 0 {
         return None;
     }
@@ -714,8 +714,8 @@ fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
     let linkedit = segs
         .iter()
         .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("__LINKEDIT"))?;
-    let file_offset = linkedit.get("file_offset").and_then(|x| x.as_u64())?;
-    let file_size = linkedit.get("file_size").and_then(|x| x.as_u64())?;
+    let file_offset = linkedit.get("file_offset").and_then(serde_json::Value::as_u64)?;
+    let file_size = linkedit.get("file_size").and_then(serde_json::Value::as_u64)?;
     let end = file_offset.checked_add(file_size)?;
     let cs_off = end.checked_sub(u64::from(size))?;
     Some((cs_off as u32, size))
@@ -934,9 +934,9 @@ impl MachOAnalyzer {
         if let Some(slice) = pick {
             let off = slice
                 .get("file_offset")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0) as usize;
-            let size = slice.get("file_size").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+            let size = slice.get("file_size").and_then(serde_json::Value::as_u64).unwrap_or(0) as usize;
             if size > 0 && off.saturating_add(size) <= data.len() {
                 return off..off + size;
             }
@@ -967,8 +967,8 @@ impl MachOAnalyzer {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|s| {
-                        let off = s.get("file_offset").and_then(|v| v.as_u64())? as usize;
-                        let size = s.get("file_size").and_then(|v| v.as_u64())? as usize;
+                        let off = s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
+                        let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         let name = s.get("cpu_type").and_then(|v| v.as_str())?;
                         if size > 0 && off.saturating_add(size) <= data.len() {
                             Some((Arch::from_report_str(name), off..off + size))
@@ -997,8 +997,8 @@ impl MachOAnalyzer {
             .map(|arr| {
                 arr.iter()
                     .filter_map(|s| {
-                        let off = s.get("file_offset").and_then(|v| v.as_u64())? as usize;
-                        let size = s.get("file_size").and_then(|v| v.as_u64())? as usize;
+                        let off = s.get("file_offset").and_then(serde_json::Value::as_u64)? as usize;
+                        let size = s.get("file_size").and_then(serde_json::Value::as_u64)? as usize;
                         if size > 0 && off.saturating_add(size) <= data.len() {
                             Some(off..off + size)
                         } else {
@@ -1066,10 +1066,10 @@ impl MachOAnalyzer {
         };
         let dummy_path = Path::new("");
         for slice in slices {
-            let Some(offset) = slice.get("file_offset").and_then(|x| x.as_u64()) else {
+            let Some(offset) = slice.get("file_offset").and_then(serde_json::Value::as_u64) else {
                 continue;
             };
-            let Some(size) = slice.get("file_size").and_then(|x| x.as_u64()) else {
+            let Some(size) = slice.get("file_size").and_then(serde_json::Value::as_u64) else {
                 continue;
             };
             let offset = offset as usize;

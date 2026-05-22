@@ -21,13 +21,11 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use cleave::analyzers::pdf::PdfAnalyzer;
-use cleave::analyzers::{analyzer_for_file_type_arc, Analyzer, FileType};
+use cleave::analyzers::{analyzer_for_file_type, AnalysisInput, FileType};
 use cleave::capabilities::CapabilityMapper;
 use cleave::types::AnalysisReport;
 use std::io::Write;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Build a `CapabilityMapper` with trait loading disabled — these
 /// tests assert routing/dispatch shape, not trait content. Disabling
@@ -130,9 +128,10 @@ fn collect_subfiles(report: &AnalysisReport) -> Vec<(String, u32, String)> {
 #[test]
 fn pdf_javascript_subfile_lands_at_depth_one() {
     let pdf = build_pdf_with_inline_js("eval(atob('YWxlcnQoMSk='))");
-    let analyzer = PdfAnalyzer::new().with_capability_mapper(empty_mapper());
+    let analyzer = analyzer_for_file_type(&FileType::Pdf, Some(empty_mapper()))
+        .expect("PDF analyzer should exist");
     let report = analyzer
-        .analyze_input(&cleave::analyzers::AnalysisInput::new(
+        .analyze_input(&AnalysisInput::new(
             Path::new("/tmp/synthesized.pdf"),
             &pdf,
             FileType::Pdf,
@@ -174,13 +173,10 @@ fn pdf_javascript_subfile_lands_at_depth_one() {
 #[test]
 fn shell_with_base64_targz_python_extracts_layers() {
     let shell = build_shell_with_base64_targz_python();
-    let analyzer = analyzer_for_file_type_arc(
-        &FileType::Shell,
-        Some(Arc::new(empty_mapper())),
-    )
-    .expect("shell analyzer should exist");
+    let analyzer = analyzer_for_file_type(&FileType::Shell, Some(empty_mapper()))
+        .expect("shell analyzer should exist");
     let report = analyzer
-        .analyze_input(&cleave::analyzers::AnalysisInput::new(
+        .analyze_input(&AnalysisInput::new(
             Path::new("/tmp/dropper.sh"),
             &shell,
             FileType::Shell,
@@ -206,13 +202,10 @@ fn shell_with_base64_targz_python_extracts_layers() {
 #[test]
 fn shell_targz_python_reaches_innermost_python() {
     let shell = build_shell_with_base64_targz_python();
-    let analyzer = analyzer_for_file_type_arc(
-        &FileType::Shell,
-        Some(Arc::new(empty_mapper())),
-    )
-    .expect("shell analyzer should exist");
+    let analyzer = analyzer_for_file_type(&FileType::Shell, Some(empty_mapper()))
+        .expect("shell analyzer should exist");
     let report = analyzer
-        .analyze_input(&cleave::analyzers::AnalysisInput::new(
+        .analyze_input(&AnalysisInput::new(
             Path::new("/tmp/dropper.sh"),
             &shell,
             FileType::Shell,

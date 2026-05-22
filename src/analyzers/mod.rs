@@ -82,6 +82,11 @@ pub(crate) mod generic;
 // Embedded code detector (analyzes code found in strings)
 pub mod embedded_code_detector;
 
+// Unified sub-file dispatcher — one place that decides how fresh
+// bytes (decoded payload, archive member, format-embedded blob)
+// route to the right analyzer.
+pub mod subfile;
+
 // Overlay data analyzer (self-extracting archives)
 pub(crate) mod overlay;
 

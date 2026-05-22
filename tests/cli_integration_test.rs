@@ -77,12 +77,12 @@ fn test_analyze_json_output() {
 
     fs::write(&script_path, "#!/bin/bash\necho 'hello'\n").unwrap();
 
-    // Compact v4 format: single JSON object with "v" and "fs" (files array)
+    // Compact v5 format: single JSON object with "v" and "fs" (files array)
     isolated_cleave_cmd()
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"4""#))
+        .stdout(predicate::str::contains(r#""v":"5""#))
         .stdout(predicate::str::contains(r#""fs":[{"#));
 }
 
@@ -131,9 +131,9 @@ fn test_analyze_output_to_file() {
     // Note: "Results written to" message is only printed for Terminal format, not JSON
     // The success assertion above confirms the command succeeded
 
-    // Verify output file was created and contains v4 compact format
+    // Verify output file was created and contains v5 compact format
     let content = fs::read_to_string(&output_path).unwrap();
-    assert!(content.contains(r#""v":"4""#));
+    assert!(content.contains(r#""v":"5""#));
     assert!(content.contains(r#""fs":["#));
 }
 
@@ -301,7 +301,7 @@ fn test_analyze_directory_json_output() {
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"4""#));
+        .stdout(predicate::str::contains(r#""v":"5""#));
 }
 
 /// Test that --yara flag enables YARA (deprecated feature, disabled by default)

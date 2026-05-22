@@ -61,13 +61,13 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
             .ok()
             .flatten()
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let gname = header
             .groupname()
             .ok()
             .flatten()
             .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
+            .map(ToString::to_string);
         let entry_type_str = tar_entry_type_label(entry_type);
         let rel_path = outpath
             .strip_prefix(dest_dir)

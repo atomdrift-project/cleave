@@ -1,0 +1,117 @@
+# Wolfi package definition for cleave (binary) and cleave-traits (data).
+#
+# Status: LOCAL DEV ONLY. The shape is upstream-ready, but this file is
+# not yet submittable to wolfi-dev/os because cleave depends on the
+# sibling crate `filefacts` via a path dep (`filefacts = { path =
+# "../filefacts" }` in Cargo.toml). To upstream, one of:
+#   (a) move filefacts into cleave's workspace, or
+#   (b) publish filefacts to crates.io and switch to a version dep, or
+#   (c) switch cleave to a git dep on filefacts.
+# Until then, the local build (`make wolfi`) stages cleave + filefacts
+# side-by-side and uses melange's `--source-dir` to bypass git-checkout.
+# See packaging/wolfi/README.md.
+
+package:
+  name: cleave
+  version: 1.4.0
+  epoch: 0
+  description: Deep static analysis tool for extracting features from binaries and source code
+  copyright:
+    - license: Apache-2.0
+  dependencies:
+    runtime:
+      - ca-certificates-bundle
+  resources:
+    cpu: 4
+    memory: 8Gi
+
+environment:
+  contents:
+    # When wolfi-dev/os's CI runs melange, repositories + keyring are
+    # injected by the harness. Standalone melange (our local build) needs
+    # them declared explicitly.
+    repositories:
+      - https://packages.wolfi.dev/os
+    keyring:
+      - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+    packages:
+      - build-base
+      - busybox
+      - ca-certificates-bundle
+      - cargo-auditable
+      - clang
+      - cmake
+      - git
+      - perl
+      - pkgconf
+      - rust
+      - wolfi-baselayout
+
+pipeline:
+  # LOCAL_BUILD_STRIP_BEGIN  — scripts/build.sh removes this step when
+  # running locally so melange's --source-dir tree isn't overwritten by
+  # the upstream tag. Upstream wolfi-dev/os keeps it.
+  - uses: git-checkout
+    with:
+      repository: https://codeberg.org/atomdrift/cleave
+      tag: v${{package.version}}
+      expected-commit: c36812c913c0879b712a6c525ecf4b18663469e8
+  # LOCAL_BUILD_STRIP_END
+
+  - name: Build cleave
+    runs: |
+      cargo auditable build --release --locked --no-default-features --bin cleave
+      install -Dm755 target/release/cleave "${{targets.destdir}}/usr/bin/cleave"
+
+  - uses: strip
+
+subpackages:
+  - name: cleave-traits
+    description: YARA rules and trait definitions consumed by cleave at runtime
+    dependencies:
+      runtime:
+        - cleave
+    pipeline:
+      - uses: git-checkout
+        with:
+          repository: https://codeberg.org/atomdrift/cleave-traits
+          branch: main
+          expected-commit: 06e4151848ae0a6378c22a8d22a5f9e4e763278d
+          destination: traits-src
+      - name: Install traits
+        runs: |
+          # Force 0755 because melange's runs: shell inherits a restrictive
+          # umask; without -m, `install -d` produced a 0700 traits/ dir that
+          # the nonroot runtime user (uid 65532 in apko.yaml) could not
+          # traverse, breaking cleave's YAML discovery.
+          install -d -m 0755 "${{targets.subpkgdir}}/usr/share/cleave/traits"
+          cp -a traits-src/. "${{targets.subpkgdir}}/usr/share/cleave/traits/"
+          # Belt-and-braces: ensure every directory is world-traversable
+          # and every file world-readable.
+          chmod -R a+rX "${{targets.subpkgdir}}/usr/share/cleave/traits"
+          # Cleave only requires one of these top-level dirs; assert presence.
+          for d in objectives micro-behaviors metadata; do
+            if [ -d "${{targets.subpkgdir}}/usr/share/cleave/traits/$d" ]; then
+              echo "found traits subdir: $d"
+              exit 0
+            fi
+          done
+          echo "ERROR: none of objectives/, micro-behaviors/, metadata/ found in traits checkout" >&2
+          exit 1
+
+test:
+  pipeline:
+    - name: Version reports correctly
+      runs: |
+        set -euo pipefail
+        cleave --version
+        cleave --version | grep -q '1\.4\.0'
+    - name: Help works
+      runs: |
+        set -euo pipefail
+        cleave --help >/dev/null
+
+update:
+  enabled: true
+  git:
+    strip-prefix: v

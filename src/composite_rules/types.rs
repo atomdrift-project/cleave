@@ -562,6 +562,7 @@ impl FileType {
             "swift" => FileType::Swift,
             "objectivec" | "objc" | "m" => FileType::ObjectiveC,
             "groovy" | "gradle" => FileType::Groovy,
+            "kotlin" | "kt" | "kts" => FileType::Kotlin,
             "scala" | "sc" => FileType::Scala,
             "zig" => FileType::Zig,
             "elixir" | "ex" | "exs" => FileType::Elixir,

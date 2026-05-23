@@ -1,0 +1,58 @@
+# Lima VM template for building Wolfi packages on macOS.
+# Provisioned with nerdctl + containerd; no Docker, no port forwards.
+#
+# Placeholders (__SRC_DIR__, __OUT_DIR__, __CACHE_DIR__) are substituted
+# with absolute paths by scripts/bootstrap-lima.sh at VM creation time —
+# `{{.Dir}}` is not stable here because Lima copies the config to
+# ~/.lima/<name>/ before resolving template variables.
+
+# Ubuntu 26.04 LTS (Resolute Raccoon) — newest LTS at time of writing.
+# Newer than Lima's bundled default (25.10 as of lima 2.1.1) and supported
+# until 2031. Lima downloads + caches on first VM creation.
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/resolute/release/ubuntu-26.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
+  - location: "https://cloud-images.ubuntu.com/releases/resolute/release/ubuntu-26.04-server-cloudimg-arm64.img"
+    arch: "aarch64"
+
+cpus: 4
+# Cleave's release profile uses lto="fat" + codegen-units=1, which
+# exhausts ~10GB during the final link step. 12GiB headroom is enough
+# even with debug symbols enabled.
+memory: "12GiB"
+disk: "30GiB"
+
+mounts:
+  # Cleave source tree, read-only — melange reads from here via --source-dir.
+  - location: "__SRC_DIR__"
+    mountPoint: "/work/src"
+    writable: false
+  # Build output dir — apks, OCI tarball, SBOMs land here.
+  - location: "__OUT_DIR__"
+    mountPoint: "/work/out"
+    writable: true
+  # Persistent cargo + melange caches across runs.
+  - location: "__CACHE_DIR__"
+    mountPoint: "/work/cache"
+    writable: true
+
+# Pull container images we use, install nerdctl from upstream tarball.
+# Idempotent: provisioning re-runs are no-ops once tools are present.
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      set -eu
+      if ! command -v nerdctl >/dev/null 2>&1; then
+        NERDCTL_VERSION=2.3.1
+        ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+        curl -fsSL "https://github.com/containerd/nerdctl/releases/download/v${NERDCTL_VERSION}/nerdctl-full-${NERDCTL_VERSION}-linux-${ARCH}.tar.gz" \
+          | tar -xz -C /usr/local
+        systemctl daemon-reload || true
+        systemctl enable --now containerd || true
+        systemctl enable --now buildkit || true
+      fi
+
+ssh:
+  loadDotSSHPubKeys: false
+  forwardAgent: false

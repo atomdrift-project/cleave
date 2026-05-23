@@ -138,14 +138,29 @@ const PARENT_DUPLICATE_EXCEPTIONS: &[&str] = &[
 ];
 
 /// Directories where a normally-vague segment has precise local meaning.
-const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[(
-    "metadata/package/fields/types",
-    "types", // package.json `types`/`typings` entry point field
-)];
+const BANNED_SEGMENT_EXCEPTIONS: &[(&str, &str)] = &[
+    (
+        "metadata/package/fields/types",
+        "types", // package.json `types`/`typings` entry point field
+    ),
+    (
+        "well-known/tool/detection",
+        "detection", // detection tools (cleave's stng, SAST scanners): "detection" is the category
+    ),
+];
 
 /// Maximum number of traits allowed in a single directory.
 /// Directories exceeding this should be split into subdirectories.
 pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 80;
+
+/// Directories explicitly allowed to exceed `MAX_TRAITS_PER_DIRECTORY`.
+/// Use sparingly — splitting by sub-technique is preferred. Listed here
+/// when the trait set is per-implementation (one set per supported
+/// language) and splitting by language would violate the
+/// platform/language directory ban.
+pub(crate) const OVERSIZED_DIRECTORY_EXCEPTIONS: &[&str] = &[
+    "objectives/command-and-control/reverse-shell/dup",
+];
 
 /// Validate that a trait ID contains only valid characters.
 /// Valid characters are: alphanumerics, dashes, and underscores.
@@ -869,10 +884,11 @@ pub(crate) fn find_banned_directory_segments(trait_dirs: &[String]) -> Vec<(Stri
         for segment in dir_path.split('/') {
             let lower = segment.to_lowercase();
             if BANNED_DIRECTORY_SEGMENTS.contains(&lower.as_str()) {
-                if BANNED_SEGMENT_EXCEPTIONS
-                    .iter()
-                    .any(|(path, allowed)| dir_path == *path && lower == *allowed)
-                {
+                if BANNED_SEGMENT_EXCEPTIONS.iter().any(|(path, allowed)| {
+                    lower == *allowed
+                        && (dir_path == *path
+                            || dir_path.starts_with(&format!("{path}/")))
+                }) {
                     continue;
                 }
                 violations.push((dir_path.clone(), segment.to_string()));
@@ -972,7 +988,10 @@ pub(crate) fn find_oversized_trait_directories(
 
     let mut violations: Vec<_> = dir_counts
         .into_iter()
-        .filter(|(_, count)| *count > MAX_TRAITS_PER_DIRECTORY)
+        .filter(|(dir, count)| {
+            *count > MAX_TRAITS_PER_DIRECTORY
+                && !OVERSIZED_DIRECTORY_EXCEPTIONS.contains(&dir.as_str())
+        })
         .collect();
 
     violations.sort_by_key(|v| std::cmp::Reverse(v.1)); // Sort by count descending

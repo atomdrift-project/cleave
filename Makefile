@@ -11,7 +11,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once
+.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
 
 # Default target
 all: build
@@ -41,6 +41,13 @@ help: ## Show this help
 	@echo "  sampled-benchmark     - Benchmark with samply CPU profiling (DATASET=200MB)"
 	@echo "  tuna                  - LLM autoresearch loop, alternating memory/cpu; cherry-picks wins (Ctrl-C to stop)"
 	@echo "  tuna-once             - Run one tuna cycle then cherry-pick accepted experiments"
+	@echo "  wolfi                 - Bootstrap + build + smoke-test the Wolfi OCI image (WOLFI_ARCH=)"
+	@echo "  wolfi-bootstrap       - Ensure Lima VM (macOS) or container runtime (Linux) is ready"
+	@echo "  wolfi-build           - Build cleave + cleave-traits apks and assemble OCI image (idempotent)"
+	@echo "  wolfi-test            - Run smoke tests against the built image"
+	@echo "  wolfi-shell           - Open an interactive shell in the built image (debugging)"
+	@echo "  wolfi-clean           - Remove Wolfi build output (keeps the Lima VM)"
+	@echo "  wolfi-nuke            - wolfi-clean + delete the Lima VM (destructive opt-in)"
 	@echo "  clean                 - Clean all build artifacts"
 
 build: debug ## Build in debug mode (default)
@@ -286,3 +293,41 @@ tuna-once: ## One cleave-tuna cycle, then cherry-pick accepted experiments
 
 $(OUT_DIR):
 	mkdir -p $(OUT_DIR)
+
+# ----- Wolfi packaging ----------------------------------------------------
+# Build a Wolfi-based OCI image for cleave via melange + apko. On macOS the
+# build runs inside a dedicated Lima VM (`cleave-wolfi`); on Linux it uses
+# nerdctl/docker/podman directly. See packaging/wolfi/README.md.
+WOLFI_DIR = packaging/wolfi
+WOLFI_OUT = $(OUT_DIR)/wolfi
+WOLFI_ARCH ?=
+
+wolfi: wolfi-bootstrap wolfi-build wolfi-test ## Bootstrap + build + smoke-test the Wolfi OCI image
+
+wolfi-bootstrap: ## Ensure Lima VM (macOS) or container runtime (Linux) is ready
+	@$(WOLFI_DIR)/scripts/bootstrap-lima.sh
+
+wolfi-build: ## Build cleave + cleave-traits apks and assemble OCI image (idempotent)
+	@WOLFI_ARCH="$(WOLFI_ARCH)" $(WOLFI_DIR)/scripts/build.sh
+	@echo "✓ Wolfi image: $(WOLFI_OUT)/cleave.tar"
+
+wolfi-test: ## Run smoke tests against the built image
+	@$(WOLFI_DIR)/scripts/smoke-test.sh
+
+wolfi-shell: ## Open an interactive shell in the built image (debugging)
+	@[ -f $(WOLFI_OUT)/cleave.tar ] || { echo "error: run 'make wolfi-build' first"; exit 1; }
+	@case "$$(uname -s)" in \
+		Darwin) limactl shell --workdir / cleave-wolfi nerdctl run --rm -it --entrypoint /bin/sh cleave:smoke ;; \
+		Linux)  for r in nerdctl docker podman; do command -v $$r >/dev/null 2>&1 && { exec $$r run --rm -it --entrypoint /bin/sh cleave:smoke; }; done; echo "no container runtime"; exit 1 ;; \
+	esac
+
+wolfi-clean: ## Remove Wolfi build output (keeps the Lima VM)
+	rm -rf $(WOLFI_OUT)
+	@echo "✓ Wolfi output cleaned"
+
+wolfi-nuke: wolfi-clean ## wolfi-clean + delete the Lima VM (destructive opt-in)
+	@case "$$(uname -s)" in \
+		Darwin) limactl delete --force cleave-wolfi 2>/dev/null || true ;; \
+	esac
+	rm -rf $$HOME/.cache/cleave-wolfi
+	@echo "✓ Wolfi VM and cache removed"

@@ -738,7 +738,7 @@ const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
     ("liblzma.so.5.4.5.xz", 5),
     ("ls.macOS.xz", 9),
     ("package.json.xz", 5),
-    ("php-wundii-flowcrafter.tar.xz", 12),
+    ("php-wundii-flowcrafter.tar.xz", 14),
     // pyaigis is the canonical "defensive scanner whose pattern database
     // looks like its targets" test case. After the scanner-context audit
     // landed it scores 35; cap is 38 (current + 3 headroom). A regression

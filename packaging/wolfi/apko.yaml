@@ -1,0 +1,47 @@
+# Local OCI image for cleave. NOT upstreamed — Wolfi only hosts apks.
+# The build flow uses melange to produce local cleave + cleave-traits
+# apks, then apko assembles them into a runnable container image.
+
+contents:
+  # The local APKINDEX produced by melange lives at /out/packages
+  # inside the apko build container (mounted by scripts/build.sh).
+  # apko picks up cleave + cleave-traits from there; transitive runtime
+  # deps come from Wolfi upstream.
+  repositories:
+    - /out/packages
+    - https://packages.wolfi.dev/os
+  keyring:
+    - /out/melange.rsa.pub
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - ca-certificates-bundle
+    - wolfi-baselayout
+    - cleave
+    - cleave-traits
+
+accounts:
+  groups:
+    - groupname: nonroot
+      gid: 65532
+  users:
+    - username: nonroot
+      uid: 65532
+      gid: 65532
+  run-as: 65532
+
+entrypoint:
+  command: /usr/bin/cleave
+
+environment:
+  CLEAVE_TRAITS_DIR: /usr/share/cleave/traits
+  PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+archs:
+  - aarch64
+  - x86_64
+
+annotations:
+  org.opencontainers.image.source: https://codeberg.org/atomdrift/cleave
+  org.opencontainers.image.title: cleave
+  org.opencontainers.image.description: Deep static analysis tool for binaries and source code
+  org.opencontainers.image.licenses: Apache-2.0

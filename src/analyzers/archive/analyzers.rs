@@ -103,47 +103,6 @@ fn is_interesting_jar_non_class(path: &str) -> bool {
     !lower.contains("meta-inf/") || lower.ends_with("manifest.mf") || lower.ends_with(".xml")
 }
 
-fn read_indexed_zip_member(data: &[u8], entry: &ArchiveEntry, limit: u64) -> Result<Vec<u8>> {
-    let data_offset = entry
-        .data_offset
-        .ok_or_else(|| anyhow::anyhow!("missing ZIP data offset"))?;
-    let compressed_size = entry
-        .compressed_size
-        .ok_or_else(|| anyhow::anyhow!("missing ZIP compressed size"))?;
-    let start =
-        usize::try_from(data_offset).map_err(|e| anyhow::anyhow!("ZIP offset too large: {e}"))?;
-    let compressed_len = usize::try_from(compressed_size)
-        .map_err(|e| anyhow::anyhow!("ZIP compressed size too large: {e}"))?;
-    let end = start
-        .checked_add(compressed_len)
-        .ok_or_else(|| anyhow::anyhow!("ZIP member range overflow"))?;
-    if end > data.len() {
-        anyhow::bail!("ZIP member range exceeds archive size");
-    }
-
-    let compressed = &data[start..end];
-    match entry.compression_method.as_deref() {
-        Some("stored") => {
-            if compressed.len() as u64 > limit {
-                anyhow::bail!("ZIP stored member exceeds read limit");
-            }
-            Ok(compressed.to_vec())
-        }
-        Some("deflate") => {
-            let mut decoder = flate2::read::DeflateDecoder::new(compressed);
-            let mut limited = LimitedReader::new(&mut decoder, limit);
-            let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
-            limited.read_to_end(&mut out)?;
-            if limited.is_limited() {
-                anyhow::bail!("ZIP deflated member exceeds read limit");
-            }
-            Ok(out)
-        }
-        Some(method) => anyhow::bail!("unsupported indexed ZIP compression method: {method}"),
-        None => anyhow::bail!("missing ZIP compression method"),
-    }
-}
-
 /// Total number of successful archive member analyses (cumulative, for logging)
 static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
@@ -664,7 +623,7 @@ impl ArchiveAnalyzer {
             }
 
             if entry_type_label == "symlink" {
-                let target = read_indexed_zip_member(data, entry, 4096)
+                let target = super::zip::read_indexed_zip_member(data, entry, 4096)
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok());
                 if let Some(target_str) = target.as_deref() {
@@ -720,7 +679,8 @@ impl ArchiveAnalyzer {
                 continue;
             }
 
-            let Ok(file_data) = read_indexed_zip_member(data, entry, MAX_FILE_SIZE) else {
+            let Ok(file_data) = super::zip::read_indexed_zip_member(data, entry, MAX_FILE_SIZE)
+            else {
                 return Ok(false);
             };
             let written = file_data.len() as u64;

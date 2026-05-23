@@ -1105,6 +1105,7 @@ pub(crate) fn find_excessive_file_types(
         FileType::PkgInfo,
         FileType::Plist,
         FileType::Lnk,
+        FileType::Dockerfile,
     ];
     let documents: &[FileType] = &[
         FileType::Pdf,

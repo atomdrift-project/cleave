@@ -285,6 +285,7 @@ mod tests {
             excel_styles_xml: None,
             excel_macrosheet_xml: None,
             vba_project_strings: Vec::new(),
+            max_entry_size: 0,
         }
     }
 

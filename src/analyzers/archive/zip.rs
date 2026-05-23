@@ -14,6 +14,7 @@ use super::guards::{
     sanitize_entry_path, symlink_escapes, CancellableReader, ExtractedMemberMetadata,
     ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
+use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Seek};
@@ -144,6 +145,52 @@ pub(crate) fn crx_zip_offset(data: &[u8]) -> Result<usize> {
         );
     }
     Ok(zip_offset)
+}
+
+/// Read a ZIP member from filefacts central-directory offsets.
+pub(crate) fn read_indexed_zip_member(
+    data: &[u8],
+    entry: &ArchiveEntry,
+    limit: u64,
+) -> Result<Vec<u8>> {
+    let data_offset = entry
+        .data_offset
+        .ok_or_else(|| anyhow::anyhow!("missing ZIP data offset"))?;
+    let compressed_size = entry
+        .compressed_size
+        .ok_or_else(|| anyhow::anyhow!("missing ZIP compressed size"))?;
+    let start =
+        usize::try_from(data_offset).map_err(|e| anyhow::anyhow!("ZIP offset too large: {e}"))?;
+    let compressed_len = usize::try_from(compressed_size)
+        .map_err(|e| anyhow::anyhow!("ZIP compressed size too large: {e}"))?;
+    let end = start
+        .checked_add(compressed_len)
+        .ok_or_else(|| anyhow::anyhow!("ZIP member range overflow"))?;
+    if end > data.len() {
+        anyhow::bail!("ZIP member range exceeds archive size");
+    }
+
+    let compressed = &data[start..end];
+    match entry.compression_method.as_deref() {
+        Some("stored") => {
+            if compressed.len() as u64 > limit {
+                anyhow::bail!("ZIP stored member exceeds read limit");
+            }
+            Ok(compressed.to_vec())
+        }
+        Some("deflate") => {
+            let mut decoder = flate2::read::DeflateDecoder::new(compressed);
+            let mut limited = LimitedReader::new(&mut decoder, limit);
+            let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
+            limited.read_to_end(&mut out)?;
+            if limited.is_limited() {
+                anyhow::bail!("ZIP deflated member exceeds read limit");
+            }
+            Ok(out)
+        }
+        Some(method) => anyhow::bail!("unsupported indexed ZIP compression method: {method}"),
+        None => anyhow::bail!("missing ZIP compression method"),
+    }
 }
 
 /// Extract a CRX (Chrome extension) archive from in-memory data.

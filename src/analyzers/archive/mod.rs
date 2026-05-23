@@ -7,7 +7,7 @@ mod guards_test;
 mod system_packages;
 mod tar;
 pub(crate) mod utils;
-mod zip;
+pub(crate) mod zip;
 
 pub(crate) use guards::HostileArchiveReason;
 pub(crate) use guards::MAX_ZIP_ENTRIES;

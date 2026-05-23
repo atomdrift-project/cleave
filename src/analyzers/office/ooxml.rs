@@ -4,8 +4,11 @@
 //! These are ZIP archives containing XML files and optional VBA project binaries.
 
 use super::vba;
+use crate::types::ArchiveEntry;
 use anyhow::Result;
 use std::io::{Cursor, Read};
+
+const OOXML_ENTRY_READ_LIMIT: u64 = 50 * 1024 * 1024;
 
 /// Parsed OOXML document.
 #[derive(Debug)]
@@ -43,6 +46,8 @@ pub(crate) struct OoxmlDocument {
     pub excel_macrosheet_xml: Option<String>,
     /// Printable strings recovered from vbaProject.bin when present
     pub vba_project_strings: Vec<String>,
+    /// Largest ZIP member uncompressed size.
+    pub max_entry_size: u64,
 }
 
 /// OOXML document subtype.
@@ -93,67 +98,180 @@ pub(crate) struct OoxmlMetadata {
     pub category: Option<String>,
 }
 
-/// Parse an OOXML document.
-pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
-    let cursor = Cursor::new(data);
-    let mut archive = zip::ZipArchive::new(cursor)?;
-    if archive.len() > crate::analyzers::archive::MAX_ZIP_ENTRIES {
-        anyhow::bail!(
-            "OOXML ZIP claims {} entries (max {})",
-            archive.len(),
-            crate::analyzers::archive::MAX_ZIP_ENTRIES
-        );
+/// Read OOXML entries from either a filefacts ZIP index or a local ZIP parser.
+trait OoxmlEntryReader {
+    fn entry_names(&self) -> &[String];
+    fn max_entry_size(&self) -> u64;
+    fn read_entry(&mut self, name: &str) -> Option<Vec<u8>>;
+}
+
+struct ZipArchiveReader<'a> {
+    archive: zip::ZipArchive<Cursor<&'a [u8]>>,
+    entry_names: Vec<String>,
+    max_entry_size: u64,
+}
+
+impl<'a> ZipArchiveReader<'a> {
+    fn new(data: &'a [u8]) -> Result<Self> {
+        let cursor = Cursor::new(data);
+        let mut archive = zip::ZipArchive::new(cursor)?;
+        if archive.len() > crate::analyzers::archive::MAX_ZIP_ENTRIES {
+            anyhow::bail!(
+                "OOXML ZIP claims {} entries (max {})",
+                archive.len(),
+                crate::analyzers::archive::MAX_ZIP_ENTRIES
+            );
+        }
+
+        let mut entry_names = Vec::with_capacity(archive.len());
+        let mut max_entry_size = 0u64;
+        for i in 0..archive.len() {
+            let entry = archive.by_index(i)?;
+            max_entry_size = max_entry_size.max(entry.size());
+            entry_names.push(entry.name().to_string());
+        }
+
+        Ok(Self {
+            archive,
+            entry_names,
+            max_entry_size,
+        })
+    }
+}
+
+impl OoxmlEntryReader for ZipArchiveReader<'_> {
+    fn entry_names(&self) -> &[String] {
+        &self.entry_names
     }
 
-    // Collect entry names
-    let entry_names: Vec<String> = archive.file_names().map(String::from).collect();
+    fn max_entry_size(&self) -> u64 {
+        self.max_entry_size
+    }
 
-    // Detect document type from [Content_Types].xml
-    let doc_subtype = detect_subtype(&mut archive);
+    fn read_entry(&mut self, name: &str) -> Option<Vec<u8>> {
+        let mut entry = self.archive.by_name(name).ok()?;
+        if entry.size() > OOXML_ENTRY_READ_LIMIT {
+            return None;
+        }
+        let mut data = Vec::with_capacity(entry.size() as usize);
+        entry.read_to_end(&mut data).ok()?;
+        Some(data)
+    }
+}
 
-    // Check for VBA project
+struct IndexedZipReader<'a> {
+    data: &'a [u8],
+    entries: &'a [ArchiveEntry],
+    entry_names: Vec<String>,
+    max_entry_size: u64,
+}
+
+impl<'a> IndexedZipReader<'a> {
+    fn new(data: &'a [u8], entries: &'a [ArchiveEntry]) -> Option<Self> {
+        if entries.is_empty() || entries.len() > crate::analyzers::archive::MAX_ZIP_ENTRIES {
+            return None;
+        }
+        let mut entry_names = Vec::with_capacity(entries.len());
+        let mut max_entry_size = 0u64;
+        for entry in entries {
+            entry_names.push(entry.path.clone());
+            max_entry_size = max_entry_size.max(entry.size_bytes);
+        }
+        Some(Self {
+            data,
+            entries,
+            entry_names,
+            max_entry_size,
+        })
+    }
+
+    fn find(&self, name: &str) -> Option<&ArchiveEntry> {
+        self.entries.iter().find(|entry| entry.path == name)
+    }
+}
+
+impl OoxmlEntryReader for IndexedZipReader<'_> {
+    fn entry_names(&self) -> &[String] {
+        &self.entry_names
+    }
+
+    fn max_entry_size(&self) -> u64 {
+        self.max_entry_size
+    }
+
+    fn read_entry(&mut self, name: &str) -> Option<Vec<u8>> {
+        let entry = self.find(name)?;
+        if entry.entry_type.as_deref() == Some("directory") || entry.encrypted {
+            return None;
+        }
+        if entry.size_bytes > OOXML_ENTRY_READ_LIMIT {
+            return None;
+        }
+        crate::analyzers::archive::zip::read_indexed_zip_member(
+            self.data,
+            entry,
+            OOXML_ENTRY_READ_LIMIT,
+        )
+        .ok()
+    }
+}
+
+/// Parse an OOXML document.
+pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
+    let mut reader = ZipArchiveReader::new(data)?;
+    Ok(parse_ooxml_from_reader(&mut reader))
+}
+
+/// Parse an OOXML document, borrowing filefacts's ZIP member index when available.
+pub(crate) fn parse_ooxml_with_archive_entries(
+    data: &[u8],
+    entries: &[ArchiveEntry],
+) -> Result<OoxmlDocument> {
+    if let Some(mut reader) = IndexedZipReader::new(data, entries) {
+        return Ok(parse_ooxml_from_reader(&mut reader));
+    }
+    parse_ooxml(data)
+}
+
+fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument {
+    let entry_names: Vec<String> = reader.entry_names().to_vec();
+    let max_entry_size = reader.max_entry_size();
+
+    let doc_subtype = detect_subtype(reader);
+
     let has_vba = entry_names
         .iter()
         .any(|n| n.to_lowercase().contains("vbaproject.bin"));
 
-    // Extract VBA modules
     let vba_modules = if has_vba {
-        extract_vba_from_ooxml(&mut archive, &entry_names)
+        extract_vba_from_ooxml(reader, &entry_names)
     } else {
         Vec::new()
     };
-    let vba_project_strings = extract_vba_project_strings(&mut archive, &entry_names);
-
-    // Find external references (template injection)
-    let external_refs = find_external_refs(&mut archive, &entry_names);
-
-    // Detect DDE links
-    let dde_links = find_dde_links(&mut archive, &entry_names);
-
-    // Find embedded executables
-    let embedded_executables = find_embedded_executables(&mut archive, &entry_names);
-
-    // Extract metadata
-    let metadata = extract_metadata(&mut archive);
-    let content_types_xml = read_zip_entry(&mut archive, "[Content_Types].xml")
+    let vba_project_strings = extract_vba_project_strings(reader, &entry_names);
+    let external_refs = find_external_refs(reader, &entry_names);
+    let dde_links = find_dde_links(reader, &entry_names);
+    let embedded_executables = find_embedded_executables(reader, &entry_names);
+    let metadata = extract_metadata(reader);
+    let content_types_xml = read_zip_entry(reader, "[Content_Types].xml")
         .map(|bytes| String::from_utf8_lossy(&bytes).into_owned());
     let word_document_xml = match doc_subtype {
-        OoxmlSubtype::Word => read_zip_entry(&mut archive, "word/document.xml")
+        OoxmlSubtype::Word => read_zip_entry(reader, "word/document.xml")
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
     let workbook_xml = match doc_subtype {
-        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/workbook.xml")
+        OoxmlSubtype::Excel => read_zip_entry(reader, "xl/workbook.xml")
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
     let workbook_rels_xml = match doc_subtype {
-        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/_rels/workbook.xml.rels")
+        OoxmlSubtype::Excel => read_zip_entry(reader, "xl/_rels/workbook.xml.rels")
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
     let excel_styles_xml = match doc_subtype {
-        OoxmlSubtype::Excel => read_zip_entry(&mut archive, "xl/styles.xml")
+        OoxmlSubtype::Excel => read_zip_entry(reader, "xl/styles.xml")
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
@@ -161,17 +279,16 @@ pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
         OoxmlSubtype::Excel => entry_names
             .iter()
             .find(|n| n.starts_with("xl/macrosheets/") && n.ends_with(".xml"))
-            .and_then(|name| read_zip_entry(&mut archive, name))
+            .and_then(|name| read_zip_entry(reader, name))
             .map(|bytes| String::from_utf8_lossy(&bytes).into_owned()),
         _ => None,
     };
 
-    // Check for encryption marker
     let has_encryption = entry_names
         .iter()
         .any(|n| n.contains("EncryptedPackage") || n.contains("EncryptionInfo"));
 
-    Ok(OoxmlDocument {
+    OoxmlDocument {
         doc_subtype,
         has_vba,
         vba_modules,
@@ -188,12 +305,13 @@ pub(crate) fn parse_ooxml(data: &[u8]) -> Result<OoxmlDocument> {
         excel_styles_xml,
         excel_macrosheet_xml,
         vba_project_strings,
-    })
+        max_entry_size,
+    }
 }
 
 /// Detect document subtype from [Content_Types].xml.
-fn detect_subtype(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlSubtype {
-    let Some(xml) = read_zip_entry(archive, "[Content_Types].xml") else {
+fn detect_subtype<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlSubtype {
+    let Some(xml) = read_zip_entry(reader, "[Content_Types].xml") else {
         return OoxmlSubtype::Unknown;
     };
 
@@ -210,8 +328,8 @@ fn detect_subtype(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlSubtype 
 }
 
 /// Extract VBA modules from vbaProject.bin within the OOXML archive.
-fn extract_vba_from_ooxml(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+fn extract_vba_from_ooxml<R: OoxmlEntryReader>(
+    reader: &mut R,
     entry_names: &[String],
 ) -> Vec<vba::VbaModule> {
     // Find the vbaProject.bin entry
@@ -229,7 +347,7 @@ fn extract_vba_from_ooxml(
         None => return Vec::new(),
     };
 
-    let Some(vba_data) = read_zip_entry(archive, &vba_path) else {
+    let Some(vba_data) = read_zip_entry(reader, &vba_path) else {
         return Vec::new();
     };
 
@@ -243,8 +361,8 @@ fn extract_vba_from_ooxml(
     }
 }
 
-fn extract_vba_project_strings(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+fn extract_vba_project_strings<R: OoxmlEntryReader>(
+    reader: &mut R,
     entry_names: &[String],
 ) -> Vec<String> {
     let vba_entry = entry_names
@@ -258,7 +376,7 @@ fn extract_vba_project_strings(
     let Some(vba_path) = vba_entry else {
         return Vec::new();
     };
-    let Some(vba_data) = read_zip_entry(archive, vba_path) else {
+    let Some(vba_data) = read_zip_entry(reader, vba_path) else {
         return Vec::new();
     };
     extract_ascii_strings(&vba_data, 4)
@@ -287,8 +405,8 @@ fn extract_ascii_strings(data: &[u8], min_len: usize) -> Vec<String> {
 ///
 /// Template injection attacks use `TargetMode="External"` in .rels files
 /// to fetch remote templates containing malicious macros.
-fn find_external_refs(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+fn find_external_refs<R: OoxmlEntryReader>(
+    reader: &mut R,
     entry_names: &[String],
 ) -> Vec<ExternalRef> {
     let mut refs = Vec::new();
@@ -300,7 +418,7 @@ fn find_external_refs(
         .collect();
 
     for rels_path in &rels_entries {
-        let Some(data) = read_zip_entry(archive, rels_path) else {
+        let Some(data) = read_zip_entry(reader, rels_path) else {
             continue;
         };
 
@@ -333,10 +451,7 @@ fn find_external_refs(
 /// Detect DDE (Dynamic Data Exchange) field codes in document XML.
 ///
 /// DDE is used in attacks to execute commands without macros.
-fn find_dde_links(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
-    entry_names: &[String],
-) -> Vec<String> {
+fn find_dde_links<R: OoxmlEntryReader>(reader: &mut R, entry_names: &[String]) -> Vec<String> {
     let mut dde_links = Vec::new();
 
     // Check Word documents
@@ -349,7 +464,7 @@ fn find_dde_links(
         .collect();
 
     for entry_path in &doc_entries {
-        let Some(data) = read_zip_entry(archive, entry_path) else {
+        let Some(data) = read_zip_entry(reader, entry_path) else {
             continue;
         };
 
@@ -380,8 +495,8 @@ fn find_dde_links(
 }
 
 /// Find embedded objects containing PE/ELF executables.
-fn find_embedded_executables(
-    archive: &mut zip::ZipArchive<Cursor<&[u8]>>,
+fn find_embedded_executables<R: OoxmlEntryReader>(
+    reader: &mut R,
     entry_names: &[String],
 ) -> Vec<String> {
     let mut found = Vec::new();
@@ -393,7 +508,7 @@ fn find_embedded_executables(
         .collect();
 
     for entry_path in &embed_entries {
-        let Some(data) = read_zip_entry(archive, entry_path) else {
+        let Some(data) = read_zip_entry(reader, entry_path) else {
             continue;
         };
 
@@ -427,11 +542,11 @@ fn find_embedded_executables(
 }
 
 /// Extract metadata from docProps/core.xml and docProps/app.xml.
-fn extract_metadata(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlMetadata {
+fn extract_metadata<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlMetadata {
     let mut meta = OoxmlMetadata::default();
 
     // Parse core.xml (Dublin Core metadata)
-    if let Some(data) = read_zip_entry(archive, "docProps/core.xml") {
+    if let Some(data) = read_zip_entry(reader, "docProps/core.xml") {
         let text = String::from_utf8_lossy(&data);
         if let Ok(doc) = roxmltree::Document::parse(&text) {
             for node in doc.descendants() {
@@ -452,7 +567,7 @@ fn extract_metadata(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlMetada
     }
 
     // Parse app.xml (application metadata)
-    if let Some(data) = read_zip_entry(archive, "docProps/app.xml") {
+    if let Some(data) = read_zip_entry(reader, "docProps/app.xml") {
         let text = String::from_utf8_lossy(&data);
         if let Ok(doc) = roxmltree::Document::parse(&text) {
             for node in doc.descendants() {
@@ -469,15 +584,8 @@ fn extract_metadata(archive: &mut zip::ZipArchive<Cursor<&[u8]>>) -> OoxmlMetada
 }
 
 /// Read a ZIP entry by name, returning None on any error.
-fn read_zip_entry(archive: &mut zip::ZipArchive<Cursor<&[u8]>>, name: &str) -> Option<Vec<u8>> {
-    let mut entry = archive.by_name(name).ok()?;
-    // Limit to 50MB to prevent zip bombs
-    if entry.size() > 50 * 1024 * 1024 {
-        return None;
-    }
-    let mut data = Vec::with_capacity(entry.size() as usize);
-    entry.read_to_end(&mut data).ok()?;
-    Some(data)
+fn read_zip_entry<R: OoxmlEntryReader>(reader: &mut R, name: &str) -> Option<Vec<u8>> {
+    reader.read_entry(name)
 }
 
 #[cfg(test)]
@@ -490,5 +598,50 @@ mod tests {
         assert_eq!(OoxmlSubtype::Excel.as_str(), "xlsx");
         assert_eq!(OoxmlSubtype::PowerPoint.as_str(), "pptx");
         assert_eq!(OoxmlSubtype::Unknown.as_str(), "ooxml");
+    }
+
+    fn tiny_docx() -> anyhow::Result<Vec<u8>> {
+        use std::io::Write;
+
+        let mut out = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut out);
+            let options = zip::write::FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("[Content_Types].xml", options)?;
+            zip.write_all(br#"<Types><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>"#)?;
+            zip.start_file("word/document.xml", options)?;
+            zip.write_all(br#"<w:document><w:body><w:p>Hello</w:p></w:body></w:document>"#)?;
+            zip.start_file("word/_rels/document.xml.rels", options)?;
+            zip.write_all(br#"<Relationships><Relationship TargetMode="External" Target="https://example.invalid/template.dotm" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/attachedTemplate"/></Relationships>"#)?;
+            zip.start_file("docProps/app.xml", options)?;
+            zip.write_all(br#"<Properties><Application>Word</Application><Company>ACME</Company></Properties>"#)?;
+            zip.finish()?;
+        }
+        Ok(out.into_inner())
+    }
+
+    #[test]
+    fn parses_ooxml_from_filefacts_zip_index() -> anyhow::Result<()> {
+        let data = tiny_docx()?;
+        let path = std::path::Path::new("sample.docx");
+        let ctx = crate::analysis_context::AnalysisContext::open(path, &data)?;
+        let entries = ctx.archive_entries();
+        assert!(
+            !entries.is_empty(),
+            "filefacts should expose OOXML ZIP entries"
+        );
+        assert!(entries.iter().any(|entry| entry.data_offset.is_some()));
+
+        let doc = parse_ooxml_with_archive_entries(&data, &entries)?;
+        assert_eq!(doc.doc_subtype, OoxmlSubtype::Word);
+        assert!(doc.max_entry_size > 0);
+        assert_eq!(doc.metadata.application.as_deref(), Some("Word"));
+        assert_eq!(doc.external_refs.len(), 1);
+        assert_eq!(
+            doc.external_refs[0].target,
+            "https://example.invalid/template.dotm"
+        );
+        Ok(())
     }
 }

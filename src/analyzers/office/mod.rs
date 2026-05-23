@@ -13,7 +13,7 @@ pub(crate) mod vba_symbols;
 use super::{analyzer_for_file_type_arc, AnalysisInput, Analyzer, FileType};
 use crate::capabilities::CapabilityMapper;
 use crate::types::office_metrics::{OleMetrics, OoxmlMetrics, XlmMetrics};
-use crate::types::{AnalysisReport, Criticality, Finding, FindingKind, TargetInfo};
+use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, FindingKind, TargetInfo};
 
 /// Cross-format counts surfaced from a parsed OLE2/OOXML document.
 ///
@@ -91,6 +91,16 @@ impl OfficeAnalyzer {
         hasher.update(data);
         let sha256 = format!("{:x}", hasher.finalize());
 
+        let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+        let office_archive_entries = if matches!(file_type, FileType::Ooxml) {
+            office_ctx
+                .as_ref()
+                .map(crate::analysis_context::AnalysisContext::archive_entries)
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
         // Route to appropriate parser
         let (
             type_str,
@@ -108,7 +118,8 @@ impl OfficeAnalyzer {
                 (t, f, v, e, Some(om), None, None, cc, kv)
             }
             FileType::Ooxml => {
-                let (t, f, v, om, xm, cc, kv) = self.analyze_ooxml(data, file_path);
+                let (t, f, v, om, xm, cc, kv) =
+                    self.analyze_ooxml(data, file_path, &office_archive_entries);
                 (t, f, v, Vec::new(), None, om, xm, cc, kv)
             }
             _ => (
@@ -147,16 +158,7 @@ impl OfficeAnalyzer {
             report.values_tree = Some(Box::new(values_tree));
         }
 
-        // Open the shared filefacts-side parse for this document so the
-        // VBA symbol surface comes from `parsed.imports()` /
-        // `parsed.functions()` instead of a second regex pass.
-        // Filefacts already pre-decompressed each VBA module and ran
-        // the extractor across all of them; the typed views carry
-        // every Declare / CreateObject / GetObject / Sub|Function
-        // filefacts found, tagged `source: "vba-*"`. Returns `None`
-        // for files filefacts can't open (cleave still falls back to
-        // emitting per-module shape stats only).
-        let office_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+        // Reuse the shared filefacts-side parse opened before structural parsing.
 
         // Surface VBA-extracted imports/functions on the parent report
         // BEFORE the capability mapper runs, so `type: symbol` traits with
@@ -992,6 +994,7 @@ impl OfficeAnalyzer {
         &self,
         data: &[u8],
         file_path: &Path,
+        archive_entries: &[ArchiveEntry],
     ) -> (
         String,
         Vec<Finding>,
@@ -1003,7 +1006,7 @@ impl OfficeAnalyzer {
     ) {
         let mut findings = Vec::new();
 
-        let doc = match ooxml::parse_ooxml(data) {
+        let doc = match ooxml::parse_ooxml_with_archive_entries(data, archive_entries) {
             Ok(doc) => doc,
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to parse OOXML document");
@@ -1404,7 +1407,7 @@ impl OfficeAnalyzer {
             .count() as u32;
         let ooxml_metrics = OoxmlMetrics {
             entry_count: doc.entry_names.len() as u32,
-            max_entry_size: 0, // populated when zip stat exposes uncompressed sizes
+            max_entry_size: doc.max_entry_size,
             image_part_count,
             embedded_part_count,
             suspicious_extension_count,

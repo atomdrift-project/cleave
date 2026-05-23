@@ -1424,6 +1424,10 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     "micro-behaviors/communications/http/ip-discovery/",
     // Shell language markers are intentionally shared across scripts, source, and binaries
     "micro-behaviors/process/create/shell/lang/",
+    // Download-execute dropper patterns are malicious whether they appear in a
+    // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
+    // plist ProgramArguments, systemd ExecStart, etc.
+    "objectives/command-and-control/dropper/delivery/download-execute/",
 ];
 
 /// Returns the effective platform count for a trait.

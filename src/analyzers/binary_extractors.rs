@@ -16,6 +16,7 @@
 
 use crate::types::{AnalysisReport, Import};
 use std::collections::BTreeSet;
+use std::sync::OnceLock;
 
 // ---------------------------------------------------------------------------
 // ELF `.comment` section
@@ -1480,14 +1481,15 @@ pub(crate) fn detect_rust_mangling(
     imports: &[Import],
     exports: &[crate::types::Export],
 ) -> Option<&'static str> {
-    use regex::Regex;
-    let legacy_re = Regex::new(r"^_?ZN.*17h[0-9a-f]{16}E$").ok()?;
+    let legacy_re = legacy_rust_mangling_regex()?;
     let mut saw_legacy = false;
     let check = |s: &str, saw_legacy: &mut bool| -> bool {
         if s.starts_with("_R") && s.len() > 4 {
             return true; // v0
         }
-        if legacy_re.is_match(s) {
+        // Cheap byte-level prefilter: only fall through to the regex
+        // for symbols that could plausibly match `_?ZN.*17h…E`.
+        if is_legacy_rust_mangling_candidate(s) && legacy_re.is_match(s) {
             *saw_legacy = true;
         }
         false
@@ -1507,6 +1509,18 @@ pub(crate) fn detect_rust_mangling(
     } else {
         None
     }
+}
+
+fn is_legacy_rust_mangling_candidate(s: &str) -> bool {
+    let s = s.strip_prefix('_').unwrap_or(s);
+    s.starts_with("ZN") && s.ends_with('E') && s.as_bytes().windows(3).any(|w| w == b"17h")
+}
+
+fn legacy_rust_mangling_regex() -> Option<&'static regex::Regex> {
+    static LEGACY_RE: OnceLock<Option<regex::Regex>> = OnceLock::new();
+    LEGACY_RE
+        .get_or_init(|| regex::Regex::new(r"^_?ZN.*17h[0-9a-f]{16}E$").ok())
+        .as_ref()
 }
 
 /// Whether the ELF carries a `.rustc` section. Set on rustc-built

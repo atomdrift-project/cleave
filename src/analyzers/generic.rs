@@ -94,6 +94,7 @@ impl GenericAnalyzer {
             FileType::Html => "html",
             FileType::Markdown => "markdown",
             FileType::Makefile => "makefile",
+            FileType::Dockerfile => "dockerfile",
             FileType::Text => "text",
             FileType::Data => "data",
             FileType::Pdf => "pdf",
@@ -149,6 +150,11 @@ impl GenericAnalyzer {
         tracing::debug!("GenericAnalyzer: Target created in {:?}", start.elapsed());
 
         let mut report = AnalysisReport::new(target);
+        let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
+        let source_ctx = crate::analysis_context::AnalysisContext::open(file_path, eval_bytes).ok();
+        let source_ast = source_ctx
+            .as_ref()
+            .and_then(crate::analysis_context::AnalysisContext::source_ast);
 
         // `pyc.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
@@ -174,28 +180,16 @@ impl GenericAnalyzer {
                 &description,
             ));
 
-        // Parse with tree-sitter ONCE (don't parse multiple times for the same content)
+        // Parse with tree-sitter once. Prefer filefacts's cached tree when it
+        // has one for this source type; otherwise keep the local parser as a
+        // cold fallback for languages not yet covered by filefacts.
         let t_tree = std::time::Instant::now();
-        let tree = if let Some((language, node_types)) = self.treesitter_config() {
-            // Parse once and reuse for symbols, imports, and strings
-            let mut parser = tree_sitter::Parser::new();
-            if parser.set_language(&language).is_ok() {
-                if let Some(tree) = parser.parse(content, None) {
-                    // Extract function calls for capability matching (type: symbol conditions)
-                    symbol_extraction::extract_symbols_from_tree(
-                        &tree,
-                        content,
-                        node_types,
-                        &mut report,
-                    );
-                    // Also extract actual module imports for metadata/import/ findings
-                    symbol_extraction::extract_imports_from_tree(
-                        &tree,
-                        content,
-                        &self.file_type,
-                        &mut report,
-                    );
-                    Some(tree)
+        let treesitter_config = self.treesitter_config();
+        let owned_tree = if source_ast.is_none() {
+            if let Some((ref language, _)) = treesitter_config {
+                let mut parser = tree_sitter::Parser::new();
+                if parser.set_language(language).is_ok() {
+                    parser.parse(content, None)
                 } else {
                     None
                 }
@@ -205,6 +199,24 @@ impl GenericAnalyzer {
         } else {
             None
         };
+        let tree = source_ast.map_or_else(|| owned_tree.as_ref(), |ast| Some(ast.tree));
+        let tree_source = source_ast.map_or(content, |ast| ast.source);
+        if let (Some(tree), Some((_, node_types))) = (tree, treesitter_config) {
+            // Extract function calls for capability matching (type: symbol conditions)
+            symbol_extraction::extract_symbols_from_tree(
+                tree,
+                tree_source,
+                node_types,
+                &mut report,
+            );
+            // Also extract actual module imports for metadata/import/ findings
+            symbol_extraction::extract_imports_from_tree(
+                tree,
+                tree_source,
+                &self.file_type,
+                &mut report,
+            );
+        }
         tracing::debug!(
             "GenericAnalyzer: Tree-sitter parsing completed in {:?}",
             t_tree.elapsed()
@@ -225,7 +237,7 @@ impl GenericAnalyzer {
             let t_strings = std::time::Instant::now();
             if tree.is_some() {
                 // Tree-sitter available: use AST-based extraction (more accurate)
-                self.extract_strings(content, tree.as_ref(), &mut report);
+                self.extract_strings(content, tree, &mut report);
                 tracing::debug!(
                     "GenericAnalyzer: Tree-sitter string extraction completed in {:?}",
                     t_strings.elapsed()
@@ -279,7 +291,7 @@ impl GenericAnalyzer {
                 );
             } else {
                 // No tree-sitter and no stng: fallback to regex (inefficient, shouldn't happen)
-                self.extract_strings(content, tree.as_ref(), &mut report);
+                self.extract_strings(content, tree, &mut report);
                 tracing::warn!("GenericAnalyzer: Fallback regex string extraction in {:?} (stng strings should be passed)", t_strings.elapsed());
             }
 
@@ -328,13 +340,16 @@ impl GenericAnalyzer {
         // `EF BF BD`) and shifts every offset, corrupting filefacts's
         // header reads and any other byte-precise probe.
         let t_eval = std::time::Instant::now();
-        let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
-        self.capability_mapper.evaluate_and_merge_findings(
-            &mut report,
-            eval_bytes,
-            tree.as_ref(),
-            None,
-        );
+        self.capability_mapper
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                eval_bytes,
+                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
         tracing::debug!(
             "GenericAnalyzer: Rule evaluation completed in {:?}",
             t_eval.elapsed()

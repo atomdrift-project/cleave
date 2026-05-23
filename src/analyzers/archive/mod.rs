@@ -15,8 +15,8 @@ pub(crate) use guards::MAX_ZIP_ENTRIES;
 use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, FileAnalysis, Finding, FindingCounts, FindingKind,
-    ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
+    AnalysisReport, ArchiveEntry, Criticality, Evidence, FileAnalysis, Finding, FindingCounts,
+    FindingKind, ReportSummary, SampleExtractionConfig, StructuralFeature, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -741,6 +741,7 @@ impl ArchiveAnalyzer {
         };
 
         let mut report = AnalysisReport::new(target);
+        let mut filefacts_archive_entries: Vec<ArchiveEntry> = Vec::new();
 
         // Open filefacts once on the host archive bytes and merge its
         // typed values/metrics into the report. The capability
@@ -760,6 +761,7 @@ impl ArchiveAnalyzer {
                 .map(|(k, v)| (k.to_string(), v))
                 .collect();
             report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
+            filefacts_archive_entries = ctx.archive_entries();
             drop(ctx);
             if let serde_json::Value::Object(map) = values_tree {
                 for (namespace, subtree) in map {
@@ -777,16 +779,12 @@ impl ArchiveAnalyzer {
         }
 
         if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
-            // Seed `archive_contents` with the member listing. `archive.*`
-            // metrics (file_count, compression_ratio, hidden_file_count,
-            // path_traversal_count, …) are produced by filefacts's central-
-            // directory walker and flow into `report.filefacts_metrics` via
-            // `AnalysisContext` — no cleave-side flattening here.
-            if let Ok(mut seeded_entries) =
-                zip::inspect_zip_metadata_from_reader(std::io::Cursor::new(data))
-            {
-                report.archive_contents.append(&mut seeded_entries);
-            }
+            report.archive_contents.extend(
+                filefacts_archive_entries
+                    .iter()
+                    .filter(|entry| entry.entry_type.as_deref() != Some("directory"))
+                    .cloned(),
+            );
         }
 
         if matches!(file_type, FileType::Chm) {
@@ -820,10 +818,34 @@ impl ArchiveAnalyzer {
             return Ok(report);
         }
 
-        if matches!(file_type, FileType::Zip | FileType::Jar)
-            && !zip_has_encrypted_entries(data).unwrap_or(false)
-        {
-            self.analyze_zip_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+        let archive_fits_memory = data.len() as u64 <= self.max_memory_file_size;
+        let zip_family_in_memory =
+            matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx)
+                && archive_fits_memory
+                && !filefacts_archive_entries
+                    .iter()
+                    .any(|entry| entry.encrypted);
+        if zip_family_in_memory {
+            if matches!(file_type, FileType::Crx) {
+                let zip_offset = zip::crx_zip_offset(data)?;
+                self.analyze_zip_archive_in_memory(
+                    &data[zip_offset..],
+                    archive_path,
+                    &mut report,
+                    start,
+                    &guard,
+                    &[],
+                )?;
+            } else {
+                self.analyze_zip_archive_in_memory(
+                    data,
+                    archive_path,
+                    &mut report,
+                    start,
+                    &guard,
+                    &filefacts_archive_entries,
+                )?;
+            }
             let member_metadata = guard.take_member_metadata();
             if !member_metadata.is_empty() {
                 merge_archive_member_metadata(&mut report, member_metadata);
@@ -1121,31 +1143,6 @@ impl ArchiveAnalyzer {
             _ => anyhow::bail!("Unsupported archive type: {:?}", file_type),
         }
     }
-}
-
-fn zip_has_encrypted_entries(data: &[u8]) -> Result<bool> {
-    let mut archive =
-        ZipArchive::new(std::io::Cursor::new(data)).context("Failed to inspect ZIP encryption")?;
-    for i in 0..archive.len() {
-        // `by_index(i)` without a password returns
-        // `UnsupportedArchive(PASSWORD_REQUIRED)` on encrypted entries,
-        // so propagating the `?` here would misclassify encrypted
-        // archives as "not encrypted" once the caller does
-        // `.unwrap_or(false)`. Treat that specific error as a
-        // positive encryption signal; only bail on truly malformed
-        // archives.
-        match archive.by_index(i) {
-            Ok(entry) if entry.encrypted() => return Ok(true),
-            Ok(_) => continue,
-            Err(::zip::result::ZipError::UnsupportedArchive(msg))
-                if msg == ::zip::result::ZipError::PASSWORD_REQUIRED =>
-            {
-                return Ok(true);
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(false)
 }
 
 impl Default for ArchiveAnalyzer {
@@ -2063,6 +2060,14 @@ composite_rules:
             .archive_contents
             .iter()
             .any(|e| e.path.contains("manifest.json")));
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .iter()
+                .any(|t| t == "in_memory_zip"),
+            "small CRX archives should use the in-memory ZIP member path"
+        );
     }
 
     #[test]
@@ -2963,6 +2968,45 @@ traits:
         // Second write with same data — should return same path without rewriting
         let path2 = config.extract(sha256, "file.bin", data);
         assert_eq!(path1, path2);
+    }
+
+    #[test]
+    fn test_small_jar_uses_in_memory_selector() {
+        #[allow(clippy::expect_used)]
+        let temp_dir = tempfile::tempdir().expect("create temp dir");
+        let jar_path = temp_dir.path().join("sample.jar");
+        let class_bytes =
+            std::fs::read("tests/fixtures/java/HelloWorld.class").expect("java fixture present");
+
+        {
+            let file = File::create(&jar_path).expect("create jar");
+            let mut zip = zip::ZipWriter::new(file);
+            let options = zip::write::FileOptions::<()>::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("META-INF/MANIFEST.MF", options).unwrap();
+            std::io::Write::write_all(&mut zip, b"Manifest-Version: 1.0\nMain-Class: HelloWorld\n")
+                .unwrap();
+            zip.start_file("HelloWorld.class", options).unwrap();
+            std::io::Write::write_all(&mut zip, &class_bytes).unwrap();
+            zip.start_file("com/google/Benign.class", options).unwrap();
+            std::io::Write::write_all(&mut zip, &class_bytes).unwrap();
+            zip.finish().unwrap();
+        }
+
+        let analyzer = ArchiveAnalyzer::new();
+        let report = analyzer.analyze(&jar_path).expect("analyze jar");
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .iter()
+                .any(|t| t == "in_memory_jar"),
+            "small JAR archives should use the in-memory JAR selector"
+        );
+        assert!(report
+            .archive_contents
+            .iter()
+            .any(|entry| entry.path.ends_with("HelloWorld.class")));
     }
 
     #[test]

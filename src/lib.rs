@@ -1397,29 +1397,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // When filefacts can't open the bytes, fall back to the
             // analyzer's own bytes-only entry point so the malformed
             // signal is still surfaced.
-            let (struct_result, filefacts_view): (
-                Result<AnalysisReport, anyhow::Error>,
-                Option<crate::types::FilefactsView>,
-            ) = match crate::analysis_context::AnalysisContext::open(path, arch_data) {
-                Ok(ctx) => {
-                    let report = analyzer.analyze_structural_with_ctx(
+            let ctx = crate::analysis_context::AnalysisContext::open(path, arch_data).ok();
+            let struct_result: Result<AnalysisReport, anyhow::Error> =
+                if let Some(ctx) = ctx.as_ref() {
+                    Ok(analyzer.analyze_structural_with_ctx(
                         path,
                         arch_data,
                         input.sha256.clone(),
-                        &ctx,
-                    );
-                    let view = crate::types::FilefactsView::from_ctx(&ctx);
-                    (Ok(report), Some(view))
-                }
-                Err(_) => (
-                    Ok(analyzer.analyze_structural(path, arch_data, input.sha256.clone())),
-                    None,
-                ),
-            };
+                        ctx,
+                    ))
+                } else {
+                    Ok(analyzer.analyze_structural(path, arch_data, input.sha256.clone()))
+                };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
-            report.filefacts = filefacts_view;
+            report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
             analyzer.apply_fat_metadata(&mut report, file_data);
 
             // For FAT binaries, open each non-preferred arch slice as
@@ -1450,7 +1443,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_data,
-                None,
+                crate::capabilities::AnalysisBorrow::with_filefacts(
+                    None,
+                    if is_fat { None } else { ctx.as_ref() },
+                ),
                 Some(&inline_yara),
                 Some(raw_regex),
                 fat_arch_ranges.as_deref(),
@@ -1483,29 +1479,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             // When filefacts can't open the bytes, fall back to the
             // analyzer's own bytes-only entry point so the malformed
             // signal is still surfaced.
-            let (struct_result, filefacts_view): (
-                Result<AnalysisReport, anyhow::Error>,
-                Option<crate::types::FilefactsView>,
-            ) = match crate::analysis_context::AnalysisContext::open(path, file_data) {
-                Ok(ctx) => {
-                    let report = analyzer.analyze_structural_with_ctx(
+            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+            let struct_result: Result<AnalysisReport, anyhow::Error> =
+                if let Some(ctx) = ctx.as_ref() {
+                    Ok(analyzer.analyze_structural_with_ctx(
                         path,
                         file_data,
                         input.sha256.as_deref(),
-                        &ctx,
-                    );
-                    let view = crate::types::FilefactsView::from_ctx(&ctx);
-                    (Ok(report), Some(view))
-                }
-                Err(_) => (
-                    Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone())),
-                    None,
-                ),
-            };
+                        ctx,
+                    ))
+                } else {
+                    Ok(analyzer.analyze_structural(path, file_data, input.sha256.clone()))
+                };
             let raw_regex =
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
-            report.filefacts = filefacts_view;
+            report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read ELF facts directly from
@@ -1517,7 +1506,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
-                None,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, ctx.as_ref()),
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,
@@ -1577,7 +1566,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             capability_mapper.evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 file_data,
-                None,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
                 Some(&inline_yara),
                 Some(raw_regex),
                 None,

@@ -85,6 +85,65 @@ struct MemoryArchiveMember {
     sha256: String,
 }
 
+fn find_main_class_in_members(members: &[MemoryArchiveMember]) -> Option<String> {
+    let manifest = members
+        .iter()
+        .find(|m| m.relative_path.eq_ignore_ascii_case("META-INF/MANIFEST.MF"))?;
+    let text = std::str::from_utf8(&manifest.data).ok()?;
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix("Main-Class:") {
+            return Some(rest.trim().to_string());
+        }
+    }
+    None
+}
+
+fn is_interesting_jar_non_class(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    !lower.contains("meta-inf/") || lower.ends_with("manifest.mf") || lower.ends_with(".xml")
+}
+
+fn read_indexed_zip_member(data: &[u8], entry: &ArchiveEntry, limit: u64) -> Result<Vec<u8>> {
+    let data_offset = entry
+        .data_offset
+        .ok_or_else(|| anyhow::anyhow!("missing ZIP data offset"))?;
+    let compressed_size = entry
+        .compressed_size
+        .ok_or_else(|| anyhow::anyhow!("missing ZIP compressed size"))?;
+    let start =
+        usize::try_from(data_offset).map_err(|e| anyhow::anyhow!("ZIP offset too large: {e}"))?;
+    let compressed_len = usize::try_from(compressed_size)
+        .map_err(|e| anyhow::anyhow!("ZIP compressed size too large: {e}"))?;
+    let end = start
+        .checked_add(compressed_len)
+        .ok_or_else(|| anyhow::anyhow!("ZIP member range overflow"))?;
+    if end > data.len() {
+        anyhow::bail!("ZIP member range exceeds archive size");
+    }
+
+    let compressed = &data[start..end];
+    match entry.compression_method.as_deref() {
+        Some("stored") => {
+            if compressed.len() as u64 > limit {
+                anyhow::bail!("ZIP stored member exceeds read limit");
+            }
+            Ok(compressed.to_vec())
+        }
+        Some("deflate") => {
+            let mut decoder = flate2::read::DeflateDecoder::new(compressed);
+            let mut limited = LimitedReader::new(&mut decoder, limit);
+            let mut out = Vec::with_capacity(entry.size_bytes.min(16 * 1024 * 1024) as usize);
+            limited.read_to_end(&mut out)?;
+            if limited.is_limited() {
+                anyhow::bail!("ZIP deflated member exceeds read limit");
+            }
+            Ok(out)
+        }
+        Some(method) => anyhow::bail!("unsupported indexed ZIP compression method: {method}"),
+        None => anyhow::bail!("missing ZIP compression method"),
+    }
+}
+
 /// Total number of successful archive member analyses (cumulative, for logging)
 static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
@@ -514,6 +573,214 @@ impl ArchiveAnalyzer {
         result
     }
 
+    fn analyze_zip_archive_from_filefacts_index(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+        indexed_entries: &[ArchiveEntry],
+    ) -> Result<bool> {
+        if indexed_entries.is_empty() {
+            return Ok(false);
+        }
+        if indexed_entries.len() > super::MAX_ZIP_ENTRIES {
+            anyhow::bail!(
+                "ZIP central directory claims {} entries (max {})",
+                indexed_entries.len(),
+                super::MAX_ZIP_ENTRIES
+            );
+        }
+
+        for entry in indexed_entries {
+            if entry.entry_type.as_deref() == Some("directory") {
+                continue;
+            }
+            if entry.data_offset.is_none()
+                || entry.compressed_size.is_none()
+                || entry.compression_method.is_none()
+            {
+                return Ok(false);
+            }
+            if !matches!(
+                entry.compression_method.as_deref(),
+                Some("stored" | "deflate")
+            ) {
+                return Ok(false);
+            }
+        }
+
+        let fake_root = Path::new("/__cleave_archive__");
+        let stream_members = rayon::current_thread_index().is_some();
+        let mut members = if stream_members {
+            Vec::new()
+        } else {
+            Vec::with_capacity(indexed_entries.len().min(10_000))
+        };
+        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
+            Vec::with_capacity(indexed_entries.len().min(10_000))
+        } else {
+            Vec::new()
+        };
+        let mut total_streamed: usize = 0;
+
+        for entry in indexed_entries {
+            if self.is_cancelled() {
+                anyhow::bail!("Analysis cancelled during ZIP member read");
+            }
+            if !guard.check_file_count() {
+                anyhow::bail!(
+                    "Exceeded maximum file count ({})",
+                    super::guards::MAX_FILE_COUNT
+                );
+            }
+
+            let entry_name = entry.path.clone();
+            if entry_name.len() > MAX_PATH_COMPONENT_LEN {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                    len: entry_name.len(),
+                    preview: entry_name.chars().take(80).collect(),
+                });
+            }
+
+            let Some(outpath) = sanitize_entry_path(&entry_name, fake_root) else {
+                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry_name));
+                continue;
+            };
+            let relative_path = outpath
+                .strip_prefix(fake_root)
+                .unwrap_or(&outpath)
+                .to_string_lossy()
+                .replace('\\', "/");
+            let entry_type_label = entry.entry_type.as_deref().unwrap_or("regular");
+
+            if entry_type_label == "directory" {
+                continue;
+            }
+
+            if entry.encrypted {
+                anyhow::bail!("Password required to decrypt file");
+            }
+
+            if entry_type_label == "symlink" {
+                let target = read_indexed_zip_member(data, entry, 4096)
+                    .ok()
+                    .and_then(|bytes| String::from_utf8(bytes).ok());
+                if let Some(target_str) = target.as_deref() {
+                    if symlink_escapes(&outpath, target_str, fake_root) {
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{} -> {}",
+                            entry_name, target_str
+                        )));
+                    }
+                }
+                guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                    archive_path: relative_path,
+                    compressed_size: entry.compressed_size,
+                    compression_method: entry.compression_method.clone(),
+                    mtime_unix: entry.mtime_unix,
+                    mode_octal: entry.mode_octal,
+                    uid: entry.uid,
+                    gid: entry.gid,
+                    uname: entry.uname.clone(),
+                    gname: entry.gname.clone(),
+                    entry_type: Some(entry_type_label.to_string()),
+                    linkname: target,
+                    host_os: entry.host_os.clone(),
+                });
+                continue;
+            }
+
+            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                archive_path: relative_path.clone(),
+                compressed_size: entry.compressed_size,
+                compression_method: entry.compression_method.clone(),
+                mtime_unix: entry.mtime_unix,
+                mode_octal: entry.mode_octal,
+                uid: entry.uid,
+                gid: entry.gid,
+                uname: entry.uname.clone(),
+                gname: entry.gname.clone(),
+                entry_type: Some(entry_type_label.to_string()),
+                linkname: entry.linkname.clone(),
+                host_os: entry.host_os.clone(),
+            });
+
+            let compressed = entry.compressed_size.unwrap_or(0);
+            let uncompressed = entry.size_bytes;
+            if !guard.check_compression_ratio(compressed, uncompressed) {
+                continue;
+            }
+            if uncompressed > MAX_FILE_SIZE {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: entry_name,
+                    size: uncompressed,
+                });
+                continue;
+            }
+
+            let Ok(file_data) = read_indexed_zip_member(data, entry, MAX_FILE_SIZE) else {
+                return Ok(false);
+            };
+            let written = file_data.len() as u64;
+            if !guard.check_bytes(written, &relative_path) {
+                anyhow::bail!("Exceeded maximum total extraction size");
+            }
+
+            let logical_path = Path::new(&relative_path);
+            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, &file_data);
+            let sha256 = calculate_sha256(&file_data);
+            let member = MemoryArchiveMember {
+                relative_path,
+                data: file_data,
+                file_type,
+                sha256,
+            };
+            if stream_members {
+                if let Some(result) = self.analyze_one_member(&member, "filefacts ZIP index") {
+                    streamed_results.push(result);
+                }
+                total_streamed += 1;
+            } else {
+                members.push(member);
+            }
+        }
+
+        if stream_members {
+            self.aggregate_member_results(
+                streamed_results,
+                report,
+                start,
+                "ZIP archive",
+                vec![
+                    "archive_analyzer".to_string(),
+                    "filefacts_zip_index".to_string(),
+                ],
+                total_streamed,
+            );
+        } else if matches!(
+            crate::analyzers::detect_file_type(archive_path),
+            Ok(FileType::Jar)
+        ) {
+            self.analyze_jar_members_in_memory(&members, archive_path, report, start);
+        } else {
+            self.analyze_in_memory_members(
+                &members,
+                archive_path,
+                report,
+                start,
+                "ZIP archive",
+                "filefacts ZIP index",
+                vec![
+                    "archive_analyzer".to_string(),
+                    "filefacts_zip_index".to_string(),
+                ],
+            );
+        }
+        Ok(true)
+    }
+
     /// Analyze ZIP/JAR-style archives without materializing the whole archive
     /// tree under `/tmp`. Members are read into bounded in-memory buffers and
     /// handed to the same member analyzers used by the extracted-directory path.
@@ -524,7 +791,19 @@ impl ArchiveAnalyzer {
         report: &mut AnalysisReport,
         start: std::time::Instant,
         guard: &ExtractionGuard,
+        indexed_entries: &[ArchiveEntry],
     ) -> Result<()> {
+        if self.analyze_zip_archive_from_filefacts_index(
+            data,
+            archive_path,
+            report,
+            start,
+            guard,
+            indexed_entries,
+        )? {
+            return Ok(());
+        }
+
         let mut archive = ::zip::ZipArchive::new(std::io::Cursor::new(data))
             .map_err(|e| anyhow::anyhow!("Failed to read ZIP archive: {e}"))?;
         if archive.len() > super::MAX_ZIP_ENTRIES {
@@ -734,6 +1013,11 @@ impl ArchiveAnalyzer {
                 vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
                 total_streamed,
             );
+        } else if matches!(
+            crate::analyzers::detect_file_type(archive_path),
+            Ok(FileType::Jar)
+        ) {
+            self.analyze_jar_members_in_memory(&members, archive_path, report, start);
         } else {
             self.analyze_in_memory_members(
                 &members,
@@ -746,6 +1030,123 @@ impl ArchiveAnalyzer {
             );
         }
         Ok(())
+    }
+
+    fn analyze_jar_members_in_memory(
+        &self,
+        members: &[MemoryArchiveMember],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+    ) {
+        let main_class = find_main_class_in_members(members);
+        if let Some(ref mc) = main_class {
+            debug!("Main-Class: {}", mc);
+        }
+
+        let class_members: Vec<&MemoryArchiveMember> = members
+            .iter()
+            .filter(|m| m.relative_path.ends_with(".class"))
+            .collect();
+        let total_class_files = class_members.len();
+
+        let mut flagged_classes = HashSet::<String>::new();
+        let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
+        if let Some(ref yara_engine) = self.yara_engine {
+            let yara_filetypes = FileType::JavaClass.yara_filetypes();
+            let yara_filter = if yara_filetypes.is_empty() {
+                None
+            } else {
+                Some(yara_filetypes.as_slice())
+            };
+            let yara_results = par_filter_map_if_outermost(&class_members, |member| {
+                if self.is_cancelled() {
+                    return None;
+                }
+                match yara_engine.scan_bytes_filtered(&member.data, yara_filter) {
+                    Ok(matches) if !matches.is_empty() => {
+                        Some((member.relative_path.clone(), matches))
+                    }
+                    Ok(_) => None,
+                    Err(e) => {
+                        debug!("YARA scan failed for {}: {}", member.relative_path, e);
+                        None
+                    }
+                }
+            });
+            for (path, matches) in yara_results {
+                flagged_classes.insert(path);
+                for ym in matches {
+                    if !collected_yara.iter().any(|m: &YaraMatch| m.rule == ym.rule) {
+                        collected_yara.push(ym);
+                    }
+                }
+            }
+        }
+        for ym in collected_yara {
+            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
+                report.yara_matches.push(ym);
+            }
+        }
+
+        let main_class_path = main_class.map(|mc| mc.replace('.', "/") + ".class");
+        let mut selected: Vec<&MemoryArchiveMember> = class_members
+            .iter()
+            .copied()
+            .filter(|m| {
+                main_class_path
+                    .as_ref()
+                    .is_some_and(|main| m.relative_path.ends_with(main))
+                    || flagged_classes.contains(&m.relative_path)
+            })
+            .collect();
+
+        let mut sample_count = 0usize;
+        for member in class_members.iter().copied() {
+            if sample_count >= 20 {
+                break;
+            }
+            if is_benign_java_path(Path::new(&member.relative_path))
+                || flagged_classes.contains(&member.relative_path)
+                || selected
+                    .iter()
+                    .any(|selected| selected.relative_path == member.relative_path)
+            {
+                continue;
+            }
+            selected.push(member);
+            sample_count += 1;
+        }
+
+        selected.extend(
+            members
+                .iter()
+                .filter(|m| !m.relative_path.ends_with(".class"))
+                .filter(|m| !is_benign_java_path(Path::new(&m.relative_path)))
+                .filter(|m| is_interesting_jar_non_class(&m.relative_path))
+                .take(100),
+        );
+
+        let selected_count = selected.len();
+        self.analyze_in_memory_member_refs(
+            &selected,
+            archive_path,
+            report,
+            start,
+            "JAR archive",
+            "memory JAR",
+            vec![
+                "archive_analyzer".to_string(),
+                "in_memory_jar".to_string(),
+                "java_class_analyzer".to_string(),
+            ],
+        );
+        report.metadata.errors.push(format!(
+            "JAR archive: {} total classes, {} YARA-flagged, {} selected for full analysis",
+            total_class_files,
+            flagged_classes.len(),
+            selected_count
+        ));
     }
 
     /// Analyze a CHM container entirely in memory. Decodes every internal
@@ -851,6 +1252,38 @@ impl ArchiveAnalyzer {
             file_count = total_files,
             archive_label,
             "Starting in-memory archive member analysis"
+        );
+
+        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {
+            self.analyze_one_member(member, slow_log_label)
+        });
+
+        self.aggregate_member_results(
+            results,
+            report,
+            start,
+            archive_label,
+            tools_used,
+            total_files,
+        );
+    }
+
+    fn analyze_in_memory_member_refs(
+        &self,
+        members: &[&MemoryArchiveMember],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        slow_log_label: &'static str,
+        tools_used: Vec<String>,
+    ) {
+        let total_files = members.len();
+        tracing::debug!(
+            archive = %archive_path.display(),
+            file_count = total_files,
+            archive_label,
+            "Starting borrowed in-memory archive member analysis"
         );
 
         let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {

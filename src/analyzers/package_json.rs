@@ -543,12 +543,18 @@ impl PackageJsonAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report
         // This catches patterns like curl, wget, perl execution, etc.
-        self.capability_mapper.evaluate_and_merge_findings(
-            &mut report,
-            content.as_bytes(),
-            None,
-            None,
-        );
+        let filefacts_ctx =
+            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        self.capability_mapper
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                content.as_bytes(),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![parser_source.to_string()];

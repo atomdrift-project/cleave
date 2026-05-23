@@ -955,12 +955,19 @@ impl ElfAnalyzer {
                                     .push(format!("yara(upx): {e:#}")),
                             }
                         }
-                        self.capability_mapper.evaluate_and_merge_findings(
-                            &mut unpacked_report,
-                            &unpacked_data,
-                            None,
-                            None,
-                        );
+                        self.capability_mapper
+                            .evaluate_and_merge_findings_with_precomputed(
+                                &mut unpacked_report,
+                                &unpacked_data,
+                                crate::capabilities::AnalysisBorrow::with_filefacts(
+                                    None,
+                                    Some(&unpacked_ctx),
+                                ),
+                                None,
+                                None,
+                                None,
+                                None,
+                            );
                         crate::path_mapper::analyze_and_link_paths(&mut unpacked_report);
                         crate::env_mapper::analyze_and_link_env_vars(&mut unpacked_report);
 
@@ -1042,7 +1049,15 @@ impl Analyzer for ElfAnalyzer {
 
         // Post-processing
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                input.data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                None,
+                None,
+                None,
+                None,
+            );
         crate::path_mapper::analyze_and_link_paths(&mut report);
         crate::env_mapper::analyze_and_link_env_vars(&mut report);
         Ok(report)

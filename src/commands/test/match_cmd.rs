@@ -208,6 +208,7 @@ pub fn run(
         FileType::Html => composite_rules::FileType::Html,
         FileType::Markdown => composite_rules::FileType::Markdown,
         FileType::Makefile => composite_rules::FileType::Makefile,
+        FileType::Dockerfile => composite_rules::FileType::Dockerfile,
         FileType::Text => composite_rules::FileType::Text,
         FileType::Data => composite_rules::FileType::Data,
         FileType::PackageJson => composite_rules::FileType::PackageJson,

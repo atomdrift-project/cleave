@@ -14,47 +14,10 @@ use super::guards::{
     sanitize_entry_path, symlink_escapes, CancellableReader, ExtractedMemberMetadata,
     ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
 };
-use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{Read, Seek};
 use std::path::Path;
-
-/// Seed `report.archive_contents` with the ZIP member listing.
-///
-/// `archive.*` *metrics* (file_count, compression_ratio, hidden_file_count,
-/// path_traversal_count, …) are now produced by filefacts's central-directory
-/// walker — see `filefacts/src/formats/zip.rs`. They reach the trait engine
-/// via `AnalysisContext` → `report.filefacts_metrics` and don't need to be
-/// recomputed cleave-side.
-pub(crate) fn inspect_zip_metadata_from_reader<R: Read + Seek>(
-    reader: R,
-) -> Result<Vec<ArchiveEntry>> {
-    let mut archive = zip::ZipArchive::new(reader).context("Failed to read ZIP archive")?;
-    if archive.len() > super::guards::MAX_ZIP_ENTRIES {
-        anyhow::bail!(
-            "ZIP central directory claims {} entries (max {})",
-            archive.len(),
-            super::guards::MAX_ZIP_ENTRIES
-        );
-    }
-
-    let mut entries = Vec::with_capacity(archive.len());
-    for i in 0..archive.len() {
-        let entry = archive.by_index(i)?;
-        if entry.is_dir() {
-            continue;
-        }
-        entries.push(ArchiveEntry {
-            path: entry.name().to_string(),
-            file_type: "unknown".to_string(),
-            sha256: String::new(),
-            size_bytes: entry.size(),
-            ..ArchiveEntry::default()
-        });
-    }
-    Ok(entries)
-}
 
 /// Extract a ZIP archive from in-memory data.
 pub(crate) fn extract_zip_from_data(
@@ -142,14 +105,8 @@ pub(crate) fn extract_zip_from_data(
     extract_zip_entries_safe(&mut archive, dest_dir, None, guard)
 }
 
-/// Extract a CRX (Chrome extension) archive from in-memory data.
-pub(crate) fn extract_crx_from_data(
-    data: &[u8],
-    dest_dir: &Path,
-    guard: &ExtractionGuard,
-) -> Result<()> {
-    use std::io::Cursor;
-
+/// Return the byte offset where the ZIP payload begins inside a CRX file.
+pub(crate) fn crx_zip_offset(data: &[u8]) -> Result<usize> {
     if data.len() < 12 {
         anyhow::bail!("CRX data too small for header");
     }
@@ -186,6 +143,18 @@ pub(crate) fn extract_crx_from_data(
             data.len()
         );
     }
+    Ok(zip_offset)
+}
+
+/// Extract a CRX (Chrome extension) archive from in-memory data.
+pub(crate) fn extract_crx_from_data(
+    data: &[u8],
+    dest_dir: &Path,
+    guard: &ExtractionGuard,
+) -> Result<()> {
+    use std::io::Cursor;
+
+    let zip_offset = crx_zip_offset(data)?;
 
     let mut archive = zip::ZipArchive::new(Cursor::new(&data[zip_offset..]))
         .context("Failed to read ZIP from CRX")?;

@@ -34,6 +34,8 @@ pub(crate) mod validation;
 
 // Re-export public API (allow unreachable_pub: accessible via lib crate)
 #[allow(unreachable_pub)]
+pub(crate) use mapper::AnalysisBorrow;
+#[allow(unreachable_pub)]
 pub use mapper::CapabilityMapper;
 
 // Test module needs access to internal types

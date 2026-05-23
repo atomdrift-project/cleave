@@ -253,6 +253,7 @@ pub fn analyzer_for_file_type(
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
+        | FileType::Dockerfile
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper(mapper_or_empty),
         )),
@@ -365,6 +366,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::Html
         | FileType::Markdown
         | FileType::Text
+        | FileType::Dockerfile
         | FileType::Data => Some(Box::new(
             generic::GenericAnalyzer::new(*file_type).with_capability_mapper_arc(mapper_or_empty),
         )),
@@ -677,6 +679,7 @@ impl FileTypeExt for FileType {
             FileType::Html => vec!["html", "htm"],
             FileType::Markdown => vec!["md", "markdown"],
             FileType::Makefile => vec!["makefile", "make", "mk"],
+            FileType::Dockerfile => vec!["dockerfile", "docker", "containerfile"],
             FileType::Text => vec!["txt", "text"],
             FileType::Data => vec!["dat", "bin", "payload", "raw"],
             _ => vec![],

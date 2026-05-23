@@ -1255,33 +1255,34 @@ impl Analyzer for MachOAnalyzer {
         // signal) is taken by `analyze_structural_with_strings` via
         // `analyze_structural` synthesising a fresh ctx; either way
         // we never re-walk with goblin from here.
-        let mut report =
-            match crate::analysis_context::AnalysisContext::open(input.path, preferred_data) {
-                Ok(ctx) => self.analyze_structural_with_strings(
-                    input.path,
-                    input.backing_path(),
-                    preferred_data,
-                    strings,
-                    !input.skip_rizin,
-                    input.sha256.clone(),
-                    &ctx,
-                ),
-                Err(e) => {
-                    let sha256 = input.sha256.clone().unwrap_or_else(|| {
-                        crate::analyzers::utils::calculate_sha256(preferred_data)
-                    });
-                    self.analyze_macho_fallback(
-                        input.path,
-                        input.backing_path(),
-                        preferred_data,
-                        sha256,
-                        Some(format!("filefacts open failed: {e}")),
-                        !input.skip_rizin,
-                        input.sha256.clone(),
-                        std::time::Instant::now(),
-                    )
-                }
-            };
+        let preferred_ctx =
+            crate::analysis_context::AnalysisContext::open(input.path, preferred_data).ok();
+        let mut report = if let Some(ctx) = preferred_ctx.as_ref() {
+            self.analyze_structural_with_strings(
+                input.path,
+                input.backing_path(),
+                preferred_data,
+                strings,
+                !input.skip_rizin,
+                input.sha256.clone(),
+                ctx,
+            )
+        } else {
+            let sha256 = input
+                .sha256
+                .clone()
+                .unwrap_or_else(|| crate::analyzers::utils::calculate_sha256(preferred_data));
+            self.analyze_macho_fallback(
+                input.path,
+                input.backing_path(),
+                preferred_data,
+                sha256,
+                Some("filefacts open failed".to_string()),
+                !input.skip_rizin,
+                input.sha256.clone(),
+                std::time::Instant::now(),
+            )
+        };
         self.apply_fat_metadata(&mut report, input.data);
 
         // For FAT binaries, strings should already be file-relative from input.strings
@@ -1297,17 +1298,35 @@ impl Analyzer for MachOAnalyzer {
         // For FAT binaries, evaluate against the full file since strings have file-relative offsets.
         // For thin binaries, evaluate against the single slice (same as full file).
         if is_fat {
-            // Full file evaluation - strings and offsets are file-relative
+            // Full file evaluation - strings and offsets are file-relative.
+            // Use a full-file context so the mapper does not reopen filefacts.
+            let full_ctx =
+                crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
             self.capability_mapper
-                .evaluate_and_merge_findings(&mut report, input.data, None, None);
+                .evaluate_and_merge_findings_with_precomputed(
+                    &mut report,
+                    input.data,
+                    crate::capabilities::AnalysisBorrow::with_filefacts(None, full_ctx.as_ref()),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
         } else {
-            // Thin binary - single slice is the whole file
-            self.capability_mapper.evaluate_and_merge_findings(
-                &mut report,
-                preferred_data,
-                None,
-                None,
-            );
+            // Thin binary - single slice is the whole file.
+            self.capability_mapper
+                .evaluate_and_merge_findings_with_precomputed(
+                    &mut report,
+                    preferred_data,
+                    crate::capabilities::AnalysisBorrow::with_filefacts(
+                        None,
+                        preferred_ctx.as_ref(),
+                    ),
+                    None,
+                    None,
+                    None,
+                    None,
+                );
         }
 
         Ok(report)

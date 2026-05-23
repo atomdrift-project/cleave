@@ -454,12 +454,19 @@ impl PEAnalyzer {
                         }
                         // Evaluate composites against the unpacked layer so that
                         // objective-level findings (infostealers, etc.) appear in the child.
-                        self.capability_mapper.evaluate_and_merge_findings(
-                            &mut unpacked_report,
-                            &unpacked_data,
-                            None,
-                            None,
-                        );
+                        self.capability_mapper
+                            .evaluate_and_merge_findings_with_precomputed(
+                                &mut unpacked_report,
+                                &unpacked_data,
+                                crate::capabilities::AnalysisBorrow::with_filefacts(
+                                    None,
+                                    Some(&unpacked_ctx),
+                                ),
+                                None,
+                                None,
+                                None,
+                                None,
+                            );
 
                         // Create separate FileAnalysis for unpacked layer
                         let unpacked_sha256 =
@@ -1463,7 +1470,15 @@ impl Analyzer for PEAnalyzer {
 
         // Post-processing
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                input.data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, Some(&ctx)),
+                None,
+                None,
+                None,
+                None,
+            );
         Ok(report)
     }
 

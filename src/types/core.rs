@@ -8,6 +8,7 @@ use super::binary::{
 use super::diff::DiffReportV1;
 use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::filefacts_view::FilefactsView;
+use super::is_false;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
 use super::traits_findings::{Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
@@ -491,6 +492,27 @@ impl AnalysisReport {
             }
             if let Some(ref os) = entry.host_os {
                 obj.insert("host_os".into(), serde_json::Value::String(os.clone()));
+            }
+            if let Some(v) = entry.header_offset {
+                obj.insert("header_offset".into(), serde_json::Value::Number(v.into()));
+            }
+            if let Some(v) = entry.data_offset {
+                obj.insert("data_offset".into(), serde_json::Value::Number(v.into()));
+            }
+            if let Some(v) = entry.central_header_offset {
+                obj.insert(
+                    "central_header_offset".into(),
+                    serde_json::Value::Number(v.into()),
+                );
+            }
+            if let Some(v) = entry.crc32 {
+                obj.insert(
+                    "crc32".into(),
+                    serde_json::Value::Number(u64::from(v).into()),
+                );
+            }
+            if entry.encrypted {
+                obj.insert("encrypted".into(), serde_json::Value::Bool(true));
             }
             members.push(serde_json::Value::Object(obj));
         }
@@ -1290,6 +1312,21 @@ pub struct ArchiveEntry {
     /// Values: "msdos", "unix", "macintosh", "ntfs", "vfat", "amiga", etc.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub host_os: Option<String>,
+    /// ZIP local-header offset, when filefacts indexed the container.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub header_offset: Option<u64>,
+    /// ZIP compressed payload offset, when filefacts indexed the container.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub data_offset: Option<u64>,
+    /// ZIP central-directory header offset, when available.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub central_header_offset: Option<u64>,
+    /// ZIP CRC32 of the uncompressed entry payload.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub crc32: Option<u32>,
+    /// True when the archive entry is encrypted.
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub encrypted: bool,
 }
 
 #[cfg(test)]
@@ -1806,6 +1843,7 @@ mod tests {
                 entry_type: Some("regular".to_string()),
                 linkname: None,
                 host_os: None,
+                ..ArchiveEntry::default()
             },
             ArchiveEntry {
                 path: "lib/setuid-bin".to_string(),
@@ -1824,6 +1862,7 @@ mod tests {
                 entry_type: Some("regular".to_string()),
                 linkname: None,
                 host_os: None,
+                ..ArchiveEntry::default()
             },
             ArchiveEntry {
                 path: "external".to_string(),
@@ -1841,6 +1880,7 @@ mod tests {
                 entry_type: Some("symlink".to_string()),
                 linkname: Some("/etc/passwd".to_string()),
                 host_os: None,
+                ..ArchiveEntry::default()
             },
         ];
         let mut report = archive_report_with_entries(entries);
@@ -1982,6 +2022,7 @@ mod tests {
             entry_type: Some("regular".to_string()),
             linkname: None,
             host_os: None,
+            ..ArchiveEntry::default()
         }];
         let mut report = archive_report_with_entries(entries);
         report.seal_archive_metadata_kv();

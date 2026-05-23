@@ -116,6 +116,7 @@ pub(crate) mod builder;
 pub(crate) mod evaluate_composites;
 pub(crate) mod evaluate_merged;
 pub(crate) mod evaluate_traits;
+pub(crate) use evaluate_merged::AnalysisBorrow;
 pub(crate) mod filters;
 pub(crate) mod helpers;
 pub(crate) mod imports;

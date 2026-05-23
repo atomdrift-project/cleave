@@ -41,6 +41,46 @@ impl SectionMap {
         }
     }
 
+    /// Create a section map from cleave's report-side section list.
+    #[must_use]
+    pub(crate) fn from_report_sections(sections: &[crate::types::Section], file_size: u64) -> Self {
+        let sections: Vec<SectionInfo> = sections
+            .iter()
+            .filter_map(|s| {
+                let start = s.offset?;
+                Some(SectionInfo {
+                    name: s.name.clone(),
+                    start,
+                    end: start.saturating_add(s.size),
+                })
+            })
+            .collect();
+        Self {
+            sections,
+            file_size,
+            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
+        }
+    }
+
+    /// Create a section map from a borrowed filefacts parse.
+    #[must_use]
+    pub(crate) fn from_filefacts(parsed: &filefacts::ParsedFile<'_>, file_size: u64) -> Self {
+        let sections: Vec<SectionInfo> = parsed
+            .sections()
+            .iter()
+            .map(|s| SectionInfo {
+                name: s.name.clone(),
+                start: s.file_offset,
+                end: s.file_offset.saturating_add(s.file_size),
+            })
+            .collect();
+        Self {
+            sections,
+            file_size,
+            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
+        }
+    }
+
     /// Create a section map by sourcing the section table from
     /// `filefacts::open`.
     ///

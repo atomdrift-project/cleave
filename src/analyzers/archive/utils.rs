@@ -42,8 +42,11 @@ pub(crate) fn find_main_class(temp_dir: &Path) -> Option<String> {
 
 /// Check if a path is from a known benign Java package (common libraries)
 pub(crate) fn is_benign_java_path(path: &Path) -> bool {
-    let path_str = path.to_string_lossy();
-    // Skip common library packages
+    let raw = path.to_string_lossy().replace('\\', "/");
+    let path_str = format!("/{}/", raw.trim_matches('/'));
+    // Skip common library packages. The leading/trailing slashes make this
+    // work for both extracted absolute paths and in-memory archive-relative
+    // paths such as `com/google/Foo.class`.
     path_str.contains("/com/google/")
         || path_str.contains("/org/apache/")
         || path_str.contains("/org/slf4j/")
@@ -90,6 +93,7 @@ pub(crate) fn is_benign_java_path(path: &Path) -> bool {
         || path_str.contains("/org/antlr/")
         || path_str.contains("/org/checkerframework/")
         || path_str.contains("/META-INF/")
+        || path_str.contains("/meta-inf/")
         || path_str.contains("/joptsimple/")
         || path_str.contains("/oshi/")
         || path_str.contains("/com/typesafe/")

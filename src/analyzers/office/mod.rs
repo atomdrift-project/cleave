@@ -210,9 +210,18 @@ impl OfficeAnalyzer {
             flat.set_u("binary.embedded_binary_count", u64::from(embedded_count));
         }
 
-        // Delegate pattern detection to capability mapper (YAML traits + YARA)
+        // Delegate pattern detection to capability mapper (YAML traits + YARA),
+        // reusing the filefacts parse already opened for VBA symbols.
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, office_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         // Evaluate container-level composites that combine parent + sub-file findings
         // (e.g., composites requiring both OOXML metadata markers AND VBA behavioral traits)

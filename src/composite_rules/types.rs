@@ -239,6 +239,8 @@ pub(crate) enum FileType {
     Markdown,
     /// Makefile / GNU Make build file
     Makefile,
+    /// Dockerfile — container image build definition
+    Dockerfile,
     /// Plain text data
     Text,
     /// Opaque binary data (.dat, .bin, .payload, .raw)
@@ -353,6 +355,7 @@ impl FileType {
                 | FileType::Html
                 | FileType::Markdown
                 | FileType::Makefile
+                | FileType::Dockerfile
                 | FileType::Text
         )
     }
@@ -481,6 +484,7 @@ impl FileType {
             FileType::Html,
             FileType::Markdown,
             FileType::Makefile,
+            FileType::Dockerfile,
             FileType::Text,
             FileType::Data,
             // Manifest/config formats
@@ -566,6 +570,7 @@ impl FileType {
             "html" | "htm" => FileType::Html,
             "markdown" | "md" => FileType::Markdown,
             "makefile" | "make" | "mk" | "mak" => FileType::Makefile,
+            "dockerfile" | "docker" | "containerfile" => FileType::Dockerfile,
             "text" | "txt" | "b64" | "base64" => FileType::Text,
             "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
             // cpp aliases to c (handled above)

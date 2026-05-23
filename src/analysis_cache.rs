@@ -266,11 +266,33 @@ fn options_hash(options: &AnalysisOptions) -> String {
     format!("{:x}", hash)[..16].to_string()
 }
 
-/// Get the active traits/rules revision fingerprint, or `None` if unavailable.
+/// Get the active analysis-cache revision fingerprint, or `None` if unavailable.
+///
+/// Mixes the trait-files fingerprint with the cleave binary's package version
+/// and mtime so that recompiling cleave invalidates the analysis cache even
+/// when the trait YAMLs are unchanged. Analyzer logic, file type detection,
+/// and capability evaluation all live in the binary — when they change, the
+/// cached `AnalysisReport` for the same SHA can be stale.
+///
+/// (`cache_revision()` alone — used by the YARA and capability-mapper caches —
+/// is deterministic from trait inputs and should not depend on the binary.)
 fn traits_revision_key() -> Option<i64> {
-    cache_revision()
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let traits_fingerprint = cache_revision()
         .ok()
-        .map(super::cache::RuleFilesRevision::cache_i64)
+        .map(super::cache::RuleFilesRevision::cache_i64)?;
+
+    let mut hasher = DefaultHasher::new();
+    traits_fingerprint.hash(&mut hasher);
+    env!("CARGO_PKG_VERSION").hash(&mut hasher);
+    if let Ok(mtime) = super::cache::binary_mtime() {
+        if let Ok(d) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
+            d.as_nanos().hash(&mut hasher);
+        }
+    }
+    Some(i64::from_ne_bytes(hasher.finish().to_ne_bytes()))
 }
 
 /// Current time as Unix seconds.

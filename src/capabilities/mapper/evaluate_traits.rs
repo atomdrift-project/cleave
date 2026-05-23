@@ -46,10 +46,11 @@ impl super::CapabilityMapper {
         // Determine file type from report (platform comes from self.platform)
         let file_type = self.detect_file_type(&report.target.file_type);
 
-        // Build section map for location-constrained matching.
-        // Skip parsing for files that don't have sections (saves ~100ms per file).
-        let section_map = if file_type.has_sections() {
-            SectionMap::from_binary(binary_data)
+        // Build section map for location-constrained matching from the report's
+        // already-populated sections. Standalone trait evaluation should not
+        // parse file bytes just to rebuild data the analyzer already owns.
+        let section_map = if file_type.has_sections() && !report.sections.is_empty() {
+            SectionMap::from_report_sections(&report.sections, binary_data.len() as u64)
         } else {
             SectionMap::empty(binary_data.len() as u64)
         };
@@ -277,10 +278,11 @@ impl super::CapabilityMapper {
         } else {
             FxHashSet::default()
         };
-        // Build section map
-        // Skip parsing for files that don't have sections (saves ~100ms per file).
-        let section_map = if file_type.has_sections() {
-            SectionMap::from_binary(binary_data)
+        // Build section map from existing report sections. This keeps the
+        // standalone API parse-free; callers that need section constraints must
+        // provide a report populated by the structural analyzer.
+        let section_map = if file_type.has_sections() && !report.sections.is_empty() {
+            SectionMap::from_report_sections(&report.sections, binary_data.len() as u64)
         } else {
             SectionMap::empty(binary_data.len() as u64)
         };

@@ -52,8 +52,17 @@ impl VsixManifestAnalyzer {
             .metadata
             .tools_used
             .push("filefacts-vsix".to_string());
+        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
         report
     }
 }

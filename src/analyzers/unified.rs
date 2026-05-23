@@ -493,10 +493,19 @@ impl UnifiedSourceAnalyzer {
         }
 
         let scanner_risk = scanner_state_overflow_risk(&self.file_type, content);
+        let source_ctx =
+            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        let source_ast = if scanner_risk.is_none() {
+            source_ctx
+                .as_ref()
+                .and_then(crate::analysis_context::AnalysisContext::source_ast)
+        } else {
+            None
+        };
 
-        // Parse the source with a timeout unless a known external-scanner state
-        // pattern could abort the process before Rust can recover.
-        let tree = if scanner_risk.is_none() {
+        // Prefer filefacts's cached tree-sitter parse. If filefacts did not
+        // produce one, keep the legacy timeout-guarded parse as a fallback.
+        let owned_tree = if source_ast.is_none() && scanner_risk.is_none() {
             let mut options = tree_sitter::ParseOptions::new();
             let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
                 if start.elapsed() > timeout_limit {
@@ -521,8 +530,9 @@ impl UnifiedSourceAnalyzer {
         } else {
             None
         };
+        let tree = source_ast.map_or_else(|| owned_tree.as_ref(), |ast| Some(ast.tree));
 
-        if let Some(ref tree) = tree {
+        if let Some(tree) = tree {
             let root = tree.root_node();
             self.extract_functions(&root, content.as_bytes(), &mut report);
             self.extract_strings(&root, content.as_bytes(), &mut report);
@@ -847,7 +857,7 @@ impl UnifiedSourceAnalyzer {
             }
         }
 
-        if let Some(ref tree) = tree {
+        if let Some(tree) = tree {
             // Extract function calls for capability matching (type: symbol conditions)
             // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
             symbol_extraction::extract_symbols_from_tree(
@@ -910,13 +920,25 @@ impl UnifiedSourceAnalyzer {
         // `type: value, path: source.imports, ...` traits can resolve.
         super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
 
-        // Evaluate all rules (atomic + composite) and merge into report
-        self.capability_mapper.evaluate_and_merge_findings(
-            &mut report,
-            content.as_bytes(),
-            tree.as_ref(),
-            None,
-        );
+        if let Some(ctx) = source_ctx.as_ref() {
+            let view = crate::types::FilefactsView::from_ctx(ctx);
+            if !view.is_empty() {
+                report.filefacts = Some(view);
+            }
+        }
+
+        // Evaluate all rules (atomic + composite) and merge into report,
+        // borrowing the same filefacts context used for source AST extraction.
+        self.capability_mapper
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                content.as_bytes(),
+                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = vec![format!("tree-sitter-{}", self.config.name)];

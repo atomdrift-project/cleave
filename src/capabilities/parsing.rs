@@ -432,6 +432,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::PkgInfo,
                     RuleFileType::Plist,
                     RuleFileType::Lnk,
+                    RuleFileType::Dockerfile,
                 ],
                 "documents" => vec![
                     RuleFileType::Pdf,
@@ -481,6 +482,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "html" | "htm" => vec![RuleFileType::Html],
                 "markdown" | "md" => vec![RuleFileType::Markdown],
                 "makefile" | "make" | "mk" | "mak" => vec![RuleFileType::Makefile],
+                "dockerfile" | "docker" | "containerfile" => vec![RuleFileType::Dockerfile],
                 "text" | "txt" | "b64" | "base64" => vec![RuleFileType::Text],
                 "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
                 // Compiled languages (fullname + extension)

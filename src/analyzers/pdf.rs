@@ -72,8 +72,17 @@ impl PdfAnalyzer {
         // populates every `pdf.*` metric onto `report.filefacts_metrics`
         // and merges the structured kv view onto `report.values_tree`
         // for the trait engine.
+        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         // Route each embedded JavaScript payload through the standard
         // JS analyzer as a depth-1 sub-file. Runs *after* the

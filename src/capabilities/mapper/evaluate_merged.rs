@@ -15,6 +15,58 @@ use crate::composite_rules::{Arch, Condition, FileType as RuleFileType, SectionM
 use crate::types::{AnalysisReport, Evidence};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
+/// Borrowed analysis products shared with the rule engine.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct AnalysisBorrow<'a> {
+    pub(crate) cached_ast: Option<&'a tree_sitter::Tree>,
+    pub(crate) filefacts: Option<&'a crate::analysis_context::AnalysisContext<'a>>,
+}
+
+impl<'a> AnalysisBorrow<'a> {
+    pub(crate) fn new(cached_ast: Option<&'a tree_sitter::Tree>) -> Self {
+        Self {
+            cached_ast,
+            filefacts: None,
+        }
+    }
+
+    pub(crate) fn with_filefacts(
+        cached_ast: Option<&'a tree_sitter::Tree>,
+        filefacts: Option<&'a crate::analysis_context::AnalysisContext<'a>>,
+    ) -> Self {
+        Self {
+            cached_ast,
+            filefacts,
+        }
+    }
+}
+
+fn merge_filefacts_context(
+    report: &mut AnalysisReport,
+    ctx: &crate::analysis_context::AnalysisContext<'_>,
+) {
+    let values_tree = ctx.values_tree();
+    let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
+        .parsed
+        .metrics()
+        .iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+
+    if let serde_json::Value::Object(map) = values_tree {
+        for (namespace, subtree) in map {
+            report.merge_kv_subtree(&namespace, subtree);
+        }
+    }
+    if !filefacts_map.is_empty() {
+        let dest = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
+        for (k, v) in filefacts_map {
+            dest.insert(k, v);
+        }
+    }
+}
 
 impl super::CapabilityMapper {
     /// Pre-compute raw content regex matches once for the binary.
@@ -75,7 +127,7 @@ impl super::CapabilityMapper {
         self.evaluate_and_merge_findings_with_precomputed(
             report,
             binary_data,
-            cached_ast,
+            AnalysisBorrow::new(cached_ast),
             inline_yara,
             None,
             None,
@@ -89,63 +141,42 @@ impl super::CapabilityMapper {
         &self,
         report: &mut AnalysisReport,
         binary_data: &[u8],
-        cached_ast: Option<&tree_sitter::Tree>,
+        analysis: AnalysisBorrow<'_>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,
         cancellation: Option<&std::sync::atomic::AtomicBool>,
     ) {
+        let cached_ast = analysis.cached_ast;
         let t_total = std::time::Instant::now();
         // Detect file type once
         let file_type = self.detect_file_type(&report.target.file_type);
 
         // Build section map ONCE for location-constrained matching.
         // Skip parsing for files that don't have sections (saves ~100ms per file).
-        let section_map = if file_type.has_sections() {
-            SectionMap::from_binary(binary_data)
+        let file_size = binary_data.len() as u64;
+        let section_map = if !file_type.has_sections() {
+            SectionMap::empty(file_size)
+        } else if let Some(ctx) = analysis.filefacts {
+            SectionMap::from_filefacts(&ctx.parsed, file_size)
+        } else if !report.sections.is_empty() {
+            SectionMap::from_report_sections(&report.sections, file_size)
         } else {
-            SectionMap::empty(binary_data.len() as u64)
+            SectionMap::empty(file_size)
         };
 
-        // Open the file once via the shared `AnalysisContext` and
-        // merge filefacts's structured view into `report.values_tree` and
-        // `report.filefacts_metrics` for the trait engine. All other
-        // call sites that need format-native kv read through the
-        // same entry point — see `cleave::analysis_context`.
-        let target_path = std::path::PathBuf::from(&report.target.path);
-        if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(&target_path, binary_data) {
-            let values_tree = ctx.values_tree();
-            // Stash filefacts's flat metric map verbatim on the
-            // report. `get_metric_value` consults it as a fallback
-            // after the typed `Metrics` struct, so filefacts-emitted
-            // metrics (`lnk.args_max_whitespace_run`, `pdf.action_count`,
-            // `binary.is_pie`, …) are reachable to trait rules without
-            // a fragile serde round-trip — serde rejects `f64` → any
-            // integer-typed field, which would silently drop the
-            // whole `Metrics` rebuild on the first collision.
-            let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
-                .parsed
-                .metrics()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect();
-            drop(ctx);
-            if let serde_json::Value::Object(map) = values_tree {
-                for (namespace, subtree) in map {
-                    report.merge_kv_subtree(&namespace, subtree);
-                }
-            }
-            if !filefacts_map.is_empty() {
-                // Merge into any pre-populated map (text-side analyzers
-                // populate `text.*`/`identifiers.*`/etc. before reaching
-                // the capability mapper). Overwriting would silently
-                // drop those keys.
-                let dest = report
-                    .filefacts_metrics
-                    .get_or_insert_with(Default::default);
-                for (k, v) in filefacts_map {
-                    dest.insert(k, v);
-                }
+        // Merge filefacts's structured view into `report.values_tree` and
+        // `report.filefacts_metrics` for the trait engine. Hot analyzers pass
+        // their existing `AnalysisContext`; legacy callers still get the same
+        // behavior through the fallback open.
+        if let Some(ctx) = analysis.filefacts {
+            merge_filefacts_context(report, ctx);
+        } else {
+            let target_path = std::path::PathBuf::from(&report.target.path);
+            if let Ok(ctx) =
+                crate::analysis_context::AnalysisContext::open(&target_path, binary_data)
+            {
+                merge_filefacts_context(report, &ctx);
             }
         }
 

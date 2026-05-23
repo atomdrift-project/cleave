@@ -90,8 +90,18 @@ impl Analyzer for JavaClassAnalyzer {
         let mut report = self.analyze_structural(input.path, input.data, input.sha256.clone())?;
 
         // Evaluate all rules (atomic + composite) and merge into report
+        let filefacts_ctx =
+            crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, input.data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                input.data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         let elapsed = start.elapsed().as_millis() as u64;
         report.metadata.analysis_duration_ms = elapsed;
@@ -105,8 +115,17 @@ impl Analyzer for JavaClassAnalyzer {
         let mut report = self.analyze_structural(file_path, &data, None)?;
 
         // Evaluate all rules (atomic + composite) and merge into report
+        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
         self.capability_mapper
-            .evaluate_and_merge_findings(&mut report, &data, None, None);
+            .evaluate_and_merge_findings_with_precomputed(
+                &mut report,
+                &data,
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                None,
+                None,
+                None,
+                None,
+            );
 
         let elapsed = start.elapsed().as_millis() as u64;
         report.metadata.analysis_duration_ms = elapsed;

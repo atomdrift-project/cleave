@@ -78,6 +78,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "basic",    // meaningless
     "behavior",
     "behaviors",
+    "canonical", // describes "the textbook example of X", not a technique
     "component",
     "components",
     "commands",
@@ -89,6 +90,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "composite",  // vague
     "composites", // vague
     "default",    // meaningless
+    "detection",  // every trait is detection; meaningless modifier
     "derived",    // yes
     "generic",    // says nothing about what's inside
     "helpers",    // too vague

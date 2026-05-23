@@ -24,6 +24,14 @@ enum Target {
     },
     /// Known-benign sample whose root-file score must stay under a per-file cap.
     Benign { path: PathBuf, cap: u32 },
+    /// Walked-hostile sample (e.g. `testdata/drop-exec/`, `testdata/reverse-shell/`).
+    /// Every file under the corpus directory must surface at least `min_hostile`
+    /// hostile findings — like the inverse of the does-nothing walk.
+    WalkedHostile {
+        path: PathBuf,
+        corpus: &'static str,
+        min_hostile: usize,
+    },
     /// Does-nothing sample. Its (and any archive-member) score must stay
     /// within the cap returned by [`does_nothing_cap`].
     DoesNothing {
@@ -38,6 +46,7 @@ impl Target {
         match self {
             Self::Hostile { path, .. }
             | Self::Benign { path, .. }
+            | Self::WalkedHostile { path, .. }
             | Self::DoesNothing { path, .. } => path,
         }
     }
@@ -138,6 +147,15 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
                 passed: stats.does_nothing_passed,
                 total: stats.does_nothing_total,
             },
+            walked_hostile: stats
+                .walked_hostile
+                .iter()
+                .map(|(corpus, count)| WalkedCorpusCount {
+                    corpus: (*corpus).to_string(),
+                    passed: count.passed,
+                    total: count.total,
+                })
+                .collect(),
         },
     };
 
@@ -159,10 +177,19 @@ struct FixtureSummary {
     hostile: FixtureCount,
     benign: FixtureCount,
     does_nothing: FixtureCount,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    walked_hostile: Vec<WalkedCorpusCount>,
 }
 
 #[derive(Debug, Serialize)]
 struct FixtureCount {
+    passed: usize,
+    total: usize,
+}
+
+#[derive(Debug, Serialize)]
+struct WalkedCorpusCount {
+    corpus: String,
     passed: usize,
     total: usize,
 }
@@ -185,8 +212,7 @@ fn format_validate_terminal(report: &ValidateOutput) -> String {
     let mut out = String::new();
     out.push_str(&validation_controls::format_disabled_validators_terminal());
     out.push_str(&format!(
-        "validate ok: hostile {}/{}  benign {}/{}  does-nothing {}/{}
-",
+        "validate ok: hostile {}/{}  benign {}/{}  does-nothing {}/{}",
         report.fixtures.hostile.passed,
         report.fixtures.hostile.total,
         report.fixtures.benign.passed,
@@ -194,6 +220,10 @@ fn format_validate_terminal(report: &ValidateOutput) -> String {
         report.fixtures.does_nothing.passed,
         report.fixtures.does_nothing.total
     ));
+    for c in &report.fixtures.walked_hostile {
+        out.push_str(&format!("  {} {}/{}", c.corpus, c.passed, c.total));
+    }
+    out.push('\n');
     out
 }
 
@@ -215,8 +245,7 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
         ));
     }
     out.push_str(&format!(
-        "fixtures hostile={}/{} benign={}/{} does-nothing={}/{}
-",
+        "fixtures hostile={}/{} benign={}/{} does-nothing={}/{}",
         report.fixtures.hostile.passed,
         report.fixtures.hostile.total,
         report.fixtures.benign.passed,
@@ -224,6 +253,10 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
         report.fixtures.does_nothing.passed,
         report.fixtures.does_nothing.total
     ));
+    for c in &report.fixtures.walked_hostile {
+        out.push_str(&format!(" {}={}/{}", c.corpus, c.passed, c.total));
+    }
+    out.push('\n');
     out
 }
 
@@ -241,8 +274,23 @@ fn collect_targets() -> Result<Vec<Target>> {
         walk_does_nothing(&dn_dir, &mut targets)?;
     }
 
+    for (corpus, min_hostile) in WALKED_HOSTILE_CORPORA {
+        let dir = traits_dir.join("testdata").join(corpus);
+        if dir.is_dir() {
+            walk_hostile_corpus(&dir, corpus, *min_hostile, &mut targets)?;
+        }
+    }
+
     Ok(targets)
 }
+
+/// Corpora whose every file must hit `min_hostile` hostile findings.
+///
+/// Each corpus is the inverse of does-nothing: instead of capping scores from
+/// above we floor them from below. Use this for idiom-per-language attack
+/// samples (one drop-exec implant per language, one reverse-shell per
+/// language) — regressions show up as a single file dropping below the floor.
+const WALKED_HOSTILE_CORPORA: &[(&str, usize)] = &[("drop-exec", 3), ("reverse-shell", 3)];
 
 /// Every direct file in `testdata/hostile/` must have a hardcoded threshold.
 fn collect_hostile_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
@@ -333,6 +381,31 @@ fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
     Ok(())
 }
 
+/// Walk a hostile-floor corpus directory (e.g. `testdata/drop-exec/`).
+fn walk_hostile_corpus(
+    dir: &Path,
+    corpus: &'static str,
+    min_hostile: usize,
+    out: &mut Vec<Target>,
+) -> Result<()> {
+    for entry in walkdir::WalkDir::new(dir)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| !e.file_name().to_string_lossy().starts_with(".git"))
+    {
+        let entry = entry?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        out.push(Target::WalkedHostile {
+            path: entry.path().to_path_buf(),
+            corpus,
+            min_hostile,
+        });
+    }
+    Ok(())
+}
+
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
 struct ValidationStats {
     hostile_passed: usize,
@@ -341,6 +414,13 @@ struct ValidationStats {
     benign_total: usize,
     does_nothing_passed: usize,
     does_nothing_total: usize,
+    walked_hostile: std::collections::BTreeMap<&'static str, WalkedCorpusStats>,
+}
+
+#[derive(Default)]
+struct WalkedCorpusStats {
+    passed: usize,
+    total: usize,
 }
 
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
@@ -354,6 +434,7 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
         benign_total: 0,
         does_nothing_passed: 0,
         does_nothing_total: 0,
+        walked_hostile: std::collections::BTreeMap::new(),
     };
     let mut failed = 0usize;
 
@@ -367,6 +448,9 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
                     Target::Hostile { .. } => stats.hostile_total += 1,
                     Target::Benign { .. } => stats.benign_total += 1,
                     Target::DoesNothing { .. } => stats.does_nothing_total += 1,
+                    Target::WalkedHostile { corpus, .. } => {
+                        stats.walked_hostile.entry(corpus).or_default().total += 1;
+                    }
                 }
                 continue;
             }
@@ -412,6 +496,19 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
                     }
                 }
             }
+            Target::WalkedHostile {
+                path,
+                corpus,
+                min_hostile,
+            } => {
+                let entry = stats.walked_hostile.entry(corpus).or_default();
+                entry.total += 1;
+                if judge_walked_hostile(&path, corpus, min_hostile, &report) {
+                    entry.passed += 1;
+                } else {
+                    failed += 1;
+                }
+            }
         }
     }
 
@@ -419,6 +516,29 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
         anyhow::bail!("{failed} validation check(s) failed");
     }
     Ok(stats)
+}
+
+/// Judge a walked-hostile sample. Returns `true` if it passes the `min_hostile` floor.
+fn judge_walked_hostile(
+    path: &Path,
+    corpus: &str,
+    min_hostile: usize,
+    report: &AnalysisReport,
+) -> bool {
+    let Some(file) = report.files.first() else {
+        eprintln!("❌ {}: analysis produced no files", path.display());
+        return false;
+    };
+    let hostile = count_findings(file, Criticality::Hostile);
+    if hostile >= min_hostile {
+        return true;
+    }
+    eprintln!(
+        "❌ {} [{corpus}]: hostile findings {hostile} < minimum {min_hostile}",
+        path.display()
+    );
+    print_contributing_findings(file, "     ");
+    false
 }
 
 /// Judge a known-hostile fixture root file. Returns `true` if it passes.

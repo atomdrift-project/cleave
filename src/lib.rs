@@ -1536,12 +1536,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            // Open filefacts once here and lend it to the PE analyzer
-            // so it can read sections, imports, exports, and PE-specific
-            // values from the typed view instead of re-parsing with
-            // goblin. The trait engine downstream opens its own
-            // context for the kv tree; consolidating those two
-            // parses is a follow-up.
+            // Open filefacts once here and lend the same typed view to the PE
+            // analyzer and trait mapper so sections, imports, exports, values,
+            // and metrics are projected without another PE parser pass.
             let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
                 .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(

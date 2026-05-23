@@ -83,18 +83,10 @@ impl<'a> AnalysisContext<'a> {
     /// directory a second time.
     #[must_use]
     pub fn archive_entries(&self) -> Vec<ArchiveEntry> {
-        let Some(members) = self
-            .parsed
-            .values()
-            .get("archive.members")
-            .and_then(serde_json::Value::as_array)
-        else {
-            return Vec::new();
-        };
-
-        members
+        self.parsed
+            .archive_members()
             .iter()
-            .filter_map(archive_entry_from_filefacts)
+            .map(archive_entry_from_filefacts_member)
             .collect()
     }
 
@@ -173,59 +165,29 @@ pub fn project_filefacts_function(f: &filefacts::Function) -> Function {
     }
 }
 
-fn archive_entry_from_filefacts(value: &Value) -> Option<ArchiveEntry> {
-    let path = value.get("path")?.as_str()?.to_string();
-    let size_bytes = value.get("size_bytes").and_then(Value::as_u64).unwrap_or(0);
-
-    Some(ArchiveEntry {
-        path,
+fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> ArchiveEntry {
+    ArchiveEntry {
+        path: member.path.clone(),
         file_type: "unknown".to_string(),
         sha256: String::new(),
-        size_bytes,
-        compressed_size: value.get("compressed_size").and_then(Value::as_u64),
-        compression_method: value
-            .get("compression_method")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        mtime_unix: value.get("mtime_unix").and_then(Value::as_i64),
-        mode_octal: value
-            .get("mode_octal")
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok()),
-        uid: value.get("uid").and_then(Value::as_u64),
-        gid: value.get("gid").and_then(Value::as_u64),
-        uname: value
-            .get("uname")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        gname: value
-            .get("gname")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        entry_type: value
-            .get("entry_type")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        linkname: value
-            .get("linkname")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        host_os: value
-            .get("host_os")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
-        header_offset: value.get("header_offset").and_then(Value::as_u64),
-        data_offset: value.get("data_offset").and_then(Value::as_u64),
-        central_header_offset: value.get("central_header_offset").and_then(Value::as_u64),
-        crc32: value
-            .get("crc32")
-            .and_then(Value::as_u64)
-            .and_then(|v| u32::try_from(v).ok()),
-        encrypted: value
-            .get("encrypted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    })
+        size_bytes: member.size_bytes,
+        compressed_size: member.compressed_size,
+        compression_method: member.compression_method.clone(),
+        mtime_unix: member.mtime_unix,
+        mode_octal: member.mode_octal,
+        uid: member.uid,
+        gid: member.gid,
+        uname: member.uname.clone(),
+        gname: member.gname.clone(),
+        entry_type: member.entry_type.clone(),
+        linkname: member.linkname.clone(),
+        host_os: member.host_os.clone(),
+        header_offset: member.header_offset,
+        data_offset: member.data_offset,
+        central_header_offset: member.central_header_offset,
+        crc32: member.crc32,
+        encrypted: member.encrypted,
+    }
 }
 
 fn hex_offset(offset: u64) -> String {

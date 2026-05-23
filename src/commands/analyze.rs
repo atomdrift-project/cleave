@@ -176,7 +176,7 @@ pub fn run(config: &AnalyzeConfig<'_>) -> Result<String> {
                 result,
             } => {
                 let file_path_str = file_path.to_string_lossy().to_string();
-                let formatted = match result.as_ref() {
+                let formatted = match *result {
                     Ok(lib_report) => {
                         let mut report = prepare_output_report(lib_report);
                         let Ok(res) = format_report_output(
@@ -265,7 +265,7 @@ fn analyze_and_format(
     // Core analysis — single pipeline in lib.rs, with caching
     let lib_report = cleave::analyze_file(path, options)?;
 
-    let mut report = prepare_output_report(&lib_report);
+    let mut report = prepare_output_report(lib_report);
 
     // Merge encoding layers and recalculate composites.
     // The mapper is only needed when encoding layers are actually merged (rare for single files),
@@ -358,8 +358,7 @@ fn format_report_output(
     }
 }
 
-fn prepare_output_report(lib_report: &cleave::AnalysisReport) -> types::AnalysisReport {
-    let mut report = lib_report.clone();
+fn prepare_output_report(mut report: cleave::AnalysisReport) -> types::AnalysisReport {
     report.shrink_to_fit();
     report.finalize();
     report

@@ -131,7 +131,16 @@ impl StringExtractor {
 
     /// Extract raw stng strings from binary data.
     pub(crate) fn extract_raw_smart(&self, data: &[u8]) -> Vec<ExtractedString> {
-        let opts = crate::analyzers::stng_analysis_opts(self.min_length);
+        // Large pure-ASCII inputs (minified JS bundles, JSON dumps, logs that
+        // arrive through binary analyzers) get the text-mode opts to skip the
+        // XOR scan + UTF-16 decoders. Threshold matches the dataset sweet
+        // spot at which the scan is provably wasted.
+        const ASCII_FASTPATH_THRESHOLD: usize = 5 * 1024 * 1024;
+        let opts = if data.len() > ASCII_FASTPATH_THRESHOLD && data.is_ascii() {
+            crate::analyzers::stng_text_opts(self.min_length)
+        } else {
+            crate::analyzers::stng_analysis_opts(self.min_length)
+        };
         stng::extract_strings_with_options(data, &opts)
     }
 

@@ -276,6 +276,7 @@ const ALLOWED_MB_DATA: &[&str] = &[
     "embedded",
     "encode",
     "format",
+    "hash",
     "serialize",
     "source",
     "string",

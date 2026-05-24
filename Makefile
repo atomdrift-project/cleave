@@ -277,6 +277,10 @@ tuna-once: ## One cleave-tuna cycle, then cherry-pick accepted experiments
 	@test -z "$$(git status --porcelain)" || { echo "working tree must be clean before tuna-once"; exit 1; }
 	@before=$$(git rev-parse HEAD); \
 	$(TUNA_BIN) --source $(CURDIR) --root $(TUNA_REPO) --dataset $(TUNA_DATASET) \
+		--name cleave \
+		--bench-arg --format=jsonl \
+		--bench-env CLEAVE_SKIP_CACHE=1 \
+		--deny traits/ \
 		--experiments $(TUNA_EXPERIMENTS) \
 		--screen-samples $(TUNA_SCREEN_SAMPLES) --confirm-samples $(TUNA_CONFIRM_SAMPLES) \
 		--provider $(TUNA_PROVIDER) $(if $(TUNA_MODE),--$(TUNA_MODE),) \

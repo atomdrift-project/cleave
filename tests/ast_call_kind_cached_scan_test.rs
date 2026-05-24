@@ -24,11 +24,7 @@ fn cleave_bin() -> &'static str {
 /// Build an isolated traits dir containing a single per-language trait
 /// and run a regular `cleave --format=tiny <fixture>` scan. Returns the
 /// captured stdout.
-fn scan_with_trait(
-    fixture_name: &str,
-    fixture: &str,
-    traits_yaml: &str,
-) -> (TempDir, String) {
+fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (TempDir, String) {
     let dir = TempDir::new().unwrap();
     let file = dir.path().join(fixture_name);
     fs::write(&file, fixture).unwrap();
@@ -64,7 +60,7 @@ fn scan_with_trait(
 }
 
 /// `tiny-v2` emits one finding per line, with the trait id in column 2:
-///   `H	<id>	<desc>	<evidence>`
+///   `H<TAB><id><TAB><desc><TAB><evidence>`
 /// Returns true if any non-comment line names the supplied trait id.
 fn finding_present(stdout: &str, trait_id: &str) -> bool {
     stdout.lines().any(|line| {

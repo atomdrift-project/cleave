@@ -158,9 +158,8 @@ pub(crate) const MAX_TRAITS_PER_DIRECTORY: usize = 80;
 /// when the trait set is per-implementation (one set per supported
 /// language) and splitting by language would violate the
 /// platform/language directory ban.
-pub(crate) const OVERSIZED_DIRECTORY_EXCEPTIONS: &[&str] = &[
-    "objectives/command-and-control/reverse-shell/dup",
-];
+pub(crate) const OVERSIZED_DIRECTORY_EXCEPTIONS: &[&str] =
+    &["objectives/command-and-control/reverse-shell/dup"];
 
 /// Validate that a trait ID contains only valid characters.
 /// Valid characters are: alphanumerics, dashes, and underscores.
@@ -886,8 +885,7 @@ pub(crate) fn find_banned_directory_segments(trait_dirs: &[String]) -> Vec<(Stri
             if BANNED_DIRECTORY_SEGMENTS.contains(&lower.as_str()) {
                 if BANNED_SEGMENT_EXCEPTIONS.iter().any(|(path, allowed)| {
                     lower == *allowed
-                        && (dir_path == *path
-                            || dir_path.starts_with(&format!("{path}/")))
+                        && (dir_path == *path || dir_path.starts_with(&format!("{path}/")))
                 }) {
                     continue;
                 }

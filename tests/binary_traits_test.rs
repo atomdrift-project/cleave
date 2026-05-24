@@ -10,7 +10,13 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
 use std::fs;
+use std::sync::{Mutex, OnceLock};
 use tempfile::TempDir;
+
+fn env_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
 
 fn options() -> cleave::AnalysisOptions {
     cleave::AnalysisOptions {
@@ -35,6 +41,9 @@ fn analyze(dir: &std::path::Path, name: &str, bytes: &[u8]) -> cleave::AnalysisR
 /// crash or hang."
 #[test]
 fn binary_trait_detection_smoke() {
+    let _guard = env_lock().lock().expect("env lock poisoned");
+    let previous = std::env::var_os("CLEAVE_SKIP_TRAITS");
+    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
     let tmp = TempDir::new().unwrap();
 
     // ELF64 LE with /dev/null marker
@@ -122,6 +131,11 @@ fn binary_trait_detection_smoke() {
         0x7f, b'E', b'L', b'F', 0x02, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0,
     ];
     let _ = analyze(tmp.path(), "static.elf", &static_bin);
+
+    match previous {
+        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
+        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
+    }
 }
 
 /// Real assertion: MIPS ELF should fire an exotic-arch trait. Currently

@@ -409,7 +409,6 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
     // writes to `filefacts_metrics`.
     for field in [
         "office.dde_link_count",
-        "office.doc_type",
         "office.embedded_executable_count",
         "office.external_frame_count",
         "office.external_image_count",

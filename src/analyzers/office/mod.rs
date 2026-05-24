@@ -264,25 +264,15 @@ impl OfficeAnalyzer {
         modules: &[vba::VbaModule],
         ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) {
-        // Always seed `office.doc_type` and the macro-enabled-extension
-        // flag, regardless of whether VBA modules were recovered. The
-        // sub-struct slots stay None when no VBA project is present so
-        // the empty-doc JSON output is undisturbed.
-        use crate::types::{flatten_into_metrics, kv_set_path, MetricsExt};
+        // Seed the macro-enabled-extension flag regardless of whether
+        // VBA modules were recovered. Document format identity itself
+        // comes from filefacts (`office.kind`), so we don't duplicate it
+        // here.
+        use crate::types::{flatten_into_metrics, MetricsExt};
         let flat = report
             .filefacts_metrics
             .get_or_insert_with(Default::default);
-        // `office.doc_type` is a string — goes to values_tree, not the
-        // numeric metric map. Only seed it on the first pass.
-        let doc_type_seeded = report
-            .values_tree
-            .as_deref()
-            .and_then(|t| t.as_object())
-            .and_then(|o| o.get("office"))
-            .and_then(|o| o.as_object())
-            .and_then(|o| o.get("doc_type"))
-            .is_some();
-        if !doc_type_seeded {
+        if flat.get_b("office.is_macro_enabled_extension").is_none() {
             if let Some(ext) = file_path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -304,11 +294,6 @@ impl OfficeAnalyzer {
                             | "xlsb"
                             | "ppam"
                     ),
-                );
-                kv_set_path(
-                    &mut report.values_tree,
-                    "office.doc_type",
-                    serde_json::Value::String(ext),
                 );
             }
         }
@@ -1654,13 +1639,6 @@ mod tests {
             .filefacts_metrics
             .as_ref()
             .expect("filefacts_metrics populated");
-        let doc_type = report
-            .values_tree
-            .as_deref()
-            .and_then(|t| t.pointer("/office/doc_type"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        assert_eq!(doc_type, "docm");
         assert_eq!(flat.get_b("office.is_macro_enabled_extension"), Some(true));
         assert_eq!(flat.get_b("office.has_macros"), Some(true));
         assert_eq!(flat.get_u("office.vba_module_count"), Some(2));

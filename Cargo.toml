@@ -1,6 +1,6 @@
 [package]
 name = "cleave"
-version = "1.4.0"
+version = "2.0.0"
 edition = "2021"
 authors = ["The Atomdrift Project"]
 description = "Deep static analysis tool for extracting features from binaries and source code"
@@ -180,10 +180,6 @@ cbc = { version = "0.1", features = ["alloc"] }
 # Utilities
 sha2 = { version = "0.10", features = ["asm-aarch64"] }
 md-5 = "0.10"
-# DWARF debug-info reader — surfaces DW_AT_producer (full compile
-# command line per CU) and DW_AT_comp_dir from unstripped ELF
-# binaries. Already a transitive dep via addr2line.
-gimli = { version = "0.32", default-features = false, features = ["read", "std"] }
 # X.509 certificate parsing — surfaces PE Authenticode cert chain
 # details (issuer, validity, thumbprint, serial). Already a transitive
 # dep via macho_codesign's roxmltree, so no new download.

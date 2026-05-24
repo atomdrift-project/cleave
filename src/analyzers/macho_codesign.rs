@@ -25,18 +25,6 @@ pub(crate) enum SignatureType {
     Unknown,
 }
 
-impl SignatureType {
-    #[must_use]
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            SignatureType::Adhoc => "adhoc",
-            SignatureType::DeveloperID => "developer-id",
-            SignatureType::Platform => "platform",
-            SignatureType::Unknown => "unknown",
-        }
-    }
-}
-
 /// Entitlement values (simplified from full plist support)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub(crate) enum EntitlementValue {
@@ -822,14 +810,6 @@ fn extract_identifier(cd_data: &[u8]) -> Option<String> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_signature_type_str() {
-        assert_eq!(SignatureType::Adhoc.as_str(), "adhoc");
-        assert_eq!(SignatureType::DeveloperID.as_str(), "developer-id");
-        assert_eq!(SignatureType::Platform.as_str(), "platform");
-        assert_eq!(SignatureType::Unknown.as_str(), "unknown");
-    }
 
     #[test]
     fn test_entitlement_value_types() {

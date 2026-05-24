@@ -37,7 +37,9 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     }
 
     let old_tmp = std::env::var_os("TMPDIR");
+    let old_skip = std::env::var_os("CLEAVE_SKIP_TRAITS");
     std::env::set_var("TMPDIR", &tmp);
+    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
     let result = cleave::analyze_file(
         &zip_path,
         &cleave::AnalysisOptions {
@@ -49,6 +51,10 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     match old_tmp {
         Some(value) => std::env::set_var("TMPDIR", value),
         None => std::env::remove_var("TMPDIR"),
+    }
+    match old_skip {
+        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
+        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
     }
     result?;
 

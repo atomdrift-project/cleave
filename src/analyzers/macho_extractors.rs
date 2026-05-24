@@ -1,327 +1,41 @@
-//! Mach-O load-command extractor — byte-pattern walker for the
-//! string-typed metadata that goblin doesn't surface as plain
-//! strings (LC_UUID, LC_BUILD_VERSION tool array, LC_LOAD_DYLIB
-//! paths, LC_RPATH, LC_ID_DYLIB, LC_SOURCE_VERSION, LC_LINKER_OPTION).
+//! Mach-O section locator for cleave's Go buildinfo decoder.
 //!
-//! These are the fields Apple's `otool -l` / `codesign -dv` print
-//! and that malware authors regularly leak through:
-//!
-//! - **LC_UUID** — 16-byte build identifier; unique per build.
-//!   Apple uses it as the primary clustering key for crash reports.
-//! - **LC_BUILD_VERSION** — platform (macOS/iOS/...), minimum OS
-//!   version, SDK version, and a per-tool version array (clang,
-//!   swiftc, ld) — the cleanest compiler-attribution surface in
-//!   any binary format.
-//! - **LC_LOAD_DYLIB** family — every linked framework or dylib
-//!   with its exact compatibility/current versions.  Reveals
-//!   target macOS version, framework dependencies, and
-//!   `@executable_path/...` injection paths.
-//! - **LC_RPATH** — runtime library search paths.
-//! - **LC_ID_DYLIB** — install-name for `.dylib` files.
-//! - **LC_SOURCE_VERSION** — user-set source-version stamp.
-//! - **LC_LINKER_OPTION** — linker flags carried from `.o` files.
-//!
-//! All parsing is endianness-agnostic for LE Mach-Os (the
-//! overwhelming majority); BE Mach-Os fall back to None.  Fat /
-//! universal binaries are dispatched by reading the first slice.
+//! Filefacts owns every Mach-O `macho.*` fact emitted in the report
+//! (slices, build_version, code signature, info_plist, launchd_plist,
+//! rpaths, dylibs, source_version, …). The only function that still
+//! lives here is `find_section`, which `go_buildinfo` calls on raw
+//! bytes to locate `__TEXT,__rodata` / `__TEXT,__gopclntab` /
+//! `__DATA,__go_buildinfo` — sections it then walks itself with the
+//! Go-specific decoders.
 
-use serde::{Deserialize, Serialize};
-
-// --- Mach-O magic constants ---
 const MH_MAGIC: u32 = 0xFEED_FACE;
 const MH_MAGIC_64: u32 = 0xFEED_FACF;
 const FAT_MAGIC: u32 = 0xCAFE_BABE;
 const FAT_MAGIC_64: u32 = 0xCAFE_BABF;
 
-// --- LC_* command IDs (low bits; high bit 0x80000000 is REQ_DYLD,
-//     we mask it off before comparing) ---
-const LC_UUID: u32 = 0x1B;
-const LC_LOAD_DYLIB: u32 = 0x0C;
-const LC_ID_DYLIB: u32 = 0x0D;
-const LC_LOAD_WEAK_DYLIB: u32 = 0x18;
-const LC_LAZY_LOAD_DYLIB: u32 = 0x20;
-const LC_REEXPORT_DYLIB: u32 = 0x1F;
-const LC_LOAD_UPWARD_DYLIB: u32 = 0x23;
-const LC_RPATH: u32 = 0x1C;
-const LC_SOURCE_VERSION: u32 = 0x2A;
-const LC_LINKER_OPTION: u32 = 0x2D;
-const LC_BUILD_VERSION: u32 = 0x32;
-const LC_CODE_SIGNATURE: u32 = 0x1D;
 const LC_SEGMENT: u32 = 0x01;
 const LC_SEGMENT_64: u32 = 0x19;
-const LC_FUNCTION_STARTS: u32 = 0x26;
-/// Mach VM protection bits — same on all platforms.
-const VM_PROT_WRITE: u32 = 0x02;
-const VM_PROT_EXECUTE: u32 = 0x04;
-
 const LC_REQ_DYLD: u32 = 0x8000_0000;
 
 const MAX_LOAD_COMMANDS: usize = 4096;
 const MAX_LC_PAYLOAD: usize = 1 << 20;
 
-/// One row per slice in a Mach-O fat (universal) binary.  Plain
-/// (non-fat) Mach-Os return a single entry. Used by binary_extractors
-/// to surface `macho.slices[]` for cross-slice consistency checks
-/// (UUID drift across slices is a tamper signal — vendors typically
-/// rebuild all slices simultaneously and they share UUIDs).
-#[derive(Debug, Clone)]
-pub(crate) struct SliceSummary {
-    /// Slice CPU architecture name: `"x86_64"`, `"arm64"`, `"arm64e"`,
-    /// `"i386"`, `"ppc"`, `"ppc64"`, or `"unknown"`.
-    pub arch: String,
-    /// LC_UUID hex (canonical hyphenated form), or `None` if absent.
-    pub uuid: Option<String>,
-    /// File offset where this slice begins (0 for non-fat Mach-O).
-    pub file_offset: u64,
-    /// Whether this slice carries an LC_CODE_SIGNATURE blob.
-    pub has_code_signature: bool,
-}
-
-/// Walk all slices in a Mach-O fat binary, returning one summary
-/// per slice. Plain Mach-O returns a single-element vec. Used to
-/// detect tampering where one slice has a different UUID or signing
-/// state than the rest.
+/// Locate the named section's bytes within a Mach-O file. Picks the
+/// first slice of a fat binary; returns `None` for non-Mach-O input
+/// or when the section is absent.
 #[must_use]
-pub(crate) fn extract_all_slices(data: &[u8]) -> Vec<SliceSummary> {
-    let mut out = Vec::new();
-    for (offset, is_64) in iterate_slice_starts(data) {
-        let arch = read_arch_name(data, offset, is_64);
-        let mut uuid = None;
-        let mut has_cs = false;
-        if let Some(after) = parse_header(data, offset, is_64) {
-            if let Some(lc) = parse_load_commands(data, after.cmds_offset, after.ncmds, offset) {
-                uuid = lc.uuid;
-                has_cs = lc.code_signature.is_some();
-            }
-        }
-        out.push(SliceSummary {
-            arch,
-            uuid,
-            file_offset: offset as u64,
-            has_code_signature: has_cs,
-        });
-    }
-    out
-}
-
-/// Yield (offset, is_64) for every Mach-O slice in `data`. Plain
-/// Mach-O returns one entry; FAT_MAGIC fans out to N.
-fn iterate_slice_starts(data: &[u8]) -> Vec<(usize, bool)> {
-    let mut out = Vec::new();
-    if data.len() < 8 {
-        return out;
-    }
-    let magic_le = match data[..4].try_into() {
-        Ok(b) => u32::from_le_bytes(b),
-        Err(_) => return out,
-    };
-    let magic_be = match data[..4].try_into() {
-        Ok(b) => u32::from_be_bytes(b),
-        Err(_) => return out,
-    };
-    if magic_le == MH_MAGIC_64 {
-        out.push((0, true));
-        return out;
-    }
-    if magic_le == MH_MAGIC {
-        out.push((0, false));
-        return out;
-    }
-    if magic_be == FAT_MAGIC || magic_be == FAT_MAGIC_64 {
-        let nfat = match data[4..8].try_into() {
-            Ok(b) => u32::from_be_bytes(b) as usize,
-            Err(_) => return out,
-        };
-        let entry_size = if magic_be == FAT_MAGIC_64 { 32 } else { 20 };
-        for i in 0..nfat.min(32) {
-            let entry_off = 8 + i * entry_size;
-            if entry_off + entry_size > data.len() {
-                break;
-            }
-            let slice_off: usize = if magic_be == FAT_MAGIC_64 {
-                match data[entry_off + 8..entry_off + 16].try_into() {
-                    Ok(b) => u64::from_be_bytes(b) as usize,
-                    Err(_) => continue,
-                }
-            } else {
-                match data[entry_off + 8..entry_off + 12].try_into() {
-                    Ok(b) => u32::from_be_bytes(b) as usize,
-                    Err(_) => continue,
-                }
-            };
-            if slice_off + 4 > data.len() {
-                continue;
-            }
-            let inner = match data[slice_off..slice_off + 4].try_into() {
-                Ok(b) => u32::from_le_bytes(b),
-                Err(_) => continue,
-            };
-            if inner == MH_MAGIC_64 {
-                out.push((slice_off, true));
-            } else if inner == MH_MAGIC {
-                out.push((slice_off, false));
-            }
-        }
-    }
-    out
-}
-
-/// Decode a slice's CPU type / subtype into a canonical arch name.
-/// Falls back to `"unknown"` for unsupported types.
-fn read_arch_name(data: &[u8], header_off: usize, is_64: bool) -> String {
-    if header_off + 12 > data.len() {
-        return "unknown".to_string();
-    }
-    let cputype = match data[header_off + 4..header_off + 8].try_into() {
-        Ok(b) => u32::from_le_bytes(b),
-        Err(_) => return "unknown".to_string(),
-    };
-    let cpusubtype = match data[header_off + 8..header_off + 12].try_into() {
-        Ok(b) => u32::from_le_bytes(b),
-        Err(_) => return "unknown".to_string(),
-    };
-    cputype_name(cputype, cpusubtype, is_64).to_string()
-}
-
-/// Mach-O CPU type constants → canonical arch name. The list mirrors
-/// what `lipo -archs` prints. cpu_subtype is used to disambiguate
-/// arm64 vs arm64e (Apple Silicon PAC-enabled).
-fn cputype_name(cputype: u32, cpusubtype: u32, is_64: bool) -> &'static str {
-    const CPU_TYPE_X86: u32 = 0x7;
-    const CPU_TYPE_X86_64: u32 = 0x01000007;
-    const CPU_TYPE_ARM: u32 = 0xC;
-    const CPU_TYPE_ARM64: u32 = 0x0100000C;
-    const CPU_TYPE_ARM64_32: u32 = 0x0200000C;
-    const CPU_TYPE_PPC: u32 = 0x12;
-    const CPU_TYPE_PPC64: u32 = 0x01000012;
-    // arm64e (Apple Silicon with PAC) carries a specific cpusubtype.
-    const CPU_SUBTYPE_ARM64E: u32 = 2;
-    let cpusubtype_masked = cpusubtype & 0x00FF_FFFF;
-    match cputype {
-        CPU_TYPE_X86_64 => "x86_64",
-        CPU_TYPE_X86 => "i386",
-        CPU_TYPE_ARM64 => {
-            if cpusubtype_masked == CPU_SUBTYPE_ARM64E {
-                "arm64e"
-            } else {
-                "arm64"
-            }
-        }
-        CPU_TYPE_ARM64_32 => "arm64_32",
-        CPU_TYPE_ARM => "arm",
-        CPU_TYPE_PPC64 => "ppc64",
-        CPU_TYPE_PPC => "ppc",
-        _ => {
-            let _ = is_64;
-            "unknown"
-        }
-    }
-}
-
-/// Recovered Mach-O load-command data.  Empty fields drop from the
-/// kv tree.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct MachoLoadCommands {
-    pub uuid: Option<String>,
-    pub build_version: Option<MachoBuildVersion>,
-    pub source_version: Option<String>,
-    pub id_dylib: Option<String>,
-    /// Path-token classification of `id_dylib` (the dylib's own
-    /// install_name): `"absolute"`, `"rpath"`, `"loader_path"`, or
-    /// `"executable_path"`. The 3CX backdoor flipped its libffmpeg
-    /// from `@rpath` to `@loader_path` to make injection from
-    /// arbitrary directories work.
-    pub install_name_kind: Option<String>,
-    pub load_dylibs: Vec<MachoDylib>,
-    pub rpath: Vec<String>,
-    pub linker_options: Vec<String>,
-    /// File offset + size of the LC_CODE_SIGNATURE blob, when present.
-    /// Callers feed this to `macho_codesign::parse_code_signature` to
-    /// recover team_id / entitlements / authorities.
-    pub code_signature: Option<(u32, u32)>,
-    /// Decoded count of LC_FUNCTION_STARTS entries (function entry
-    /// points known to dyld). Distinct from radare2's `func_count`
-    /// which comes from disassembly.
-    pub function_starts_count: u32,
-    /// Names of segments whose initial protection (`init_prot`)
-    /// permits both write and execute — i.e. mapped RWX from load.
-    /// Anomalous: ordinary binaries map __TEXT as r-x and __DATA as
-    /// rw-. RWX init_prot indicates self-modifying code or runtime
-    /// patching infrastructure (JIT engines, packers).
-    pub wx_init_prot_segments: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MachoBuildVersion {
-    /// Platform: `"macOS"`, `"iOS"`, `"tvOS"`, `"watchOS"`,
-    /// `"macCatalyst"`, `"iOSSimulator"`, `"driverkit"`, etc.
-    pub platform: String,
-    /// Minimum supported OS version (e.g. `"10.13.0"`).
-    pub minos: String,
-    /// SDK version this binary was built against (e.g. `"11.0.0"`).
-    pub sdk: String,
-    /// Build tools used: clang, swiftc, ld, lld each with a version.
-    pub tools: Vec<MachoTool>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MachoTool {
-    pub tool: String,
-    pub version: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct MachoDylib {
-    pub path: String,
-    /// One of `"load"`, `"weak"`, `"lazy"`, `"reexport"`, `"upward"`.
-    pub kind: String,
-    /// Path-token classification: `"absolute"`, `"rpath"`,
-    /// `"loader_path"`, or `"executable_path"`.
-    pub path_kind: String,
-    /// LC_LOAD_DYLIB `timestamp` field (u32, seconds since epoch).
-    /// Often zero in modern dyld-3 builds; non-zero values predate ~2018
-    /// and carry a weak who/when signal.
-    pub timestamp: u32,
-    /// Compatibility version (encoded X.Y.Z).
-    pub compatibility_version: String,
-    /// Current version (encoded X.Y.Z).
-    pub current_version: String,
-}
-
-/// Extract load-command data from raw Mach-O bytes.  Returns
-/// `None` for non-Mach-O input (unrecognized magic) or when the
-/// command list looks structurally broken.
-#[must_use]
-pub(crate) fn extract(data: &[u8]) -> Option<MachoLoadCommands> {
+pub(crate) fn find_section<'a>(data: &'a [u8], segname: &str, sectname: &str) -> Option<&'a [u8]> {
     let (header_off, is_64) = locate_first_macho_slice(data)?;
     let after_header = parse_header(data, header_off, is_64)?;
-    let mut out = parse_load_commands(
-        data,
-        after_header.cmds_offset,
-        after_header.ncmds,
-        header_off,
-    )?;
-    // LC_CODE_SIGNATURE.dataoff is slice-relative.  Promote to a
-    // file-absolute offset so callers (binary_extractors) can pass
-    // the raw file bytes without having to track which slice we
-    // dispatched to.
-    if header_off > 0 {
-        if let Some((off, sz)) = out.code_signature {
-            out.code_signature = Some((off.saturating_add(header_off as u32), sz));
-        }
-    }
-    Some(out)
+    walk_segments_for_section(data, header_off, after_header, is_64, segname, sectname)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 struct HeaderInfo {
     cmds_offset: usize,
     ncmds: usize,
 }
 
-/// Find the start of the (first) Mach-O slice. For fat binaries we
-/// dispatch to the first arch slice; for plain Mach-Os, this is the
-/// file start.  Returns `(offset, is_64bit)`.
 fn locate_first_macho_slice(data: &[u8]) -> Option<(usize, bool)> {
     if data.len() < 8 {
         return None;
@@ -329,7 +43,6 @@ fn locate_first_macho_slice(data: &[u8]) -> Option<(usize, bool)> {
     let magic_le = u32::from_le_bytes(data[..4].try_into().ok()?);
     let magic_be = u32::from_be_bytes(data[..4].try_into().ok()?);
 
-    // Plain Mach-O.
     if magic_le == MH_MAGIC_64 {
         return Some((0, true));
     }
@@ -337,7 +50,6 @@ fn locate_first_macho_slice(data: &[u8]) -> Option<(usize, bool)> {
         return Some((0, false));
     }
 
-    // Fat / universal binaries — pick the first slice.
     if magic_be == FAT_MAGIC || magic_be == FAT_MAGIC_64 {
         let nfat = u32::from_be_bytes(data[4..8].try_into().ok()?) as usize;
         if nfat == 0 {
@@ -348,9 +60,6 @@ fn locate_first_macho_slice(data: &[u8]) -> Option<(usize, bool)> {
         if entry_off + entry_size > data.len() {
             return None;
         }
-        // Slice offset lives at bytes 8..16 in entry (big-endian
-        // u64 for FAT_MAGIC_64; big-endian u32 at 8..12 for legacy
-        // FAT_MAGIC).
         let slice_off: usize = if magic_be == FAT_MAGIC_64 {
             u64::from_be_bytes(data[entry_off + 8..entry_off + 16].try_into().ok()?) as usize
         } else {
@@ -375,7 +84,6 @@ fn parse_header(data: &[u8], off: usize, is_64: bool) -> Option<HeaderInfo> {
     if off + header_size > data.len() {
         return None;
     }
-    // ncmds at offset 16 of the header (after magic, cputype, cpusubtype, filetype).
     let ncmds = u32::from_le_bytes(data[off + 16..off + 20].try_into().ok()?) as usize;
     if ncmds > MAX_LOAD_COMMANDS {
         return None;
@@ -383,406 +91,6 @@ fn parse_header(data: &[u8], off: usize, is_64: bool) -> Option<HeaderInfo> {
     Some(HeaderInfo {
         cmds_offset: off + header_size,
         ncmds,
-    })
-}
-
-fn parse_load_commands(
-    data: &[u8],
-    start: usize,
-    ncmds: usize,
-    slice_off: usize,
-) -> Option<MachoLoadCommands> {
-    let mut out = MachoLoadCommands::default();
-    let mut cursor = start;
-    for _ in 0..ncmds {
-        if cursor + 8 > data.len() {
-            break;
-        }
-        let cmd_raw = u32::from_le_bytes(data[cursor..cursor + 4].try_into().ok()?);
-        let cmdsize = u32::from_le_bytes(data[cursor + 4..cursor + 8].try_into().ok()?) as usize;
-        if !(8..=MAX_LC_PAYLOAD).contains(&cmdsize) || cursor + cmdsize > data.len() {
-            break;
-        }
-        let cmd = cmd_raw & !LC_REQ_DYLD;
-        let body = &data[cursor..cursor + cmdsize];
-
-        match cmd {
-            LC_UUID if body.len() >= 24 => {
-                let uuid_bytes = &body[8..24];
-                out.uuid = Some(format_uuid(uuid_bytes));
-            }
-            LC_BUILD_VERSION => {
-                if let Some(bv) = parse_build_version(body) {
-                    out.build_version = Some(bv);
-                }
-            }
-            LC_SOURCE_VERSION if body.len() >= 16 => {
-                let raw = u64::from_le_bytes(body[8..16].try_into().ok()?);
-                out.source_version = Some(decode_source_version(raw));
-            }
-            LC_RPATH if body.len() >= 12 => {
-                let off = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-                if let Some(s) = read_lc_string(body, off) {
-                    out.rpath.push(s);
-                }
-            }
-            LC_LOAD_DYLIB | LC_ID_DYLIB | LC_LOAD_WEAK_DYLIB | LC_LAZY_LOAD_DYLIB
-            | LC_REEXPORT_DYLIB | LC_LOAD_UPWARD_DYLIB => {
-                if let Some(d) = parse_dylib(body, cmd) {
-                    if cmd == LC_ID_DYLIB {
-                        out.install_name_kind = Some(d.path_kind.clone());
-                        out.id_dylib = Some(d.path);
-                    } else {
-                        out.load_dylibs.push(d);
-                    }
-                }
-            }
-            LC_SEGMENT_64 if body.len() >= 72 => {
-                let segname = parse_fixed_name(&body[8..24]);
-                // segment_command_64: char segname[16], u64 vmaddr,
-                // u64 vmsize, u64 fileoff, u64 filesize,
-                // u32 maxprot @56, u32 initprot @60.
-                // We check initprot — it's what actually gets mapped.
-                // maxprot is almost always 0x07 (rwx) on Apple's
-                // linker; the signal lives in initprot.
-                let initprot = u32::from_le_bytes(body[60..64].try_into().ok()?);
-                if initprot & VM_PROT_WRITE != 0 && initprot & VM_PROT_EXECUTE != 0 {
-                    out.wx_init_prot_segments.push(segname);
-                }
-            }
-            LC_SEGMENT if body.len() >= 56 => {
-                let segname = parse_fixed_name(&body[8..24]);
-                // segment_command (32-bit): char segname[16], u32 vmaddr,
-                // u32 vmsize, u32 fileoff, u32 filesize,
-                // u32 maxprot @40, u32 initprot @44.
-                let initprot = u32::from_le_bytes(body[44..48].try_into().ok()?);
-                if initprot & VM_PROT_WRITE != 0 && initprot & VM_PROT_EXECUTE != 0 {
-                    out.wx_init_prot_segments.push(segname);
-                }
-            }
-            LC_FUNCTION_STARTS if body.len() >= 16 => {
-                let dataoff = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-                let datasize = u32::from_le_bytes(body[12..16].try_into().ok()?) as usize;
-                let abs = slice_off.saturating_add(dataoff);
-                if let Some(slice) = data.get(abs..abs.saturating_add(datasize)) {
-                    out.function_starts_count = count_function_starts(slice);
-                }
-            }
-            LC_CODE_SIGNATURE if body.len() >= 16 => {
-                let off = u32::from_le_bytes(body[8..12].try_into().ok()?);
-                let sz = u32::from_le_bytes(body[12..16].try_into().ok()?);
-                if sz > 0 {
-                    out.code_signature = Some((off, sz));
-                }
-            }
-            LC_LINKER_OPTION if body.len() >= 12 => {
-                let count = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-                let mut p = 12;
-                for _ in 0..count.min(64) {
-                    if p >= body.len() {
-                        break;
-                    }
-                    let nul = body[p..]
-                        .iter()
-                        .position(|&b| b == 0)
-                        .map(|n| p + n)
-                        .unwrap_or(body.len());
-                    if nul > p {
-                        let s = String::from_utf8_lossy(&body[p..nul]).into_owned();
-                        if !s.is_empty() {
-                            out.linker_options.push(s);
-                        }
-                    }
-                    p = nul + 1;
-                }
-            }
-            _ => {}
-        }
-        cursor += cmdsize;
-    }
-
-    if out.uuid.is_none()
-        && out.build_version.is_none()
-        && out.source_version.is_none()
-        && out.id_dylib.is_none()
-        && out.load_dylibs.is_empty()
-        && out.rpath.is_empty()
-        && out.linker_options.is_empty()
-        && out.code_signature.is_none()
-        && out.function_starts_count == 0
-        && out.wx_init_prot_segments.is_empty()
-    {
-        return None;
-    }
-    Some(out)
-}
-
-/// Count entries in an LC_FUNCTION_STARTS payload. The blob is a
-/// sequence of ULEB128-encoded address deltas terminated by a zero
-/// delta. Each non-terminating delta corresponds to one function
-/// known to dyld.
-fn count_function_starts(data: &[u8]) -> u32 {
-    let mut count: u32 = 0;
-    let mut i = 0usize;
-    while i < data.len() {
-        let mut value: u64 = 0;
-        let mut shift = 0u32;
-        let mut consumed = 0usize;
-        loop {
-            if i + consumed >= data.len() || shift >= 63 {
-                return count;
-            }
-            let byte = data[i + consumed];
-            value |= ((byte & 0x7f) as u64) << shift;
-            consumed += 1;
-            if byte & 0x80 == 0 {
-                break;
-            }
-            shift += 7;
-        }
-        i += consumed;
-        if value == 0 {
-            break;
-        }
-        count = count.saturating_add(1);
-    }
-    count
-}
-
-/// Format the LC_UUID 16-byte field as a canonical hyphenated UUID.
-fn format_uuid(bytes: &[u8]) -> String {
-    if bytes.len() < 16 {
-        return String::new();
-    }
-    format!(
-        "{:02X}{:02X}{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        bytes[0], bytes[1], bytes[2], bytes[3],
-        bytes[4], bytes[5],
-        bytes[6], bytes[7],
-        bytes[8], bytes[9],
-        bytes[10], bytes[11], bytes[12], bytes[13], bytes[14], bytes[15],
-    )
-}
-
-fn parse_build_version(body: &[u8]) -> Option<MachoBuildVersion> {
-    if body.len() < 24 {
-        return None;
-    }
-    let platform = u32::from_le_bytes(body[8..12].try_into().ok()?);
-    let minos = u32::from_le_bytes(body[12..16].try_into().ok()?);
-    let sdk = u32::from_le_bytes(body[16..20].try_into().ok()?);
-    let ntools = u32::from_le_bytes(body[20..24].try_into().ok()?) as usize;
-    let mut tools = Vec::with_capacity(ntools.min(8));
-    for i in 0..ntools.min(16) {
-        let off = 24 + i * 8;
-        if off + 8 > body.len() {
-            break;
-        }
-        let tool_id = u32::from_le_bytes(body[off..off + 4].try_into().ok()?);
-        let version = u32::from_le_bytes(body[off + 4..off + 8].try_into().ok()?);
-        tools.push(MachoTool {
-            tool: build_tool_name(tool_id).to_string(),
-            version: decode_xyz_version(version),
-        });
-    }
-    Some(MachoBuildVersion {
-        platform: platform_name(platform).to_string(),
-        minos: decode_xyz_version(minos),
-        sdk: decode_xyz_version(sdk),
-        tools,
-    })
-}
-
-fn parse_dylib(body: &[u8], cmd: u32) -> Option<MachoDylib> {
-    if body.len() < 24 {
-        return None;
-    }
-    let name_offset = u32::from_le_bytes(body[8..12].try_into().ok()?) as usize;
-    let timestamp = u32::from_le_bytes(body[12..16].try_into().ok()?);
-    let current = u32::from_le_bytes(body[16..20].try_into().ok()?);
-    let compat = u32::from_le_bytes(body[20..24].try_into().ok()?);
-    let path = read_lc_string(body, name_offset)?;
-    let path_kind = classify_install_name_path(&path).to_string();
-    Some(MachoDylib {
-        path,
-        kind: dylib_kind(cmd).to_string(),
-        path_kind,
-        timestamp,
-        compatibility_version: decode_xyz_version(compat),
-        current_version: decode_xyz_version(current),
-    })
-}
-
-/// Classify an install_name / dylib path by its leading dyld token.
-/// Distinguishes the three flexible runtime-resolution forms from
-/// the absolute path. The 3CX backdoor toggled libffmpeg's
-/// install_name from `@rpath` to `@loader_path`; surfacing the
-/// kind lets traits compare the categorical value rather than
-/// regex-matching the raw string.
-fn classify_install_name_path(path: &str) -> &'static str {
-    if let Some(rest) = path.strip_prefix('@') {
-        if rest.starts_with("rpath/") || rest == "rpath" {
-            "rpath"
-        } else if rest.starts_with("loader_path/") || rest == "loader_path" {
-            "loader_path"
-        } else if rest.starts_with("executable_path/") || rest == "executable_path" {
-            "executable_path"
-        } else {
-            "other_token"
-        }
-    } else if path.starts_with('/') {
-        "absolute"
-    } else {
-        "relative"
-    }
-}
-
-fn dylib_kind(cmd: u32) -> &'static str {
-    match cmd {
-        LC_LOAD_WEAK_DYLIB => "weak",
-        LC_LAZY_LOAD_DYLIB => "lazy",
-        LC_REEXPORT_DYLIB => "reexport",
-        LC_LOAD_UPWARD_DYLIB => "upward",
-        LC_ID_DYLIB => "id",
-        // LC_LOAD_DYLIB and any unknown future LC_*_DYLIB variant
-        // both default to the standard "load" attachment kind.
-        _ => "load",
-    }
-}
-
-fn read_lc_string(body: &[u8], offset: usize) -> Option<String> {
-    if offset >= body.len() {
-        return None;
-    }
-    let bytes = &body[offset..];
-    let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
-    let s = String::from_utf8_lossy(&bytes[..end]).into_owned();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
-}
-
-/// Decode an OS / SDK / compat version u32: bits 31-16 = X (major),
-/// bits 15-8 = Y (minor), bits 7-0 = Z (patch).
-fn decode_xyz_version(v: u32) -> String {
-    let major = v >> 16;
-    let minor = (v >> 8) & 0xFF;
-    let patch = v & 0xFF;
-    format!("{}.{}.{}", major, minor, patch)
-}
-
-/// Decode LC_SOURCE_VERSION's 64-bit packed encoding: A.B.C.D.E with
-/// 24 + 10 + 10 + 10 + 10 bits respectively.
-fn decode_source_version(v: u64) -> String {
-    let a = v >> 40;
-    let b = (v >> 30) & 0x3FF;
-    let c = (v >> 20) & 0x3FF;
-    let d = (v >> 10) & 0x3FF;
-    let e = v & 0x3FF;
-    if d == 0 && e == 0 {
-        format!("{}.{}.{}", a, b, c)
-    } else {
-        format!("{}.{}.{}.{}.{}", a, b, c, d, e)
-    }
-}
-
-fn platform_name(p: u32) -> &'static str {
-    match p {
-        1 => "macOS",
-        2 => "iOS",
-        3 => "tvOS",
-        4 => "watchOS",
-        5 => "bridgeOS",
-        6 => "macCatalyst",
-        7 => "iOSSimulator",
-        8 => "tvOSSimulator",
-        9 => "watchOSSimulator",
-        10 => "driverkit",
-        _ => "unknown",
-    }
-}
-
-/// Walk the load commands of the first Mach-O slice looking for a
-/// section named `(segname, sectname)`. Returns the section's byte
-/// slice when found, or `None` for non-Mach-O input or absent
-/// sections. Lenient — bails on malformed inputs rather than
-/// propagating errors.
-///
-/// Used to extract embedded text-segment payloads:
-/// `("__TEXT", "__info_plist")` for command-line tools' Info.plist,
-/// `("__TEXT", "__launchd_plist")` for self-installing daemons,
-/// `("__TEXT", "__entitlements")` for inline entitlements,
-/// `("__DATA_CONST", "__objc_classlist")` for ObjC reflection.
-#[must_use]
-pub(crate) fn find_section<'a>(data: &'a [u8], segname: &str, sectname: &str) -> Option<&'a [u8]> {
-    let (header_off, is_64) = locate_first_macho_slice(data)?;
-    let after_header = parse_header(data, header_off, is_64)?;
-    walk_segments_for_section(data, header_off, after_header, is_64, segname, sectname)
-}
-
-/// Decoded `__DATA,__objc_imageinfo` (or `__OBJC,__image_info` for
-/// pre-2018 binaries). Reveals Swift toolchain version even when no
-/// Swift symbols are exposed; `is_simulated` distinguishes simulator-
-/// targeted slices.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct ObjcImageInfo {
-    /// Canonical Swift version derived from bits 8..16 of `flags`.
-    /// Returns `None` for pure ObjC binaries (Swift bits = 0).
-    pub swift_version: Option<&'static str>,
-    /// Bit 5 — `OBJC_IMAGE_IS_SIMULATED`.
-    pub is_simulated: bool,
-    /// Bit 3 — `OBJC_IMAGE_OPTIMIZED_BY_DYLD`.
-    pub optimized_by_dyld: bool,
-    /// Bit 6 — `OBJC_IMAGE_HAS_CATEGORY_CLASS_PROPERTIES`.
-    pub has_category_class_properties: bool,
-}
-
-impl ObjcImageInfo {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.swift_version.is_none()
-            && !self.is_simulated
-            && !self.optimized_by_dyld
-            && !self.has_category_class_properties
-    }
-}
-
-/// Parse `__DATA,__objc_imageinfo` (8 bytes: u32 version, u32 flags).
-/// Falls back to `__OBJC,__image_info` for pre-2018 binaries. Returns
-/// `None` if neither section is present.
-#[must_use]
-pub(crate) fn extract_objc_imageinfo(data: &[u8]) -> Option<ObjcImageInfo> {
-    let bytes = find_section(data, "__DATA", "__objc_imageinfo")
-        .or_else(|| find_section(data, "__DATA_CONST", "__objc_imageinfo"))
-        .or_else(|| find_section(data, "__OBJC", "__image_info"))?;
-    if bytes.len() < 8 {
-        return None;
-    }
-    let flags = u32::from_le_bytes(bytes[4..8].try_into().ok()?);
-    let swift_byte = ((flags >> 8) & 0xff) as u8;
-    Some(ObjcImageInfo {
-        swift_version: swift_version_name(swift_byte),
-        is_simulated: flags & (1 << 5) != 0,
-        optimized_by_dyld: flags & (1 << 3) != 0,
-        has_category_class_properties: flags & (1 << 6) != 0,
-    })
-}
-
-/// Map the high-byte Swift version field to a canonical name. Apple's
-/// runtime defines a fixed table; values past 7 are Swift 5.x where
-/// the exact version is encoded by additional metadata in the binary.
-fn swift_version_name(byte: u8) -> Option<&'static str> {
-    Some(match byte {
-        0 => return None,
-        1 => "1.0",
-        2 => "1.1",
-        3 => "2.0",
-        4 => "3.0",
-        5 => "4.0",
-        6 => "4.1",
-        7 => "4.2",
-        _ => "5.0+",
     })
 }
 
@@ -821,9 +129,9 @@ fn walk_segments_for_section<'a>(
             }
             let segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
             let (header_size, section_size, nsects_off) = if is_64 {
-                (72, 80, 64) // segment header is 72 bytes; nsects at offset 64
+                (72, 80, 64)
             } else {
-                (56, 68, 48) // segment header is 56 bytes; nsects at offset 48
+                (56, 68, 48)
             };
             if body.len() < nsects_off + 4 {
                 cursor += cmdsize;
@@ -832,9 +140,6 @@ fn walk_segments_for_section<'a>(
             let nsects =
                 u32::from_le_bytes(body[nsects_off..nsects_off + 4].try_into().ok()?) as usize;
 
-            // Only walk sections if this segment matches the target —
-            // typically only __TEXT carries the inline payloads we care
-            // about, and __LINKEDIT alone has many sections we'd skip.
             if segname == target_seg {
                 for i in 0..nsects.min(256) {
                     let s_off = header_size + i * section_size;
@@ -856,8 +161,8 @@ fn walk_segments_for_section<'a>(
                             )
                         };
                         // Section file offset is relative to the
-                        // file's slice start, which is `header_off`
-                        // for fat binaries and 0 for plain Mach-O.
+                        // file's slice start (`header_off` for fat,
+                        // 0 for plain Mach-O).
                         let abs_off = header_off.checked_add(offset)?;
                         if abs_off.checked_add(size)? > data.len() || size == 0 {
                             return None;
@@ -873,291 +178,7 @@ fn walk_segments_for_section<'a>(
     None
 }
 
-/// Decode a 16-byte fixed-length NUL-padded segment/section name
-/// into a Rust string. Stops at the first NUL.
 fn parse_fixed_name(bytes: &[u8]) -> String {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     String::from_utf8_lossy(&bytes[..end]).into_owned()
-}
-
-/// Enumerate every section under the given segment whose name starts
-/// with `prefix`. Returns the matching section names (with their
-/// `__` prefix, sorted, deduped). Used to surface the
-/// `__TEXT,__swift5_*` family for Swift detection.
-#[must_use]
-pub(crate) fn list_sections_with_prefix(data: &[u8], segname: &str, prefix: &str) -> Vec<String> {
-    let Some((header_off, is_64)) = locate_first_macho_slice(data) else {
-        return Vec::new();
-    };
-    let Some(after_header) = parse_header(data, header_off, is_64) else {
-        return Vec::new();
-    };
-
-    let mut out: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    let mut cursor = after_header.cmds_offset;
-    for _ in 0..after_header.ncmds {
-        if cursor + 8 > data.len() {
-            break;
-        }
-        let Ok(cmd_bytes) = data[cursor..cursor + 4].try_into() else {
-            break;
-        };
-        let Ok(size_bytes) = data[cursor + 4..cursor + 8].try_into() else {
-            break;
-        };
-        let cmd = u32::from_le_bytes(cmd_bytes) & !LC_REQ_DYLD;
-        let cmdsize = u32::from_le_bytes(size_bytes) as usize;
-        if !(8..=MAX_LC_PAYLOAD).contains(&cmdsize) || cursor + cmdsize > data.len() {
-            break;
-        }
-        let body = &data[cursor..cursor + cmdsize];
-
-        let want_64 = is_64 && cmd == LC_SEGMENT_64;
-        let want_32 = !is_64 && cmd == LC_SEGMENT;
-        if want_64 || want_32 {
-            let segname_off = 8usize;
-            if body.len() < segname_off + 16 {
-                cursor += cmdsize;
-                continue;
-            }
-            let this_segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
-            let (header_size, section_size, nsects_off) =
-                if is_64 { (72, 80, 64) } else { (56, 68, 48) };
-            if body.len() < nsects_off + 4 {
-                cursor += cmdsize;
-                continue;
-            }
-            let Ok(nsects_bytes) = body[nsects_off..nsects_off + 4].try_into() else {
-                cursor += cmdsize;
-                continue;
-            };
-            let nsects = u32::from_le_bytes(nsects_bytes) as usize;
-            if this_segname == segname {
-                for i in 0..nsects.min(256) {
-                    let s_off = header_size + i * section_size;
-                    if s_off + section_size > body.len() {
-                        break;
-                    }
-                    let sectname = parse_fixed_name(&body[s_off..s_off + 16]);
-                    if sectname.starts_with(prefix) {
-                        out.insert(sectname);
-                    }
-                }
-            }
-        }
-        cursor += cmdsize;
-    }
-    out.into_iter().collect()
-}
-
-fn build_tool_name(t: u32) -> &'static str {
-    match t {
-        1 => "clang",
-        2 => "swiftc",
-        3 => "ld",
-        4 => "lld",
-        _ => "unknown",
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
-mod tests {
-    use super::*;
-
-    /// Build a minimal LE 64-bit Mach-O header with `ncmds`
-    /// load-commands following.  Caller appends the command bodies.
-    fn build_macho_header_64(ncmds: u32, sizeofcmds: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(32);
-        out.extend_from_slice(&MH_MAGIC_64.to_le_bytes()); // magic
-        out.extend_from_slice(&0u32.to_le_bytes()); // cputype
-        out.extend_from_slice(&0u32.to_le_bytes()); // cpusubtype
-        out.extend_from_slice(&2u32.to_le_bytes()); // filetype = executable
-        out.extend_from_slice(&ncmds.to_le_bytes()); // ncmds
-        out.extend_from_slice(&sizeofcmds.to_le_bytes()); // sizeofcmds
-        out.extend_from_slice(&0u32.to_le_bytes()); // flags
-        out.extend_from_slice(&0u32.to_le_bytes()); // reserved
-        out
-    }
-
-    fn lc_uuid(uuid: [u8; 16]) -> Vec<u8> {
-        let mut out = Vec::with_capacity(24);
-        out.extend_from_slice(&LC_UUID.to_le_bytes());
-        out.extend_from_slice(&24u32.to_le_bytes());
-        out.extend_from_slice(&uuid);
-        out
-    }
-
-    fn lc_build_version(platform: u32, minos: u32, sdk: u32, tools: &[(u32, u32)]) -> Vec<u8> {
-        let cmdsize = 24 + tools.len() * 8;
-        let mut out = Vec::with_capacity(cmdsize);
-        out.extend_from_slice(&LC_BUILD_VERSION.to_le_bytes());
-        out.extend_from_slice(&(cmdsize as u32).to_le_bytes());
-        out.extend_from_slice(&platform.to_le_bytes());
-        out.extend_from_slice(&minos.to_le_bytes());
-        out.extend_from_slice(&sdk.to_le_bytes());
-        out.extend_from_slice(&(tools.len() as u32).to_le_bytes());
-        for (tool, ver) in tools {
-            out.extend_from_slice(&tool.to_le_bytes());
-            out.extend_from_slice(&ver.to_le_bytes());
-        }
-        out
-    }
-
-    fn lc_dylib(cmd: u32, path: &str, current: u32, compat: u32) -> Vec<u8> {
-        let path_bytes = path.as_bytes();
-        // Dylib command header is 24 bytes; path follows immediately.
-        let cmdsize = (24 + path_bytes.len() + 1).next_multiple_of(8);
-        let mut out = Vec::with_capacity(cmdsize);
-        out.extend_from_slice(&cmd.to_le_bytes());
-        out.extend_from_slice(&(cmdsize as u32).to_le_bytes());
-        out.extend_from_slice(&24u32.to_le_bytes()); // name offset
-        out.extend_from_slice(&0u32.to_le_bytes()); // timestamp
-        out.extend_from_slice(&current.to_le_bytes());
-        out.extend_from_slice(&compat.to_le_bytes());
-        out.extend_from_slice(path_bytes);
-        while out.len() < cmdsize {
-            out.push(0);
-        }
-        out
-    }
-
-    fn lc_rpath(path: &str) -> Vec<u8> {
-        let path_bytes = path.as_bytes();
-        let cmdsize = (12 + path_bytes.len() + 1).next_multiple_of(8);
-        let mut out = Vec::with_capacity(cmdsize);
-        out.extend_from_slice(&LC_RPATH.to_le_bytes());
-        out.extend_from_slice(&(cmdsize as u32).to_le_bytes());
-        out.extend_from_slice(&12u32.to_le_bytes()); // path offset
-        out.extend_from_slice(path_bytes);
-        while out.len() < cmdsize {
-            out.push(0);
-        }
-        out
-    }
-
-    fn lc_source_version(major: u32, minor: u32, patch: u32) -> Vec<u8> {
-        let mut out = Vec::with_capacity(16);
-        out.extend_from_slice(&LC_SOURCE_VERSION.to_le_bytes());
-        out.extend_from_slice(&16u32.to_le_bytes());
-        let v: u64 = ((major as u64) << 40) | ((minor as u64) << 30) | ((patch as u64) << 20);
-        out.extend_from_slice(&v.to_le_bytes());
-        out
-    }
-
-    #[test]
-    fn decode_xyz_basic() {
-        // 11.0.0 = 0x000B0000
-        assert_eq!(decode_xyz_version(0x000B_0000), "11.0.0");
-        // 10.13.5 = 0x000A0D05
-        assert_eq!(decode_xyz_version(0x000A_0D05), "10.13.5");
-    }
-
-    #[test]
-    fn extract_uuid() {
-        let uuid = [
-            0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,
-            0x77, 0x88,
-        ];
-        let cmd = lc_uuid(uuid);
-        let mut buf = build_macho_header_64(1, cmd.len() as u32);
-        buf.extend_from_slice(&cmd);
-        let lc = extract(&buf).expect("uuid present");
-        assert_eq!(
-            lc.uuid.as_deref(),
-            Some("12345678-9ABC-DEF0-1122-334455667788")
-        );
-    }
-
-    #[test]
-    fn extract_build_version() {
-        // platform=1 (macOS), minos=0x000B0000 (11.0.0), sdk=0x000B0100 (11.1.0)
-        let cmd = lc_build_version(
-            1,
-            0x000B_0000,
-            0x000B_0100,
-            &[(1, 0x0E00_0000), (3, 0x03F0_0000)],
-        );
-        let mut buf = build_macho_header_64(1, cmd.len() as u32);
-        buf.extend_from_slice(&cmd);
-        let lc = extract(&buf).expect("present");
-        let bv = lc.build_version.expect("build_version");
-        assert_eq!(bv.platform, "macOS");
-        assert_eq!(bv.minos, "11.0.0");
-        assert_eq!(bv.sdk, "11.1.0");
-        assert_eq!(bv.tools.len(), 2);
-        assert_eq!(bv.tools[0].tool, "clang");
-        assert_eq!(bv.tools[1].tool, "ld");
-    }
-
-    #[test]
-    fn extract_load_dylib_kinds() {
-        let mut all = Vec::new();
-        all.extend_from_slice(&lc_dylib(
-            LC_LOAD_DYLIB,
-            "/usr/lib/libSystem.B.dylib",
-            0x0510_0000,
-            0x0001_0000,
-        ));
-        all.extend_from_slice(&lc_dylib(
-            LC_LOAD_WEAK_DYLIB,
-            "@rpath/libThing.dylib",
-            0x0001_0000,
-            0x0001_0000,
-        ));
-        all.extend_from_slice(&lc_dylib(
-            LC_REEXPORT_DYLIB | LC_REQ_DYLD,
-            "@rpath/Reex.dylib",
-            0x0001_0000,
-            0x0001_0000,
-        ));
-        let mut buf = build_macho_header_64(3, all.len() as u32);
-        buf.extend_from_slice(&all);
-        let lc = extract(&buf).expect("present");
-        assert_eq!(lc.load_dylibs.len(), 3);
-        assert_eq!(lc.load_dylibs[0].path, "/usr/lib/libSystem.B.dylib");
-        assert_eq!(lc.load_dylibs[0].kind, "load");
-        assert_eq!(lc.load_dylibs[1].kind, "weak");
-        assert_eq!(lc.load_dylibs[2].kind, "reexport");
-    }
-
-    #[test]
-    fn extract_rpath() {
-        let cmd = lc_rpath("@executable_path/../Frameworks");
-        let mut buf = build_macho_header_64(1, cmd.len() as u32);
-        buf.extend_from_slice(&cmd);
-        let lc = extract(&buf).expect("present");
-        assert_eq!(lc.rpath.len(), 1);
-        assert_eq!(lc.rpath[0], "@executable_path/../Frameworks");
-    }
-
-    #[test]
-    fn extract_source_version() {
-        let cmd = lc_source_version(2, 5, 1);
-        let mut buf = build_macho_header_64(1, cmd.len() as u32);
-        buf.extend_from_slice(&cmd);
-        let lc = extract(&buf).expect("present");
-        assert_eq!(lc.source_version.as_deref(), Some("2.5.1"));
-    }
-
-    #[test]
-    fn extract_returns_none_for_non_macho() {
-        assert!(extract(b"random bytes").is_none());
-    }
-
-    #[test]
-    fn extract_returns_none_for_truncated_header() {
-        let buf = vec![0x12, 0x34];
-        assert!(extract(&buf).is_none());
-    }
-
-    #[test]
-    fn extract_id_dylib_for_dylibs() {
-        let cmd = lc_dylib(LC_ID_DYLIB, "@rpath/MyFramework", 0x0001_0000, 0x0001_0000);
-        let mut buf = build_macho_header_64(1, cmd.len() as u32);
-        buf.extend_from_slice(&cmd);
-        let lc = extract(&buf).expect("present");
-        assert_eq!(lc.id_dylib.as_deref(), Some("@rpath/MyFramework"));
-        assert!(lc.load_dylibs.is_empty());
-    }
 }

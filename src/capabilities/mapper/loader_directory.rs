@@ -544,6 +544,17 @@ impl super::CapabilityMapper {
         let mut yaml_files: Vec<_> = walkdir::WalkDir::new(dir_path)
             .follow_links(true)
             .into_iter()
+            .filter_entry(|entry| {
+                // Don't descend into hidden dirs (`.git`, `.devcontainer`) or
+                // dirs Go conventionally treats as ignored (`_examples`,
+                // `_testdata`). The traits dir is the root, so its own name is
+                // never matched here.
+                if entry.depth() == 0 || !entry.file_type().is_dir() {
+                    return true;
+                }
+                let name = entry.file_name().to_string_lossy();
+                !name.starts_with('.') && !name.starts_with('_')
+            })
             .filter_map(std::result::Result::ok)
             .filter(|entry| {
                 let path = entry.path();

@@ -87,7 +87,7 @@ cleave-macros = { path = "cleave-macros" }
 # tree-sitter, or the structured-format parsers directly — every parse
 # is materialised once via filefacts::open() and reused via the typed
 # views on `ParsedFile`.
-filefacts = { path = "../filefacts" }
+filefacts = { git = "https://codeberg.org/atomdrift/filefacts.git" }
 
 # Binary parsing — all goblin reads now go through filefacts's typed views.
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }

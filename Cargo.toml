@@ -113,31 +113,11 @@ pyinstx = { path = "crates/pyinstx" }
 yara-classify = { path = "crates/yara-classify" }
 yara-x = { version = "1.16", features = ["rules-profiling"] }
 
-# Tree-sitter parsers
+# Tree-sitter core types only. Per-language grammars (and their parsers)
+# live in filefacts; cleave consumes the cached `tree_sitter::Tree`
+# filefacts exposes via `ParsedFile::source_ast()`.
 tree-sitter = "0.26"
 streaming-iterator = "0.1"
-tree-sitter-bash = "0.25"
-tree-sitter-python = "0.25"
-tree-sitter-javascript = "0.25"
-tree-sitter-typescript = "0.23"
-tree-sitter-go = "0.25"
-tree-sitter-rust = "0.24"
-tree-sitter-java = "0.23"
-tree-sitter-ruby = "0.23"
-tree-sitter-c = "0.24"
-tree-sitter-php = "0.24"
-ts-parser-perl = "1.0.2"
-tree-sitter-lua = "0.4"
-tree-sitter-c-sharp = "0.23"
-tree-sitter-powershell = "0.25"
-tree-sitter-swift = "0.7"
-tree-sitter-objc = "3.0"
-tree-sitter-groovy = "0.1"
-tree-sitter-scala = "0.24"
-tree-sitter-kotlin-sg = "0.4.1"
-tree-sitter-zig = "1.1"
-tree-sitter-elixir = "0.3"
-tree-sitter-make = "1.1.1"
 
 # Serialization
 plist = "1.9"
@@ -335,3 +315,9 @@ opt-level = 3
 
 [profile.dev.package.aho-corasick]
 opt-level = 3
+
+# Local development override: point filefacts at the sibling worktree so
+# in-flight changes are picked up without a publish cycle. Remove once
+# the upstream tag is bumped.
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }

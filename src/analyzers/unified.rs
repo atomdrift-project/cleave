@@ -16,34 +16,8 @@ use crate::analyzers::{AnalysisInput, Analyzer, FileType, FileTypeExt};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Function, StringInfo, TargetInfo};
 use anyhow::Result;
-use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
-
-use tree_sitter::{Language, Parser};
-
-/// Keep indentation-sensitive external scanners below Tree-sitter's 1024-byte
-/// serialized scanner-state buffer. Python stores roughly two bytes per indent.
-const MAX_SAFE_INDENT_STACK_DEPTH: usize = 450;
-const TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE: usize = 1024;
-
-/// Files larger than this skip AST parsing entirely. Tree-sitter's external
-/// scanner `ts_parser__external_scanner_serialize` asserts `length <= 1024`;
-/// on large generated files (e.g. protobuf descriptors) nested-state
-/// accumulation can trigger that C-level abort before Rust can intervene.
-/// Files this large are almost always machine-generated and gain little from
-/// AST analysis anyway.
-const MAX_AST_FILE_BYTES: usize = 2 * 1024 * 1024; // 2 MB
-
-#[derive(Debug)]
-struct AstSkipFinding {
-    id: &'static str,
-    desc: String,
-    evidence: String,
-    /// True when the skip reason is itself a security signal (e.g. obfuscation).
-    /// False for operational skips like file-too-large.
-    suspicious: bool,
-}
 
 /// Configuration for a language analyzer.
 #[derive(Clone, Debug)]
@@ -54,8 +28,6 @@ pub(crate) struct LanguageConfig {
     pub file_type: &'static str,
     /// Human-readable description
     pub description: &'static str,
-    /// Tree-sitter language
-    pub language: Language,
     /// Node types for symbol/call extraction
     pub call_node_types: &'static [&'static str],
     /// Node types for function declarations
@@ -78,7 +50,6 @@ pub(crate) fn config_for_file_type(
             name: "python",
             file_type: "python",
             description: "Python script",
-            language: tree_sitter_python::LANGUAGE.into(),
             call_node_types: &["call"],
             function_node_types: &["function_definition", "async_function_definition"],
             function_name_field: "name",
@@ -88,7 +59,6 @@ pub(crate) fn config_for_file_type(
             name: "javascript",
             file_type: "javascript",
             description: "JavaScript code",
-            language: tree_sitter_javascript::LANGUAGE.into(),
             call_node_types: &[
                 "call_expression",
                 "assignment_expression",
@@ -107,7 +77,6 @@ pub(crate) fn config_for_file_type(
             name: "typescript",
             file_type: "javascript",
             description: "TypeScript/JavaScript code",
-            language: tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             call_node_types: &["call_expression"],
             function_node_types: &[
                 "function_declaration",
@@ -122,7 +91,6 @@ pub(crate) fn config_for_file_type(
             name: "go",
             file_type: "go",
             description: "Go source code",
-            language: tree_sitter_go::LANGUAGE.into(),
             call_node_types: &["call_expression"],
             function_node_types: &["function_declaration", "method_declaration"],
             function_name_field: "name",
@@ -132,7 +100,6 @@ pub(crate) fn config_for_file_type(
             name: "rust",
             file_type: "rust",
             description: "Rust source code",
-            language: tree_sitter_rust::LANGUAGE.into(),
             call_node_types: &["call_expression", "macro_invocation"],
             function_node_types: &["function_item"],
             function_name_field: "name",
@@ -142,7 +109,6 @@ pub(crate) fn config_for_file_type(
             name: "ruby",
             file_type: "ruby",
             description: "Ruby script",
-            language: tree_sitter_ruby::LANGUAGE.into(),
             call_node_types: &["call", "method_call"],
             function_node_types: &["method", "singleton_method"],
             function_name_field: "name",
@@ -159,7 +125,6 @@ pub(crate) fn config_for_file_type(
             name: "php",
             file_type: "php",
             description: "PHP script",
-            language: tree_sitter_php::LANGUAGE_PHP.into(),
             call_node_types: &["function_call_expression"],
             function_node_types: &["function_definition", "method_declaration"],
             function_name_field: "name",
@@ -169,7 +134,6 @@ pub(crate) fn config_for_file_type(
             name: "shell",
             file_type: "shell",
             description: "Shell script",
-            language: tree_sitter_bash::LANGUAGE.into(),
             call_node_types: &["command", "command_name"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
@@ -179,7 +143,6 @@ pub(crate) fn config_for_file_type(
             name: "lua",
             file_type: "lua",
             description: "Lua script",
-            language: tree_sitter_lua::LANGUAGE.into(),
             call_node_types: &["function_call"],
             function_node_types: &["function_declaration", "local_function"],
             function_name_field: "name",
@@ -189,7 +152,6 @@ pub(crate) fn config_for_file_type(
             name: "perl",
             file_type: "perl",
             description: "Perl script",
-            language: ts_parser_perl::LANGUAGE.into(),
             call_node_types: &["function_call", "method_call"],
             function_node_types: &["subroutine_declaration", "method_declaration"],
             function_name_field: "name",
@@ -199,7 +161,6 @@ pub(crate) fn config_for_file_type(
             name: "powershell",
             file_type: "powershell",
             description: "PowerShell script",
-            language: tree_sitter_powershell::LANGUAGE.into(),
             call_node_types: &["command_expression", "invocation_expression"],
             function_node_types: &["function_statement"],
             function_name_field: "name",
@@ -209,7 +170,6 @@ pub(crate) fn config_for_file_type(
             name: "java",
             file_type: "java",
             description: "Java source code",
-            language: tree_sitter_java::LANGUAGE.into(),
             call_node_types: &["method_invocation"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
@@ -219,7 +179,6 @@ pub(crate) fn config_for_file_type(
             name: "csharp",
             file_type: "csharp",
             description: "C# source code",
-            language: tree_sitter_c_sharp::LANGUAGE.into(),
             call_node_types: &["invocation_expression"],
             function_node_types: &["method_declaration", "constructor_declaration"],
             function_name_field: "name",
@@ -229,7 +188,6 @@ pub(crate) fn config_for_file_type(
             name: "c",
             file_type: "c",
             description: "C source code",
-            language: tree_sitter_c::LANGUAGE.into(),
             call_node_types: &["call_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "declarator",
@@ -239,7 +197,6 @@ pub(crate) fn config_for_file_type(
             name: "swift",
             file_type: "swift",
             description: "Swift source code",
-            language: tree_sitter_swift::LANGUAGE.into(),
             call_node_types: &["call_expression"],
             function_node_types: &["function_declaration"],
             function_name_field: "name",
@@ -249,7 +206,6 @@ pub(crate) fn config_for_file_type(
             name: "objc",
             file_type: "objc",
             description: "Objective-C source code",
-            language: tree_sitter_objc::LANGUAGE.into(),
             call_node_types: &["message_expression", "call_expression"],
             function_node_types: &["function_definition", "method_definition"],
             function_name_field: "declarator",
@@ -259,7 +215,6 @@ pub(crate) fn config_for_file_type(
             name: "groovy",
             file_type: "groovy",
             description: "Groovy source code",
-            language: tree_sitter_groovy::LANGUAGE.into(),
             call_node_types: &["method_call", "function_call"],
             function_node_types: &["method_declaration", "function_declaration"],
             function_name_field: "name",
@@ -269,7 +224,6 @@ pub(crate) fn config_for_file_type(
             name: "scala",
             file_type: "scala",
             description: "Scala source code",
-            language: tree_sitter_scala::LANGUAGE.into(),
             call_node_types: &["call_expression", "apply_expression"],
             function_node_types: &["function_definition"],
             function_name_field: "name",
@@ -279,7 +233,6 @@ pub(crate) fn config_for_file_type(
             name: "kotlin",
             file_type: "kotlin",
             description: "Kotlin source code",
-            language: tree_sitter_kotlin_sg::LANGUAGE.into(),
             call_node_types: &["call_expression"],
             function_node_types: &["fun_declaration", "function_declaration"],
             function_name_field: "name",
@@ -289,7 +242,6 @@ pub(crate) fn config_for_file_type(
             name: "zig",
             file_type: "zig",
             description: "Zig source code",
-            language: tree_sitter_zig::LANGUAGE.into(),
             call_node_types: &["call_expression"],
             function_node_types: &["fn_decl"],
             function_name_field: "name",
@@ -299,7 +251,6 @@ pub(crate) fn config_for_file_type(
             name: "elixir",
             file_type: "elixir",
             description: "Elixir source code",
-            language: tree_sitter_elixir::LANGUAGE.into(),
             call_node_types: &["call"],
             function_node_types: &["call"], // def/defp are calls in Elixir's AST
             function_name_field: "target",
@@ -309,7 +260,6 @@ pub(crate) fn config_for_file_type(
             name: "makefile",
             file_type: "makefile",
             description: "Makefile build script",
-            language: tree_sitter_make::LANGUAGE.into(),
             call_node_types: &["recipe"],
             function_node_types: &["rule"],
             function_name_field: "target",
@@ -325,7 +275,6 @@ pub(crate) fn config_for_file_type(
 pub(crate) struct UnifiedSourceAnalyzer {
     config: LanguageConfig,
     file_type: crate::analyzers::FileType,
-    parser: RefCell<Parser>,
     capability_mapper: Arc<CapabilityMapper>,
     /// When true, skip embedded payload detection to prevent recursion.
     /// Set for analyzers created for inner analysis (e.g. decoded PowerShell).
@@ -341,7 +290,6 @@ impl std::fmt::Debug for UnifiedSourceAnalyzer {
         f.debug_struct("UnifiedSourceAnalyzer")
             .field("config", &self.config)
             .field("file_type", &self.file_type)
-            .field("parser", &"<Parser>")
             .field("capability_mapper", &self.capability_mapper)
             .finish()
     }
@@ -353,15 +301,9 @@ impl UnifiedSourceAnalyzer {
         config: LanguageConfig,
         file_type: crate::analyzers::FileType,
     ) -> anyhow::Result<Self> {
-        let mut parser = Parser::new();
-        parser
-            .set_language(&config.language)
-            .map_err(|e| anyhow::anyhow!("Failed to load language grammar: {:?}", e))?;
-
         Ok(Self {
             config,
             file_type,
-            parser: RefCell::new(parser),
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             skip_embedded_detection: false,
             cancellation: None,
@@ -474,9 +416,6 @@ impl UnifiedSourceAnalyzer {
         let has_preextracted = !preextracted_stng.is_empty();
         let mut owned_stng = Vec::new();
 
-        let timeout_limit = std::time::Duration::from_secs(4);
-        let mut timed_out = false;
-
         // Run stng extraction first (sequential). Previously this used
         // rayon::in_place_scope to overlap stng with tree-sitter parsing,
         // but that deadlocks when nested inside a saturated rayon pool
@@ -492,107 +431,17 @@ impl UnifiedSourceAnalyzer {
             owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
         }
 
-        let scanner_risk = scanner_state_overflow_risk(&self.file_type, content);
         let source_ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        let source_ast = if scanner_risk.is_none() {
-            source_ctx
-                .as_ref()
-                .and_then(crate::analysis_context::AnalysisContext::source_ast)
-        } else {
-            None
-        };
-
-        // Prefer filefacts's cached tree-sitter parse. If filefacts did not
-        // produce one, keep the legacy timeout-guarded parse as a fallback.
-        let owned_tree = if source_ast.is_none() && scanner_risk.is_none() {
-            let mut options = tree_sitter::ParseOptions::new();
-            let mut cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
-                if start.elapsed() > timeout_limit {
-                    std::ops::ControlFlow::Break(())
-                } else {
-                    std::ops::ControlFlow::Continue(())
-                }
-            };
-            options.progress_callback = Some(&mut cb);
-
-            self.parser.borrow_mut().parse_with_options(
-                &mut |i, _| {
-                    if i < content.len() {
-                        &content.as_bytes()[i..]
-                    } else {
-                        &[]
-                    }
-                },
-                None,
-                Some(options),
-            )
-        } else {
-            None
-        };
-        let tree = source_ast.map_or_else(|| owned_tree.as_ref(), |ast| Some(ast.tree));
+        let source_ast = source_ctx
+            .as_ref()
+            .and_then(crate::analysis_context::AnalysisContext::source_ast);
+        let tree = source_ast.map(|ast| ast.tree);
 
         if let Some(tree) = tree {
             let root = tree.root_node();
             self.extract_functions(&root, content.as_bytes(), &mut report);
             self.extract_strings(&root, content.as_bytes(), &mut report);
-        } else if start.elapsed() > timeout_limit {
-            timed_out = true;
-        }
-
-        if let Some(reason) = scanner_risk {
-            tracing::info!(
-                path = %file_path.display(),
-                reason = %reason.desc,
-                "AST parsing skipped to avoid tree-sitter external scanner abort"
-            );
-            let finding = if reason.suspicious {
-                crate::types::Finding::structural(reason.id.to_string(), reason.desc, 0.85)
-                    .with_criticality(crate::types::Criticality::Suspicious)
-                    .with_attack("T1027".to_string())
-                    .with_evidence(vec![crate::types::Evidence {
-                        method: "parser-guard".to_string(),
-                        source: "tree-sitter".to_string(),
-                        value: reason.evidence,
-                        location: Some("source:indentation".to_string()),
-                        ..Default::default()
-                    }])
-            } else {
-                let mut f = crate::types::Finding::new(
-                    reason.id.to_string(),
-                    crate::types::FindingKind::Structural,
-                    reason.desc,
-                    0.0,
-                );
-                f.crit = crate::types::Criticality::Component;
-                f.evidence = vec![crate::types::Evidence {
-                    method: "parser-guard".to_string(),
-                    source: "tree-sitter".to_string(),
-                    value: reason.evidence,
-                    ..Default::default()
-                }];
-                f
-            };
-            report.findings.push(finding);
-            // `text.*` metrics still flow in via filefacts's `extract` —
-            // it falls back to a tree-less text emission when the
-            // parse is skipped or fails.
-        }
-
-        if timed_out {
-            tracing::info!(
-                "AST parsing timed out for {}, skipping deep AST analysis.",
-                file_path.display()
-            );
-            let mut finding = crate::types::Finding::new(
-                "metadata/analysis/ast-timeout".to_string(),
-                crate::types::FindingKind::Structural,
-                "AST parsing timed out; deep AST analysis was skipped.".to_string(),
-                0.4,
-            );
-            finding.crit = crate::types::Criticality::Component;
-            report.findings.push(finding);
-            // Text-only metrics still come from filefacts's source extractor.
         }
 
         // Use pre-extracted stng strings if available, otherwise use parallel extracted ones
@@ -867,14 +716,15 @@ impl UnifiedSourceAnalyzer {
                 &mut report,
             );
 
-            // Also extract actual module imports (require/import statements) for metadata/import/ findings
-            // Reuse the already-parsed tree to avoid redundant tree-sitter parsing
-            symbol_extraction::extract_imports_from_tree(
-                tree,
-                content,
-                &self.file_type,
-                &mut report,
-            );
+            // Module imports come from filefacts's per-language queries; cleave
+            // only adds Python `__import__` alias resolution on top.
+            if let Some(ctx) = source_ctx.as_ref() {
+                symbol_extraction::ingest_filefacts_imports(
+                    &ctx.parsed,
+                    &self.file_type,
+                    &mut report,
+                );
+            }
 
             // Analyze paths and environment variables
             crate::path_mapper::analyze_and_link_paths(&mut report);
@@ -1160,78 +1010,6 @@ impl Analyzer for UnifiedSourceAnalyzer {
     }
 }
 
-fn scanner_state_overflow_risk(
-    file_type: &crate::analyzers::FileType,
-    content: &str,
-) -> Option<AstSkipFinding> {
-    // Guard against the C-level abort in ts_parser__external_scanner_serialize.
-    // All tree-sitter grammars with external scanners are at risk on very large
-    // files; this check must run before any language-specific logic.
-    if content.len() > MAX_AST_FILE_BYTES {
-        let size_kb = content.len() / 1024;
-        return Some(AstSkipFinding {
-            id: "metadata/analysis/ast-file-too-large",
-            desc: format!(
-                "AST parsing skipped: file size ({size_kb} KB) exceeds the {}-MB safety limit for tree-sitter external scanner serialization",
-                MAX_AST_FILE_BYTES / (1024 * 1024)
-            ),
-            evidence: format!(
-                "file_size_bytes={} limit_bytes={MAX_AST_FILE_BYTES} tree_sitter_serialization_buffer_bytes={TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE}",
-                content.len()
-            ),
-            suspicious: false,
-        });
-    }
-
-    if !matches!(file_type, crate::analyzers::FileType::Python) {
-        return None;
-    }
-
-    let depth = estimated_python_indent_stack_depth(content);
-    if depth > MAX_SAFE_INDENT_STACK_DEPTH {
-        Some(AstSkipFinding {
-            id: "objectives/anti-static/obfuscation/parser::python-indentation-scanner-state-overflow",
-            desc: format!(
-                "Python AST parsing skipped because indentation depth ({depth}) can overflow tree-sitter external scanner serialization"
-            ),
-            evidence: format!(
-                "language=python indent_stack_depth={depth} safe_depth_limit={MAX_SAFE_INDENT_STACK_DEPTH} tree_sitter_serialization_buffer_bytes={TREE_SITTER_SCANNER_SERIALIZATION_BUFFER_SIZE}"
-            ),
-            suspicious: true,
-        })
-    } else {
-        None
-    }
-}
-
-fn estimated_python_indent_stack_depth(content: &str) -> usize {
-    let mut stack = vec![0usize];
-    let mut max_depth = 1usize;
-
-    for line in content.lines() {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            continue;
-        }
-
-        let indent = line
-            .bytes()
-            .take_while(|b| matches!(b, b' ' | b'\t'))
-            .fold(0usize, |col, b| if b == b'\t' { col + 8 } else { col + 1 });
-
-        while stack.last().is_some_and(|last| indent < *last) {
-            stack.pop();
-        }
-
-        if stack.last().is_some_and(|last| indent > *last) {
-            stack.push(indent);
-            max_depth = max_depth.max(stack.len());
-        }
-    }
-
-    max_depth
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -1258,42 +1036,6 @@ if __name__ == "__main__":
         assert!(report.structure.iter().any(|s| s.id.contains("python")));
         assert!(!report.functions.is_empty());
         assert!(!report.strings.is_empty());
-    }
-
-    #[test]
-    fn test_deep_python_indentation_emits_specific_suspicious_parser_trait() {
-        let analyzer = UnifiedSourceAnalyzer::for_file_type(&FileType::Python).unwrap();
-        let path = PathBuf::from("deep.py");
-        let mut code = String::new();
-        for depth in 0..=MAX_SAFE_INDENT_STACK_DEPTH + 8 {
-            code.push_str(&" ".repeat(depth * 2));
-            code.push_str("if True:\n");
-        }
-        code.push_str(&" ".repeat((MAX_SAFE_INDENT_STACK_DEPTH + 9) * 2));
-        code.push_str("print('ok')\n");
-
-        let report = analyzer.analyze_source(&path, &code);
-        let finding = report
-            .findings
-            .iter()
-            .find(|f| {
-                f.id == "objectives/anti-static/obfuscation/parser::python-indentation-scanner-state-overflow"
-            })
-            .expect("specific parser skip finding");
-        assert_eq!(finding.crit, crate::types::Criticality::Suspicious);
-        assert!(finding
-            .evidence
-            .iter()
-            .any(|e| e.value.contains("indent_stack_depth=")
-                && e.value
-                    .contains("tree_sitter_serialization_buffer_bytes=1024")));
-        // `text.*` lives in the flat metric map; analyze_text always
-        // emits `text.total_lines` (zero or otherwise) once content is
-        // non-empty, so presence of any `text.` key confirms emission.
-        assert!(report
-            .filefacts_metrics
-            .as_ref()
-            .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
     }
 
     #[test]

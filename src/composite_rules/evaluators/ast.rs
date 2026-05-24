@@ -183,98 +183,11 @@ pub(crate) fn eval_ast<'a>(
         },
     };
 
-    if let Some(cached_tree) = ctx.cached_ast {
-        return eval_ast_pattern_multi(
-            cached_tree,
-            source,
-            &node_types,
-            pattern,
-            match_mode,
-            case_insensitive,
-            ctx.deadline,
-        );
-    }
-
-    // No cached AST: the primary parse either timed out or was never attempted.
-    // For large files the primary parse already failed — re-parsing per-rule would
-    // only duplicate the failure while burning memory across every rayon thread.
-    // Bail out immediately for anything over the threshold; smaller files get a
-    // bounded fallback parse below (safety net for file types generic.rs handles).
-    const MAX_FALLBACK_PARSE_BYTES: usize = 2_000_000; // 2 MB
-    if ctx.binary_data.len() > MAX_FALLBACK_PARSE_BYTES {
-        return ConditionResult::no_match();
-    }
-
-    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if !WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
-        tracing::info!(file_type = ?ctx.file_type, "AST cache miss — re-parsing AST for each trait");
-    }
-
-    // Get parser language for file type
-    let parser_lang = match ctx.file_type {
-        FileType::C => Some(tree_sitter_c::LANGUAGE),
-        FileType::Python => Some(tree_sitter_python::LANGUAGE),
-        FileType::JavaScript => Some(tree_sitter_javascript::LANGUAGE),
-        FileType::TypeScript => Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT),
-        FileType::Rust => Some(tree_sitter_rust::LANGUAGE),
-        FileType::Go => Some(tree_sitter_go::LANGUAGE),
-        FileType::Java => Some(tree_sitter_java::LANGUAGE),
-        FileType::Ruby => Some(tree_sitter_ruby::LANGUAGE),
-        FileType::Shell => Some(tree_sitter_bash::LANGUAGE),
-        FileType::Php => Some(tree_sitter_php::LANGUAGE_PHP),
-        FileType::CSharp => Some(tree_sitter_c_sharp::LANGUAGE),
-        FileType::Lua => Some(tree_sitter_lua::LANGUAGE),
-        FileType::Perl => Some(ts_parser_perl::LANGUAGE),
-        FileType::PowerShell => Some(tree_sitter_powershell::LANGUAGE),
-        FileType::Swift => Some(tree_sitter_swift::LANGUAGE),
-        FileType::ObjectiveC => Some(tree_sitter_objc::LANGUAGE),
-        FileType::Groovy => Some(tree_sitter_groovy::LANGUAGE),
-        FileType::Scala => Some(tree_sitter_scala::LANGUAGE),
-        FileType::Zig => Some(tree_sitter_zig::LANGUAGE),
-        FileType::Elixir => Some(tree_sitter_elixir::LANGUAGE),
-        FileType::Makefile => Some(tree_sitter_make::LANGUAGE),
-        _ => None,
-    };
-
-    let lang: tree_sitter::Language = match parser_lang {
-        Some(l) => l.into(),
-        None => return ConditionResult::no_match(),
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return ConditionResult::no_match();
-    }
-
-    // Use a 4-second timeout for fallback parses to avoid unbounded memory growth
-    // when the primary parse already timed out (e.g. huge minified JS files).
-    let fallback_deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-    let mut parse_opts = tree_sitter::ParseOptions::new();
-    let mut timeout_cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
-        if std::time::Instant::now() > fallback_deadline {
-            std::ops::ControlFlow::Break(())
-        } else {
-            std::ops::ControlFlow::Continue(())
-        }
-    };
-    parse_opts.progress_callback = Some(&mut timeout_cb);
-    let src_bytes = source.as_bytes();
-    let Some(tree) = parser.parse_with_options(
-        &mut |i, _| {
-            if i < src_bytes.len() {
-                &src_bytes[i..]
-            } else {
-                &[]
-            }
-        },
-        None,
-        Some(parse_opts),
-    ) else {
+    let Some(cached_tree) = ctx.cached_ast else {
         return ConditionResult::no_match();
     };
-
     eval_ast_pattern_multi(
-        &tree,
+        cached_tree,
         source,
         &node_types,
         pattern,
@@ -426,76 +339,14 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         },
     };
 
-    // Get the appropriate language for this file type
-    let lang: tree_sitter::Language = match ctx.file_type {
-        FileType::C => tree_sitter_c::LANGUAGE.into(),
-        FileType::Python => tree_sitter_python::LANGUAGE.into(),
-        FileType::JavaScript => tree_sitter_javascript::LANGUAGE.into(),
-        FileType::TypeScript => tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
-        FileType::Rust => tree_sitter_rust::LANGUAGE.into(),
-        FileType::Go => tree_sitter_go::LANGUAGE.into(),
-        FileType::Java => tree_sitter_java::LANGUAGE.into(),
-        FileType::Ruby => tree_sitter_ruby::LANGUAGE.into(),
-        FileType::Shell => tree_sitter_bash::LANGUAGE.into(),
-        FileType::Php => tree_sitter_php::LANGUAGE_PHP.into(),
-        FileType::CSharp => tree_sitter_c_sharp::LANGUAGE.into(),
-        FileType::Lua => tree_sitter_lua::LANGUAGE.into(),
-        FileType::Perl => ts_parser_perl::LANGUAGE.into(),
-        FileType::PowerShell => tree_sitter_powershell::LANGUAGE.into(),
-        FileType::Swift => tree_sitter_swift::LANGUAGE.into(),
-        FileType::ObjectiveC => tree_sitter_objc::LANGUAGE.into(),
-        FileType::Groovy => tree_sitter_groovy::LANGUAGE.into(),
-        FileType::Scala => tree_sitter_scala::LANGUAGE.into(),
-        FileType::Zig => tree_sitter_zig::LANGUAGE.into(),
-        FileType::Elixir => tree_sitter_elixir::LANGUAGE.into(),
-        FileType::Makefile => tree_sitter_make::LANGUAGE.into(),
-        _ => return ConditionResult::no_match(),
+    // Trust filefacts's cached parse — cleave no longer carries its own
+    // tree-sitter grammars or fallback parser. If filefacts has no tree
+    // for this file (unsupported language, oversized source), the AST
+    // query has nothing to match against.
+    let Some(tree) = ctx.cached_ast else {
+        return ConditionResult::no_match();
     };
-
-    // Use cached AST if available, otherwise attempt a bounded fallback parse.
-    // Large files skip the fallback immediately: if the primary parse timed out,
-    // a per-rule re-parse across N rayon threads would replicate the failure while
-    // spiking RSS proportionally to thread count.
-    let parsed_tree;
-    let tree = if let Some(cached) = ctx.cached_ast {
-        cached
-    } else {
-        const MAX_FALLBACK_PARSE_BYTES: usize = 2_000_000; // 2 MB
-        if source.len() > MAX_FALLBACK_PARSE_BYTES {
-            return ConditionResult::no_match();
-        }
-        let mut parser = tree_sitter::Parser::new();
-        if parser.set_language(&lang).is_err() {
-            return ConditionResult::no_match();
-        }
-        // Bounded fallback parse: 4-second timeout as a safety net.
-        let fallback_deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-        let mut parse_opts = tree_sitter::ParseOptions::new();
-        let mut timeout_cb = |_: &tree_sitter::ParseState| -> std::ops::ControlFlow<()> {
-            if std::time::Instant::now() > fallback_deadline {
-                std::ops::ControlFlow::Break(())
-            } else {
-                std::ops::ControlFlow::Continue(())
-            }
-        };
-        parse_opts.progress_callback = Some(&mut timeout_cb);
-        let src_bytes = source.as_bytes();
-        parsed_tree = match parser.parse_with_options(
-            &mut |i, _| {
-                if i < src_bytes.len() {
-                    &src_bytes[i..]
-                } else {
-                    &[]
-                }
-            },
-            None,
-            Some(parse_opts),
-        ) {
-            Some(t) => t,
-            None => return ConditionResult::no_match(),
-        };
-        &parsed_tree
-    };
+    let lang = &*tree.language();
 
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();

@@ -12,7 +12,6 @@ use crate::types::{AnalysisReport, StringInfo, TargetInfo};
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
-use tree_sitter::Language;
 
 /// Generic analyzer that works with any text file.
 ///
@@ -48,25 +47,18 @@ impl GenericAnalyzer {
         self
     }
 
-    /// Get tree-sitter language and call node types for this file type, if available.
-    fn treesitter_config(&self) -> Option<(Language, &'static [&'static str])> {
+    /// Call-expression node-kind names for this file type, used to
+    /// project filefacts's cached tree into the report's symbols. The
+    /// grammars themselves live in filefacts; cleave only carries the
+    /// node-kind labels its rule engine wants to match against.
+    fn call_node_types(&self) -> Option<&'static [&'static str]> {
         match self.file_type {
-            FileType::Swift => Some((tree_sitter_swift::LANGUAGE.into(), &["call_expression"])),
-            FileType::ObjectiveC => Some((
-                tree_sitter_objc::LANGUAGE.into(),
-                &["message_expression", "call_expression"],
-            )),
-            FileType::Groovy => Some((
-                tree_sitter_groovy::LANGUAGE.into(),
-                &["method_call", "function_call"],
-            )),
-            FileType::Scala => Some((
-                tree_sitter_scala::LANGUAGE.into(),
-                &["call_expression", "method_call"],
-            )),
-            FileType::Zig => Some((tree_sitter_zig::LANGUAGE.into(), &["call_expression"])),
-            FileType::Elixir => Some((tree_sitter_elixir::LANGUAGE.into(), &["call"])),
-            // No tree-sitter for these; also fallback for dedicated analyzer types
+            FileType::Swift => Some(&["call_expression"]),
+            FileType::ObjectiveC => Some(&["message_expression", "call_expression"]),
+            FileType::Groovy => Some(&["method_call", "function_call"]),
+            FileType::Scala => Some(&["call_expression", "method_call"]),
+            FileType::Zig => Some(&["call_expression"]),
+            FileType::Elixir => Some(&["call"]),
             _ => None,
         }
     }
@@ -160,7 +152,7 @@ impl GenericAnalyzer {
         // capability mapper — no synthesis needed here.
 
         // Add structural feature
-        let (parser_name, description) = if let Some((_, _)) = self.treesitter_config() {
+        let (parser_name, description) = if self.call_node_types().is_some() {
             (
                 format!("tree-sitter-{}", self.file_type_str()),
                 format!("{} source code", self.file_type_str()),
@@ -180,45 +172,20 @@ impl GenericAnalyzer {
                 &description,
             ));
 
-        // Parse with tree-sitter once. Prefer filefacts's cached tree when it
-        // has one for this source type; otherwise keep the local parser as a
-        // cold fallback for languages not yet covered by filefacts.
+        // Symbol/import extraction reuses filefacts's cached tree. When
+        // filefacts has no tree for this file type (or refused to parse,
+        // e.g. oversized source), AST-based extraction is silently
+        // skipped — text and string features still flow downstream.
         let t_tree = std::time::Instant::now();
-        let treesitter_config = self.treesitter_config();
-        let owned_tree = if source_ast.is_none() {
-            if let Some((ref language, _)) = treesitter_config {
-                let mut parser = tree_sitter::Parser::new();
-                if parser.set_language(language).is_ok() {
-                    parser.parse(content, None)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-        let tree = source_ast.map_or_else(|| owned_tree.as_ref(), |ast| Some(ast.tree));
-        let tree_source = source_ast.map_or(content, |ast| ast.source);
-        if let (Some(tree), Some((_, node_types))) = (tree, treesitter_config) {
-            // Extract function calls for capability matching (type: symbol conditions)
-            symbol_extraction::extract_symbols_from_tree(
-                tree,
-                tree_source,
-                node_types,
-                &mut report,
-            );
-            // Also extract actual module imports for metadata/import/ findings
-            symbol_extraction::extract_imports_from_tree(
-                tree,
-                tree_source,
-                &self.file_type,
-                &mut report,
-            );
+        if let (Some(ast), Some(node_types)) = (source_ast, self.call_node_types()) {
+            symbol_extraction::extract_symbols_from_tree(ast.tree, ast.source, node_types, &mut report);
         }
+        if let Some(ctx) = source_ctx.as_ref() {
+            symbol_extraction::ingest_filefacts_imports(&ctx.parsed, &self.file_type, &mut report);
+        }
+        let tree = source_ast.map(|ast| ast.tree);
         tracing::debug!(
-            "GenericAnalyzer: Tree-sitter parsing completed in {:?}",
+            "GenericAnalyzer: Tree-sitter symbol extraction completed in {:?}",
             t_tree.elapsed()
         );
 

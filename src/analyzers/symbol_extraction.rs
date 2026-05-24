@@ -6,292 +6,46 @@
 use crate::analyzers::FileType;
 use crate::types::{AnalysisReport, Import};
 
-/// Function type for extracting imports from a syntax tree node
-type ImportExtractFn = for<'a> fn(&tree_sitter::Node<'a>, &[u8]) -> Option<String>;
-
-/// Extract imports from a pre-parsed tree (avoids re-parsing)
-pub(crate) fn extract_imports_from_tree(
-    tree: &tree_sitter::Tree,
-    source: &str,
+/// Ingest the import list filefacts already produced from its
+/// per-language tree-sitter queries, then run Python `__import__`
+/// alias resolution on top — that pass is cleave-specific (it rewrites
+/// symbol references in `report.imports` so trait matchers see the
+/// real module name behind a malware-evasion alias).
+pub(crate) fn ingest_filefacts_imports(
+    parsed: &filefacts::ParsedFile<'_>,
     file_type: &FileType,
     report: &mut AnalysisReport,
 ) {
-    let import_fn: ImportExtractFn = match file_type {
-        FileType::Ruby => extract_ruby_import,
-        FileType::Python => extract_python_import,
-        FileType::JavaScript | FileType::TypeScript => extract_js_import,
-        FileType::Lua => extract_lua_import,
-        FileType::Go => extract_go_import,
-        FileType::Perl => extract_perl_import,
-        FileType::CSharp => extract_csharp_import,
-        _ => return, // Other languages don't have import extraction yet
-    };
+    for imp in parsed.imports().iter() {
+        if imp.name.len() < 2 {
+            continue;
+        }
+        report.imports.push(Import {
+            symbol: imp.name.clone(),
+            library: imp.library.clone(),
+            source: "import".to_string(),
+            offset: imp.offset.map(|o| format!("0x{o:x}")),
+        });
+    }
 
-    let mut imports = std::collections::HashSet::new();
-    let mut cursor = tree.walk();
-    walk_for_imports(&mut cursor, source.as_bytes(), import_fn, &mut imports);
-
-    // For Python: collect __import__() alias mappings and resolve aliased symbols
     if matches!(file_type, FileType::Python) {
-        let mut alias_map = std::collections::HashMap::new();
-        let mut alias_cursor = tree.walk();
-        collect_dunder_import_aliases(&mut alias_cursor, source.as_bytes(), &mut alias_map);
-
-        if !alias_map.is_empty() {
-            // Resolve aliased symbols already in report.imports (from extract_symbols_from_tree)
-            for import in &mut report.imports {
-                if let Some(dot_pos) = import.symbol.find('.') {
-                    let prefix = &import.symbol[..dot_pos];
-                    if let Some(module) = alias_map.get(prefix) {
-                        import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
+        if let Some(ast) = parsed.source_ast() {
+            let mut alias_map = std::collections::HashMap::new();
+            let mut alias_cursor = ast.tree.walk();
+            collect_dunder_import_aliases(&mut alias_cursor, ast.source.as_bytes(), &mut alias_map);
+            if !alias_map.is_empty() {
+                for import in &mut report.imports {
+                    if let Some(dot_pos) = import.symbol.find('.') {
+                        let prefix = &import.symbol[..dot_pos];
+                        if let Some(module) = alias_map.get(prefix) {
+                            import.symbol =
+                                format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
+                        }
                     }
                 }
             }
         }
     }
-
-    for module in imports {
-        if module.len() >= 2 {
-            report.imports.push(Import {
-                symbol: module,
-                library: None,
-                source: "import".to_string(),
-                offset: None,
-            });
-        }
-    }
-}
-
-/// Extract actual module imports from source code (e.g., require in Ruby, import in Python)
-/// This is separate from function call extraction for capability matching.
-/// NOTE: This parses internally - prefer extract_imports_from_tree() if you already have a tree
-#[allow(dead_code)] // Used in tests
-pub(crate) fn extract_imports(source: &str, file_type: &FileType, report: &mut AnalysisReport) {
-    let (lang, import_fn): (tree_sitter::Language, ImportExtractFn) = match file_type {
-        FileType::Ruby => (tree_sitter_ruby::LANGUAGE.into(), extract_ruby_import),
-        FileType::Python => (tree_sitter_python::LANGUAGE.into(), extract_python_import),
-        FileType::JavaScript | FileType::TypeScript => {
-            let lang = if matches!(file_type, FileType::TypeScript) {
-                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
-            } else {
-                tree_sitter_javascript::LANGUAGE.into()
-            };
-            (lang, extract_js_import)
-        }
-        FileType::Lua => (tree_sitter_lua::LANGUAGE.into(), extract_lua_import),
-        FileType::Go => (tree_sitter_go::LANGUAGE.into(), extract_go_import),
-        FileType::Perl => (ts_parser_perl::LANGUAGE.into(), extract_perl_import),
-        FileType::CSharp => (tree_sitter_c_sharp::LANGUAGE.into(), extract_csharp_import),
-        _ => return, // Other languages don't have import extraction yet
-    };
-
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&lang).is_err() {
-        return;
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
-        return;
-    };
-
-    let mut imports = std::collections::HashSet::new();
-    let mut cursor = tree.walk();
-    walk_for_imports(&mut cursor, source.as_bytes(), import_fn, &mut imports);
-
-    // For Python: collect __import__() alias mappings and resolve aliased symbols
-    if matches!(file_type, FileType::Python) {
-        let mut alias_map = std::collections::HashMap::new();
-        let mut alias_cursor = tree.walk();
-        collect_dunder_import_aliases(&mut alias_cursor, source.as_bytes(), &mut alias_map);
-
-        if !alias_map.is_empty() {
-            for import in &mut report.imports {
-                if let Some(dot_pos) = import.symbol.find('.') {
-                    let prefix = &import.symbol[..dot_pos];
-                    if let Some(module) = alias_map.get(prefix) {
-                        import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
-                    }
-                }
-            }
-        }
-    }
-
-    for module in imports {
-        if module.len() >= 2 {
-            report.imports.push(Import {
-                symbol: module,
-                library: None,
-                source: "import".to_string(), // Distinguish from function calls ("ast")
-                offset: None,
-            });
-        }
-    }
-}
-
-/// Walk AST to find import statements
-fn walk_for_imports<'a>(
-    cursor: &mut tree_sitter::TreeCursor<'a>,
-    source: &[u8],
-    import_fn: fn(&tree_sitter::Node<'a>, &[u8]) -> Option<String>,
-    imports: &mut std::collections::HashSet<String>,
-) {
-    loop {
-        let node = cursor.node();
-        if let Some(module) = import_fn(&node, source) {
-            imports.insert(module);
-        }
-
-        if cursor.goto_first_child() {
-            continue;
-        }
-        if cursor.goto_next_sibling() {
-            continue;
-        }
-        loop {
-            if !cursor.goto_parent() {
-                return;
-            }
-            if cursor.goto_next_sibling() {
-                break;
-            }
-        }
-    }
-}
-
-/// Extract Ruby require/require_relative statements
-fn extract_ruby_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    // Ruby require is: call with method name "require" or "require_relative"
-    if node.kind() != "call" && node.kind() != "method_call" {
-        return None;
-    }
-
-    // Get the method name
-    let method_node = node.child_by_field_name("method")?;
-    let method_name = method_node.utf8_text(source).ok()?;
-
-    if method_name != "require" && method_name != "require_relative" {
-        return None;
-    }
-
-    // Get the argument (the module name)
-    let args = node.child_by_field_name("arguments")?;
-    // First child of arguments is the string
-    let arg = args.child(0)?;
-    extract_string_content(&arg, source)
-}
-
-/// Extract Python import statements
-fn extract_python_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    match node.kind() {
-        "import_statement" => {
-            // import foo.bar -> extract "foo.bar"
-            let name_node = node.child_by_field_name("name")?;
-            name_node
-                .utf8_text(source)
-                .ok()
-                .map(std::string::ToString::to_string)
-        }
-        "import_from_statement" => {
-            // from foo.bar import baz -> extract "foo.bar"
-            let module_node = node.child_by_field_name("module_name")?;
-            module_node
-                .utf8_text(source)
-                .ok()
-                .map(std::string::ToString::to_string)
-        }
-        _ => None,
-    }
-}
-
-/// Extract JavaScript/TypeScript import statements
-fn extract_js_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    if node.kind() != "import_statement" && node.kind() != "import_declaration" {
-        return None;
-    }
-    // Find the source/string child
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            if let Some(content) = extract_string_content(&child, source) {
-                return Some(content);
-            }
-        }
-    }
-    None
-}
-
-/// Extract Lua require statements
-fn extract_lua_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    if node.kind() != "function_call" {
-        return None;
-    }
-    // Check if it's a require call
-    let func = node.child_by_field_name("name")?;
-    let func_name = func.utf8_text(source).ok()?;
-    if func_name != "require" {
-        return None;
-    }
-    let args = node.child_by_field_name("arguments")?;
-    let arg = args.child(0)?;
-    extract_string_content(&arg, source)
-}
-
-/// Extract Go import declarations
-fn extract_go_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    if node.kind() != "import_spec" {
-        return None;
-    }
-    let path = node.child_by_field_name("path")?;
-    extract_string_content(&path, source)
-}
-
-/// Extract Perl use/require statements
-fn extract_perl_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    if node.kind() != "use_statement" && node.kind() != "require_statement" {
-        return None;
-    }
-    // Find the module name
-    for i in 0..node.child_count() {
-        if let Some(child) = node.child(i as u32) {
-            if child.kind() == "package_name" || child.kind() == "bareword" {
-                return child
-                    .utf8_text(source)
-                    .ok()
-                    .map(std::string::ToString::to_string);
-            }
-        }
-    }
-    None
-}
-
-/// Extract C# using directives.
-///
-/// Grammar shape (tree-sitter-c-sharp): the import *target* is always the last
-/// `identifier` or `qualified_name` child of a `using_directive`, regardless of
-/// the directive form:
-///   `using System;`                   → identifier "System"
-///   `using System.Net.WebSockets;`    → qualified_name "System.Net.WebSockets"
-///   `using static System.Math;`       → qualified_name "System.Math"
-///   `using Json = System.Text.Json;`  → qualified_name "System.Text.Json"
-///                                        (the leading `identifier [field=name]` is the
-///                                         local alias; we ignore it and emit the
-///                                         imported namespace so traits can match the
-///                                         actual capability surface)
-fn extract_csharp_import<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
-    if node.kind() != "using_directive" {
-        return None;
-    }
-    // Walk children in reverse and take the first identifier/qualified_name we hit.
-    // For all four directive forms above, that yields the imported namespace.
-    for i in (0..node.child_count()).rev() {
-        let child = node.child(i as u32)?;
-        if matches!(child.kind(), "qualified_name" | "identifier") {
-            return child
-                .utf8_text(source)
-                .ok()
-                .map(std::string::ToString::to_string);
-        }
-    }
-    None
 }
 
 /// Collect `foo = __import__('module')` alias mappings from Python AST.
@@ -401,10 +155,10 @@ fn extract_string_content<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Op
     }
 }
 
-/// Extract function calls from source code and add to report.imports
-/// NOTE: This is primarily for capability matching, not module imports.
-/// Use extract_imports() for actual module imports like require/import.
-/// Extract symbols from a pre-parsed tree (avoids re-parsing)
+/// Extract function calls from source code and add to report.imports.
+///
+/// Primarily for capability matching, not module imports — use
+/// [`ingest_filefacts_imports`] for `require`/`import` statements.
 ///
 /// Each call site emits its own `Import` entry tagged with the node's
 /// byte offset, so composite rules with `near_bytes`/`near_lines`
@@ -442,27 +196,6 @@ pub(crate) fn extract_symbols_from_tree(
             .imports
             .push(Import::with_offset(symbol, None, "ast", offset));
     }
-}
-
-/// Extract symbols from source code by parsing with tree-sitter
-/// NOTE: This parses internally - prefer extract_symbols_from_tree() if you already have a tree
-#[allow(dead_code)] // Used in tests
-pub(crate) fn extract_symbols(
-    source: &str,
-    lang: &tree_sitter::Language,
-    call_types: &[&str],
-    report: &mut AnalysisReport,
-) {
-    let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(lang).is_err() {
-        return;
-    }
-
-    let Some(tree) = parser.parse(source, None) else {
-        return;
-    };
-
-    extract_symbols_from_tree(&tree, source, call_types, report);
 }
 
 /// Walk AST iteratively to find function calls (avoids stack overflow on deep nesting).
@@ -616,6 +349,20 @@ mod tests {
     use crate::analyzers::FileType;
     use crate::types::{AnalysisReport, TargetInfo};
 
+    fn parse_for_test<'a>(code: &'a str, file_type: &FileType) -> filefacts::ParsedFile<'a> {
+        let hint = match file_type {
+            FileType::Ruby => "test.rb",
+            FileType::Python => "test.py",
+            FileType::Go => "test.go",
+            FileType::CSharp => "test.cs",
+            other => panic!("parse_for_test: unsupported language {other:?}"),
+        };
+        let parsed = filefacts::open_with_path(std::path::Path::new(hint), code.as_bytes())
+            .expect("filefacts open");
+        let _ = parsed.values();
+        parsed
+    }
+
     #[test]
     fn test_ruby_extract_imports_only_require() {
         // Ruby code with require statements AND method calls
@@ -646,7 +393,8 @@ Foo.run()
         });
 
         // Extract imports (should only get require statements)
-        extract_imports(code, &FileType::Ruby, &mut report);
+        let parsed = parse_for_test(code, &FileType::Ruby);
+        ingest_filefacts_imports(&parsed, &FileType::Ruby, &mut report);
 
         // Should have exactly 4 imports (the require statements)
         let import_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
@@ -705,7 +453,8 @@ from urllib import request
             architectures: None,
         });
 
-        extract_imports(code, &FileType::Python, &mut report);
+        let parsed = parse_for_test(code, &FileType::Python);
+        ingest_filefacts_imports(&parsed, &FileType::Python, &mut report);
 
         let import_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
         assert!(import_symbols.contains(&"socket"), "Missing socket import");
@@ -733,11 +482,12 @@ exec(compile(data, '<>', 'exec'))
         });
 
         // Extract symbols first (call extraction)
-        let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
-        extract_symbols(code, &lang, &["call"], &mut report);
+        let parsed = parse_for_test(code, &FileType::Python);
+        let tree = parsed.source_ast().expect("source_ast").tree;
+        extract_symbols_from_tree(tree, code, &["call"], &mut report);
 
         // Then extract imports (which resolves __import__ aliases)
-        extract_imports(code, &FileType::Python, &mut report);
+        ingest_filefacts_imports(&parsed, &FileType::Python, &mut report);
 
         let all_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
 
@@ -792,7 +542,8 @@ namespace Foo
             architectures: None,
         });
 
-        extract_imports(code, &FileType::CSharp, &mut report);
+        let parsed = parse_for_test(code, &FileType::CSharp);
+        ingest_filefacts_imports(&parsed, &FileType::CSharp, &mut report);
 
         let import_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
         assert!(
@@ -857,7 +608,8 @@ func main() {
             architectures: None,
         });
 
-        extract_imports(code, &FileType::Go, &mut report);
+        let parsed = parse_for_test(code, &FileType::Go);
+        ingest_filefacts_imports(&parsed, &FileType::Go, &mut report);
 
         let import_symbols: Vec<&str> = report.imports.iter().map(|i| i.symbol.as_str()).collect();
         assert!(import_symbols.contains(&"net"), "Missing net import");

@@ -16,9 +16,9 @@ images:
     arch: "aarch64"
 
 cpus: 4
-# Cleave's release profile uses lto="fat" + codegen-units=1, which
-# exhausts ~10GB during the final link step. 12GiB headroom is enough
-# even with debug symbols enabled.
+# The wolfi build uses cleave's `release-lto` profile (lto="fat" +
+# codegen-units=1), which exhausts ~10GB during the final link step.
+# 12GiB headroom is enough even with debug symbols enabled.
 memory: "12GiB"
 disk: "30GiB"
 

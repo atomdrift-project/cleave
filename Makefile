@@ -11,7 +11,7 @@ CARGO_TARGET ?= $(if $(CARGO_TARGET_DIR),$(CARGO_TARGET_DIR),target)
 
 # For sccache, set RUSTC_WRAPPER=sccache in your environment
 
-.PHONY: all build debug release check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
+.PHONY: all build debug release release-lto check-cargo install tarball rollout-bastille test test-fast test-unit lint fmt clean coverage ci help regenerate-testdata loadtest bench-build benchmark sampled-benchmark validate tuna tuna-once wolfi wolfi-bootstrap wolfi-build wolfi-test wolfi-shell wolfi-clean wolfi-nuke
 
 # Default target
 all: build
@@ -83,12 +83,21 @@ check-cargo: ## Verify cargo is installed
 		exit 1; \
 	}
 
-release: check-cargo $(OUT_DIR) ## Build in release mode
+release: check-cargo $(OUT_DIR) ## Build in release mode (thin LTO)
 	@echo "Building $(BINARY) (release mode, treating warnings as errors)..."
 	cargo build --release --features jemalloc
 	cp $(CARGO_TARGET)/release/$(BINARY) $(OUT_DIR)/$(BINARY).new && mv -f $(OUT_DIR)/$(BINARY).new $(OUT_DIR)/$(BINARY)
 	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY); fi
 	@echo "✓ Release binary: $(OUT_DIR)/$(BINARY)"
+
+# Fat LTO + single codegen unit. Multi-minute link, marginal runtime win
+# over the default release profile. Use for container/tarball builds.
+release-lto: check-cargo $(OUT_DIR) ## Build in distribution mode (fat LTO; multi-minute link)
+	@echo "Building $(BINARY) (release-lto: fat LTO, single codegen unit)..."
+	cargo build --profile release-lto --features jemalloc
+	cp $(CARGO_TARGET)/release-lto/$(BINARY) $(OUT_DIR)/$(BINARY).new && mv -f $(OUT_DIR)/$(BINARY).new $(OUT_DIR)/$(BINARY)
+	@if [ "$$(uname)" = "Darwin" ]; then codesign -s - -f $(OUT_DIR)/$(BINARY); fi
+	@echo "✓ Release-LTO binary: $(OUT_DIR)/$(BINARY)"
 
 install: release ## Install binary to first writeable location
 	@set -e; \

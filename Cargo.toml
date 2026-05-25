@@ -259,19 +259,25 @@ proptest = "1.11"
 name = "analyze"
 harness = false
 
+# Thin LTO + cu=16 keeps most of fat LTO's runtime gain at roughly a
+# third of the link time — the right default for everyday `cargo build
+# --release`. Use the `release-lto` profile for container/distribution
+# builds where the extra link minutes are acceptable.
 [profile.release]
+lto = "thin"
+codegen-units = 16
+
+# Distribution profile: fat LTO + single codegen unit. Squeezes out the
+# last few percent of runtime at the cost of multi-minute link times.
+# Used by `make release-lto` and the wolfi container builds.
+[profile.release-lto]
+inherits = "release"
 lto = "fat"
 codegen-units = 1
 
 [profile.profiling]
 inherits = "release"
 debug = true
-# Override release's fat LTO for benchmark builds. Fat LTO + cu=1
-# adds ~10 min to the link step; thin LTO + cu=16 builds in roughly
-# a third of that while keeping most of LTO's runtime gain — the
-# right trade-off for tuna's tight propose-edit-bench iteration loop.
-lto = "thin"
-codegen-units = 16
 
 [profile.test]
 opt-level = 1  # Faster test execution

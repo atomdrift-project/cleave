@@ -60,8 +60,8 @@ pipeline:
 
   - name: Build cleave
     runs: |
-      cargo auditable build --release --locked --no-default-features --bin cleave
-      install -Dm755 target/release/cleave "${{targets.destdir}}/usr/bin/cleave"
+      cargo auditable build --profile release-lto --locked --no-default-features --bin cleave
+      install -Dm755 target/release-lto/cleave "${{targets.destdir}}/usr/bin/cleave"
 
   - uses: strip
 

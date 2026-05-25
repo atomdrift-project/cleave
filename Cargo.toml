@@ -316,8 +316,3 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
-# Local development override: point filefacts at the sibling worktree so
-# in-flight changes are picked up without a publish cycle. Remove once
-# the upstream tag is bumped.
-[patch."https://codeberg.org/atomdrift/filefacts.git"]
-filefacts = { path = "../filefacts" }

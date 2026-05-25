@@ -24,7 +24,7 @@
 /// clause or a CreateObject/GetObject argument is not a string
 /// literal. Re-exported from filefacts so cleave-side consumers don't
 /// have to import the filefacts-public path.
-pub(crate) const NON_LITERAL_SENTINEL: &str = filefacts::vba_symbols::NON_LITERAL_SENTINEL;
+pub(crate) const NON_LITERAL_SENTINEL: &str = filefacts::VBA_NON_LITERAL_SENTINEL;
 
 // Trigger-handler vocabulary kept in cleave so the office analyzer's
 // distinct-trigger aggregation runs without round-tripping through

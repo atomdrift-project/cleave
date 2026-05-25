@@ -198,25 +198,27 @@ pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
 }
 
 fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> ArchiveEntry {
+    let compression = member.compression.as_ref();
+    let ownership = member.ownership.as_ref();
     ArchiveEntry {
         path: member.path.clone(),
         file_type: "unknown".to_string(),
         sha256: String::new(),
         size_bytes: member.size_bytes,
-        compressed_size: member.compressed_size,
-        compression_method: member.compression_method.clone(),
+        compressed_size: compression.and_then(|c| c.compressed_size),
+        compression_method: compression.and_then(|c| c.method.clone()),
         mtime_unix: member.mtime_unix,
-        mode_octal: member.mode_octal,
-        uid: member.uid,
-        gid: member.gid,
-        uname: member.uname.clone(),
-        gname: member.gname.clone(),
+        mode_octal: ownership.and_then(|o| o.mode_octal),
+        uid: ownership.and_then(|o| o.uid),
+        gid: ownership.and_then(|o| o.gid),
+        uname: ownership.and_then(|o| o.uname.clone()),
+        gname: ownership.and_then(|o| o.gname.clone()),
         entry_type: member.entry_type.clone(),
         linkname: member.linkname.clone(),
         host_os: member.host_os.clone(),
-        header_offset: member.header_offset,
-        data_offset: member.data_offset,
-        central_header_offset: member.central_header_offset,
+        header_offset: member.offsets.header,
+        data_offset: member.offsets.data,
+        central_header_offset: member.offsets.central_header,
         crc32: member.crc32,
         encrypted: member.encrypted,
     }

@@ -353,7 +353,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= STRING_VALUE_MATCH_MULTIPLIER;
         }
-        Condition::StringLiteral {
+        Condition::Literal {
             exact,
             substr,
             regex,
@@ -426,7 +426,7 @@ fn score_condition(condition: &Condition) -> f32 {
         Condition::Trait { id } => {
             score += score_string_value(id);
         }
-        Condition::Ast {
+        Condition::TreeSitter {
             kind,
             node,
             exact,

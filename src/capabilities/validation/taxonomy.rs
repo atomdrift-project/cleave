@@ -1338,7 +1338,7 @@ fn condition_has_section_filter(cond: &Condition) -> bool {
             section_offset_range,
             ..
         }
-        | Condition::StringLiteral {
+        | Condition::Literal {
             section,
             offset,
             offset_range,
@@ -1381,7 +1381,7 @@ fn condition_supports_section_filter(cond: &Condition) -> bool {
         cond,
         Condition::Raw { .. }
             | Condition::Text { .. }
-            | Condition::StringLiteral { .. }
+            | Condition::Literal { .. }
             | Condition::Encoded { .. }
             | Condition::Hex { .. }
     )

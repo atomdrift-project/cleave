@@ -25,7 +25,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 /// All deep-binary signal — function CFG fields, sections recovered
 /// from packed binaries, the rizin import fallback — now flows in
 /// through `filefacts::open`. The analyzer projects from
-/// `ctx.parsed.functions()` / `imports()` / `sections()` rather than
+/// `ctx.parsed.symbols()` (filtered by kind) / `sections()` rather than
 /// spawning rizin itself.
 #[derive(Debug)]
 pub struct PEAnalyzer {
@@ -642,7 +642,7 @@ impl PEAnalyzer {
 
         // Project structural views from filefacts's typed accessors. The
         // rizin recovery (for stripped / packed PEs) already ran
-        // inside `filefacts::open` — `ctx.parsed.functions()` /
+        // inside `filefacts::open` — `ctx.parsed.symbols()` /
         // `imports()` / `sections()` already carry the rizin-recovered
         // entries with `source: "rizin"`.
         let scope_start = std::time::Instant::now();
@@ -701,11 +701,16 @@ impl PEAnalyzer {
         // filefacts's rizin fallback fired during `open`.
         report.functions = ctx
             .parsed
-            .functions()
-            .iter()
-            .map(crate::analysis_context::project_filefacts_function)
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Function)
+            .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-        if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
+        if ctx
+            .parsed
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Function)
+            .any(|s| s.source() == "rizin")
+        {
             tools_used.push("radare2".to_string());
         }
 

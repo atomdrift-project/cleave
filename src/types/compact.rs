@@ -504,52 +504,51 @@ fn compact_errors(file: &super::file_analysis::FileAnalysis) -> Vec<CompactError
         .unwrap_or_default()
 }
 
-fn json_string_array(value: &serde_json::Value, key: &str) -> Vec<String> {
-    value
-        .get(key)
-        .and_then(serde_json::Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(serde_json::Value::as_str)
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn compact_ast(
     file: &super::file_analysis::FileAnalysis,
 ) -> (Vec<String>, Vec<String>, Vec<CompactCallArg>) {
     let Some(view) = file.filefacts.as_ref() else {
         return (Vec::new(), Vec::new(), Vec::new());
     };
-    if view.ast.is_null() {
+    if view.symbols.is_empty() {
         return (Vec::new(), Vec::new(), Vec::new());
     }
 
-    let targets = json_string_array(&view.ast, "targets");
-    let members = json_string_array(&view.ast, "members");
-    let mut call_args = Vec::new();
-    if let Some(args_by_target) = view
-        .ast
-        .get("call_strings")
-        .and_then(serde_json::Value::as_object)
-    {
-        for (callee, values) in args_by_target {
-            let Some(values) = values.as_array() else {
-                continue;
-            };
-            for value in values.iter().filter_map(serde_json::Value::as_str) {
-                call_args.push(CompactCallArg {
-                    callee: callee.clone(),
-                    value: value.to_string(),
-                });
+    // Targets: sorted-unique Call.target across all call symbols.
+    let mut target_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut member_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for sym in &view.symbols {
+        let Some(kind) = sym.get("kind").and_then(|k| k.as_str()) else {
+            continue;
+        };
+        match kind {
+            "call" => {
+                if let Some(t) = sym.get("target").and_then(|v| v.as_str()) {
+                    target_set.insert(t.to_string());
+                }
             }
+            "member" => {
+                if let Some(p) = sym.get("path").and_then(|v| v.as_str()) {
+                    member_set.insert(p.to_string());
+                }
+            }
+            _ => {}
         }
     }
 
-    (targets, members, call_args)
+    // call_args (callee → literal value) was derived from the old
+    // `Ast::call_strings` index. The unified Symbol::Call no longer
+    // carries an inline strings field — literal values live in
+    // top-level `literals` and correlate by offset window. Return
+    // empty here; rule engines that need this correlation do it
+    // themselves via Stage 5's offset-window predicate.
+    let call_args = Vec::new();
+
+    (
+        target_set.into_iter().collect(),
+        member_set.into_iter().collect(),
+        call_args,
+    )
 }
 
 // ========================================================================
@@ -888,11 +887,10 @@ mod formula_tests {
         );
         fa.kv.insert("pe.machine".into(), json!("x86_64"));
         fa.filefacts = Some(FilefactsView {
-            ast: json!({
-                "targets": ["fetch"],
-                "members": ["window.localStorage"],
-                "call_strings": { "fetch": ["https://example.com"] }
-            }),
+            symbols: vec![
+                json!({"kind": "call", "target": "fetch", "args": ["string"], "source": "javascript"}),
+                json!({"kind": "member", "path": "window.localStorage", "source": "javascript"}),
+            ],
             ..FilefactsView::default()
         });
 
@@ -914,7 +912,11 @@ mod formula_tests {
         assert_eq!(ff["sc"][0], json!([".text", 1024, 4096, 6.42, "r-x"]));
         assert_eq!(ff["ct"], json!(["fetch"]));
         assert_eq!(ff["mc"], json!(["window.localStorage"]));
-        assert_eq!(ff["ca"][0], json!(["fetch", "https://example.com"]));
+        // call_args was derived from the dropped Ast.call_strings index.
+        // The unified Symbol::Call no longer carries inline strings —
+        // literal values live in top-level `literals` and correlate by
+        // offset window. compact_ast returns empty here; rule engines
+        // do the offset correlation themselves.
         assert!(value["fs"][0].get("ms").is_none());
         assert!(value["fs"][0].get("k").is_none());
     }

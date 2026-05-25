@@ -69,7 +69,7 @@ impl super::CapabilityMapper {
                 let mut required_node_types = FxHashSet::default();
                 for &idx in &applicable_indices {
                     let trait_def = &self.trait_definitions[idx];
-                    if let Condition::Ast { kind, node, .. } = &trait_def.r#if {
+                    if let Condition::TreeSitter { kind, node, .. } = &trait_def.r#if {
                         if let Some(k) = kind {
                             for nt in map_kind_to_node_types(k, file_type) {
                                 required_node_types.insert(nt);

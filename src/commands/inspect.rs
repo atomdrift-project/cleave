@@ -70,28 +70,37 @@ fn inspect_one(target: &str, tree: Option<&cli::InspectTree>) -> Result<Value> {
     let parsed = filefacts::open_with_path(path, &bytes)
         .map_err(|e| anyhow::anyhow!("filefacts failed to parse {}: {}", target, e))?;
 
+    use filefacts::SymbolKind;
+    let kind_to_value = |k: SymbolKind| -> Result<Value> {
+        Ok(serde_json::to_value(
+            parsed.symbols().iter_kind(k).collect::<Vec<_>>(),
+        )?)
+    };
     Ok(match tree {
         None => json!({
             "fileid": parsed.fileid(),
             "values": parsed.values(),
-            "strings": parsed.strings(),
+            "text": parsed.text(),
+            "literals": parsed.literals(),
             "metrics": parsed.metrics(),
-            "ast": parsed.ast(),
             "sections": parsed.sections(),
-            "imports": parsed.imports(),
-            "exports": parsed.exports(),
-            "functions": parsed.functions(),
+            "symbols": parsed.symbols(),
             "errors": parsed.errors(),
         }),
         Some(cli::InspectTree::Fileid { .. }) => serde_json::to_value(parsed.fileid())?,
         Some(cli::InspectTree::Values { .. }) => serde_json::to_value(parsed.values())?,
-        Some(cli::InspectTree::Strings { .. }) => serde_json::to_value(parsed.strings())?,
+        Some(cli::InspectTree::Text { .. }) => serde_json::to_value(parsed.text())?,
+        Some(cli::InspectTree::Literals { .. }) => serde_json::to_value(parsed.literals())?,
         Some(cli::InspectTree::Metrics { .. }) => serde_json::to_value(parsed.metrics())?,
-        Some(cli::InspectTree::Ast { .. }) => serde_json::to_value(parsed.ast())?,
         Some(cli::InspectTree::Sections { .. }) => serde_json::to_value(parsed.sections())?,
-        Some(cli::InspectTree::Imports { .. }) => serde_json::to_value(parsed.imports())?,
-        Some(cli::InspectTree::Exports { .. }) => serde_json::to_value(parsed.exports())?,
-        Some(cli::InspectTree::Functions { .. }) => serde_json::to_value(parsed.functions())?,
+        Some(cli::InspectTree::Symbols { .. }) => serde_json::to_value(parsed.symbols())?,
+        Some(cli::InspectTree::Imports { .. }) => kind_to_value(SymbolKind::Import)?,
+        Some(cli::InspectTree::Exports { .. }) => kind_to_value(SymbolKind::Export)?,
+        Some(cli::InspectTree::Functions { .. }) => kind_to_value(SymbolKind::Function)?,
+        Some(cli::InspectTree::Calls { .. }) => kind_to_value(SymbolKind::Call)?,
+        Some(cli::InspectTree::Members { .. }) => kind_to_value(SymbolKind::Member)?,
+        Some(cli::InspectTree::Binds { .. }) => kind_to_value(SymbolKind::Bind)?,
+        Some(cli::InspectTree::Identifiers { .. }) => kind_to_value(SymbolKind::Identifier)?,
         Some(cli::InspectTree::Errors { .. }) => serde_json::to_value(parsed.errors())?,
     })
 }

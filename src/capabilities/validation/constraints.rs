@@ -373,7 +373,7 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 word,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact,
                 substr,
                 regex,
@@ -628,7 +628,7 @@ fn has_short_pattern_constraints(t: &TraitDefinition, cond: &Condition) -> bool 
         section_offset_range,
         ..
     }
-    | Condition::StringLiteral {
+    | Condition::Literal {
         section,
         offset,
         offset_range,
@@ -705,7 +705,7 @@ pub(crate) fn find_too_short_patterns(
         let (exact, substr) = match &t.r#if {
             Condition::Raw { exact, substr, .. }
             | Condition::Text { exact, substr, .. }
-            | Condition::StringLiteral { exact, substr, .. }
+            | Condition::Literal { exact, substr, .. }
             | Condition::Encoded { exact, substr, .. } => (exact.as_deref(), substr.as_deref()),
             Condition::Hex { pattern, .. } => {
                 let concrete_bytes = count_concrete_hex_bytes(pattern);
@@ -953,7 +953,7 @@ pub(crate) fn find_invalid_not_usage(trait_definitions: &[TraitDefinition]) -> V
             | Condition::Encoded { regex, not, .. }
             | Condition::Symbol { regex, not, .. }
             | Condition::Text { regex, not, .. }
-            | Condition::StringLiteral { regex, not, .. } => not.is_some() && regex.is_none(),
+            | Condition::Literal { regex, not, .. } => not.is_some() && regex.is_none(),
             // Hex: not is always valid (patterns are inherently ambiguous).
             // Other condition types do not have a `not:` field.
             _ => false,
@@ -1267,7 +1267,7 @@ pub(crate) fn find_condition_scope_violations(
         .iter()
         .filter_map(|t| {
             let (kind, max) = match &t.r#if {
-                Condition::Ast { .. } => ("ast", AST_MAX_FILETYPES),
+                Condition::TreeSitter { .. } => ("ast", AST_MAX_FILETYPES),
                 Condition::Symbol { .. } => ("symbol", SYMBOL_HEX_YARA_MAX_FILETYPES),
                 Condition::Hex { .. } => ("hex", SYMBOL_HEX_YARA_MAX_FILETYPES),
                 Condition::Yara { .. } => ("yara", SYMBOL_HEX_YARA_MAX_FILETYPES),

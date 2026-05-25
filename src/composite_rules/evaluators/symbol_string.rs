@@ -708,6 +708,207 @@ fn can_use_byte_matching(pattern: &str) -> bool {
         && !pattern.contains("\\P")
 }
 
+/// Evaluate `type: symbol, kind: call [+ arg: ...]` — match call
+/// sites from filefacts's unified `Symbol::Call` records, optionally
+/// narrowing by an arg-position filter that matches against the
+/// per-arg shape+value carried on each call.
+///
+/// Iterates `ctx.report.filefacts.symbols` (the raw filefacts JSON
+/// mirror), filters to entries with `kind: "call"`, matches `target`
+/// against the rule's name predicates, and — when `arg` is set —
+/// requires at least one of the call's `args[]` to match the arg
+/// filter on shape + value.
+#[must_use]
+pub(crate) fn eval_call<'a>(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    arg_filter: Option<&crate::composite_rules::condition::ArgFilter>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    let Some(view) = ctx.report.filefacts.as_ref() else {
+        return ConditionResult::no_match();
+    };
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+    let compiled_regex = regex.and_then(|r| regex::Regex::new(r).ok());
+
+    for sym in &view.symbols {
+        let Some(obj) = sym.as_object() else { continue };
+        if obj.get("kind").and_then(|v| v.as_str()) != Some("call") {
+            continue;
+        }
+        let target = obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
+
+        // Match the target name against any name predicate.
+        let name_matches = match (exact, substr, compiled_regex.as_ref()) {
+            (None, None, None) => true, // no name filter — every call qualifies
+            (Some(e), _, _) => target == e,
+            (_, Some(s), _) => target.contains(s.as_str()),
+            (_, _, Some(re)) => re.is_match(target),
+        };
+        if !name_matches {
+            continue;
+        }
+
+        // If an arg filter is set, require at least one arg in args[]
+        // to match it.
+        if let Some(filter) = arg_filter {
+            let Some(args) = obj.get("args").and_then(|v| v.as_array()) else {
+                continue;
+            };
+            if !args.iter().any(|a| arg_matches(a, filter)) {
+                continue;
+            }
+        }
+
+        match_count += 1;
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "symbol".to_string(),
+                source: "call".to_string(),
+                value: target.to_string(),
+                location: obj
+                    .get("offset")
+                    .and_then(|v| v.as_u64())
+                    .map(|o| format!("{:#x}", o)),
+                ..Default::default()
+            });
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: 2.0,
+        matched_trait_ids: Vec::new(),
+    }
+}
+
+/// Match one arg JSON value against an [`ArgFilter`]. Argstring/number/
+/// identifier are tagged `{"shape": ...}` in filefacts's serialization.
+fn arg_matches(
+    arg: &serde_json::Value,
+    filter: &crate::composite_rules::condition::ArgFilter,
+) -> bool {
+    let Some(obj) = arg.as_object() else {
+        return false;
+    };
+    let shape = obj.get("shape").and_then(|v| v.as_str()).unwrap_or("");
+    if let Some(want_kind) = filter.kind.as_deref() {
+        if shape != want_kind {
+            return false;
+        }
+    }
+    match shape {
+        "number" => {
+            if let Some(want_value) = filter.value {
+                if obj.get("value").and_then(|v| v.as_i64()) != Some(want_value) {
+                    return false;
+                }
+            }
+            if let Some(want_radix) = filter.radix {
+                if obj.get("radix").and_then(|v| v.as_u64()).map(|r| r as u32)
+                    != Some(want_radix)
+                {
+                    return false;
+                }
+            }
+        }
+        "string" | "template" => {
+            let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(want_exact) = filter.exact.as_deref() {
+                if value != want_exact {
+                    return false;
+                }
+            }
+            if let Some(want_substr) = filter.substr.as_deref() {
+                if !value.contains(want_substr) {
+                    return false;
+                }
+            }
+        }
+        "identifier" => {
+            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            if let Some(want_name) = filter.name.as_deref() {
+                if name != want_name {
+                    return false;
+                }
+            }
+        }
+        _ => {
+            // Other shapes (null, object, array, function, call,
+            // expression) carry no matchable value — passing the
+            // filter just by shape match (already checked above) is
+            // sufficient.
+        }
+    }
+    true
+}
+
+/// Evaluate `type: literal, kind: number` — match against numeric
+/// literals extracted by the AST walker into `ctx.report.strings` with
+/// `section: Some("ast-number")`. The string row encodes:
+///   - `value`    = decimal-rendered parsed integer (e.g., `"511"`)
+///   - `encoding` = source-written radix as string (`"2" / "8" / "10" / "16"`)
+///
+/// When `want_value` is set, the literal's parsed value must equal it.
+/// When `want_radix` is set, the source-written radix must match —
+/// lets authors distinguish `0o777` from `511`.
+#[must_use]
+pub(crate) fn eval_numeric_literal<'a>(
+    want_value: Option<i64>,
+    want_radix: Option<u32>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+
+    for string_info in &ctx.report.strings {
+        if string_info.section.as_deref() != Some("ast-number") {
+            continue;
+        }
+        let Ok(parsed_value) = string_info.value.parse::<i64>() else {
+            continue;
+        };
+        let Ok(parsed_radix) = string_info.encoding.parse::<u32>() else {
+            continue;
+        };
+        if let Some(v) = want_value {
+            if parsed_value != v {
+                continue;
+            }
+        }
+        if let Some(r) = want_radix {
+            if parsed_radix != r {
+                continue;
+            }
+        }
+        match_count += 1;
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "literal".to_string(),
+                source: "ast-number".to_string(),
+                value: format!("{} (radix {})", parsed_value, parsed_radix),
+                location: string_info.offset.map(|o| format!("{:#x}", o)),
+                ..Default::default()
+            });
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        // High precision — numeric literal matches are unambiguous.
+        precision: 2.0,
+        matched_trait_ids: Vec::new(),
+    }
+}
+
 /// Used by `type: raw` conditions to search raw file content rather than extracted strings.
 /// Use for cross-boundary patterns or when string extraction is insufficient.
 #[allow(clippy::too_many_arguments)]

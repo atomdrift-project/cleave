@@ -1134,9 +1134,9 @@ fn check_regex_length(
     let regex = match condition {
         Condition::Symbol { regex, .. }
         | Condition::Text { regex, .. }
-        | Condition::StringLiteral { regex, .. }
+        | Condition::Literal { regex, .. }
         | Condition::Raw { regex, .. }
-        | Condition::Ast { regex, .. }
+        | Condition::TreeSitter { regex, .. }
         | Condition::Section { regex, .. }
         | Condition::Encoded { regex, .. }
         | Condition::Basename { regex, .. }

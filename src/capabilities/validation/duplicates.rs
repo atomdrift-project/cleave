@@ -603,7 +603,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("text", "regex", v.clone(), sec.clone(), None);
             }
         }
-        Condition::StringLiteral {
+        Condition::Literal {
             exact,
             substr,
             word,
@@ -1777,7 +1777,7 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("text", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::StringLiteral {
+            Condition::Literal {
                 exact,
                 substr,
                 word,
@@ -1874,7 +1874,7 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("value", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Ast {
+            Condition::TreeSitter {
                 exact,
                 substr,
                 regex,
@@ -2143,7 +2143,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
             Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
             Condition::Text { regex: Some(r), .. } => add_regex("text", r.clone()),
-            Condition::StringLiteral { regex: Some(r), .. } => {
+            Condition::Literal { regex: Some(r), .. } => {
                 add_regex("string_literal", r.clone())
             }
             Condition::Basename { regex: Some(r), .. } => add_regex("basename", r.clone()),
@@ -2218,7 +2218,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("text", "word", w.clone());
                 }
             }
-            Condition::StringLiteral {
+            Condition::Literal {
                 exact,
                 substr,
                 word,
@@ -2522,7 +2522,7 @@ pub(crate) fn check_regex_alternative_subsets(
                 case_insensitive,
                 ..
             } => add_regex("text", r.clone(), *case_insensitive),
-            Condition::StringLiteral {
+            Condition::Literal {
                 regex: Some(r),
                 case_insensitive,
                 ..
@@ -2762,7 +2762,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             Condition::Symbol { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Text { exact: Some(s), .. }
-            | Condition::StringLiteral { exact: Some(s), .. }
+            | Condition::Literal { exact: Some(s), .. }
             | Condition::Basename { exact: Some(s), .. }
             | Condition::Encoded { exact: Some(s), .. } => {
                 literal_patterns.push((
@@ -2782,7 +2782,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             | Condition::Text {
                 substr: Some(s), ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s), ..
             }
             | Condition::Basename {
@@ -2809,7 +2809,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             Condition::Symbol { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
-            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Literal { regex: Some(r), .. }
             | Condition::Basename { regex: Some(r), .. }
             | Condition::Encoded { regex: Some(r), .. } => Some(r),
             _ => None,
@@ -3127,7 +3127,7 @@ pub(crate) fn find_alternation_merge_candidates(
             Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
-            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Literal { regex: Some(r), .. }
             | Condition::Basename { regex: Some(r), .. }
             | Condition::Encoded { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
@@ -3628,7 +3628,7 @@ pub(crate) fn find_structural_regex_duplicates(
 
         let (regex_opt, scope, condition_type) = match &trait_def.r#if {
             Condition::Text { regex, .. } => (regex.as_ref(), Scope::Body, "text"),
-            Condition::StringLiteral { regex, .. } => {
+            Condition::Literal { regex, .. } => {
                 (regex.as_ref(), Scope::Body, "string_literal")
             }
             Condition::Raw { regex, .. } => (regex.as_ref(), Scope::Raw, "raw"),

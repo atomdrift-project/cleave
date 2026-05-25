@@ -26,7 +26,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 ///
 /// Wave B routed deep-binary signal through `filefacts::open`: function
 /// CFG fields and recovered symbols for stripped binaries arrive on
-/// `ctx.parsed.functions()` / `imports()` / `exports()` /
+/// `ctx.parsed.symbols()` (filtered by kind) /
 /// `sections()`. The analyzer no longer spawns rizin itself.
 #[derive(Debug)]
 pub(crate) struct ElfAnalyzer {
@@ -242,11 +242,16 @@ impl ElfAnalyzer {
             // CFG block on the cleave mirror `None`.
             report.functions = ctx
                 .parsed
-                .functions()
-                .iter()
-                .map(crate::analysis_context::project_filefacts_function)
+                .symbols()
+                .iter_kind(filefacts::SymbolKind::Function)
+                .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
+            if ctx
+                .parsed
+                .symbols()
+                .iter_kind(filefacts::SymbolKind::Function)
+                .any(|s| s.source() == "rizin")
+            {
                 tools_used.push("radare2".to_string());
             }
             let r2_strings_extracted: Option<Vec<stng::ExtractedString>> = None;
@@ -426,18 +431,23 @@ impl ElfAnalyzer {
 
             // Rizin recovery is owned by `filefacts::open` now: when
             // goblin's ELF parse comes back empty, filefacts's internal
-            // fallback re-runs through rizin and fills the typed
-            // `Functions` / `Imports` / `Exports` / `Sections` views
-            // before we ever look at them. Projecting from
-            // `ctx.parsed.functions()` here mirrors the happy path
+            // fallback re-runs through rizin and fills the unified
+            // `Symbols` view with Function records (plus Imports /
+            // Exports) before we ever look at them. Projecting from
+            // `ctx.parsed.symbols()` here mirrors the happy path
             // and avoids duplicating the cache-key plumbing.
             report.functions = ctx
                 .parsed
-                .functions()
-                .iter()
-                .map(crate::analysis_context::project_filefacts_function)
+                .symbols()
+                .iter_kind(filefacts::SymbolKind::Function)
+                .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
+            if ctx
+                .parsed
+                .symbols()
+                .iter_kind(filefacts::SymbolKind::Function)
+                .any(|s| s.source() == "rizin")
+            {
                 tools_used.push("radare2".to_string());
             }
             let _ = (parse_failed, allow_rizin, precomputed_sha256);

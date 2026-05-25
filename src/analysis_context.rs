@@ -90,29 +90,47 @@ impl<'a> AnalysisContext<'a> {
             .collect()
     }
 
-    /// Project filefacts imports into cleave's import representation.
+    /// Project filefacts Import symbols into cleave's import representation.
     #[must_use]
     pub fn imports_from_filefacts(&self) -> Vec<Import> {
         self.parsed
-            .imports()
-            .iter()
-            .map(|i| match i.offset {
-                Some(offset) => Import::with_offset(&i.name, i.library.clone(), i.source, offset),
-                None => Import::new(&i.name, i.library.clone(), i.source),
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Import)
+            .filter_map(|s| match s {
+                filefacts::Symbol::Import {
+                    name,
+                    library,
+                    source,
+                    offset,
+                    ..
+                } => Some(match offset {
+                    Some(off) => Import::with_offset(name, library.clone(), source.clone(), *off),
+                    None => Import::new(name, library.clone(), source.clone()),
+                }),
+                _ => None,
             })
             .collect()
     }
 
-    /// Project filefacts exports into cleave's export representation.
+    /// Project filefacts Export symbols into cleave's export representation.
     #[must_use]
     pub fn exports_from_filefacts(&self) -> Vec<Export> {
         self.parsed
-            .exports()
-            .iter()
-            .map(|e| {
-                let mut out = Export::new(&e.name, e.offset.map(hex_offset), e.source);
-                out.forward_to = e.forward_to.clone();
-                out
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Export)
+            .filter_map(|s| match s {
+                filefacts::Symbol::Export {
+                    name,
+                    source,
+                    offset,
+                    forward_to,
+                    ..
+                } => {
+                    let mut out = Export::new(name, offset.map(hex_offset), source.clone());
+                    out.forward_to = forward_to.clone();
+                    Some(out)
+                }
+                _ => None,
             })
             .collect()
     }
@@ -135,34 +153,48 @@ impl<'a> AnalysisContext<'a> {
             .collect()
     }
 
-    /// Project filefacts functions into cleave's function representation.
+    /// Project filefacts Function symbols into cleave's function
+    /// representation.
     #[must_use]
     pub fn functions_from_filefacts(&self) -> Vec<Function> {
         self.parsed
-            .functions()
-            .iter()
-            .map(project_filefacts_function)
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Function)
+            .filter_map(project_filefacts_function)
             .collect()
     }
 }
 
-/// Project one filefacts function into cleave's public function shape.
+/// Project one filefacts Function symbol into cleave's public function
+/// shape. Returns None for non-Function variants (defensive — callers
+/// should already pre-filter).
 #[must_use]
-pub fn project_filefacts_function(f: &filefacts::Function) -> Function {
-    Function {
-        name: f.name.clone(),
-        offset: f.offset.map(hex_offset),
+pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
+    let filefacts::Symbol::Function {
+        name,
+        offset,
+        complexity,
+        callees,
+        source,
+        ..
+    } = sym
+    else {
+        return None;
+    };
+    Some(Function {
+        name: name.clone(),
+        offset: offset.map(hex_offset),
         size: None,
-        complexity: f.complexity,
-        calls: f.calls.clone(),
-        source: f.source.to_string(),
+        complexity: *complexity,
+        calls: callees.clone(),
+        source: source.clone(),
         control_flow: None,
         register_usage: None,
         constants: Vec::new(),
         signature: None,
         nesting: None,
         call_patterns: None,
-    }
+    })
 }
 
 fn archive_entry_from_filefacts_member(member: &filefacts::ArchiveMember) -> ArchiveEntry {

@@ -51,7 +51,7 @@ If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](.
        conf: 0.9
        mbc: "C0029"
        if:
-         type: ast
+         type: symbol
          kind: call
          substr: "Digest::SHA256"
    ```
@@ -64,8 +64,9 @@ If you're unsure where a rule belongs, the decision framework in [TAXONOMY.md](.
    cleave test-match /path/to/sample --type text --pattern "your-pattern"
    ```
 
-   Use `--type text` for most human-readable patterns. Use `--type string-literal`
-   only when you specifically want AST-backed string literals from source files.
+   Use `--type text` for most human-readable patterns. Use `--type literal`
+   for parser-extracted string and number literals from source files
+   (formerly `string-literal`, kept as a serde alias).
 
 4. **Run the checks:**
    ```bash

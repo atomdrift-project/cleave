@@ -25,7 +25,7 @@ type Ctx<'a> = crate::analysis_context::AnalysisContext<'a>;
 ///
 /// Wave B routed deep-binary signal through `filefacts::open`: function
 /// CFG fields and rizin-recovered symbols arrive on
-/// `ctx.parsed.functions()` / `imports()` / `exports()`. The analyzer
+/// `ctx.parsed.symbols()` (filtered by kind). The analyzer
 /// no longer merges its own rizin import augment over goblin's view —
 /// filefacts's typed Mach-O imports cover what cleave needed previously.
 #[derive(Debug)]
@@ -285,11 +285,16 @@ impl MachOAnalyzer {
         let _t_r2 = std::time::Instant::now();
         report.functions = ctx
             .parsed
-            .functions()
-            .iter()
-            .map(crate::analysis_context::project_filefacts_function)
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Function)
+            .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-        if ctx.parsed.functions().iter().any(|f| f.source == "rizin") {
+        if ctx
+            .parsed
+            .symbols()
+            .iter_kind(filefacts::SymbolKind::Function)
+            .any(|s| s.source() == "rizin")
+        {
             tools_used.push("radare2".to_string());
         }
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;

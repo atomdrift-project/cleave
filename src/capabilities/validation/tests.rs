@@ -250,11 +250,14 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::StringLiteral {
+            Condition::Literal {
+                kind: None,
                 exact: Some(pattern.to_string()),
                 substr: None,
                 regex: None,
                 word: None,
+                value: None,
+                radix: None,
                 case_insensitive,
                 is_check: None,
                 not: None,
@@ -380,6 +383,7 @@ mod duplicate_tests {
                 platforms: None,
                 is_check: None,
                 kind: None,
+            arg: None,
                 not: None,
                 compiled_regex: None,
                 compiled_finder: None,
@@ -2065,6 +2069,7 @@ mod duplicate_tests {
                     platforms: None,
                     is_check: None,
                     kind: None,
+            arg: None,
                     not: None,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -5596,11 +5601,14 @@ mod string_literal_should_use_text_tests {
     fn flags_code_structure_pattern() {
         let t = source_trait(
             "t::literal-eval",
-            Condition::StringLiteral {
+            Condition::Literal {
+                kind: None,
                 exact: None,
                 substr: Some("eval(".to_string()),
                 regex: None,
                 word: None,
+                value: None,
+                radix: None,
                 case_insensitive: false,
                 is_check: None,
                 not: None,

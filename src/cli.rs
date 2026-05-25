@@ -656,76 +656,100 @@ fn parse_offset_range(s: &str) -> Result<(i64, Option<i64>), String> {
 }
 
 /// View filter for `cleave facts`. Each variant maps 1:1 onto an
-/// accessor on `filefacts::ParsedFile`.
+/// accessor on `filefacts::ParsedFile` (or a `symbols()` filter for
+/// the per-kind convenience variants).
 #[derive(Debug, Clone, clap::Subcommand)]
 pub enum InspectTree {
     /// File identification — file type + detection source
     Fileid {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Structural values tree (paths usable by `type: value` rules)
+    ///Structural values tree (paths usable by `type: value` rules)
     Values {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Extracted strings — literals and decoded payloads
-    Strings {
+    ///Byte-scan extracted text runs (ascii / utf16le partitions)
+    Text {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Flat metric map (`text.char_entropy`, `pe.import_count`, …)
+    ///Parser-extracted string literals (the precise tier — no
+    /// comment/code false positives)
+    Literals {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Flat metric map (`text.char_entropy`, `pe.import_count`, …)
     Metrics {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// AST projections — calls, targets, members, and call strings
-    Ast {
-        /// File paths to inspect (1+ required).
-
-        #[arg(required = true)]
-        targets: Vec<String>,
-    },
-    /// Binary sections — name, extents, entropy, flag vocabulary
+    ///Binary sections — name, extents, entropy, flag vocabulary
     Sections {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Imported foreign symbols
+    ///Unified named-entity facts: imports, exports, functions, calls,
+    /// members, binds, identifiers, tagged by `kind`.
+    Symbols {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Imported foreign symbols (convenience alias for `symbols`
+    /// filtered to `kind: import`).
     Imports {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Locally-defined exported symbols
+    ///Locally-defined exported symbols (convenience for `kind: export`).
     Exports {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
-    /// Functions / methods defined in the file
+    ///Function definitions (convenience for `kind: function`).
     Functions {
         /// File paths to inspect (1+ required).
-
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Per-call-site records (convenience for `kind: call`).
+    Calls {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Dotted member-access chains (convenience for `kind: member`).
+    Members {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Static name = value bindings (convenience for `kind: bind`).
+    Binds {
+        /// File paths to inspect (1+ required).
+        #[arg(required = true)]
+        targets: Vec<String>,
+    },
+    ///Bare identifiers (convenience for `kind: identifier`).
+    Identifiers {
+        /// File paths to inspect (1+ required).
         #[arg(required = true)]
         targets: Vec<String>,
     },
     /// Recoverable parser diagnostics
     Errors {
         /// File paths to inspect (1+ required).
-
         #[arg(required = true)]
         targets: Vec<String>,
     },
@@ -738,13 +762,18 @@ impl InspectTree {
         match self {
             Self::Fileid { targets }
             | Self::Values { targets }
-            | Self::Strings { targets }
+            | Self::Text { targets }
+            | Self::Literals { targets }
             | Self::Metrics { targets }
-            | Self::Ast { targets }
             | Self::Sections { targets }
+            | Self::Symbols { targets }
             | Self::Imports { targets }
             | Self::Exports { targets }
             | Self::Functions { targets }
+            | Self::Calls { targets }
+            | Self::Members { targets }
+            | Self::Binds { targets }
+            | Self::Identifiers { targets }
             | Self::Errors { targets } => targets,
         }
     }
@@ -756,13 +785,18 @@ impl InspectTree {
         match self {
             Self::Fileid { .. } => "fileid",
             Self::Values { .. } => "values",
-            Self::Strings { .. } => "strings",
+            Self::Text { .. } => "text",
+            Self::Literals { .. } => "literals",
             Self::Metrics { .. } => "metrics",
-            Self::Ast { .. } => "ast",
             Self::Sections { .. } => "sections",
+            Self::Symbols { .. } => "symbols",
             Self::Imports { .. } => "imports",
             Self::Exports { .. } => "exports",
             Self::Functions { .. } => "functions",
+            Self::Calls { .. } => "calls",
+            Self::Members { .. } => "members",
+            Self::Binds { .. } => "binds",
+            Self::Identifiers { .. } => "identifiers",
             Self::Errors { .. } => "errors",
         }
     }

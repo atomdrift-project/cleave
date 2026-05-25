@@ -944,6 +944,35 @@ impl UnifiedSourceAnalyzer {
                         });
                     }
                 }
+            } else if is_numeric_node_kind(kind) {
+                // Numeric-literal extraction (rule type: `type: literal,
+                // kind: number`). Heuristic-named node kinds across our
+                // 22 tree-sitter grammars share these stems:
+                //   integer | integer_literal | int_literal | number |
+                //   number_literal | decimal_integer_literal |
+                //   hex_integer_literal | octal_integer_literal |
+                //   binary_integer_literal | imaginary_literal | float_literal
+                //
+                // We piggyback on the existing string `StringInfo` row
+                // shape rather than adding new fields (avoiding 141
+                // cascading test-fix sites):
+                //   value:    decimal-rendered parsed integer ("511")
+                //   encoding: radix as a string ("8" / "10" / "16" / "2")
+                //   section:  "ast-number" sentinel — `eval_literal` filters
+                //             on this to route to numeric matching.
+                if let Ok(text) = node.utf8_text(source) {
+                    if let Some((value, radix)) = parse_numeric_literal(text) {
+                        report.strings.push(StringInfo {
+                            value: value.to_string(),
+                            offset: Some(node.start_byte() as u64),
+                            string_type: None,
+                            encoding: radix.to_string(),
+                            section: Some("ast-number".to_string()),
+                            encoding_chain: Vec::new(),
+                            fragments: None,
+                        });
+                    }
+                }
             }
 
             if cursor.goto_first_child() {
@@ -958,6 +987,115 @@ impl UnifiedSourceAnalyzer {
                 }
             }
         }
+    }
+}
+
+/// Heuristic: tree-sitter node names that correspond to integer
+/// numeric literals across our supported grammars. Generic enough to
+/// avoid per-language config; the parser fails fast on non-numeric
+/// matches via [`parse_numeric_literal`].
+#[inline]
+fn is_numeric_node_kind(kind: &str) -> bool {
+    // Skip float-family kinds: numeric-literal matching is integer-only
+    // (chmod 0o777, port 4444, sentinel 0xDEADBEEF). Floats would need
+    // their own parsing path and aren't a malware-rule target.
+    if kind.contains("float") || kind.contains("real") {
+        return false;
+    }
+    kind == "number"
+        || kind == "integer"
+        || kind.contains("integer_literal")
+        || kind.contains("int_literal")
+        || kind.contains("number_literal")
+}
+
+/// Parse a numeric-literal source text into `(value, radix)`. Returns
+/// `None` for unparseable input (floats, BigInts, weird suffixes).
+///
+/// Detects the source-written radix from prefix:
+///   - `0x` / `0X`  → 16
+///   - `0o` / `0O`  → 8
+///   - `0b` / `0B`  → 2
+///   - else         → 10
+///
+/// Strips underscores (Rust/Python/JS use them as digit separators) and
+/// common integer suffixes (`u8`, `i64`, `L`, `n` for BigInt, `i` for
+/// imaginary). Returns `None` rather than truncating on overflow.
+fn parse_numeric_literal(text: &str) -> Option<(i64, u32)> {
+    // Reject floating-point shapes that slipped through the node-kind filter.
+    if text.contains('.') || text.contains('e') || text.contains('E') {
+        // 'e'/'E' guard would false-reject hex literals like 0xE5 — only apply
+        // when we haven't yet seen an 0x prefix.
+        if !(text.starts_with("0x") || text.starts_with("0X")) {
+            return None;
+        }
+        if text.contains('.') {
+            return None;
+        }
+    }
+    let (rest, radix) = if let Some(s) = text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+    {
+        (s, 16u32)
+    } else if let Some(s) = text.strip_prefix("0o").or_else(|| text.strip_prefix("0O")) {
+        (s, 8u32)
+    } else if let Some(s) = text.strip_prefix("0b").or_else(|| text.strip_prefix("0B")) {
+        (s, 2u32)
+    } else {
+        (text, 10u32)
+    };
+    // Strip digit separators + the most common integer-type suffixes that
+    // appear in source-language literals. Anything that wouldn't be a
+    // valid digit-in-this-radix character is dropped so suffixes like
+    // `_u32`, `L`, `n` (BigInt), `i` (imaginary) don't break parsing.
+    let cleaned: String = rest
+        .chars()
+        .take_while(|c| c.is_digit(radix) || *c == '_')
+        .filter(|c| *c != '_')
+        .collect();
+    if cleaned.is_empty() {
+        return None;
+    }
+    i64::from_str_radix(&cleaned, radix).ok().map(|v| (v, radix))
+}
+
+#[cfg(test)]
+mod numeric_literal_tests {
+    use super::{is_numeric_node_kind, parse_numeric_literal};
+
+    #[test]
+    fn parse_decimal_octal_hex_binary() {
+        assert_eq!(parse_numeric_literal("4444"), Some((4444, 10)));
+        assert_eq!(parse_numeric_literal("0o777"), Some((511, 8)));
+        assert_eq!(parse_numeric_literal("0xDEADBEEF"), Some((0xDEADBEEF, 16)));
+        assert_eq!(parse_numeric_literal("0b1010"), Some((10, 2)));
+    }
+
+    #[test]
+    fn parse_rejects_floats() {
+        assert_eq!(parse_numeric_literal("3.14"), None);
+        assert_eq!(parse_numeric_literal("1e10"), None);
+    }
+
+    #[test]
+    fn parse_strips_digit_separators_and_suffixes() {
+        assert_eq!(parse_numeric_literal("1_000_000"), Some((1_000_000, 10)));
+        assert_eq!(parse_numeric_literal("4444u16"), Some((4444, 10)));
+        assert_eq!(parse_numeric_literal("0xDEAD_BEEFi64"), Some((0xDEADBEEF, 16)));
+    }
+
+    #[test]
+    fn is_numeric_node_kind_matches_known_grammars() {
+        assert!(is_numeric_node_kind("number"));
+        assert!(is_numeric_node_kind("integer"));
+        assert!(is_numeric_node_kind("integer_literal"));
+        assert!(is_numeric_node_kind("int_literal"));
+        assert!(is_numeric_node_kind("number_literal"));
+        assert!(is_numeric_node_kind("hex_integer_literal"));
+        assert!(is_numeric_node_kind("decimal_integer_literal"));
+        assert!(!is_numeric_node_kind("float_literal"));
+        assert!(!is_numeric_node_kind("real_literal"));
+        assert!(!is_numeric_node_kind("string"));
+        assert!(!is_numeric_node_kind("identifier"));
     }
 }
 

@@ -30,11 +30,11 @@ fn substr_regex_fields(
         Condition::Text { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "text"))
         }
-        Condition::StringLiteral { substr, regex, .. } => {
+        Condition::Literal { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "string_literal"))
         }
         Condition::Raw { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "raw")),
-        Condition::Ast { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "ast")),
+        Condition::TreeSitter { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "ast")),
         Condition::Section { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "section"))
         }
@@ -348,7 +348,7 @@ pub(crate) fn find_short_pattern_warnings(
                     section_offset_range,
                     ..
                 }
-                | Condition::StringLiteral {
+                | Condition::Literal {
                     section,
                     offset,
                     offset_range,
@@ -602,7 +602,7 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
     });
 
     match condition {
-        Condition::StringLiteral {
+        Condition::Literal {
             substr: Some(s), ..
         } => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
@@ -611,14 +611,14 @@ fn pattern_targets_code_structure(condition: &Condition) -> Option<(&str, &str)>
                 None
             }
         }
-        Condition::StringLiteral { exact: Some(s), .. } => {
+        Condition::Literal { exact: Some(s), .. } => {
             if func_call_re.is_match(s) || import_re.is_match(s) {
                 Some((s.as_str(), "exact"))
             } else {
                 None
             }
         }
-        Condition::StringLiteral { regex: Some(s), .. } => {
+        Condition::Literal { regex: Some(s), .. } => {
             if regex_code_re.is_match(s) {
                 Some((s.as_str(), "regex"))
             } else {
@@ -656,7 +656,7 @@ pub(crate) fn find_string_literal_should_use_text(
         }
 
         let (pattern_value, pattern_kind) = match &trait_def.r#if {
-            Condition::StringLiteral { .. } => {
+            Condition::Literal { .. } => {
                 if let Some(match_info) = pattern_targets_code_structure(&trait_def.r#if) {
                     match_info
                 } else {

@@ -160,23 +160,32 @@ fn populate_symbols_from_filefacts(
     exports: &mut std::collections::HashSet<String>,
     functions: &mut std::collections::HashSet<String>,
 ) {
-    for imp in parsed.imports().iter() {
-        let name = imp.name.trim_start_matches('_').to_string();
-        imports.insert(name.clone());
-        if let Some(lib) = &imp.library {
-            import_libraries.insert(name, lib.clone());
+    for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Import) {
+        let filefacts::Symbol::Import { name, library, .. } = sym else {
+            continue;
+        };
+        let stripped = name.trim_start_matches('_').to_string();
+        imports.insert(stripped.clone());
+        if let Some(lib) = library {
+            import_libraries.insert(stripped, lib.clone());
         }
     }
-    for exp in parsed.exports().iter() {
-        let name = exp.name.trim_start_matches('_').to_string();
-        exports.insert(name);
+    for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Export) {
+        let filefacts::Symbol::Export { name, .. } = sym else {
+            continue;
+        };
+        let stripped = name.trim_start_matches('_').to_string();
+        exports.insert(stripped);
     }
-    for func in parsed.functions().iter() {
-        let name = func.name.trim_start_matches('_').to_string();
-        if name.is_empty() || imports.contains(&name) || exports.contains(&name) {
+    for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Function) {
+        let filefacts::Symbol::Function { name, .. } = sym else {
+            continue;
+        };
+        let stripped = name.trim_start_matches('_').to_string();
+        if stripped.is_empty() || imports.contains(&stripped) || exports.contains(&stripped) {
             continue;
         }
-        functions.insert(name);
+        functions.insert(stripped);
     }
 }
 

@@ -1,15 +1,17 @@
 //! Cleave's report-side mirror of filefacts's typed views.
 //!
-//! Schema v3.0 ships filefacts's output verbatim under `filefacts: ...` so
-//! downstream consumers can navigate `filefacts.values.pe.signatures[0]`
-//! and friends without going through cleave's projection structs. The
-//! `sections` / `imports` / `exports` / `functions` / `errors` lists
-//! are held as `serde_json::Value` (rather than the strongly-typed
-//! filefacts structs) because cleave's `AnalysisReport` derives
-//! `Deserialize` for its on-disk cache and filefacts's types use
-//! `&'static str` for the `source` field — incompatible with
-//! deserialization. The JSON shape is byte-identical to filefacts's
-//! native serialization.
+//! Schema v4 (cleave) ships filefacts v6's output verbatim under
+//! `filefacts: ...` so downstream consumers can navigate
+//! `filefacts.values.pe.signatures[0]` and friends without going through
+//! cleave's projection structs.
+//!
+//! The fields are held as `serde_json::Value` (rather than the strongly
+//! typed filefacts structs) because cleave's `AnalysisReport` derives
+//! `Deserialize` for its on-disk cache. Even though filefacts v6 now
+//! uses `String` (not `&'static str`) for `source` fields and would
+//! deserialize cleanly, JSON Values keep cleave's report independent of
+//! filefacts version drift — a forward-compatible field that filefacts
+//! adds shows up automatically without a cleave rebuild.
 
 use std::collections::BTreeMap;
 
@@ -21,6 +23,11 @@ use serde::{Deserialize, Serialize};
 /// via [`FilefactsView::from_ctx`]. Every field is `skip_serializing_if`-elided
 /// when empty so binary-only fields don't appear in source-file
 /// reports and vice versa.
+///
+/// The eight-key flat shape mirrors filefacts v6's public output:
+/// `values`, `metrics`, `sections`, `symbols`, `text`, `literals`,
+/// `errors`. There is no `ast` field — calls / members / binds live
+/// inside `symbols` tagged by kind.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FilefactsView {
     /// Structural key-value tree (`pe.*`, `elf.*`, `macho.*`,
@@ -31,22 +38,24 @@ pub struct FilefactsView {
     /// `text.char_entropy`, …). Mirrors `ctx.parsed.metrics()`.
     #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
     pub metrics: BTreeMap<String, f64>,
-    /// AST projection - see filefacts::Ast.
-    #[serde(skip_serializing_if = "is_null_or_empty_object", default)]
-    pub ast: serde_json::Value,
     /// Section / segment table — see `filefacts::Section`.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sections: Vec<serde_json::Value>,
-    /// Imported symbols — see `filefacts::Import`.
+    /// Unified named-entity facts (imports, exports, functions, calls,
+    /// members, binds, identifiers) tagged by kind. See
+    /// `filefacts::Symbol`.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub imports: Vec<serde_json::Value>,
-    /// Locally-defined exported symbols — see `filefacts::Export`.
+    pub symbols: Vec<serde_json::Value>,
+    /// Byte-scan extracted text runs — ascii + utf16le partitions.
+    /// See `filefacts::Text`.
+    #[serde(skip_serializing_if = "is_null_or_empty_object", default)]
+    pub text: serde_json::Value,
+    /// Parser-extracted string literals from tree-sitter / structured
+    /// parses. See `filefacts::Literals`.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub exports: Vec<serde_json::Value>,
-    /// Functions defined in the file — see `filefacts::Function`.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub functions: Vec<serde_json::Value>,
-    /// Recoverable parse errors filefacts collected — see `filefacts::ParseError`.
+    pub literals: Vec<serde_json::Value>,
+    /// Recoverable parse errors filefacts collected — see
+    /// `filefacts::ParseError`.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub errors: Vec<serde_json::Value>,
 }
@@ -56,8 +65,8 @@ impl FilefactsView {
     /// into the report-side shape by serializing each typed view to
     /// its canonical JSON form.
     ///
-    /// The serializations below cannot fail in practice — every
-    /// filefacts view is built from owned data with no non-stringifiable
+    /// The serializations cannot fail in practice — every filefacts
+    /// view is built from owned data with no non-stringifiable
     /// `Map<_, _>` keys — but if `serde_json::to_value` ever returns
     /// an error the affected list is left empty rather than
     /// propagating the failure into the report.
@@ -67,31 +76,25 @@ impl FilefactsView {
         Self {
             values: parsed.values().as_json().clone(),
             metrics: parsed.metrics().as_map().clone(),
-            ast: if parsed.ast().is_empty() {
-                serde_json::Value::Null
-            } else {
-                serde_json::to_value(parsed.ast()).unwrap_or(serde_json::Value::Null)
-            },
             sections: serialize_to_array(parsed.sections()),
-            imports: serialize_to_array(parsed.imports()),
-            exports: serialize_to_array(parsed.exports()),
-            functions: serialize_to_array(parsed.functions()),
+            symbols: serialize_to_array(parsed.symbols()),
+            text: serde_json::to_value(parsed.text()).unwrap_or(serde_json::Value::Null),
+            literals: serialize_to_array(parsed.literals()),
             errors: serialize_to_array(parsed.errors()),
         }
     }
 
-    /// True when every list and the values tree are empty. Used by
-    /// callers that want to skip attaching an `FilefactsView` to a
-    /// report when filefacts produced nothing of substance.
+    /// True when every field is empty. Used by callers that want to
+    /// skip attaching a `FilefactsView` to a report when filefacts
+    /// produced nothing of substance.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         is_null_or_empty_object(&self.values)
             && self.metrics.is_empty()
-            && is_null_or_empty_object(&self.ast)
             && self.sections.is_empty()
-            && self.imports.is_empty()
-            && self.exports.is_empty()
-            && self.functions.is_empty()
+            && self.symbols.is_empty()
+            && is_null_or_empty_object(&self.text)
+            && self.literals.is_empty()
             && self.errors.is_empty()
     }
 }
@@ -125,7 +128,6 @@ mod tests {
         let view = FilefactsView {
             values: json!({ "pe": { "machine": "x86_64" } }),
             metrics,
-            ast: serde_json::Value::Null,
             sections: vec![json!({
                 "name": ".text",
                 "vaddr": 4096,
@@ -133,9 +135,9 @@ mod tests {
                 "file_size": 8192,
                 "flags": ["readable", "executable"]
             })],
-            imports: Vec::new(),
-            exports: Vec::new(),
-            functions: Vec::new(),
+            symbols: Vec::new(),
+            text: serde_json::Value::Null,
+            literals: Vec::new(),
             errors: Vec::new(),
         };
 
@@ -144,7 +146,7 @@ mod tests {
         assert_eq!(round_tripped.values, view.values);
         assert_eq!(round_tripped.metrics, view.metrics);
         assert_eq!(round_tripped.sections, view.sections);
-        assert!(round_tripped.imports.is_empty());
+        assert!(round_tripped.symbols.is_empty());
     }
 
     #[test]
@@ -163,21 +165,19 @@ mod tests {
     }
 
     #[test]
-    fn filefacts_view_from_ctx_populates_ast_for_source() {
+    fn filefacts_view_from_ctx_populates_symbols_for_source() {
         let path = std::path::Path::new("sample.js");
         let bytes = b"function main() { fetch(\"https://example.com\"); }";
         let ctx = crate::analysis_context::AnalysisContext::open(path, bytes)
             .expect("filefacts opens JS fixture");
 
         let view = FilefactsView::from_ctx(&ctx);
-        assert_eq!(
-            view.ast
-                .get("targets")
-                .and_then(serde_json::Value::as_array)
-                .and_then(|items| items.first())
-                .and_then(serde_json::Value::as_str),
-            Some("fetch")
-        );
+        let call_target = view
+            .symbols
+            .iter()
+            .filter(|s| s.get("kind").and_then(|k| k.as_str()) == Some("call"))
+            .find_map(|s| s.get("target").and_then(|t| t.as_str()).map(str::to_string));
+        assert_eq!(call_target.as_deref(), Some("fetch"));
     }
 
     #[test]

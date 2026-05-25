@@ -16,15 +16,24 @@ pub(crate) fn ingest_filefacts_imports(
     file_type: &FileType,
     report: &mut AnalysisReport,
 ) {
-    for imp in parsed.imports().iter() {
-        if imp.name.len() < 2 {
+    for sym in parsed.symbols().iter_kind(filefacts::SymbolKind::Import) {
+        let filefacts::Symbol::Import {
+            name,
+            library,
+            offset,
+            ..
+        } = sym
+        else {
+            continue;
+        };
+        if name.len() < 2 {
             continue;
         }
         report.imports.push(Import {
-            symbol: imp.name.clone(),
-            library: imp.library.clone(),
+            symbol: name.clone(),
+            library: library.clone(),
             source: "import".to_string(),
-            offset: imp.offset.map(|o| format!("0x{o:x}")),
+            offset: offset.map(|o| format!("0x{o:x}")),
         });
     }
 

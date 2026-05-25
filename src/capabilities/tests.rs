@@ -3454,7 +3454,7 @@ fn test_atomic_precision_calibration_spread() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::JavaScript],
         for_from_groups: false,
-        r#if: Condition::Ast {
+        r#if: Condition::TreeSitter {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("eval".to_string()),
@@ -3811,7 +3811,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::Ast {
+        r#if: Condition::TreeSitter {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("VirtualAlloc".to_string()),
@@ -4054,7 +4054,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::Ast {
+        r#if: Condition::TreeSitter {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("CreateRemoteThread".to_string()),
@@ -4160,7 +4160,7 @@ fn test_inherited_composite_scores_are_compressed() {
         arch: vec![Arch::All],
         r#for: vec![RuleFileType::Pe],
         for_from_groups: false,
-        r#if: Condition::Ast {
+        r#if: Condition::TreeSitter {
             kind: Some("call".to_string()),
             node: None,
             exact: Some("CreateRemoteThread".to_string()),

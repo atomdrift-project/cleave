@@ -249,8 +249,12 @@ fn options_hash(options: &AnalysisOptions) -> String {
         .map(|p| format!("{:?}", p))
         .collect::<Vec<_>>()
         .join(",");
+    // Cache version bumped v=5 → v=6 for the filefacts v6 schema cut
+    // (Symbol enum collapse, Text/Literals split). Cached reports from
+    // older binaries deserialize via `serde_json::Value` flexibility,
+    // but the underlying field semantics differ — force re-analysis.
     let key = format!(
-        "v=5,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={}",
+        "v=6,3p={},yara={},r2={},upx={},plat={},hp={},sp={},ps={},fv={}",
         options.enable_third_party_yara,
         !options.disable_yara,
         !options.disable_radare2,

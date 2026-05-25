@@ -613,7 +613,7 @@ impl<'a> RuleDebugger<'a> {
                 *section_offset,
                 *section_offset_range,
             ),
-            Condition::Ast {
+            Condition::TreeSitter {
                 kind,
                 node,
                 exact,

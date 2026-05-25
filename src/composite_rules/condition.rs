@@ -243,6 +243,42 @@ pub(crate) enum SymbolKind {
     Export,
     Forward,
     Function,
+    /// Call-site records from the source AST walker. Distinct from
+    /// `Function` (which is the *declaration*) — `Call` is each
+    /// *invocation* with target + arg values from `filefacts::Symbol::Call`.
+    Call,
+}
+
+/// Filter for matching a single argument at a call site. Used by
+/// `Condition::Symbol { kind: Call, arg: ... }`. Each field narrows
+/// the match: `kind` filters arg shape (`string`/`number`/`identifier`),
+/// the per-shape fields filter content.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArgFilter {
+    /// Arg shape to match: `string`, `number`, `identifier`, `bool`,
+    /// `template`, `null`, `object`, `array`, `function`, `call`,
+    /// `expression`. Omitted → any shape.
+    #[serde(default)]
+    pub kind: Option<String>,
+    /// Numeric value (kind=number). Matches when the arg's parsed
+    /// integer equals this.
+    #[serde(default)]
+    pub value: Option<i64>,
+    /// Source-written radix (kind=number): 2 / 8 / 10 / 16. With
+    /// `value`, both must match — lets authors distinguish `0o777`
+    /// (radix 8) from decimal `511` (radix 10).
+    #[serde(default)]
+    pub radix: Option<u32>,
+    /// String / template value substring match.
+    #[serde(default)]
+    pub substr: Option<String>,
+    /// String / template value exact match.
+    #[serde(default)]
+    pub exact: Option<String>,
+    /// Identifier name exact match (kind=identifier).
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
@@ -262,10 +298,18 @@ enum ConditionTagged {
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
         /// Restrict match to a specific symbol category (imports, exports,
-        /// forwarded exports, or internal functions).  When absent, match
-        /// across all categories — preserving the pre-`kind` semantic.
+        /// forwarded exports, internal functions, or call sites).
+        /// When absent, match across imports/exports/functions —
+        /// preserving the pre-`kind` semantic.
         #[serde(default)]
         kind: Option<SymbolKind>,
+        /// Per-argument filter (kind=call only). Narrows matches to
+        /// calls whose argument list contains at least one arg matching
+        /// the filter's shape + value constraints. Example: match
+        /// `chmod(_, 0o777)` via `kind: call, name: chmod, arg: {
+        /// kind: number, value: 511, radix: 8 }`.
+        #[serde(default)]
+        arg: Option<ArgFilter>,
         /// Exclude individual matches where the symbol name (or surrounding
         /// trait-level evidence) matches any of these patterns.
         #[serde(default)]
@@ -349,7 +393,14 @@ enum ConditionTagged {
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
     },
-    StringLiteral {
+    #[serde(alias = "string_literal")]
+    Literal {
+        /// Literal kind to match: `string` (default) or `number`.
+        /// Numeric matching is wired through `value` / `radix` fields;
+        /// string matching uses the standard exact / substr / regex /
+        /// word predicates against the literal's text.
+        #[serde(default)]
+        kind: Option<String>,
         #[serde(default)]
         exact: Option<String>,
         #[serde(default)]
@@ -358,6 +409,17 @@ enum ConditionTagged {
         regex: Option<String>,
         #[serde(default)]
         word: Option<String>,
+        /// Numeric value (kind=number only). Matches a literal whose
+        /// parsed integer value equals this.
+        #[serde(default)]
+        value: Option<i64>,
+        /// How a numeric literal was written in source: 2, 8, 10, 16.
+        /// When set together with `value`, both must match — lets
+        /// authors distinguish "the source said `0o777`" from "the
+        /// source said `511`" even though they represent the same
+        /// integer.
+        #[serde(default)]
+        radix: Option<u32>,
         #[serde(default)]
         case_insensitive: bool,
         #[serde(rename = "is", default)]
@@ -388,10 +450,20 @@ enum ConditionTagged {
     Trait {
         id: String,
     },
-    /// Unified AST condition type - replaces ast_pattern and ast_query
+    /// Live tree-sitter query — escape hatch for structural patterns
+    /// the precomputed `Symbol::Call/Member/Bind` projections can't
+    /// express. Most rules should reach for `type: call` / `member` /
+    /// `bind` / `literal` instead, which match against the
+    /// already-walked symbol view without re-parsing.
+    ///
     /// Simple mode: kind + exact/substr/regex (or node + exact/substr/regex for raw node types)
     /// Advanced mode: query (tree-sitter S-expression)
-    Ast {
+    ///
+    /// Renamed from `type: ast` for honesty: this evaluator spins up
+    /// tree-sitter and runs queries live. The old `type: ast` spelling
+    /// continues to work via serde alias.
+    #[serde(alias = "ast")]
+    TreeSitter {
         /// Abstract node category (e.g., "call", "function", "class")
         /// Maps to language-specific tree-sitter node types automatically
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -708,6 +780,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
+                    arg,
                     not,
                 } => Condition::Symbol {
                     exact,
@@ -716,6 +789,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind,
+                    arg,
                     not,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -734,6 +808,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind: Some(SymbolKind::Import),
+                    arg: None,
                     not,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -752,6 +827,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind: Some(SymbolKind::Export),
+                    arg: None,
                     not,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -770,6 +846,7 @@ impl From<ConditionDeser> for Condition {
                     platforms,
                     is_check,
                     kind: Some(SymbolKind::Function),
+                    arg: None,
                     not,
                     compiled_regex: None,
                     compiled_finder: None,
@@ -805,11 +882,14 @@ impl From<ConditionDeser> for Condition {
                     compiled_regex: None,
                     compiled_finder: None,
                 },
-                ConditionTagged::StringLiteral {
+                ConditionTagged::Literal {
+                    kind,
                     exact,
                     substr,
                     regex,
                     word,
+                    value,
+                    radix,
                     case_insensitive,
                     is_check,
                     not,
@@ -819,11 +899,14 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                } => Condition::StringLiteral {
+                } => Condition::Literal {
+                    kind,
                     exact,
                     substr,
                     regex,
                     word,
+                    value,
+                    radix,
                     case_insensitive,
                     is_check,
                     not,
@@ -837,7 +920,7 @@ impl From<ConditionDeser> for Condition {
                     compiled_finder: None,
                 },
                 ConditionTagged::Trait { id } => Condition::Trait { id },
-                ConditionTagged::Ast {
+                ConditionTagged::TreeSitter {
                     kind,
                     node,
                     exact,
@@ -846,7 +929,7 @@ impl From<ConditionDeser> for Condition {
                     query,
                     language,
                     case_insensitive,
-                } => Condition::Ast {
+                } => Condition::TreeSitter {
                     kind,
                     node,
                     exact,
@@ -1040,6 +1123,7 @@ impl From<Condition> for ConditionTagged {
                 platforms,
                 is_check,
                 kind,
+                arg,
                 not,
                 compiled_regex: _,
                 compiled_finder: _,
@@ -1050,6 +1134,7 @@ impl From<Condition> for ConditionTagged {
                 platforms,
                 is_check,
                 kind,
+                arg,
                 not,
             },
             Condition::Text {
@@ -1083,11 +1168,14 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::StringLiteral {
+            Condition::Literal {
+                kind,
                 exact,
                 substr,
                 regex,
                 word,
+                value,
+                radix,
                 case_insensitive,
                 is_check,
                 not,
@@ -1099,11 +1187,14 @@ impl From<Condition> for ConditionTagged {
                 section_offset_range,
                 compiled_regex: _,
                 compiled_finder: _,
-            } => ConditionTagged::StringLiteral {
+            } => ConditionTagged::Literal {
+                kind,
                 exact,
                 substr,
                 regex,
                 word,
+                value,
+                radix,
                 case_insensitive,
                 is_check,
                 not,
@@ -1115,7 +1206,7 @@ impl From<Condition> for ConditionTagged {
                 section_offset_range,
             },
             Condition::Trait { id } => ConditionTagged::Trait { id },
-            Condition::Ast {
+            Condition::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -1124,7 +1215,7 @@ impl From<Condition> for ConditionTagged {
                 query,
                 language,
                 case_insensitive,
-            } => ConditionTagged::Ast {
+            } => ConditionTagged::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -1336,6 +1427,13 @@ pub(crate) enum Condition {
         /// across imports, exports, and internal functions.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         kind: Option<SymbolKind>,
+        /// Per-argument filter (kind=call only). Narrows matches to
+        /// call sites whose argument list contains at least one arg
+        /// matching the filter — e.g. `chmod(_, 0o777)` via
+        /// `kind: call, name: chmod, arg: { kind: number, value: 511,
+        /// radix: 8 }`.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        arg: Option<ArgFilter>,
         /// Exclude individual matches where the symbol name matches any of
         /// these patterns. Combined (OR) with the trait-level `not:` filter.
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -1406,60 +1504,78 @@ pub(crate) enum Condition {
         compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
-    /// Match only AST-backed source-language string literals.
+    /// Match a language-level literal recovered by the AST walker.
     ///
-    /// This does not fall back to raw text and only works on file types with
-    /// tree-sitter support.
-    StringLiteral {
-        /// Full literal match (entire string literal must equal this)
+    /// Defaults to string-literal matching (kind=string) — same precise
+    /// tier as the prior `type: string_literal` (which is kept as a
+    /// serde alias for backward compat). With `kind: number`, matches
+    /// numeric literals by their parsed integer `value` (and optional
+    /// source-written `radix`).
+    ///
+    /// Only works on file types with tree-sitter support; does not
+    /// fall back to raw text.
+    Literal {
+        /// Literal kind to match: `string` (default) or `number`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind: Option<String>,
+        /// Full literal match (string mode) — entire literal text must equal this.
         #[serde(skip_serializing_if = "Option::is_none")]
         exact: Option<String>,
-        /// Substring match (appears anywhere in the literal)
+        /// Substring match (string mode) — appears anywhere in the literal.
         #[serde(skip_serializing_if = "Option::is_none")]
         substr: Option<String>,
-        /// Regex pattern match
+        /// Regex pattern match (string mode).
         #[serde(skip_serializing_if = "Option::is_none")]
         regex: Option<String>,
-        /// Match pattern only at word boundaries (convenience for \bpattern\b)
+        /// Word-boundary substring match (string mode).
         #[serde(skip_serializing_if = "Option::is_none")]
         word: Option<String>,
-        /// If true, matching is case-insensitive
+        /// Numeric value (kind=number) — matches when the literal's
+        /// parsed integer equals this.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        value: Option<i64>,
+        /// Source-written radix (kind=number): 2, 8, 10, 16. When set
+        /// with `value`, both must match — distinguishes `0o777` from
+        /// `511` even though they parse to the same integer.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        radix: Option<u32>,
+        /// Case-insensitive matching (string mode).
         #[serde(default)]
         case_insensitive: bool,
-        /// Optional high-fidelity validation check
+        /// Optional high-fidelity validation check (string mode).
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
-        /// Exclude individual matches where evidence matches any of these patterns
+        /// Exclude individual matches where evidence matches any of these patterns.
         #[serde(skip_serializing_if = "Option::is_none")]
         not: Option<Vec<NotException>>,
-        /// Platform filter - only evaluate this condition for these platforms
+        /// Platform filter.
         #[serde(skip_serializing_if = "Option::is_none")]
         platforms: Option<Vec<Platform>>,
-        /// Section constraint: only match literals in this section (supports fuzzy names like "text")
+        /// Section constraint.
         #[serde(skip_serializing_if = "Option::is_none")]
         section: Option<String>,
-        /// Absolute file offset: only match at this exact byte position (negative = from end)
+        /// Absolute file offset.
         #[serde(skip_serializing_if = "Option::is_none")]
         offset: Option<i64>,
-        /// Absolute offset range: [start, end) (negative values resolved from file end)
+        /// Absolute offset range: [start, end).
         #[serde(
             skip_serializing_if = "Option::is_none",
             deserialize_with = "offset_range_serde::deserialize"
         )]
         offset_range: Option<(i64, Option<i64>)>,
-        /// Section-relative offset: only match at this offset within the section
+        /// Section-relative offset.
         #[serde(skip_serializing_if = "Option::is_none")]
         section_offset: Option<i64>,
-        /// Section-relative offset range: [start, end) within section bounds
+        /// Section-relative offset range: [start, end).
         #[serde(
             skip_serializing_if = "Option::is_none",
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
+        /// Pre-compiled regex (populated after deserialization, not serialized).
         #[serde(skip)]
         compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized)
+        /// Pre-compiled substring finder (populated after deserialization, not serialized).
         #[serde(skip)]
         compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
@@ -1470,36 +1586,37 @@ pub(crate) enum Condition {
         id: String,
     },
 
-    /// Unified AST condition - search for patterns in AST nodes
+    /// Live tree-sitter query — escape hatch for structural patterns
+    /// the precomputed `Symbol::Call/Member/Bind` projections can't
+    /// express. Reach for `type: call` / `member` / `bind` / `literal`
+    /// first; this evaluator spins up tree-sitter and runs queries live.
     ///
     /// Simple mode (kind + exact/substr/regex):
     /// ```yaml
-    /// type: ast
+    /// type: tree-sitter
     /// kind: call              # abstract kind: call, function, class, import, etc.
     /// substr: "eval"          # substring match
-    /// # OR
-    /// exact: "eval"           # full match (entire node text must equal this)
-    /// # OR
-    /// regex: "eval\\("        # regex match
     /// ```
     ///
     /// Raw node type mode (node + exact/substr/regex):
     /// ```yaml
-    /// type: ast
+    /// type: tree-sitter
     /// node: call_expression   # raw tree-sitter node type (escape hatch)
     /// substr: "eval"
     /// ```
     ///
     /// Advanced mode (query):
     /// ```yaml
-    /// type: ast
+    /// type: tree-sitter
     /// query: |
     ///   (call_expression
     ///     function: (identifier) @fn
     ///     (#eq? @fn "eval"))
     /// language: javascript    # optional, for validation
     /// ```
-    Ast {
+    ///
+    /// The old `type: ast` spelling continues to work via serde alias.
+    TreeSitter {
         /// Abstract node category (e.g., "call", "function", "class")
         #[serde(skip_serializing_if = "Option::is_none")]
         kind: Option<String>,
@@ -1866,7 +1983,7 @@ impl Condition {
             Condition::Section { .. } => is_binary,
 
             // AST-backed searches require source code support
-            Condition::Ast { .. } | Condition::StringLiteral { .. } => {
+            Condition::TreeSitter { .. } | Condition::Literal { .. } => {
                 file_type.supports_ast_queries()
             }
 
@@ -1881,9 +1998,9 @@ impl Condition {
         match self {
             Condition::Symbol { .. } => "symbol",
             Condition::Text { .. } => "text",
-            Condition::StringLiteral { .. } => "string_literal",
+            Condition::Literal { .. } => "string_literal",
             Condition::Trait { .. } => "trait",
-            Condition::Ast { .. } => "ast",
+            Condition::TreeSitter { .. } => "ast",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
             Condition::Metrics { .. } => "metrics",
@@ -1909,7 +2026,7 @@ impl Condition {
                     .map_err(|e| anyhow::anyhow!("invalid YARA rule: {}", e))?;
                 Ok(())
             }
-            Condition::Ast {
+            Condition::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -2007,7 +2124,7 @@ impl Condition {
                 *section_offset_range,
                 "text",
             ),
-            Condition::StringLiteral {
+            Condition::Literal {
                 section,
                 offset,
                 offset_range,
@@ -2095,7 +2212,7 @@ impl Condition {
         let regex_to_check = match self {
             Condition::Text { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
-            | Condition::Ast { regex: Some(r), .. } => Some(r.as_str()),
+            | Condition::TreeSitter { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
         };
 
@@ -2116,7 +2233,7 @@ impl Condition {
     pub(crate) fn check_word_boundary_regex(&self) -> Option<String> {
         let regex_to_check = match self {
             Condition::Text { regex: Some(r), .. }
-            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Literal { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. } => Some(r.as_str()),
             _ => None,
         };
@@ -2192,7 +2309,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -2202,7 +2319,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::Ast {
+            | Condition::TreeSitter {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -2212,7 +2329,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
@@ -2222,7 +2339,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::Ast {
+            | Condition::TreeSitter {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
@@ -2232,7 +2349,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2278,13 +2395,13 @@ impl Condition {
 
         match self {
             Condition::Text { exact: Some(s), .. }
-            | Condition::StringLiteral { exact: Some(s), .. }
+            | Condition::Literal { exact: Some(s), .. }
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Symbol { exact: Some(s), .. } => check_empty(s, "exact"),
             Condition::Text {
                 substr: Some(s), ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s), ..
             }
             | Condition::Raw {
@@ -2294,11 +2411,11 @@ impl Condition {
                 substr: Some(s), ..
             } => check_empty(s, "substr"),
             Condition::Text { regex: Some(s), .. }
-            | Condition::StringLiteral { regex: Some(s), .. }
+            | Condition::Literal { regex: Some(s), .. }
             | Condition::Raw { regex: Some(s), .. }
             | Condition::Symbol { regex: Some(s), .. } => check_empty(s, "regex"),
             Condition::Text { word: Some(s), .. }
-            | Condition::StringLiteral { word: Some(s), .. }
+            | Condition::Literal { word: Some(s), .. }
             | Condition::Raw { word: Some(s), .. } => check_empty(s, "word"),
             _ => None,
         }
@@ -2325,7 +2442,7 @@ impl Condition {
                 case_insensitive: false,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact: Some(s),
                 case_insensitive: false,
                 ..
@@ -2345,7 +2462,7 @@ impl Condition {
                 case_insensitive: false,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s),
                 case_insensitive: false,
                 ..
@@ -2359,7 +2476,7 @@ impl Condition {
                 case_insensitive: false,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 word: Some(s),
                 case_insensitive: false,
                 ..
@@ -2396,7 +2513,7 @@ impl Condition {
 
         match self {
             Condition::Text { regex: Some(r), .. }
-            | Condition::StringLiteral { regex: Some(r), .. }
+            | Condition::Literal { regex: Some(r), .. }
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Symbol { regex: Some(r), .. } => {
                 if is_literal(r) {
@@ -2431,7 +2548,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact: Some(s),
                 case_insensitive: true,
                 ..
@@ -2441,7 +2558,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s),
                 case_insensitive: true,
                 ..
@@ -2451,7 +2568,7 @@ impl Condition {
                 case_insensitive: true,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 word: Some(s),
                 case_insensitive: true,
                 ..
@@ -2570,7 +2687,7 @@ impl Condition {
                 word,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact,
                 substr,
                 regex,
@@ -2595,7 +2712,7 @@ impl Condition {
                 regex,
                 ..
             }
-            | Condition::Ast {
+            | Condition::TreeSitter {
                 exact,
                 substr,
                 regex,
@@ -2679,7 +2796,7 @@ impl Condition {
                     });
                 }
             }
-            Condition::StringLiteral {
+            Condition::Literal {
                 regex,
                 word,
                 case_insensitive,
@@ -2883,7 +3000,7 @@ impl Condition {
                 compiled_finder,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(s),
                 case_insensitive,
                 compiled_finder,
@@ -3596,12 +3713,112 @@ exact: curl
     }
 
     #[test]
+    fn literal_yaml_accepts_both_type_literal_and_type_string_literal() {
+        // Backward-compat alias: rules authored as `type: string_literal`
+        // must continue parsing into Condition::Literal so the existing
+        // trait corpus keeps working.
+        let new_form: Condition =
+            serde_yaml::from_str("type: literal\nsubstr: rm -rf").expect("parse type: literal");
+        let old_form: Condition = serde_yaml::from_str("type: string_literal\nsubstr: rm -rf")
+            .expect("parse type: string_literal");
+        assert!(matches!(new_form, Condition::Literal { .. }));
+        assert!(matches!(old_form, Condition::Literal { .. }));
+    }
+
+    #[test]
+    fn numeric_literal_match_fires_on_chmod_octal_777() {
+        // End-to-end: synthesize what the AST walker would produce for
+        // an octal literal `0o777`, then exercise the evaluator dispatch
+        // for `type: literal, kind: number, value: 511, radix: 8`. The
+        // value+radix pair lets authors distinguish `0o777` from
+        // decimal `511` even though they represent the same integer.
+        use crate::composite_rules::types::Platform;
+        use crate::types::binary::StringInfo;
+        use crate::types::{AnalysisReport, TargetInfo};
+
+        let mut report = AnalysisReport::new(TargetInfo::default());
+        report.strings.push(StringInfo {
+            value: "511".to_string(),
+            offset: Some(0x40),
+            string_type: None,
+            encoding: "8".to_string(),
+            section: Some("ast-number".to_string()),
+            encoding_chain: Vec::new(),
+            fragments: None,
+        });
+        let platforms = vec![Platform::All];
+        let ctx = crate::composite_rules::EvaluationContext::new(
+            &report,
+            b"",
+            crate::composite_rules::types::FileType::Python,
+            &platforms,
+            None,
+            None,
+        );
+
+        // Right value + right radix → match.
+        let res = crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+            Some(511),
+            Some(8),
+            &ctx,
+        );
+        assert!(res.matched, "0o777 (value=511, radix=8) should match");
+        assert_eq!(res.match_count, 1);
+
+        // Right value, wrong radix → no match (source wrote octal, not decimal).
+        let res = crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+            Some(511),
+            Some(10),
+            &ctx,
+        );
+        assert!(!res.matched, "wrong radix should not match");
+
+        // Wrong value → no match.
+        let res = crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+            Some(777),
+            Some(8),
+            &ctx,
+        );
+        assert!(!res.matched, "wrong value should not match");
+
+        // Value-only (no radix constraint) → match.
+        let res = crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+            Some(511),
+            None,
+            &ctx,
+        );
+        assert!(res.matched, "value-only filter should match");
+    }
+
+    #[test]
+    fn literal_yaml_parses_numeric_kind_with_value_and_radix() {
+        // The new numeric-matching surface: `kind: number` with
+        // `value` + `radix`. The evaluator dispatch is a TODO; this
+        // test just locks in that the grammar accepts the shape.
+        let cond: Condition =
+            serde_yaml::from_str("type: literal\nkind: number\nvalue: 511\nradix: 8")
+                .expect("parse numeric literal");
+        let Condition::Literal {
+            kind, value, radix, ..
+        } = cond
+        else {
+            panic!("expected Literal variant");
+        };
+        assert_eq!(kind.as_deref(), Some("number"));
+        assert_eq!(value, Some(511));
+        assert_eq!(radix, Some(8));
+    }
+
+    #[test]
     fn greedy_pattern_lint_skips_string_literal_regex() {
-        let cond = Condition::StringLiteral {
+        let cond = Condition::Literal {
+            kind: None,
             exact: None,
             substr: None,
             regex: Some(r"^ssh(d|-.+)?$".to_string()),
             word: None,
+            value: None,
+            radix: None,
             case_insensitive: false,
             is_check: None,
             not: None,
@@ -3626,6 +3843,7 @@ exact: curl
             platforms: None,
             is_check: None,
             kind: None,
+            arg: None,
             not: None,
             compiled_regex: None,
             compiled_finder: None,

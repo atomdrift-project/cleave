@@ -613,7 +613,7 @@ impl TraitDefinition {
                 word: None,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 exact: Some(_),
                 regex: None,
                 word: None,
@@ -642,7 +642,7 @@ impl TraitDefinition {
                 case_insensitive,
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 substr: Some(search_substr),
                 regex: None,
                 word: None,
@@ -705,7 +705,7 @@ impl TraitDefinition {
                 regex: Some(pattern),
                 ..
             }
-            | Condition::StringLiteral {
+            | Condition::Literal {
                 regex: Some(pattern),
                 ..
             }
@@ -1206,26 +1206,46 @@ impl TraitDefinition {
                 platforms,
                 is_check,
                 kind,
+                arg,
                 not,
                 compiled_regex,
                 compiled_finder,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                timed_eval!(
-                    "symbol",
-                    eval_symbol(
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        platforms.as_ref(),
-                        *is_check,
-                        *kind,
-                        compiled_regex.as_ref(),
-                        compiled_finder.as_ref(),
-                        merged_not.as_ref(),
-                        ctx,
+                // kind=call with arg filter dispatches to the
+                // call-site evaluator that consumes filefacts's
+                // unified Symbol::Call records (which carry per-arg
+                // shape+value via the Arg tagged enum). All other
+                // kinds (Import/Export/Function/Forward/None) go
+                // through the legacy declared-symbol path.
+                if matches!(kind, Some(crate::composite_rules::condition::SymbolKind::Call)) {
+                    timed_eval!(
+                        "symbol",
+                        crate::composite_rules::evaluators::symbol_string::eval_call(
+                            exact.as_ref(),
+                            substr.as_ref(),
+                            regex.as_ref(),
+                            arg.as_ref(),
+                            ctx,
+                        )
                     )
-                )
+                } else {
+                    timed_eval!(
+                        "symbol",
+                        eval_symbol(
+                            exact.as_ref(),
+                            substr.as_ref(),
+                            regex.as_ref(),
+                            platforms.as_ref(),
+                            *is_check,
+                            *kind,
+                            compiled_regex.as_ref(),
+                            compiled_finder.as_ref(),
+                            merged_not.as_ref(),
+                            ctx,
+                        )
+                    )
+                }
             }
             Condition::Text {
                 exact,
@@ -1265,11 +1285,14 @@ impl TraitDefinition {
                     eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
                 )
             }
-            Condition::StringLiteral {
+            Condition::Literal {
+                kind,
                 exact,
                 substr,
                 regex,
                 word,
+                value,
+                radix,
                 case_insensitive,
                 is_check,
                 not: _,
@@ -1282,29 +1305,45 @@ impl TraitDefinition {
                 compiled_regex,
                 compiled_finder,
             } => {
-                let params = StringParams {
-                    exact: exact.as_ref(),
-                    substr: substr.as_ref(),
-                    regex: regex.as_ref(),
-                    word: word.as_ref(),
-                    case_insensitive: *case_insensitive,
-                    is_check: *is_check,
-                    compiled_regex: compiled_regex.as_ref(),
-                    compiled_finder: compiled_finder.as_ref(),
-                    section: section.as_ref(),
-                    offset: *offset,
-                    offset_range: *offset_range,
-                    section_offset: *section_offset,
-                    section_offset_range: *section_offset_range,
-                    arch_clamp,
-                };
-                timed_eval!(
-                    "string_literal",
-                    eval_string_literal(&params, self.not.as_ref(), ctx)
-                )
+                // kind=number dispatches to numeric matching against
+                // literals extracted into report.strings with
+                // section="ast-number" (where value is the decimal
+                // integer text and encoding is the source radix). kind
+                // omitted or "string" uses the standard string-literal
+                // path — backward-compatible with the prior
+                // `type: string_literal`.
+                if kind.as_deref() == Some("number") {
+                    timed_eval!(
+                        "literal",
+                        crate::composite_rules::evaluators::symbol_string::eval_numeric_literal(
+                            *value, *radix, ctx,
+                        )
+                    )
+                } else {
+                    let params = StringParams {
+                        exact: exact.as_ref(),
+                        substr: substr.as_ref(),
+                        regex: regex.as_ref(),
+                        word: word.as_ref(),
+                        case_insensitive: *case_insensitive,
+                        is_check: *is_check,
+                        compiled_regex: compiled_regex.as_ref(),
+                        compiled_finder: compiled_finder.as_ref(),
+                        section: section.as_ref(),
+                        offset: *offset,
+                        offset_range: *offset_range,
+                        section_offset: *section_offset,
+                        section_offset_range: *section_offset_range,
+                        arch_clamp,
+                    };
+                    timed_eval!(
+                        "literal",
+                        eval_string_literal(&params, self.not.as_ref(), ctx)
+                    )
+                }
             }
             Condition::Trait { id } => timed_eval!("trait", eval_trait(id, ctx)),
-            Condition::Ast {
+            Condition::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -2475,23 +2514,34 @@ impl CompositeTrait {
                 platforms,
                 is_check,
                 kind,
+                arg,
                 not,
                 compiled_regex,
                 compiled_finder,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                self.eval_symbol(
-                    exact.as_ref(),
-                    substr.as_ref(),
-                    regex.as_ref(),
-                    platforms.as_ref(),
-                    *is_check,
-                    *kind,
-                    compiled_regex.as_ref(),
-                    compiled_finder.as_ref(),
-                    merged_not.as_ref(),
-                    ctx,
-                )
+                if matches!(kind, Some(crate::composite_rules::condition::SymbolKind::Call)) {
+                    crate::composite_rules::evaluators::symbol_string::eval_call(
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        arg.as_ref(),
+                        ctx,
+                    )
+                } else {
+                    self.eval_symbol(
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        platforms.as_ref(),
+                        *is_check,
+                        *kind,
+                        compiled_regex.as_ref(),
+                        compiled_finder.as_ref(),
+                        merged_not.as_ref(),
+                        ctx,
+                    )
+                }
             }
             Condition::Text {
                 exact,
@@ -2528,11 +2578,14 @@ impl CompositeTrait {
                 };
                 eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
             }
-            Condition::StringLiteral {
+            Condition::Literal {
+                kind: _,
                 exact,
                 substr,
                 regex,
                 word,
+                value: _,
+                radix: _,
                 case_insensitive,
                 is_check,
                 not: _,
@@ -2564,7 +2617,7 @@ impl CompositeTrait {
                 eval_string_literal(&params, self.not.as_ref(), ctx)
             }
             Condition::Trait { id } => eval_trait(id, ctx),
-            Condition::Ast {
+            Condition::TreeSitter {
                 kind,
                 node,
                 exact,
@@ -3353,6 +3406,7 @@ mod scope_tests {
                 platforms: None,
                 is_check: None,
                 kind: None,
+            arg: None,
                 not: None,
                 compiled_regex: None,
                 compiled_finder: None,

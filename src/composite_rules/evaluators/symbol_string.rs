@@ -770,7 +770,7 @@ pub(crate) fn eval_call<'a>(
                 value: target.to_string(),
                 location: obj
                     .get("offset")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .map(|o| format!("{:#x}", o)),
                 ..Default::default()
             });
@@ -805,12 +805,15 @@ fn arg_matches(
     match shape {
         "number" => {
             if let Some(want_value) = filter.value {
-                if obj.get("value").and_then(|v| v.as_i64()) != Some(want_value) {
+                if obj.get("value").and_then(serde_json::Value::as_i64) != Some(want_value) {
                     return false;
                 }
             }
             if let Some(want_radix) = filter.radix {
-                if obj.get("radix").and_then(|v| v.as_u64()).map(|r| r as u32)
+                if obj
+                    .get("radix")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|r| r as u32)
                     != Some(want_radix)
                 {
                     return false;

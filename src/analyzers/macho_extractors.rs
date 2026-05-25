@@ -128,11 +128,8 @@ fn walk_segments_for_section<'a>(
                 continue;
             }
             let segname = parse_fixed_name(&body[segname_off..segname_off + 16]);
-            let (header_size, section_size, nsects_off) = if is_64 {
-                (72, 80, 64)
-            } else {
-                (56, 68, 48)
-            };
+            let (header_size, section_size, nsects_off) =
+                if is_64 { (72, 80, 64) } else { (56, 68, 48) };
             if body.len() < nsects_off + 4 {
                 cursor += cmdsize;
                 continue;

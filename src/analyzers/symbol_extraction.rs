@@ -47,8 +47,7 @@ pub(crate) fn ingest_filefacts_imports(
                     if let Some(dot_pos) = import.symbol.find('.') {
                         let prefix = &import.symbol[..dot_pos];
                         if let Some(module) = alias_map.get(prefix) {
-                            import.symbol =
-                                format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
+                            import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
                         }
                     }
                 }
@@ -353,6 +352,7 @@ fn get_full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Optio
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::analyzers::FileType;

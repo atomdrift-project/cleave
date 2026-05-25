@@ -34,7 +34,9 @@ fn substr_regex_fields(
             Some((substr.as_deref(), regex.as_deref(), "string_literal"))
         }
         Condition::Raw { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "raw")),
-        Condition::TreeSitter { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "ast")),
+        Condition::TreeSitter { substr, regex, .. } => {
+            Some((substr.as_deref(), regex.as_deref(), "ast"))
+        }
         Condition::Section { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "section"))
         }

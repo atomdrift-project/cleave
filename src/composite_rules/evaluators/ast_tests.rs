@@ -257,7 +257,8 @@ eval(code);
 new Function("return " + code)();
 "#;
     let parsed = parsed_for_test("script.js", source.as_bytes());
-    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     let result = eval_ast(
         Some("call"),
@@ -400,7 +401,8 @@ fn test_eval_ast_query_javascript() {
 document.write("<script>evil()</script>");
 "#;
     let parsed = parsed_for_test("script.js", source.as_bytes());
-    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     // Query for document.write calls
     let query = r#"(call_expression
@@ -741,7 +743,8 @@ fn test_eval_ast_query_predicates_filter_correctly() {
     let report = create_test_report("/test/prettify.js");
     let source = r#"ac.replace(/[ \t\r\n]+/g," ")"#;
     let parsed = parsed_for_test("prettify.js", source.as_bytes());
-    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     // First, verify the query compiles and predicates are actually recognized.
     // Borrow the language straight off the cached tree — no need to keep a
@@ -809,7 +812,8 @@ fn test_eval_ast_query_predicates_positive_match() {
     let report = create_test_report("/test/ip.js");
     let source = r#"addr.replace(/:/g,"-")"#;
     let parsed = parsed_for_test("ip.js", source.as_bytes());
-    let ctx = create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
 
     let query = r#"(call_expression
   function: (member_expression

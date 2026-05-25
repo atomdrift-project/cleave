@@ -152,7 +152,6 @@ fn read_shdr(data: &[u8], shoff: usize, entsize: usize, idx: usize, is_64: bool)
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // Rust runtime detection
 // ---------------------------------------------------------------------------
@@ -273,7 +272,6 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // Build the augmenting Value first so we don't have to worry
     // about partial-update consistency.
     let mut augment = serde_json::Map::new();
-
 
     // Top unnamed functions by cyclomatic complexity. rizin labels
     // discovered-but-unnamed functions as `fcn.<addr>`; named ones
@@ -690,5 +688,4 @@ mod tests {
         assert_eq!(m["build"]["distro"], "ubuntu");
         assert_eq!(m["elf"]["foo"], 1);
     }
-
 }

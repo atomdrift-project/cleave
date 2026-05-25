@@ -297,24 +297,21 @@ impl std::fmt::Debug for UnifiedSourceAnalyzer {
 
 impl UnifiedSourceAnalyzer {
     /// Create a new analyzer for the given language configuration.
-    pub(crate) fn new(
-        config: LanguageConfig,
-        file_type: crate::analyzers::FileType,
-    ) -> anyhow::Result<Self> {
-        Ok(Self {
+    pub(crate) fn new(config: LanguageConfig, file_type: crate::analyzers::FileType) -> Self {
+        Self {
             config,
             file_type,
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             skip_embedded_detection: false,
             cancellation: None,
             encoded_context: None,
-        })
+        }
     }
 
     /// Create an analyzer for the given file type.
     #[must_use]
     pub(crate) fn for_file_type(file_type: &crate::analyzers::FileType) -> Option<Self> {
-        config_for_file_type(file_type).and_then(|config| Self::new(config, *file_type).ok())
+        config_for_file_type(file_type).map(|config| Self::new(config, *file_type))
     }
 
     /// Create analyzer with pre-existing capability mapper (wraps in Arc)
@@ -1055,7 +1052,9 @@ fn parse_numeric_literal(text: &str) -> Option<(i64, u32)> {
     if cleaned.is_empty() {
         return None;
     }
-    i64::from_str_radix(&cleaned, radix).ok().map(|v| (v, radix))
+    i64::from_str_radix(&cleaned, radix)
+        .ok()
+        .map(|v| (v, radix))
 }
 
 #[cfg(test)]
@@ -1080,7 +1079,10 @@ mod numeric_literal_tests {
     fn parse_strips_digit_separators_and_suffixes() {
         assert_eq!(parse_numeric_literal("1_000_000"), Some((1_000_000, 10)));
         assert_eq!(parse_numeric_literal("4444u16"), Some((4444, 10)));
-        assert_eq!(parse_numeric_literal("0xDEAD_BEEFi64"), Some((0xDEADBEEF, 16)));
+        assert_eq!(
+            parse_numeric_literal("0xDEAD_BEEFi64"),
+            Some((0xDEADBEEF, 16))
+        );
     }
 
     #[test]

@@ -1218,7 +1218,10 @@ impl TraitDefinition {
                 // shape+value via the Arg tagged enum). All other
                 // kinds (Import/Export/Function/Forward/None) go
                 // through the legacy declared-symbol path.
-                if matches!(kind, Some(crate::composite_rules::condition::SymbolKind::Call)) {
+                if matches!(
+                    kind,
+                    Some(crate::composite_rules::condition::SymbolKind::Call)
+                ) {
                     timed_eval!(
                         "symbol",
                         crate::composite_rules::evaluators::symbol_string::eval_call(
@@ -2520,7 +2523,10 @@ impl CompositeTrait {
                 compiled_finder,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                if matches!(kind, Some(crate::composite_rules::condition::SymbolKind::Call)) {
+                if matches!(
+                    kind,
+                    Some(crate::composite_rules::condition::SymbolKind::Call)
+                ) {
                     crate::composite_rules::evaluators::symbol_string::eval_call(
                         exact.as_ref(),
                         substr.as_ref(),
@@ -3406,7 +3412,7 @@ mod scope_tests {
                 platforms: None,
                 is_check: None,
                 kind: None,
-            arg: None,
+                arg: None,
                 not: None,
                 compiled_regex: None,
                 compiled_finder: None,

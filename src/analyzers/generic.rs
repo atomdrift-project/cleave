@@ -53,11 +53,10 @@ impl GenericAnalyzer {
     /// node-kind labels its rule engine wants to match against.
     fn call_node_types(&self) -> Option<&'static [&'static str]> {
         match self.file_type {
-            FileType::Swift => Some(&["call_expression"]),
             FileType::ObjectiveC => Some(&["message_expression", "call_expression"]),
             FileType::Groovy => Some(&["method_call", "function_call"]),
             FileType::Scala => Some(&["call_expression", "method_call"]),
-            FileType::Zig => Some(&["call_expression"]),
+            FileType::Swift | FileType::Zig => Some(&["call_expression"]),
             FileType::Elixir => Some(&["call"]),
             _ => None,
         }
@@ -178,7 +177,12 @@ impl GenericAnalyzer {
         // skipped — text and string features still flow downstream.
         let t_tree = std::time::Instant::now();
         if let (Some(ast), Some(node_types)) = (source_ast, self.call_node_types()) {
-            symbol_extraction::extract_symbols_from_tree(ast.tree, ast.source, node_types, &mut report);
+            symbol_extraction::extract_symbols_from_tree(
+                ast.tree,
+                ast.source,
+                node_types,
+                &mut report,
+            );
         }
         if let Some(ctx) = source_ctx.as_ref() {
             symbol_extraction::ingest_filefacts_imports(&ctx.parsed, &self.file_type, &mut report);

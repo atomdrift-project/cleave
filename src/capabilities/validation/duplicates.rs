@@ -2143,9 +2143,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
             Condition::Symbol { regex: Some(r), .. } => add_regex("symbol", r.clone()),
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
             Condition::Text { regex: Some(r), .. } => add_regex("text", r.clone()),
-            Condition::Literal { regex: Some(r), .. } => {
-                add_regex("string_literal", r.clone())
-            }
+            Condition::Literal { regex: Some(r), .. } => add_regex("string_literal", r.clone()),
             Condition::Basename { regex: Some(r), .. } => add_regex("basename", r.clone()),
             Condition::Encoded { regex: Some(r), .. } => add_regex("encoded", r.clone()),
             _ => {}
@@ -3628,9 +3626,7 @@ pub(crate) fn find_structural_regex_duplicates(
 
         let (regex_opt, scope, condition_type) = match &trait_def.r#if {
             Condition::Text { regex, .. } => (regex.as_ref(), Scope::Body, "text"),
-            Condition::Literal { regex, .. } => {
-                (regex.as_ref(), Scope::Body, "string_literal")
-            }
+            Condition::Literal { regex, .. } => (regex.as_ref(), Scope::Body, "string_literal"),
             Condition::Raw { regex, .. } => (regex.as_ref(), Scope::Raw, "raw"),
             Condition::Symbol { regex, .. } => (regex.as_ref(), Scope::Symbol, "symbol"),
             _ => continue,

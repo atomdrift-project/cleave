@@ -255,7 +255,7 @@ pub(crate) enum SymbolKind {
 /// the per-shape fields filter content.
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct ArgFilter {
+pub(crate) struct ArgFilter {
     /// Arg shape to match: `string`, `number`, `identifier`, `bool`,
     /// `template`, `null`, `object`, `array`, `function`, `call`,
     /// `expression`. Omitted → any shape.
@@ -3035,8 +3035,7 @@ fn validate_ast_query(query: &str, language: Option<&str>) -> Result<()> {
     let Some(name) = language else {
         return Ok(());
     };
-    filefacts::validate_source_query(name, query)
-        .map_err(|e| anyhow::anyhow!("{e}"))
+    filefacts::validate_source_query(name, query).map_err(|e| anyhow::anyhow!("{e}"))
 }
 
 /// Detect regex patterns that cause catastrophic backtracking.
@@ -3798,15 +3797,15 @@ exact: curl
         let cond: Condition =
             serde_yaml::from_str("type: literal\nkind: number\nvalue: 511\nradix: 8")
                 .expect("parse numeric literal");
-        let Condition::Literal {
+        assert!(matches!(cond, Condition::Literal { .. }));
+        if let Condition::Literal {
             kind, value, radix, ..
         } = cond
-        else {
-            panic!("expected Literal variant");
-        };
-        assert_eq!(kind.as_deref(), Some("number"));
-        assert_eq!(value, Some(511));
-        assert_eq!(radix, Some(8));
+        {
+            assert_eq!(kind.as_deref(), Some("number"));
+            assert_eq!(value, Some(511));
+            assert_eq!(radix, Some(8));
+        }
     }
 
     #[test]

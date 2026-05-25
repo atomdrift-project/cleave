@@ -362,7 +362,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let query = if let Some(q) = cached {
         q
     } else {
-        match tree_sitter::Query::new(&lang, query_str) {
+        match tree_sitter::Query::new(lang, query_str) {
             Ok(q) => {
                 let arc = Arc::new(q);
                 QUERY_CACHE.write().put(key, Arc::clone(&arc));

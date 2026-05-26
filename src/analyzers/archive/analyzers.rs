@@ -174,6 +174,16 @@ impl ArchiveAnalyzer {
             return None;
         }
 
+        // Allow file types that carry identity-signal facts (Markdown
+        // exposes `markdown.first_heading` / `markdown.github_repos[]`,
+        // PkgInfo carries `Name:` / `Version:` headers). These are
+        // technically `!is_program()` but the cross-file value
+        // matchers depend on their values being reachable from
+        // archive-scope evaluation.
+        if matches!(file_type, FileType::Markdown | FileType::PkgInfo) {
+            return None;
+        }
+
         if !file_type.is_program() {
             return Some("non-program archive member and all_files is false");
         }

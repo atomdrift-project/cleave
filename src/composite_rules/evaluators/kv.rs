@@ -1671,10 +1671,7 @@ fn evaluate_kv_eq_ne(
 /// prefix. Returns the first navigation hit (multi-hit paths like
 /// `arr[*].x` are not meaningful for path-vs-path comparison and the
 /// first element is taken).
-fn resolve_first_value<'a>(
-    qualified_path: &str,
-    ctx: &'a EvaluationContext<'_>,
-) -> Option<Value> {
+fn resolve_first_value(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Option<Value> {
     let (sibling, path) = split_qualified_path(qualified_path);
     let segments = parse_path(path).ok()?;
     match sibling {
@@ -1716,7 +1713,7 @@ fn resolve_first_value<'a>(
 /// final path component equals `target` (case-insensitive).
 fn sibling_path_matches(entry_path: &str, target: &str) -> bool {
     let basename = entry_path
-        .rsplit(|c: char| c == '/' || c == '\\' || c == '!')
+        .rsplit(['/', '\\', '!'])
         .next()
         .unwrap_or(entry_path);
     basename.eq_ignore_ascii_case(target)
@@ -4363,7 +4360,10 @@ Author-Email: test@example.com
         // Case-insensitive.
         assert!(sibling_path_matches("foo/README.MD", "readme.md"));
         // Nested archive separator.
-        assert!(sibling_path_matches("outer.tgz!inner/package.json", "package.json"));
+        assert!(sibling_path_matches(
+            "outer.tgz!inner/package.json",
+            "package.json"
+        ));
         // No match.
         assert!(!sibling_path_matches("foo/bar.txt", "baz.txt"));
     }
@@ -4374,7 +4374,10 @@ Author-Email: test@example.com
             value_as_normalized_string(json!("  @Img/Sharp-Win32-X64  ")),
             Some("@img/sharp-win32-x64".to_string())
         );
-        assert_eq!(value_as_normalized_string(json!(42)), Some("42".to_string()));
+        assert_eq!(
+            value_as_normalized_string(json!(42)),
+            Some("42".to_string())
+        );
         assert_eq!(
             value_as_normalized_string(json!(true)),
             Some("true".to_string())
@@ -4387,9 +4390,7 @@ Author-Email: test@example.com
 
     /// Build an evaluation context whose current-file values tree
     /// contains the supplied JSON, suitable for same-file eq/ne tests.
-    fn ctx_with_values(
-        values: serde_json::Value,
-    ) -> EvaluationContext<'static> {
+    fn ctx_with_values(values: serde_json::Value) -> EvaluationContext<'static> {
         create_test_ctx_with_values_tree(
             &[],
             Box::leak(Box::new(std::path::PathBuf::from("test"))),
@@ -4621,10 +4622,7 @@ Author-Email: test@example.com
         );
         let ctx = ctx_from_report(report);
 
-        let cond = kv_ne(
-            "README.md::markdown.first_heading",
-            "package.json::name",
-        );
+        let cond = kv_ne("README.md::markdown.first_heading", "package.json::name");
         assert!(evaluate_kv(&cond, &ctx).is_some(), "expected fire");
     }
 
@@ -4643,10 +4641,7 @@ Author-Email: test@example.com
         );
         let ctx = ctx_from_report(report);
 
-        let cond = kv_ne(
-            "README.md::markdown.first_heading",
-            "package.json::name",
-        );
+        let cond = kv_ne("README.md::markdown.first_heading", "package.json::name");
         assert!(evaluate_kv(&cond, &ctx).is_none(), "expected silence");
     }
 

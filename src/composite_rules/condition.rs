@@ -780,7 +780,6 @@ enum ConditionTagged {
     },
 }
 
-
 impl From<ConditionDeser> for Condition {
     fn from(deser: ConditionDeser) -> Self {
         match deser {

@@ -1036,6 +1036,8 @@ pub fn run(
                 exact: exact.clone(),
                 substr: substr.clone(),
                 regex: regex_str.clone(),
+                eq: None,
+                ne: None,
                 case_insensitive,
                 exists: kv_exists,
                 size_min: kv_size_min,

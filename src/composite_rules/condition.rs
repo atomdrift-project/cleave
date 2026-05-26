@@ -753,6 +753,18 @@ enum ConditionTagged {
         /// Value/element matches regex pattern
         #[serde(skip_serializing_if = "Option::is_none")]
         regex: Option<String>,
+        /// Right-hand-side value path for cross-fact equality comparison.
+        /// When set, the value at `path` must equal the value at `eq`.
+        /// Comparison is always case-insensitive and whitespace-trimmed —
+        /// if you need strict matching, use `exact:` against a literal.
+        /// Path syntax accepts an optional `<filename>::` prefix to
+        /// reference a sibling file within the same archive scope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        eq: Option<String>,
+        /// Right-hand-side value path for cross-fact inequality comparison.
+        /// Mirrors `eq` with reversed sense; same normalization applies.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ne: Option<String>,
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
@@ -767,6 +779,7 @@ enum ConditionTagged {
         size_max: Option<usize>,
     },
 }
+
 
 impl From<ConditionDeser> for Condition {
     fn from(deser: ConditionDeser) -> Self {
@@ -1093,6 +1106,8 @@ impl From<ConditionDeser> for Condition {
                     exact,
                     substr,
                     regex,
+                    eq,
+                    ne,
                     case_insensitive,
                     exists,
                     size_min,
@@ -1102,6 +1117,8 @@ impl From<ConditionDeser> for Condition {
                     exact,
                     substr,
                     regex,
+                    eq,
+                    ne,
                     case_insensitive,
                     exists,
                     size_min,
@@ -1379,6 +1396,8 @@ impl From<Condition> for ConditionTagged {
                 exact,
                 substr,
                 regex,
+                eq,
+                ne,
                 case_insensitive,
                 exists,
                 size_min,
@@ -1389,6 +1408,8 @@ impl From<Condition> for ConditionTagged {
                 exact,
                 substr,
                 regex,
+                eq,
+                ne,
                 case_insensitive,
                 exists,
                 size_min,
@@ -1927,8 +1948,11 @@ pub(crate) enum Condition {
     /// Example: { type: value, path: "scripts.postinstall", substr: "curl" }
     /// Example: { type: value, path: "content_scripts[*].matches", is: "<all_urls>" }
     /// Example: { type: value, path: "maintainers", size_min: 1, size_max: 1 }
+    /// Example: { type: value, path: "file.basename", ne: "pe.version_info.original_filename" }
     Kv {
-        /// Path to navigate using dot notation, [n] for indices, [*] for wildcards
+        /// Path to navigate using dot notation, [n] for indices, [*] for wildcards.
+        /// Accepts an optional `<filename>::` prefix to reference a sibling
+        /// file's values within the same archive scope.
         path: String,
         /// Value/element equals exactly
         #[serde(
@@ -1943,6 +1967,15 @@ pub(crate) enum Condition {
         /// Value/element matches regex pattern
         #[serde(skip_serializing_if = "Option::is_none")]
         regex: Option<String>,
+        /// Right-hand-side value path for cross-fact equality. When set,
+        /// the value at `path` must equal the value at `eq` (case-insensitive,
+        /// whitespace-trimmed). Paths accept an optional `<filename>::`
+        /// prefix to cross archive entries.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        eq: Option<String>,
+        /// Right-hand-side value path for cross-fact inequality.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ne: Option<String>,
         /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
@@ -3615,6 +3648,8 @@ mod backtrack_tests {
             exact: None,
             substr: None,
             regex: Some(r"(?i)PQT_Downloader[\\/].*[\\/]PQT_Downloader\.pdb$".to_string()),
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,

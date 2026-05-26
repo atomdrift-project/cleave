@@ -409,6 +409,24 @@ fn looks_like_github_actions_workflow(content: &[u8]) -> bool {
     false
 }
 
+/// Split a path on the optional `<filename>::` sibling-file prefix.
+///
+/// Returns `(sibling_basename, remaining_path)`. When `path` contains no
+/// `::`, the sibling is `None` and the whole input is the remaining path.
+/// When the prefix is present, the sibling is the part before `::` and
+/// the remaining path is what follows.
+///
+/// The split is on the FIRST `::` so paths like `pkg.json::a::b` resolve
+/// to sibling `pkg.json`, remaining `a::b` — the latter would then fail
+/// to parse as path segments. That's intentional: nested cross-file
+/// references aren't supported.
+pub(crate) fn split_qualified_path(path: &str) -> (Option<&str>, &str) {
+    match path.find("::") {
+        Some(idx) => (Some(&path[..idx]), &path[idx + 2..]),
+        None => (None, path),
+    }
+}
+
 /// Parse a path string into segments.
 ///
 /// # Examples
@@ -416,6 +434,9 @@ fn looks_like_github_actions_workflow(content: &[u8]) -> bool {
 /// - `"scripts.postinstall"` -> `[Key("scripts"), Key("postinstall")]`
 /// - `"content_scripts[*].matches"` -> `[Key("content_scripts"), Wildcard, Key("matches")]`
 /// - `"items[0]"` -> `[Key("items"), Index(0)]`
+///
+/// To use the optional `<filename>::` prefix, call [`split_qualified_path`]
+/// first.
 pub(crate) fn parse_path(path: &str) -> Result<Vec<PathSegment>, String> {
     let mut segments = Vec::new();
     let mut current_key = String::new();
@@ -1409,6 +1430,8 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
         exact,
         substr,
         regex: _,
+        eq,
+        ne,
         case_insensitive,
         exists,
         size_min,
@@ -1418,6 +1441,15 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
     else {
         return None;
     };
+
+    // Cross-fact eq/ne comparison. When either is set, the matcher is
+    // strictly path-vs-path: left and right are both value-tree paths,
+    // optionally `<filename>::` qualified to reach a sibling archive
+    // entry. Always case-insensitive + whitespace-trimmed; if you need
+    // strict matching, use `exact:` against a literal.
+    if eq.is_some() || ne.is_some() {
+        return evaluate_kv_eq_ne(path, eq.as_deref(), ne.as_deref(), ctx);
+    }
 
     // Get the string regex pattern for debug
     let regex_str = if let Condition::Kv { regex, .. } = condition {
@@ -1592,6 +1624,118 @@ fn format_evidence_value(value: &Value) -> String {
     format_evidence_value_with_size(value, None, None)
 }
 
+/// Path-vs-path equality / inequality. Both sides accept the optional
+/// `<filename>::` prefix to reach a sibling archive entry's value tree.
+/// Comparison is always case-insensitive and whitespace-trimmed; for
+/// strict-string matching use `exact:` against a literal.
+fn evaluate_kv_eq_ne(
+    left_path: &str,
+    eq: Option<&str>,
+    ne: Option<&str>,
+    ctx: &EvaluationContext<'_>,
+) -> Option<Evidence> {
+    let right_path = eq.or(ne)?;
+    let want_equal = eq.is_some();
+
+    let left = resolve_first_value(left_path, ctx);
+    let right = resolve_first_value(right_path, ctx);
+
+    // Both sides must resolve to a concrete (scalar-printable) value.
+    // If either is missing, the comparison is undefined — return no
+    // match. Trait authors who want "fire when X is present and Y is
+    // absent" can combine with `exists:` in a separate condition.
+    let left_str = left.and_then(value_as_normalized_string)?;
+    let right_str = right.and_then(value_as_normalized_string)?;
+
+    let equal = left_str == right_str;
+    if equal != want_equal {
+        return None;
+    }
+
+    let op = if want_equal { "==" } else { "!=" };
+    let value = format!(
+        "{} {} {} ({:?} {} {:?})",
+        left_path, op, right_path, left_str, op, right_str
+    );
+    Some(Evidence {
+        method: "value".to_string(),
+        source: ctx.report.target.path.clone(),
+        value,
+        location: Some(left_path.to_string()),
+        ..Default::default()
+    })
+}
+
+/// Look up the first value at `qualified_path`, optionally crossing
+/// into a sibling archive entry's value tree via the `<filename>::`
+/// prefix. Returns the first navigation hit (multi-hit paths like
+/// `arr[*].x` are not meaningful for path-vs-path comparison and the
+/// first element is taken).
+fn resolve_first_value<'a>(
+    qualified_path: &str,
+    ctx: &'a EvaluationContext<'_>,
+) -> Option<Value> {
+    let (sibling, path) = split_qualified_path(qualified_path);
+    let segments = parse_path(path).ok()?;
+    match sibling {
+        None => {
+            // Current file: try the synthetic values_tree the analyzer
+            // attached to the report (covers filefacts-emitted values
+            // for binaries and structured manifests alike).
+            if let Some(tree) = ctx.report.values_tree.as_ref() {
+                let hits = navigate(tree.as_ref(), &segments);
+                if let Some(first) = hits.first() {
+                    return Some((*first).clone());
+                }
+            }
+            None
+        }
+        Some(name) => {
+            // Sibling archive entry: walk `report.files[]` for a
+            // matching basename. Case-insensitive match here mirrors
+            // the eq/ne default — `package.json::name` matches a file
+            // whose path tail is exactly `package.json` regardless of
+            // surrounding directory.
+            for file in &ctx.report.files {
+                if sibling_path_matches(&file.path, name) {
+                    if let Some(tree) = file.values_tree.as_deref() {
+                        let hits = navigate(tree, &segments);
+                        if let Some(first) = hits.first() {
+                            return Some((*first).clone());
+                        }
+                    }
+                }
+            }
+            None
+        }
+    }
+}
+
+/// True when `entry_path` (an archive-internal path like
+/// `package/package.json` or `foo!bar.so`) refers to a file whose
+/// final path component equals `target` (case-insensitive).
+fn sibling_path_matches(entry_path: &str, target: &str) -> bool {
+    let basename = entry_path
+        .rsplit(|c: char| c == '/' || c == '\\' || c == '!')
+        .next()
+        .unwrap_or(entry_path);
+    basename.eq_ignore_ascii_case(target)
+}
+
+/// Render a JSON value as a normalized string for eq/ne comparison.
+/// Strings, numbers, and bools all reduce cleanly. Containers (arrays
+/// and objects) and null return `None` — the comparison is
+/// scalar-only by design.
+fn value_as_normalized_string(value: Value) -> Option<String> {
+    let raw = match value {
+        Value::String(s) => s,
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        _ => return None,
+    };
+    Some(raw.trim().to_lowercase())
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -1682,6 +1826,8 @@ mod tests {
             exact: None,
             substr: None,
             regex: Some(r"[Ѐ-ӿ]".to_string()),
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -1696,6 +1842,8 @@ mod tests {
             exact: None,
             substr: Some("Excel.".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -1710,6 +1858,8 @@ mod tests {
             exact: Some("anything".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -1738,6 +1888,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: Some(r"dependency.confusion".to_string()),
+            eq: None,
+            ne: None,
             case_insensitive: true,
             exists: None,
             size_min: None,
@@ -2302,6 +2454,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: Some(false),
             size_min: None,
@@ -2324,6 +2478,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: Some(false),
             size_min: None,
@@ -2346,6 +2502,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: Some(true),
             size_min: None,
@@ -2368,6 +2526,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: Some(true),
             size_min: None,
@@ -2397,6 +2557,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: Some(1),
@@ -2421,6 +2583,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2449,6 +2613,8 @@ Author-email: security-research@example.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: Some(30),
@@ -2596,6 +2762,8 @@ Author-email: security-research@example.com
             exact: Some("secret123".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2632,6 +2800,8 @@ Author-email: security-research@example.com
             exact: Some("secret".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2667,6 +2837,8 @@ Author-email: security-research@example.com
             exact: Some("secret".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2704,6 +2876,8 @@ Author-email: security-research@example.com
             exact: Some("malicious-package".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2736,6 +2910,8 @@ Author-email: security-research@example.com
             exact: Some("malicious-crate".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2777,6 +2953,8 @@ Author-email: security-research@example.com
             exact: Some("CI".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -2808,6 +2986,8 @@ Author-email: security-research@example.com
             exact: Some("valid".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3073,6 +3253,8 @@ WantedBy=multi-user.target graphical.target
             exact: None,
             substr: Some("evil.example/payload.sh".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3086,6 +3268,8 @@ WantedBy=multi-user.target graphical.target
             exact: Some("/tmp/evil.so".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3099,6 +3283,8 @@ WantedBy=multi-user.target graphical.target
             exact: Some("multi-user.target".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3112,6 +3298,8 @@ WantedBy=multi-user.target graphical.target
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: Some(true),
             size_min: Some(2),
@@ -3125,6 +3313,8 @@ WantedBy=multi-user.target graphical.target
             exact: Some("/bin/old".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3143,6 +3333,8 @@ WantedBy=multi-user.target graphical.target
             exact: None,
             substr: Some("evil.example/dropin.sh".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3161,6 +3353,8 @@ WantedBy=multi-user.target graphical.target
             exact: None,
             substr: Some("evil.example".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3270,6 +3464,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("LD_PRELOAD=/tmp/evil.so".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3283,6 +3479,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("https://evil.example/payload.sh".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3296,6 +3494,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: Some("URL=https://evil.example/payload.sh".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3326,6 +3526,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("debugger".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3340,6 +3542,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("cookies".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3354,6 +3558,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("3".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3387,6 +3593,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("<all_urls>".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3401,6 +3609,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: Some("amazon".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3415,6 +3625,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: Some("document_start".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3446,6 +3658,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3460,6 +3674,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: Some("curl".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3474,6 +3690,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3488,6 +3706,8 @@ Environment="LD_PRELOAD=/tmp/evil.so" "URL=https://evil.example/payload.sh"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3513,6 +3733,8 @@ name: test
             exact: Some("debugger".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3542,6 +3764,8 @@ openssl = "0.10"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3556,6 +3780,8 @@ openssl = "0.10"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3570,6 +3796,8 @@ openssl = "0.10"
             exact: Some("my-crate".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3594,6 +3822,8 @@ openssl = "0.10"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3608,6 +3838,8 @@ openssl = "0.10"
             exact: Some("anything".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3628,6 +3860,8 @@ openssl = "0.10"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3642,6 +3876,8 @@ openssl = "0.10"
             exact: Some("null".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3661,6 +3897,8 @@ openssl = "0.10"
             exact: Some("found".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3680,6 +3918,8 @@ openssl = "0.10"
             exact: None,
             substr: Some("日本語".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3699,6 +3939,8 @@ openssl = "0.10"
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3751,6 +3993,8 @@ Author: attacker@evil.com
             exact: Some("malicious-package".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3765,6 +4009,8 @@ Author: attacker@evil.com
             exact: Some("1.0.0".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3779,6 +4025,8 @@ Author: attacker@evil.com
             exact: None,
             substr: Some("evil.com".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3793,6 +4041,8 @@ Author: attacker@evil.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3807,6 +4057,8 @@ Author: attacker@evil.com
             exact: None,
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3833,6 +4085,8 @@ Classifier: Programming Language :: Python :: 3
             exact: None,
             substr: Some("MIT License".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3847,6 +4101,8 @@ Classifier: Programming Language :: Python :: 3
             exact: None,
             substr: Some("Python".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3873,6 +4129,8 @@ Version: 1.0.0
             exact: None,
             substr: Some("multi-line".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3897,6 +4155,8 @@ Author-Email: test@example.com
             exact: None,
             substr: Some("example.com".to_string()),
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3961,6 +4221,8 @@ Author-Email: test@example.com
             exact: Some("com.example.app".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3975,6 +4237,8 @@ Author-Email: test@example.com
             exact: Some("camera".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -3989,6 +4253,8 @@ Author-Email: test@example.com
             exact: Some("com.other.app".to_string()),
             substr: None,
             regex: None,
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -4020,6 +4286,8 @@ Author-Email: test@example.com
             exact: None,
             substr: None,
             regex: Some(r"^com\.apple\.".to_string()),
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -4034,6 +4302,8 @@ Author-Email: test@example.com
             exact: None,
             substr: None,
             regex: Some(r"^/tmp/".to_string()),
+            eq: None,
+            ne: None,
             case_insensitive: false,
             exists: None,
             size_min: None,
@@ -4057,5 +4327,458 @@ Author-Email: test@example.com
         assert!(result.ends_with("..."));
         // Verify the truncated string is valid UTF-8
         assert!(result.is_char_boundary(0));
+    }
+
+    // ============================================================
+    // Cross-fact eq/ne tests
+    // ============================================================
+
+    #[test]
+    fn split_qualified_path_no_prefix() {
+        assert_eq!(split_qualified_path("foo.bar"), (None, "foo.bar"));
+    }
+
+    #[test]
+    fn split_qualified_path_with_filename() {
+        assert_eq!(
+            split_qualified_path("README.md::markdown.first_heading"),
+            (Some("README.md"), "markdown.first_heading")
+        );
+    }
+
+    #[test]
+    fn split_qualified_path_first_double_colon_wins() {
+        // Nested cross-file references aren't supported; the first ::
+        // is the split point even if the remaining path contains more.
+        assert_eq!(split_qualified_path("a::b::c"), (Some("a"), "b::c"));
+    }
+
+    #[test]
+    fn sibling_path_matches_archive_paths() {
+        assert!(sibling_path_matches("package/package.json", "package.json"));
+        assert!(sibling_path_matches(
+            "mempalace_dashboard-0.5.0.dist-info/METADATA",
+            "METADATA"
+        ));
+        // Case-insensitive.
+        assert!(sibling_path_matches("foo/README.MD", "readme.md"));
+        // Nested archive separator.
+        assert!(sibling_path_matches("outer.tgz!inner/package.json", "package.json"));
+        // No match.
+        assert!(!sibling_path_matches("foo/bar.txt", "baz.txt"));
+    }
+
+    #[test]
+    fn value_as_normalized_string_lowers_and_trims() {
+        assert_eq!(
+            value_as_normalized_string(json!("  @Img/Sharp-Win32-X64  ")),
+            Some("@img/sharp-win32-x64".to_string())
+        );
+        assert_eq!(value_as_normalized_string(json!(42)), Some("42".to_string()));
+        assert_eq!(
+            value_as_normalized_string(json!(true)),
+            Some("true".to_string())
+        );
+        // Containers and null are intentionally unsupported.
+        assert_eq!(value_as_normalized_string(json!([1, 2, 3])), None);
+        assert_eq!(value_as_normalized_string(json!({})), None);
+        assert_eq!(value_as_normalized_string(json!(null)), None);
+    }
+
+    /// Build an evaluation context whose current-file values tree
+    /// contains the supplied JSON, suitable for same-file eq/ne tests.
+    fn ctx_with_values(
+        values: serde_json::Value,
+    ) -> EvaluationContext<'static> {
+        create_test_ctx_with_values_tree(
+            &[],
+            Box::leak(Box::new(std::path::PathBuf::from("test"))),
+            FileType::All,
+            values,
+        )
+    }
+
+    fn kv_eq(path: &str, eq: &str) -> Condition {
+        Condition::Kv {
+            path: path.to_string(),
+            exact: None,
+            substr: None,
+            regex: None,
+            eq: Some(eq.to_string()),
+            ne: None,
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        }
+    }
+
+    fn kv_ne(path: &str, ne: &str) -> Condition {
+        Condition::Kv {
+            path: path.to_string(),
+            exact: None,
+            substr: None,
+            regex: None,
+            eq: None,
+            ne: Some(ne.to_string()),
+            case_insensitive: false,
+            exists: None,
+            size_min: None,
+            size_max: None,
+            compiled_regex: None,
+        }
+    }
+
+    #[test]
+    fn eq_fires_when_same_file_paths_agree() {
+        let ctx = ctx_with_values(json!({
+            "a": {"name": "foo"},
+            "b": {"name": "foo"},
+        }));
+        assert!(evaluate_kv(&kv_eq("a.name", "b.name"), &ctx).is_some());
+    }
+
+    #[test]
+    fn eq_silent_when_same_file_paths_disagree() {
+        let ctx = ctx_with_values(json!({
+            "a": {"name": "foo"},
+            "b": {"name": "bar"},
+        }));
+        assert!(evaluate_kv(&kv_eq("a.name", "b.name"), &ctx).is_none());
+    }
+
+    #[test]
+    fn ne_fires_when_same_file_paths_disagree() {
+        let ctx = ctx_with_values(json!({
+            "a": {"name": "foo"},
+            "b": {"name": "bar"},
+        }));
+        assert!(evaluate_kv(&kv_ne("a.name", "b.name"), &ctx).is_some());
+    }
+
+    #[test]
+    fn ne_silent_when_same_file_paths_agree() {
+        let ctx = ctx_with_values(json!({
+            "a": {"name": "foo"},
+            "b": {"name": "foo"},
+        }));
+        assert!(evaluate_kv(&kv_ne("a.name", "b.name"), &ctx).is_none());
+    }
+
+    #[test]
+    fn eq_is_case_insensitive_by_default() {
+        let ctx = ctx_with_values(json!({
+            "x": "Foo",
+            "y": "foo",
+        }));
+        assert!(evaluate_kv(&kv_eq("x", "y"), &ctx).is_some());
+    }
+
+    #[test]
+    fn eq_trims_whitespace_by_default() {
+        let ctx = ctx_with_values(json!({
+            "x": "  hello\n",
+            "y": "hello",
+        }));
+        assert!(evaluate_kv(&kv_eq("x", "y"), &ctx).is_some());
+    }
+
+    #[test]
+    fn eq_silent_when_left_path_missing() {
+        let ctx = ctx_with_values(json!({"y": "foo"}));
+        assert!(evaluate_kv(&kv_eq("missing", "y"), &ctx).is_none());
+    }
+
+    #[test]
+    fn eq_silent_when_right_path_missing() {
+        let ctx = ctx_with_values(json!({"x": "foo"}));
+        assert!(evaluate_kv(&kv_eq("x", "missing"), &ctx).is_none());
+    }
+
+    #[test]
+    fn ne_silent_when_either_path_missing() {
+        // ne treats missing values the same way: comparison undefined → no match.
+        let ctx = ctx_with_values(json!({"x": "foo"}));
+        assert!(evaluate_kv(&kv_ne("x", "missing"), &ctx).is_none());
+        assert!(evaluate_kv(&kv_ne("missing", "x"), &ctx).is_none());
+    }
+
+    #[test]
+    fn eq_rejects_container_values() {
+        // Comparing scalar to array is not defined — return no match.
+        let ctx = ctx_with_values(json!({
+            "scalar": "foo",
+            "container": ["foo"],
+        }));
+        assert!(evaluate_kv(&kv_eq("scalar", "container"), &ctx).is_none());
+    }
+
+    /// Cross-file resolution: a sibling FileAnalysis with its own
+    /// values_tree is reachable via the `<filename>::` prefix.
+    #[test]
+    fn eq_resolves_sibling_archive_entry_via_filename_prefix() {
+        use crate::types::FileAnalysis;
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "outer.tgz".to_string(),
+            file_type: "tar.gz".to_string(),
+            size_bytes: 0,
+            sha256: "".to_string(),
+            architectures: None,
+        });
+        report.values_tree = Some(Box::new(json!({"name": "@devcarron/clob"})));
+
+        let mut sibling = FileAnalysis::new(
+            1,
+            "package/README.md".to_string(),
+            "markdown".to_string(),
+            "".to_string(),
+            0,
+        );
+        sibling.values_tree = Some(Box::new(json!({
+            "markdown": {"first_heading": "@img/sharp-win32-x64"}
+        })));
+        report.files.push(sibling);
+
+        let report: &'static AnalysisReport = Box::leak(Box::new(report));
+        let ctx = EvaluationContext::test_only_new(report, &[], FileType::All);
+
+        // Mismatch fires `ne`.
+        let cond = kv_ne("name", "README.md::markdown.first_heading");
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+        // Same value silences `ne`.
+        let cond = kv_eq("name", "README.md::markdown.first_heading");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    /// `<filename>::` lookup that targets a sibling whose name doesn't
+    /// match anything in `report.files` produces no match (treated as
+    /// "value missing" — same as a typo in a same-file path).
+    #[test]
+    fn eq_returns_no_match_when_sibling_filename_missing() {
+        let ctx = ctx_with_values(json!({"a": "foo"}));
+        let cond = kv_eq("a", "no_such_file.json::name");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    // ============================================================
+    // Integration tests for the five canonical cross-file queries.
+    //
+    // Each pair: a positive fixture (the facts genuinely disagree,
+    // matcher should fire) and a negative fixture (facts agree,
+    // matcher must stay silent). The fixtures mirror the actual
+    // filefacts schema so they exercise the same path shapes a real
+    // analysis run would produce.
+    // ============================================================
+
+    use crate::types::FileAnalysis;
+
+    fn report_for_integration(outer_path: &str, outer_values: Value) -> AnalysisReport {
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: outer_path.to_string(),
+            file_type: "archive".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        report.values_tree = Some(Box::new(outer_values));
+        report
+    }
+
+    fn add_file_with_values(report: &mut AnalysisReport, path: &str, values: Value) {
+        let mut file = FileAnalysis::new(
+            report.files.len() as u32 + 1,
+            path.to_string(),
+            "test".to_string(),
+            String::new(),
+            0,
+        );
+        file.values_tree = Some(Box::new(values));
+        report.files.push(file);
+    }
+
+    fn ctx_from_report(report: AnalysisReport) -> EvaluationContext<'static> {
+        let leaked: &'static AnalysisReport = Box::leak(Box::new(report));
+        EvaluationContext::test_only_new(leaked, &[], FileType::All)
+    }
+
+    // ---- Query #1: README header impersonates package name -----
+
+    #[test]
+    fn integration_readme_impersonates_other_package() {
+        // The clob case: README claims `@img/sharp-win32-x64`, package.json
+        // declares `@devcarron/clob`. ne should fire.
+        let mut report = report_for_integration("@devcarron-clob-2.73.0.tgz", json!({}));
+        add_file_with_values(
+            &mut report,
+            "package/README.md",
+            json!({"markdown": {"first_heading": "@img/sharp-win32-x64"}}),
+        );
+        add_file_with_values(
+            &mut report,
+            "package/package.json",
+            json!({"name": "@devcarron/clob"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne(
+            "README.md::markdown.first_heading",
+            "package.json::name",
+        );
+        assert!(evaluate_kv(&cond, &ctx).is_some(), "expected fire");
+    }
+
+    #[test]
+    fn integration_readme_matches_package_no_match() {
+        let mut report = report_for_integration("legit-pkg-1.0.0.tgz", json!({}));
+        add_file_with_values(
+            &mut report,
+            "package/README.md",
+            json!({"markdown": {"first_heading": "legit-pkg"}}),
+        );
+        add_file_with_values(
+            &mut report,
+            "package/package.json",
+            json!({"name": "legit-pkg"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne(
+            "README.md::markdown.first_heading",
+            "package.json::name",
+        );
+        assert!(evaluate_kv(&cond, &ctx).is_none(), "expected silence");
+    }
+
+    // ---- Query #2: PE filename masquerade -----
+
+    #[test]
+    fn integration_pe_filename_masquerade() {
+        // Same-file comparison: an .exe whose embedded original_filename
+        // disagrees with the on-disk basename → renamed binary.
+        let ctx = ctx_with_values(json!({
+            "file": {"basename": "update.exe"},
+            "pe": {"version_info": {"original_filename": "mimikatz.exe"}},
+        }));
+        let cond = kv_ne("file.basename", "pe.version_info.original_filename");
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+    }
+
+    #[test]
+    fn integration_pe_filename_matches_no_match() {
+        let ctx = ctx_with_values(json!({
+            "file": {"basename": "notepad.exe"},
+            "pe": {"version_info": {"original_filename": "notepad.exe"}},
+        }));
+        let cond = kv_ne("file.basename", "pe.version_info.original_filename");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    // ---- Query #3: PDB path stem mismatch -----
+
+    #[test]
+    fn integration_pdb_stem_mismatch() {
+        // PDB stem leaks an attribution name that doesn't match the
+        // binary's own stem → build-pipeline anomaly / repack.
+        let ctx = ctx_with_values(json!({
+            "file": {"stem": "update"},
+            "pe": {"debug": {"pdb": {"stem": "stealer"}}},
+        }));
+        let cond = kv_ne("file.stem", "pe.debug.pdb.stem");
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+    }
+
+    #[test]
+    fn integration_pdb_stem_matches_no_match() {
+        let ctx = ctx_with_values(json!({
+            "file": {"stem": "notepad"},
+            "pe": {"debug": {"pdb": {"stem": "notepad"}}},
+        }));
+        let cond = kv_ne("file.stem", "pe.debug.pdb.stem");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    // ---- Query #4: Lockfile drift -----
+
+    #[test]
+    fn integration_lockfile_name_drift() {
+        // package-lock.json wasn't regenerated after package.json was
+        // tampered → name drift signals one side was edited by hand.
+        let mut report = report_for_integration("hijacked-1.2.3.tgz", json!({}));
+        add_file_with_values(
+            &mut report,
+            "package/package.json",
+            json!({"name": "evil-replacement"}),
+        );
+        add_file_with_values(
+            &mut report,
+            "package/package-lock.json",
+            json!({"name": "original-victim"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne("package.json::name", "package-lock.json::name");
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+    }
+
+    #[test]
+    fn integration_lockfile_in_sync_no_match() {
+        let mut report = report_for_integration("legit-1.2.3.tgz", json!({}));
+        add_file_with_values(
+            &mut report,
+            "package/package.json",
+            json!({"name": "legit"}),
+        );
+        add_file_with_values(
+            &mut report,
+            "package/package-lock.json",
+            json!({"name": "legit"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne("package.json::name", "package-lock.json::name");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    // ---- Query #5: Wheel filename vs METADATA::Name -----
+
+    #[test]
+    fn integration_wheel_filename_vs_metadata_name() {
+        // Wheel outer filename declares one identity; the inner
+        // METADATA blob declares another → repack signal.
+        let mut report = report_for_integration(
+            "fake_name-1.0.0-py3-none-any.whl",
+            json!({
+                "whl": {"filename": {"name_prefix": "fake_name"}}
+            }),
+        );
+        add_file_with_values(
+            &mut report,
+            "realpkg-1.0.0.dist-info/METADATA",
+            json!({"Name": "realpkg"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne("whl.filename.name_prefix", "METADATA::Name");
+        assert!(evaluate_kv(&cond, &ctx).is_some());
+    }
+
+    #[test]
+    fn integration_wheel_filename_matches_metadata_no_match() {
+        let mut report = report_for_integration(
+            "legit_pkg-1.0.0-py3-none-any.whl",
+            json!({
+                "whl": {"filename": {"name_prefix": "legit_pkg"}}
+            }),
+        );
+        add_file_with_values(
+            &mut report,
+            "legit_pkg-1.0.0.dist-info/METADATA",
+            json!({"Name": "legit_pkg"}),
+        );
+        let ctx = ctx_from_report(report);
+
+        let cond = kv_ne("whl.filename.name_prefix", "METADATA::Name");
+        assert!(evaluate_kv(&cond, &ctx).is_none());
     }
 }

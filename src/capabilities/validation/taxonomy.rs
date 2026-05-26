@@ -114,6 +114,7 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "operation",
     "pattern",    // vague
     "patterns",   // vague
+    "protocol",   // vague
     "go-runtime", // platform
     "simple",     // meaningless
     "stuff",      // obviously bad

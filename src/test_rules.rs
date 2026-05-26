@@ -1304,6 +1304,8 @@ impl<'a> RuleDebugger<'a> {
             exact: exact.clone(),
             substr: substr.clone(),
             regex: regex.clone(),
+            eq: None,
+            ne: None,
             case_insensitive,
             exists,
             size_min,

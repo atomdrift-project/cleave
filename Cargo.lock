@@ -1591,7 +1591,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.6.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#acc289e661a060f9c81ba26fa619b4f386ba359d"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#4aa874af7a81e172f0f0d4f5c386ead9f40ab7bb"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -4241,7 +4241,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.4.0"
-source = "git+https://codeberg.org/atomdrift/stng.git#d1e272d92fe8ea39669a68097f0799ccd85b02d1"
+source = "git+https://codeberg.org/atomdrift/stng.git#45a560c8133e04e7786e61dd91d1bda527169f3d"
 dependencies = [
  "aho-corasick",
  "anyhow",

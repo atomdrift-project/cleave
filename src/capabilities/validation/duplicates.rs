@@ -479,15 +479,70 @@ fn normalize_regex(pattern: &str) -> String {
     normalized
 }
 
+/// If `pattern` is a regex that contains no actual regex metacharacters
+/// (only literal text plus simple `\<punct>` escapes), return the substr-
+/// equivalent literal. Otherwise return `None`.
+///
+/// This makes a regex like `\.aws/credentials` compare equal to the substr
+/// `.aws/credentials` during duplicate detection — the two match identical
+/// byte sequences, so they are semantic duplicates regardless of `match_type`.
+///
+/// Returns `None` for any pattern containing real metacharacters (`.`, `*`,
+/// `+`, `?`, `|`, `(`, `)`, `[`, `]`, `{`, `}`) or regex shorthand escapes
+/// (`\w`, `\d`, `\s`, `\b`, `\B`, `\A`, `\Z`, `\n`, `\t`, `\r`, `\x..`,
+/// `\u{..}`). Anchors (`^`, `$`) at start/end are assumed already stripped
+/// by `normalize_regex`.
+pub(super) fn extract_pure_literal_from_regex(pattern: &str) -> Option<String> {
+    let mut result = String::with_capacity(pattern.len());
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => {
+                let Some(&next) = chars.peek() else {
+                    // Trailing backslash — not a clean literal.
+                    return None;
+                };
+                // Accept escape sequences whose only effect is to suppress a
+                // regex metacharacter so it matches itself. Reject regex
+                // shorthand classes (`\w`, `\d`, …) because those are not
+                // expressible as a substr.
+                match next {
+                    '.' | '/' | '-' | '_' | '\\' | '"' | '\''
+                    | ':' | ',' | '=' | '@' | '#' | '~' | ' '
+                    | '|' | '(' | ')' | '[' | ']' | '{' | '}'
+                    | '?' | '*' | '+' | '^' | '$' | '<' | '>'
+                    | '!' | '%' | '&' | ';' | '`' => {
+                        result.push(next);
+                        chars.next();
+                    }
+                    _ => return None,
+                }
+            }
+            // Real regex metacharacters mean the pattern is not purely literal.
+            '.' | '*' | '+' | '?' | '|' | '(' | ')' | '[' | ']' | '{' | '}' => {
+                return None;
+            }
+            // Anchors at non-edge positions are real regex syntax.
+            '^' | '$' => return None,
+            other => result.push(other),
+        }
+    }
+    Some(result)
+}
+
 /// Normalize pattern for duplicate detection
 /// - Decode hex escapes: \x27 → '
-/// - For regex: strip anchors
+/// - For regex: strip anchors, then decode purely-literal regexes (e.g.
+///   `\.aws/credentials`) to their substr-equivalent so they compare equal
+///   to substr matches of the same content.
 fn normalize_pattern_for_comparison(pattern: &str, is_regex: bool) -> String {
     let mut normalized = decode_hex_escapes(pattern);
 
-    // For regex, also strip anchors
     if is_regex {
         normalized = normalize_regex(&normalized);
+        if let Some(literal) = extract_pure_literal_from_regex(&normalized) {
+            return literal;
+        }
     }
 
     normalized
@@ -518,13 +573,24 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             return;
         }
 
+        // If the regex contained only literal text (after stripping anchors
+        // and decoding `\<punct>` escapes), `normalize_pattern_for_comparison`
+        // returned the substr-equivalent literal. Treat the trait as if it
+        // were authored as a substr match so cross-matcher duplicates are
+        // surfaced by `matcher_context_reusable_as_is`.
+        let effective_match_type = if is_regex && normalized != normalize_regex(&value) {
+            "substr"
+        } else {
+            match_type
+        };
+
         patterns.push((
             normalized,
             PatternLocation {
                 trait_id: trait_def.id.clone(),
                 file_path: file_path.clone(),
                 condition_type: condition_type.to_string(),
-                match_type: match_type.to_string(),
+                match_type: effective_match_type.to_string(),
                 encoding,
                 original_value: value,
                 for_types: for_types.clone(),
@@ -2357,6 +2423,40 @@ pub(crate) fn find_regex_literal_overlap_issues(
                 // Check condition types (cross-type means different string/symbol/raw)
                 let cross_type = literal_pat.condition_type != regex_pat.condition_type;
 
+                // Some cross-type pairs search genuinely different surfaces and
+                // are NOT semantic duplicates even when their byte patterns match:
+                //  - `basename` (the file's name) vs any content matcher: "this
+                //    file IS X.dll" is a different fact from "this code REFERENCES
+                //    X.dll".
+                //  - `encoded` (decoded-string corpus) vs any other surface: an
+                //    encoded match means the literal was hidden in an encoding,
+                //    which carries different intent than a plain occurrence.
+                // `symbol` vs `text`/`raw` is NOT considered complementary —
+                // stripped binaries can lose one surface while keeping the other,
+                // so authors generally want them unified into a single composite
+                // (`any:` of both) rather than maintained as parallel atoms.
+                let surfaces_are_complementary = cross_type && {
+                    let a = regex_pat.condition_type.as_str();
+                    let b = literal_pat.condition_type.as_str();
+                    let (lo, hi) = if a < b { (a, b) } else { (b, a) };
+                    matches!(
+                        (lo, hi),
+                        ("basename", "raw")
+                            | ("basename", "string_literal")
+                            | ("basename", "symbol")
+                            | ("basename", "text")
+                            | ("basename", "encoded")
+                            | ("encoded", "raw")
+                            | ("encoded", "string_literal")
+                            | ("encoded", "symbol")
+                            | ("encoded", "text")
+                    )
+                };
+
+                if is_exact_match && surfaces_are_complementary {
+                    continue;
+                }
+
                 if is_exact_match {
                     // Exact match: regex pattern is functionally same as literal
                     let tier_note = make_tier_note(&regex_pat.trait_id, &literal_pat.trait_id);
@@ -3782,4 +3882,108 @@ pub(crate) fn find_structural_regex_duplicates(
         start.elapsed(),
         dups_found
     );
+}
+
+#[cfg(test)]
+mod literal_regex_tests {
+    use super::*;
+
+    #[test]
+    fn pure_literal_with_escaped_dot_decodes() {
+        // The canonical false-positive: regex `\.aws/credentials` matches the
+        // exact same bytes as substr `.aws/credentials` and must compare equal
+        // for duplicate detection.
+        assert_eq!(
+            extract_pure_literal_from_regex("\\.aws/credentials"),
+            Some(".aws/credentials".to_string())
+        );
+    }
+
+    #[test]
+    fn pure_literal_unescaped_punctuation_passes_through() {
+        // `/`, `-`, `_` are not regex metacharacters and stay as-is.
+        assert_eq!(
+            extract_pure_literal_from_regex("/etc/passwd"),
+            Some("/etc/passwd".to_string())
+        );
+        assert_eq!(
+            extract_pure_literal_from_regex("AKIA_TEST-KEY"),
+            Some("AKIA_TEST-KEY".to_string())
+        );
+    }
+
+    #[test]
+    fn escaped_metacharacters_decode_to_their_literal_form() {
+        assert_eq!(
+            extract_pure_literal_from_regex("\\(literal\\)"),
+            Some("(literal)".to_string())
+        );
+        assert_eq!(
+            extract_pure_literal_from_regex("a\\|b"),
+            Some("a|b".to_string())
+        );
+    }
+
+    #[test]
+    fn unescaped_metacharacters_block_literal_extraction() {
+        assert!(extract_pure_literal_from_regex(".aws/credentials").is_none());
+        assert!(extract_pure_literal_from_regex("foo|bar").is_none());
+        assert!(extract_pure_literal_from_regex("[abc]").is_none());
+        assert!(extract_pure_literal_from_regex("a*").is_none());
+        assert!(extract_pure_literal_from_regex("a+").is_none());
+        assert!(extract_pure_literal_from_regex("a?").is_none());
+        assert!(extract_pure_literal_from_regex("(group)").is_none());
+        assert!(extract_pure_literal_from_regex("a{1,3}").is_none());
+        assert!(extract_pure_literal_from_regex("^foo").is_none());
+        assert!(extract_pure_literal_from_regex("foo$").is_none());
+    }
+
+    #[test]
+    fn regex_shorthand_classes_block_literal_extraction() {
+        // \w \d \s \b — these are character classes / boundaries, not literals.
+        assert!(extract_pure_literal_from_regex("\\bfoo\\b").is_none());
+        assert!(extract_pure_literal_from_regex("\\d{3}").is_none());
+        assert!(extract_pure_literal_from_regex("\\w+").is_none());
+        assert!(extract_pure_literal_from_regex("\\s").is_none());
+    }
+
+    #[test]
+    fn trailing_backslash_blocks_literal_extraction() {
+        assert!(extract_pure_literal_from_regex("foo\\").is_none());
+    }
+
+    #[test]
+    fn normalize_pattern_strips_anchors_then_extracts_literal() {
+        // `^\.aws/credentials$` should be treated as substr `.aws/credentials`
+        // after anchor-stripping + literal-decoding.
+        assert_eq!(
+            normalize_pattern_for_comparison("^\\.aws/credentials$", true),
+            ".aws/credentials"
+        );
+    }
+
+    #[test]
+    fn normalize_pattern_keeps_meta_regex_unchanged_apart_from_anchors() {
+        // Real metacharacter → no decode, only anchor stripping.
+        assert_eq!(
+            normalize_pattern_for_comparison("^foo|bar$", true),
+            "foo|bar"
+        );
+        assert_eq!(
+            normalize_pattern_for_comparison("\\d{3}-\\d{4}", true),
+            "\\d{3}-\\d{4}"
+        );
+    }
+
+    #[test]
+    fn substr_normalization_unaffected_by_regex_decode() {
+        assert_eq!(
+            normalize_pattern_for_comparison(".aws/credentials", false),
+            ".aws/credentials"
+        );
+        assert_eq!(
+            normalize_pattern_for_comparison("\\.aws/credentials", false),
+            "\\.aws/credentials"
+        );
+    }
 }

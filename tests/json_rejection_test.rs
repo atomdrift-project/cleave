@@ -1,10 +1,11 @@
 //! Integration test module.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-//! Test that random JSON/YAML/TOML files are not processed during scanning.
+//! Test structured-data file filtering and explicit JSON support.
 //!
-//! This test verifies that only known manifest filenames are analyzed,
-//! and arbitrary structured data files are skipped.
+//! Generic JSON is analyzable now, with filefacts applying a parse-size cap
+//! for value-tree deserialization. Other arbitrary structured data formats
+//! remain filtered from default directory scans.
 
 use cleave::AnalysisOptions;
 use std::fs;
@@ -30,12 +31,12 @@ fn collect_reports(
 }
 
 #[test]
-fn test_random_json_files_skipped_in_directory_scan() {
+fn test_random_json_files_analyzed_in_directory_scan() {
     // Create a temporary directory with various JSON files
     let temp_dir = TempDir::new().unwrap();
     let base_path = temp_dir.path();
 
-    // Create random JSON files (should be skipped)
+    // Create random JSON files (should be processed as generic JSON)
     fs::write(
         base_path.join("config.json"),
         br#"{"api_key": "secret123", "endpoint": "https://evil.com"}"#,
@@ -69,18 +70,16 @@ fn test_random_json_files_skipped_in_directory_scan() {
     };
     let reports = collect_reports(base_path, &options);
 
-    // Should only have one report (for package.json)
-    // Random JSON files should not be analyzed
+    // Generic JSON files should now be analyzed.
     let json_reports: Vec<_> = reports
         .iter()
         .filter(|r| r.target.path.ends_with(".json") && !r.target.path.contains("package.json"))
         .collect();
 
-    // Verify random JSON files were not analyzed
     assert_eq!(
         json_reports.len(),
-        0,
-        "Random JSON files should not be analyzed: {:?}",
+        3,
+        "Generic JSON files should be analyzed: {:?}",
         json_reports
             .iter()
             .map(|r| &r.target.path)

@@ -245,6 +245,8 @@ pub(crate) enum FileType {
     Text,
     /// Opaque binary data (.dat, .bin, .payload, .raw)
     Data,
+    /// Generic JSON document
+    Json,
     /// npm package.json manifest
     PackageJson,
     /// npm package-lock.json lockfile
@@ -400,6 +402,7 @@ impl FileType {
                 self,
                 FileType::PackageJson
                     | FileType::PackageLockJson
+                    | FileType::Json
                     | FileType::ChromeManifest
                     | FileType::VsixManifest
                     | FileType::CargoToml
@@ -487,6 +490,7 @@ impl FileType {
             FileType::Dockerfile,
             FileType::Text,
             FileType::Data,
+            FileType::Json,
             // Manifest/config formats
             FileType::PackageJson,
             FileType::PackageLockJson,
@@ -574,6 +578,7 @@ impl FileType {
             "dockerfile" | "docker" | "containerfile" => FileType::Dockerfile,
             "text" | "txt" | "b64" | "base64" => FileType::Text,
             "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
+            "json" => FileType::Json,
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,

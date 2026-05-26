@@ -242,6 +242,7 @@ pub fn analyzer_for_file_type(
         | FileType::CargoToml
         | FileType::PyProjectToml
         | FileType::PackageLockJson
+        | FileType::Json
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
@@ -355,6 +356,7 @@ pub(crate) fn analyzer_for_file_type_arc(
         | FileType::CargoToml
         | FileType::PyProjectToml
         | FileType::PackageLockJson
+        | FileType::Json
         | FileType::Plist
         | FileType::SystemdService
         | FileType::DesktopEntry
@@ -594,6 +596,7 @@ impl FileTypeExt for FileType {
             FileType::SevenZ => "7z".to_string(),
             FileType::PythonBytecode => "python-bytecode".to_string(),
             FileType::PackageLockJson => "package-lock.json".to_string(),
+            FileType::Json => "json".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }
     }
@@ -633,6 +636,7 @@ impl FileTypeExt for FileType {
             FileType::C => vec!["c", "h", "hh"],
             FileType::PackageJson => vec!["json", "package.json", "npm"],
             FileType::PackageLockJson => vec!["json", "package-lock.json", "npm"],
+            FileType::Json => vec!["json"],
             FileType::PkgInfo => vec!["pkg-info", "metadata", "dist-info"],
             FileType::VsixManifest => vec!["xml", "vsix", "vscode"],
             FileType::ChromeManifest => vec!["json", "manifest.json", "chrome", "extension"],

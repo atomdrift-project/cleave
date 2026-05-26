@@ -444,7 +444,12 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
-                "data" => vec![RuleFileType::Ipa, RuleFileType::Text, RuleFileType::Data],
+                "data" => vec![
+                    RuleFileType::Ipa,
+                    RuleFileType::Text,
+                    RuleFileType::Data,
+                    RuleFileType::Json,
+                ],
                 "ipa" => vec![RuleFileType::Ipa],
                 "archives" => vec![
                     RuleFileType::Archive,
@@ -485,6 +490,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "dockerfile" | "docker" | "containerfile" => vec![RuleFileType::Dockerfile],
                 "text" | "txt" | "b64" | "base64" => vec![RuleFileType::Text],
                 "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
+                "json" => vec![RuleFileType::Json],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],

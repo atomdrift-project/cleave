@@ -81,6 +81,7 @@ impl GenericAnalyzer {
             FileType::CargoToml => "cargo.toml",
             FileType::PyProjectToml => "pyproject.toml",
             FileType::PackageLockJson => "package-lock.json",
+            FileType::Json => "json",
             FileType::Plist => "plist",
             FileType::Html => "html",
             FileType::Markdown => "markdown",

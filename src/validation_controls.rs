@@ -3,7 +3,7 @@
 //! This keeps temporary validator disables centralized while validators are
 //! re-enabled one at a time.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{OnceLock, RwLock};
@@ -244,6 +244,36 @@ const UNKNOWN_VALIDATOR: ValidatorSpec = ValidatorSpec {
 const DISABLED_VALIDATOR_IDS: &[&str] = &[];
 
 static DISABLED_VALIDATOR_OVERRIDE: OnceLock<RwLock<Option<BTreeSet<String>>>> = OnceLock::new();
+
+/// Output format selector for validation issues emitted during mapper load.
+///
+/// `validate` sets this so the mapper loader can render warnings using the
+/// caller's chosen format without consulting the process environment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ValidationOutputFormat {
+    Terminal,
+    Tiny,
+    Json,
+}
+
+static VALIDATION_OUTPUT_FORMAT: OnceLock<RwLock<Option<ValidationOutputFormat>>> = OnceLock::new();
+
+fn validation_output_format_lock() -> &'static RwLock<Option<ValidationOutputFormat>> {
+    VALIDATION_OUTPUT_FORMAT.get_or_init(|| RwLock::new(None))
+}
+
+/// Set the validation-issue output format for the rest of the process.
+/// Pass `None` to clear (the mapper will fall back to terminal rendering).
+pub(crate) fn set_validation_output_format(fmt: Option<ValidationOutputFormat>) {
+    if let Ok(mut g) = validation_output_format_lock().write() {
+        *g = fmt;
+    }
+}
+
+#[must_use]
+pub(crate) fn validation_output_format() -> Option<ValidationOutputFormat> {
+    validation_output_format_lock().read().ok().and_then(|g| *g)
+}
 
 fn disabled_validator_override() -> &'static RwLock<Option<BTreeSet<String>>> {
     DISABLED_VALIDATOR_OVERRIDE.get_or_init(|| RwLock::new(None))

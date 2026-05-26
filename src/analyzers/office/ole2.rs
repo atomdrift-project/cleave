@@ -499,11 +499,7 @@ fn read_null_terminated(data: &[u8]) -> Option<String> {
         return None;
     }
     let s = String::from_utf8_lossy(&data[..end]).to_string();
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 /// Known dangerous CLSIDs that indicate specific exploit vectors or suspicious objects.
@@ -810,11 +806,7 @@ fn read_property_string(section: &[u8], offset: usize) -> Option<String> {
         .trim_end_matches('\0')
         .to_string();
 
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 #[cfg(test)]

@@ -57,7 +57,7 @@ fn build_minimal_chm(entry_name: &str, entry_payload: &[u8]) -> Vec<u8> {
     buf[0x0c..0x10].copy_from_slice(&1u32.to_le_bytes()); // unknown
     buf[0x10..0x14].copy_from_slice(&0xdeadbeef_u32.to_le_bytes()); // timestamp_counter
     buf[0x14..0x18].copy_from_slice(&1033u32.to_le_bytes()); // lcid en-US
-                                                             // 0x18..0x38: 32 bytes of GUIDs — leave zero
+    // 0x18..0x38: 32 bytes of GUIDs — leave zero
     buf[0x38..0x40].copy_from_slice(&sec0_off.to_le_bytes());
     buf[0x40..0x48].copy_from_slice(&(SEC0_LEN as u64).to_le_bytes());
     buf[0x48..0x50].copy_from_slice(&sec1_off.to_le_bytes());

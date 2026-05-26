@@ -334,15 +334,15 @@ fn test_scan_multi_filetype_directory() {
     // Should succeed and return JSON array
     assert!(output.status.success());
 
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
-        if let Some(files) = get_files(&json) {
-            assert_eq!(files.len(), 3, "Should have 3 analyzed files");
-            for file in files {
-                assert!(
-                    !get_file_type(file).is_empty(),
-                    "Each analyzed file should have a file type"
-                );
-            }
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout)
+        && let Some(files) = get_files(&json)
+    {
+        assert_eq!(files.len(), 3, "Should have 3 analyzed files");
+        for file in files {
+            assert!(
+                !get_file_type(file).is_empty(),
+                "Each analyzed file should have a file type"
+            );
         }
     }
 }

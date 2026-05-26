@@ -4,18 +4,18 @@
 //! Detects Python, JavaScript, Shell, and PHP code in strings and re-analyzes them with full
 //! AST parsing and capability detection.
 
-use crate::analyzers::{detect_file_type_from_path, unified::UnifiedSourceAnalyzer, FileType};
+use crate::analyzers::{FileType, detect_file_type_from_path, unified::UnifiedSourceAnalyzer};
 use crate::capabilities::CapabilityMapper;
-use crate::types::binary::StringInfo;
-use crate::types::file_analysis::{encode_decoded_path, FileAnalysis};
 use crate::types::Evidence;
+use crate::types::binary::StringInfo;
+use crate::types::file_analysis::{FileAnalysis, encode_decoded_path};
 use crate::types::{Criticality, Finding, FindingKind};
 use anyhow::{Context, Result};
 use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Maximum nesting depth for decoded strings (prevent infinite recursion)
 const MAX_DECODE_DEPTH: usize = 3;
@@ -68,15 +68,15 @@ pub fn detect_language_with_host(
     let result = detect_language_inner(string_info, is_encoded)?;
 
     // Suppress false positives from syntactically similar languages
-    if let Some(host) = host_file_type {
-        if is_sibling_language(host, &result) {
-            tracing::debug!(
-                "Suppressing {:?} detection in {:?} host (syntactic sibling)",
-                result,
-                host
-            );
-            return None;
-        }
+    if let Some(host) = host_file_type
+        && is_sibling_language(host, &result)
+    {
+        tracing::debug!(
+            "Suppressing {:?} detection in {:?} host (syntactic sibling)",
+            result,
+            host
+        );
+        return None;
     }
 
     Some(result)
@@ -1621,8 +1621,7 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn test_detect_base64_binary_rejects_tiny_elf_fixture() {
-        let encoded =
-            "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAeABAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAAB\
+        let encoded = "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAeABAAAAAAABAAAAAAAAAAAAAAAAAAAAAAAAAAEAAOAAB\
 AAAAAAAAAAEAAAAFAAAAAAAAAAAAAAAAAEAAAAAAAAAAQAAAAAAAfQAAAAAAAAB9AAAAAAAAAAAA\
 IAAAAAAAsDyZDwU=";
         let info = make_string_info(encoded);

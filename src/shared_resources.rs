@@ -7,10 +7,35 @@
 
 use crate::capabilities::CapabilityMapper;
 use crate::yara_engine::YaraEngine;
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::sync::{Arc, OnceLock};
 
-fn skip_traits_requested() -> bool {
-    std::env::var("CLEAVE_SKIP_TRAITS").is_ok()
+/// Process-wide override for the trait-loading skip flag.
+///
+/// 0 = unset (defer to `CLEAVE_SKIP_TRAITS`), 1 = force skip, -1 = force load.
+/// Lets tests and library callers opt out of trait loading without mutating
+/// the process environment.
+static SKIP_TRAITS_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+
+/// Force trait loading on or off for the rest of the process.
+///
+/// `Some(true)` skips traits (matches `CLEAVE_SKIP_TRAITS`), `Some(false)`
+/// forces traits to load, `None` clears the override.
+pub fn set_skip_traits_override(value: Option<bool>) {
+    let encoded = match value {
+        None => 0,
+        Some(true) => 1,
+        Some(false) => -1,
+    };
+    SKIP_TRAITS_OVERRIDE.store(encoded, Ordering::Relaxed);
+}
+
+pub(crate) fn skip_traits_requested() -> bool {
+    match SKIP_TRAITS_OVERRIDE.load(Ordering::Relaxed) {
+        1 => true,
+        -1 => false,
+        _ => std::env::var("CLEAVE_SKIP_TRAITS").is_ok(),
+    }
 }
 
 /// Global CapabilityMapper behind a RwLock for hot-reload support.
@@ -252,22 +277,32 @@ mod tests {
     impl EnvVarGuard {
         fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
             let original = std::env::var(key).ok();
-            std::env::set_var(key, value);
+            // SAFETY: tests using EnvVarGuard hold `test_lock`, so no other
+            // thread is reading these vars while we mutate them.
+            unsafe {
+                std::env::set_var(key, value);
+            }
             Self { key, original }
         }
 
         fn unset(key: &'static str) -> Self {
             let original = std::env::var(key).ok();
-            std::env::remove_var(key);
+            // SAFETY: see `set`.
+            unsafe {
+                std::env::remove_var(key);
+            }
             Self { key, original }
         }
     }
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            match &self.original {
-                Some(v) => std::env::set_var(self.key, v),
-                None => std::env::remove_var(self.key),
+            // SAFETY: see `set`.
+            unsafe {
+                match &self.original {
+                    Some(v) => std::env::set_var(self.key, v),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
     }

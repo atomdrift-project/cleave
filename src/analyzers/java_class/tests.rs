@@ -4,7 +4,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::analyzers::{java_class::JavaClassAnalyzer, Analyzer};
+    use crate::analyzers::{Analyzer, java_class::JavaClassAnalyzer};
     use crate::types::{AnalysisReport, TargetInfo};
     use std::path::Path;
 
@@ -118,10 +118,12 @@ mod tests {
         assert!(!report.target.sha256.is_empty());
 
         // Should have Java bytecode structure
-        assert!(report
-            .structure
-            .iter()
-            .any(|s| s.id == "source/language/java"));
+        assert!(
+            report
+                .structure
+                .iter()
+                .any(|s| s.id == "source/language/java")
+        );
     }
 
     #[test]
@@ -307,11 +309,13 @@ mod tests {
 
         let result = analyzer.parse_class_file(&data);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .to_lowercase()
-            .contains("magic"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .to_lowercase()
+                .contains("magic")
+        );
     }
 
     #[test]

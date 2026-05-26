@@ -33,7 +33,7 @@ fn test_stng_analysis_opts_enables_xor() {
 /// analysis report contains them with an "xor" encoding_chain entry.
 #[test]
 fn test_analyze_file_includes_xor_decoded_strings() {
-    use cleave::{analyze_file, AnalysisOptions};
+    use cleave::{AnalysisOptions, analyze_file};
     use std::fs;
     use tempfile::TempDir;
 

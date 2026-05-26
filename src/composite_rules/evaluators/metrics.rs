@@ -10,8 +10,8 @@
 //! - Language-specific metrics (Go)
 
 use crate::composite_rules::context::{ConditionResult, EvaluationContext};
-use crate::types::scores::get_metric_value;
 use crate::types::Evidence;
+use crate::types::scores::get_metric_value;
 
 /// Evaluate metrics condition - check computed metrics against thresholds
 /// Field path examples: "identifiers.avg_entropy", "functions.density_per_100_lines"
@@ -26,15 +26,15 @@ pub(crate) fn eval_metrics<'a>(
 ) -> ConditionResult {
     // Check file size constraints first
     let file_size = ctx.report.target.size_bytes;
-    if let Some(min_sz) = min_size {
-        if file_size < min_sz {
-            return ConditionResult::no_match();
-        }
+    if let Some(min_sz) = min_size
+        && file_size < min_sz
+    {
+        return ConditionResult::no_match();
     }
-    if let Some(max_sz) = max_size {
-        if file_size > max_sz {
-            return ConditionResult::no_match();
-        }
+    if let Some(max_sz) = max_size
+        && file_size > max_sz
+    {
+        return ConditionResult::no_match();
     }
 
     // Dynamic field lookup — `get_metric_value` consults the typed

@@ -723,9 +723,9 @@ pub(super) fn truncate<T>(diff: &mut ScopeDiff<T>, limit: usize) {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::types::Criticality;
     use crate::types::binary::{Export, Import, Section, StringInfo};
     use crate::types::traits_findings::{Finding, FindingKind};
-    use crate::types::Criticality;
 
     fn unit() -> DiffUnit {
         DiffUnit::empty("test".to_string())
@@ -800,14 +800,16 @@ mod tests {
             "signature": {"team_id": "ABC123"},
         }));
         let d = diff_kv(&old, &new, 0);
-        assert!(d
-            .added
-            .iter()
-            .any(|c| c.path == "signature.team_id" && c.namespace == "signature"));
-        assert!(d
-            .changed
-            .iter()
-            .any(|c| c.new.path == "metadata.sig" && c.new.namespace == "metadata"));
+        assert!(
+            d.added
+                .iter()
+                .any(|c| c.path == "signature.team_id" && c.namespace == "signature")
+        );
+        assert!(
+            d.changed
+                .iter()
+                .any(|c| c.new.path == "metadata.sig" && c.new.namespace == "metadata")
+        );
     }
 
     #[test]

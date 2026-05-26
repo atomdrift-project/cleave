@@ -19,10 +19,10 @@ fn collect_reports(
 ) -> Vec<cleave::AnalysisReport> {
     let reports = Mutex::new(Vec::new());
     cleave::scan_directory(path, options, |event| {
-        if let cleave::ScanEvent::File { result, .. } = event {
-            if let Ok(report) = *result {
-                reports.lock().unwrap().push(report);
-            }
+        if let cleave::ScanEvent::File { result, .. } = event
+            && let Ok(report) = *result
+        {
+            reports.lock().unwrap().push(report);
         }
     })
     .expect("Directory analysis failed");

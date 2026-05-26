@@ -47,13 +47,12 @@ where
 
         // Check deadline every 4096 nodes to avoid syscall overhead
         node_count += 1;
-        if node_count & 0xFFF == 0 {
-            if let Some(dl) = deadline {
-                if Instant::now() > dl {
-                    stats.deadline_exceeded = true;
-                    return stats;
-                }
-            }
+        if node_count & 0xFFF == 0
+            && let Some(dl) = deadline
+            && Instant::now() > dl
+        {
+            stats.deadline_exceeded = true;
+            return stats;
         }
 
         let node = cursor.node();

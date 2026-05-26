@@ -101,14 +101,14 @@ impl Config {
 
     fn criticality_for(&self, vendor: &str, trait_id: Option<&str>) -> Option<String> {
         // 1. Check rule override (highest priority)
-        if let Some(trait_id) = trait_id {
-            if let Some(override_rule) = self.overrides.get(trait_id) {
-                if override_rule.disable {
-                    return None; // Rule disabled
-                }
-                if let Some(ref crit) = override_rule.crit {
-                    return Some(crit.clone());
-                }
+        if let Some(trait_id) = trait_id
+            && let Some(override_rule) = self.overrides.get(trait_id)
+        {
+            if override_rule.disable {
+                return None; // Rule disabled
+            }
+            if let Some(ref crit) = override_rule.crit {
+                return Some(crit.clone());
             }
         }
 

@@ -322,7 +322,7 @@ mod tests {
         data[4] = 2; // 64-bit
         data[5] = 1; // little-endian
         data[6] = 1; // ELF version
-                     // UPX magic typically appears in the packed data section
+        // UPX magic typically appears in the packed data section
         data[100..104].copy_from_slice(b"UPX!");
         assert!(UPXDecompressor::is_upx_packed(&data));
     }
@@ -402,10 +402,12 @@ mod tests {
         std::fs::set_permissions(source.path(), permissions).unwrap();
 
         let copied = UPXDecompressor::copy_to_writable_temp(source.path()).unwrap();
-        assert!(!std::fs::metadata(copied.path())
-            .unwrap()
-            .permissions()
-            .readonly());
+        assert!(
+            !std::fs::metadata(copied.path())
+                .unwrap()
+                .permissions()
+                .readonly()
+        );
 
         // Restore permissions so the temporary source can be cleaned up on all platforms.
         let mut permissions = std::fs::metadata(source.path()).unwrap().permissions();

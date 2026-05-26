@@ -245,13 +245,13 @@ pub(crate) fn find_many_directory_refs(
     fn collect_clause_refs(conditions: &[Condition]) -> HashMap<String, HashSet<String>> {
         let mut dir_refs: HashMap<String, HashSet<String>> = HashMap::new();
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
-                if let Some(idx) = id.find("::") {
-                    dir_refs
-                        .entry(id[..idx].to_string())
-                        .or_default()
-                        .insert(id.clone());
-                }
+            if let Condition::Trait { id } = cond
+                && let Some(idx) = id.find("::")
+            {
+                dir_refs
+                    .entry(id[..idx].to_string())
+                    .or_default()
+                    .insert(id.clone());
             }
         }
         dir_refs
@@ -388,21 +388,21 @@ pub(crate) fn find_single_item_clauses(
 
     // Check which clause has the single item
     // Skip directory references (no :: separator) - they match multiple traits
-    if any_count == 1 {
-        if let Some(Condition::Trait { id }) = rule.any.as_ref().and_then(|v| v.first()) {
-            // Only flag specific trait references (with ::), not directory references
-            if id.contains("::") {
-                violations.push((rule.id.clone(), "any", id.clone()));
-            }
+    if any_count == 1
+        && let Some(Condition::Trait { id }) = rule.any.as_ref().and_then(|v| v.first())
+    {
+        // Only flag specific trait references (with ::), not directory references
+        if id.contains("::") {
+            violations.push((rule.id.clone(), "any", id.clone()));
         }
     }
 
-    if all_count == 1 {
-        if let Some(Condition::Trait { id }) = rule.all.as_ref().and_then(|v| v.first()) {
-            // Only flag specific trait references (with ::), not directory references
-            if id.contains("::") {
-                violations.push((rule.id.clone(), "all", id.clone()));
-            }
+    if all_count == 1
+        && let Some(Condition::Trait { id }) = rule.all.as_ref().and_then(|v| v.first())
+    {
+        // Only flag specific trait references (with ::), not directory references
+        if id.contains("::") {
+            violations.push((rule.id.clone(), "all", id.clone()));
         }
     }
 
@@ -442,12 +442,12 @@ pub(crate) fn find_overlapping_conditions(
             .collect();
 
         for cond in conditions {
-            if let Condition::Trait { id } = cond {
-                if let Some(idx) = id.find("::") {
-                    let trait_dir = &id[..idx];
-                    if let Some(&dir) = dir_refs.iter().find(|&&d| d == trait_dir) {
-                        violations.push((rule.id.clone(), clause, dir.to_string(), id.clone()));
-                    }
+            if let Condition::Trait { id } = cond
+                && let Some(idx) = id.find("::")
+            {
+                let trait_dir = &id[..idx];
+                if let Some(&dir) = dir_refs.iter().find(|&&d| d == trait_dir) {
+                    violations.push((rule.id.clone(), clause, dir.to_string(), id.clone()));
                 }
             }
         }

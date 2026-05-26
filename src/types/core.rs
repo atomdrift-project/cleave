@@ -480,10 +480,10 @@ impl AnalysisReport {
                 *entry_type_counts.entry(t.clone()).or_insert(0) += 1;
                 if t == "symlink" {
                     symlink_count += 1;
-                    if let Some(ref link) = entry.linkname {
-                        if link.starts_with('/') || link.contains("..") {
-                            external_symlink_count += 1;
-                        }
+                    if let Some(ref link) = entry.linkname
+                        && (link.starts_with('/') || link.contains(".."))
+                    {
+                        external_symlink_count += 1;
                     }
                 }
             }
@@ -1719,14 +1719,18 @@ mod tests {
 
         assert_eq!(changed, vec![0]);
         assert_eq!(report.files.len(), 2);
-        assert!(report.files[0]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/archive"));
-        assert!(report.files[0]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/member"));
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/archive")
+        );
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/member")
+        );
         assert_eq!(report.files[1].findings.len(), 1);
         assert_eq!(report.files[1].findings[0].id, "cap/member");
     }
@@ -1754,14 +1758,18 @@ mod tests {
         let changed = report.inherit_child_findings_into_wrappers();
 
         assert_eq!(changed, vec![0, 1]);
-        assert!(report.files[1]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/payload"));
-        assert!(report.files[0]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/payload"));
+        assert!(
+            report.files[1]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/payload")
+        );
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/payload")
+        );
     }
 
     #[test]
@@ -1785,18 +1793,24 @@ mod tests {
 
         assert_eq!(report.files.len(), 2);
         assert_eq!(report.files[0].path, "/bin/sample");
-        assert!(report.files[0]
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-static/packer/upx"));
-        assert!(report.files[0]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/unpacked"));
-        assert!(report.files[1]
-            .findings
-            .iter()
-            .any(|f| f.id == "cap/unpacked"));
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-static/packer/upx")
+        );
+        assert!(
+            report.files[0]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/unpacked")
+        );
+        assert!(
+            report.files[1]
+                .findings
+                .iter()
+                .any(|f| f.id == "cap/unpacked")
+        );
     }
 
     // ==================== seal_archive_metadata_kv Tests ====================

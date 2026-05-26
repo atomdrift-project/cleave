@@ -11,9 +11,10 @@ use crate::capabilities::indexes::{
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    autoprefix_trait_refs, check_basename_pattern_duplicates, check_exact_contained_by_substr,
-    check_overlapping_regex_patterns, check_regex_alternative_subsets,
-    check_regex_or_overlapping_exact, check_regex_should_be_exact,
+    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
+    ObjectivesWellknownViolation, autoprefix_trait_refs, check_basename_pattern_duplicates,
+    check_exact_contained_by_substr, check_overlapping_regex_patterns,
+    check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
@@ -43,8 +44,6 @@ use crate::capabilities::validation::{
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
     validate_composite_trait_only, validate_directory_structure,
     validate_hostile_composite_precision, validate_hostile_trait_precision,
-    ObjectivesWellknownViolation, BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST,
-    MAX_TRAITS_PER_DIRECTORY,
 };
 use crate::composite_rules::{
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
@@ -278,8 +277,7 @@ fn build_filename_reference_suggestion(
             } else {
                 Some(format!(
                     "Hint: '{ref_id}' points to YAML file '{}.yaml', not a trait directory. Filenames are never part of trait IDs. {specific_rule_hint} If you intended a directory reference, use '{}'.",
-                    hint.filename_stem,
-                    hint.directory_ref
+                    hint.filename_stem, hint.directory_ref
                 ))
             }
         }
@@ -351,26 +349,28 @@ impl super::CapabilityMapper {
         // pure function of the traits dir, mtime-invalidated, and safe to
         // share across test invocations that set CLEAVE_SKIP_CACHE=1.
         let skip_cache = crate::cache::skip_mapper_cache();
-        if !enable_full_validation && !skip_cache {
-            if let Ok(cache_path) = crate::cache::mapper_cache_path() {
-                if cache_path.exists() {
-                    tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
-                    match fs::read(&cache_path) {
-                        Ok(mut bytes) => {
-                            match simd_json::from_slice::<MapperCacheData>(&mut bytes) {
-                                Ok(mut cache_data) => {
-                                    tracing::info!(
-                                        "Loaded mapper from cache ({} traits, {} composites)",
-                                        cache_data.trait_definitions.len(),
-                                        cache_data.composite_rules.len()
-                                    );
+        if !enable_full_validation
+            && !skip_cache
+            && let Ok(cache_path) = crate::cache::mapper_cache_path()
+        {
+            if cache_path.exists() {
+                tracing::trace!("Attempting to load mapper from cache: {:?}", cache_path);
+                match fs::read(&cache_path) {
+                    Ok(mut bytes) => {
+                        match simd_json::from_slice::<MapperCacheData>(&mut bytes) {
+                            Ok(mut cache_data) => {
+                                tracing::info!(
+                                    "Loaded mapper from cache ({} traits, {} composites)",
+                                    cache_data.trait_definitions.len(),
+                                    cache_data.composite_rules.len()
+                                );
 
-                                    // Re-compile regexes in parallel (not serialized due to #[serde(skip)])
-                                    // Use rayon to parallelize regex compilation across traits and composites
-                                    let t0 = std::time::Instant::now();
-                                    rayon::join(
-                                        || {
-                                            cache_data
+                                // Re-compile regexes in parallel (not serialized due to #[serde(skip)])
+                                // Use rayon to parallelize regex compilation across traits and composites
+                                let t0 = std::time::Instant::now();
+                                rayon::join(
+                                    || {
+                                        cache_data
                                                 .trait_definitions
                                                 .par_iter_mut()
                                                 .for_each(|trait_def| {
@@ -382,9 +382,9 @@ impl super::CapabilityMapper {
                                                         );
                                                     }
                                                 });
-                                        },
-                                        || {
-                                            cache_data
+                                    },
+                                    || {
+                                        cache_data
                                                 .composite_rules
                                                 .par_iter_mut()
                                                 .for_each(|rule| {
@@ -396,144 +396,144 @@ impl super::CapabilityMapper {
                                                         );
                                                     }
                                                 });
-                                        },
-                                    );
-                                    let t1 = std::time::Instant::now();
-                                    tracing::trace!(
-                                        "Regex precompilation took {:?} ({} traits, {} composites)",
-                                        t1.duration_since(t0),
-                                        cache_data.trait_definitions.len(),
-                                        cache_data.composite_rules.len()
-                                    );
+                                    },
+                                );
+                                let t1 = std::time::Instant::now();
+                                tracing::trace!(
+                                    "Regex precompilation took {:?} ({} traits, {} composites)",
+                                    t1.duration_since(t0),
+                                    cache_data.trait_definitions.len(),
+                                    cache_data.composite_rules.len()
+                                );
 
-                                    // Rebuild indexes from cached trait definitions (in parallel)
-                                    let (
-                                        ((trait_index, string_match_index), symbol_match_index),
-                                        raw_regex_result,
-                                    ) = rayon::join(
-                                        || {
-                                            rayon::join(
-                                                || {
-                                                    rayon::join(
-                                                        || {
-                                                            TraitIndex::build(
-                                                                &cache_data.trait_definitions,
-                                                            )
-                                                        },
-                                                        || {
-                                                            StringMatchIndex::build(
-                                                                &cache_data.trait_definitions,
-                                                            )
-                                                        },
-                                                    )
-                                                },
-                                                || {
-                                                    SymbolMatchIndex::build(
-                                                        &cache_data.trait_definitions,
-                                                    )
-                                                },
-                                            )
-                                        },
-                                        || {
-                                            RawContentRegexIndex::build(
-                                                &cache_data.trait_definitions,
-                                            )
+                                // Rebuild indexes from cached trait definitions (in parallel)
+                                let (
+                                    ((trait_index, string_match_index), symbol_match_index),
+                                    raw_regex_result,
+                                ) = rayon::join(
+                                    || {
+                                        rayon::join(
+                                            || {
+                                                rayon::join(
+                                                    || {
+                                                        TraitIndex::build(
+                                                            &cache_data.trait_definitions,
+                                                        )
+                                                    },
+                                                    || {
+                                                        StringMatchIndex::build(
+                                                            &cache_data.trait_definitions,
+                                                        )
+                                                    },
+                                                )
+                                            },
+                                            || {
+                                                SymbolMatchIndex::build(
+                                                    &cache_data.trait_definitions,
+                                                )
+                                            },
+                                        )
+                                    },
+                                    || {
+                                        RawContentRegexIndex::build(&cache_data.trait_definitions)
                                             .map_err(|errors| anyhow::anyhow!(errors.join("\n")))
-                                        },
-                                    );
-                                    let t2 = std::time::Instant::now();
-                                    tracing::trace!(
-                                        "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
-                                        t2.duration_since(t1),
-                                        string_match_index.total_patterns,
-                                        raw_regex_result.as_ref().map(|i| i.total_patterns).unwrap_or(0),
-                                    );
-                                    let raw_content_regex_index = raw_regex_result?;
+                                    },
+                                );
+                                let t2 = std::time::Instant::now();
+                                tracing::trace!(
+                                    "Index building took {:?} (StringMatchIndex: {} patterns, RawContentRegexIndex: {} patterns)",
+                                    t2.duration_since(t1),
+                                    string_match_index.total_patterns,
+                                    raw_regex_result
+                                        .as_ref()
+                                        .map(|i| i.total_patterns)
+                                        .unwrap_or(0),
+                                );
+                                let raw_content_regex_index = raw_regex_result?;
 
-                                    // Ensure rule stats are up-to-date for banner display
-                                    let _ = crate::cache::save_rule_stats(
-                                        cache_data.trait_definitions.len(),
-                                        cache_data.composite_rules.len(),
-                                    );
+                                // Ensure rule stats are up-to-date for banner display
+                                let _ = crate::cache::save_rule_stats(
+                                    cache_data.trait_definitions.len(),
+                                    cache_data.composite_rules.len(),
+                                );
 
-                                    // Populate trait_id_map from cached data
-                                    let mut trait_id_map = std::collections::HashMap::with_capacity(
-                                        cache_data.trait_definitions.len(),
-                                    );
-                                    for (idx, trait_def) in
-                                        cache_data.trait_definitions.iter().enumerate()
-                                    {
-                                        trait_id_map.insert(trait_def.id.clone(), idx);
-                                    }
-
-                                    // Initialize composite rule dependencies
-                                    for rule in &mut cache_data.composite_rules {
-                                        rule.populate_required_traits(&trait_id_map);
-                                    }
-
-                                    return Ok(Self {
-                                        symbol_map: cache_data.symbol_map,
-                                        trait_definitions: cache_data.trait_definitions,
-                                        composite_rules: cache_data.composite_rules,
-                                        trait_index,
-                                        string_match_index,
-                                        symbol_match_index,
-                                        raw_content_regex_index,
-                                        trait_id_map,
-                                        platforms: vec![Platform::All],
-                                        slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
-                                    });
+                                // Populate trait_id_map from cached data
+                                let mut trait_id_map = std::collections::HashMap::with_capacity(
+                                    cache_data.trait_definitions.len(),
+                                );
+                                for (idx, trait_def) in
+                                    cache_data.trait_definitions.iter().enumerate()
+                                {
+                                    trait_id_map.insert(trait_def.id.clone(), idx);
                                 }
-                                Err(e) => {
-                                    eprintln!("⏳ Trait cache is out of date, regenerating...");
-                                    tracing::debug!(
-                                        cache = %cache_path.display(),
-                                        error = %e,
-                                        "Mapper cache deserialization failed"
-                                    );
-                                    if let Err(rm_err) = std::fs::remove_file(&cache_path) {
-                                        tracing::debug!(
-                                            cache = %cache_path.display(),
-                                            error = %rm_err,
-                                            "Failed to remove stale mapper cache"
-                                        );
-                                    }
+
+                                // Initialize composite rule dependencies
+                                for rule in &mut cache_data.composite_rules {
+                                    rule.populate_required_traits(&trait_id_map);
                                 }
+
+                                return Ok(Self {
+                                    symbol_map: cache_data.symbol_map,
+                                    trait_definitions: cache_data.trait_definitions,
+                                    composite_rules: cache_data.composite_rules,
+                                    trait_index,
+                                    string_match_index,
+                                    symbol_match_index,
+                                    raw_content_regex_index,
+                                    trait_id_map,
+                                    platforms: vec![Platform::All],
+                                    slow_rule_ms: Self::DEFAULT_SLOW_RULE_MS,
+                                });
                             }
-                        }
-                        Err(e) => {
-                            eprintln!("⏳ Trait cache is out of date, regenerating...");
-                            tracing::debug!(
-                                cache = %cache_path.display(),
-                                error = %e,
-                                "Mapper cache read failed"
-                            );
-                            if let Err(rm_err) = std::fs::remove_file(&cache_path) {
+                            Err(e) => {
+                                eprintln!("⏳ Trait cache is out of date, regenerating...");
                                 tracing::debug!(
                                     cache = %cache_path.display(),
-                                    error = %rm_err,
-                                    "Failed to remove stale mapper cache"
+                                    error = %e,
+                                    "Mapper cache deserialization failed"
                                 );
+                                if let Err(rm_err) = std::fs::remove_file(&cache_path) {
+                                    tracing::debug!(
+                                        cache = %cache_path.display(),
+                                        error = %rm_err,
+                                        "Failed to remove stale mapper cache"
+                                    );
+                                }
                             }
                         }
                     }
-                } else {
-                    tracing::info!(
-                        expected = %cache_path.display(),
-                        "Trait mapper cache miss — expected file not found"
-                    );
-                    match crate::cache::most_recent_yaml_file() {
-                        Ok((mtime, path)) => {
-                            let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
-                            tracing::info!(
-                                newest_trait = %path.display(),
-                                modified_ago = %crate::cache::format_age(age),
-                                "Cache key derived from newest .yaml/.yml trait file"
+                    Err(e) => {
+                        eprintln!("⏳ Trait cache is out of date, regenerating...");
+                        tracing::debug!(
+                            cache = %cache_path.display(),
+                            error = %e,
+                            "Mapper cache read failed"
+                        );
+                        if let Err(rm_err) = std::fs::remove_file(&cache_path) {
+                            tracing::debug!(
+                                cache = %cache_path.display(),
+                                error = %rm_err,
+                                "Failed to remove stale mapper cache"
                             );
                         }
-                        Err(_) => {
-                            tracing::info!("No .yaml/.yml files found in traits directory");
-                        }
+                    }
+                }
+            } else {
+                tracing::info!(
+                    expected = %cache_path.display(),
+                    "Trait mapper cache miss — expected file not found"
+                );
+                match crate::cache::most_recent_yaml_file() {
+                    Ok((mtime, path)) => {
+                        let age = mtime.elapsed().map(|d| d.as_secs()).unwrap_or(0);
+                        tracing::info!(
+                            newest_trait = %path.display(),
+                            modified_ago = %crate::cache::format_age(age),
+                            "Cache key derived from newest .yaml/.yml trait file"
+                        );
+                    }
+                    Err(_) => {
+                        tracing::info!("No .yaml/.yml files found in traits directory");
                     }
                 }
             }
@@ -750,13 +750,12 @@ impl super::CapabilityMapper {
 
                 // Auto-prefix trait ID if it doesn't already have the path prefix
                 // Uses :: as delimiter between directory path and trait name
-                if let Some(ref prefix) = trait_prefix {
-                    if !trait_def.id.starts_with(prefix)
-                        && !trait_def.id.contains("::")
-                        && !trait_def.id.contains('/')
-                    {
-                        trait_def.id = format!("{}::{}", prefix, trait_def.id);
-                    }
+                if let Some(ref prefix) = trait_prefix
+                    && !trait_def.id.starts_with(prefix)
+                    && !trait_def.id.contains("::")
+                    && !trait_def.id.contains('/')
+                {
+                    trait_def.id = format!("{}::{}", prefix, trait_def.id);
                 }
                 // Validate YARA/AST conditions at load time
                 trait_def
@@ -772,24 +771,23 @@ impl super::CapabilityMapper {
                 // Per-trait validation checks - skip when validation is disabled
                 if enable_full_validation {
                     // Check for greedy regex patterns
-                    if !crate::validation_controls::is_validator_disabled("nested-quantifier") {
-                        if let Some(warning) = trait_def.r#if.check_greedy_patterns() {
-                            warnings.push_id(
-                                "nested-quantifier",
-                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                            );
-                        }
+                    if !crate::validation_controls::is_validator_disabled("nested-quantifier")
+                        && let Some(warning) = trait_def.r#if.check_greedy_patterns()
+                    {
+                        warnings.push_id(
+                            "nested-quantifier",
+                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                        );
                     }
                     // Check for word boundary regex patterns that should use type: word
                     if !crate::validation_controls::is_validator_disabled(
                         "simple-word-boundary-regex",
-                    ) {
-                        if let Some(warning) = trait_def.r#if.check_word_boundary_regex() {
-                            warnings.push_id(
-                                "simple-word-boundary-regex",
-                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                            );
-                        }
+                    ) && let Some(warning) = trait_def.r#if.check_word_boundary_regex()
+                    {
+                        warnings.push_id(
+                            "simple-word-boundary-regex",
+                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                        );
                     }
 
                     // Check for short case-insensitive patterns (high collision risk)
@@ -902,14 +900,12 @@ impl super::CapabilityMapper {
                     // Check for useless case_insensitive
                     if !crate::validation_controls::is_validator_disabled(
                         "case-insensitive-no-effect",
-                    ) {
-                        if let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha()
-                        {
-                            warnings.push_id(
-                                "case-insensitive-no-effect",
-                                format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
-                            );
-                        }
+                    ) && let Some(warning) = trait_def.r#if.check_case_insensitive_on_non_alpha()
+                    {
+                        warnings.push_id(
+                            "case-insensitive-no-effect",
+                            format!("trait '{}' in {:?}: {}", trait_def.id, path, warning),
+                        );
                     }
 
                     // Check for count_min: 0
@@ -982,8 +978,8 @@ impl super::CapabilityMapper {
                     .r#for
                     .contains(&crate::composite_rules::FileType::All)
                     || trait_def.r#for.is_empty();
-                if is_universal {
-                    if let Condition::Symbol {
+                if is_universal
+                    && let Condition::Symbol {
                         exact,
                         substr: _,
                         regex,
@@ -991,36 +987,35 @@ impl super::CapabilityMapper {
                         compiled_regex: _,
                         ..
                     } = &trait_def.r#if
-                    {
-                        // If exact is specified, add it directly
-                        if let Some(exact_val) = exact {
-                            symbol_map
-                                .entry(exact_val.clone())
-                                .or_insert_with(|| TraitInfo {
-                                    id: trait_def.id.clone(),
-                                    desc: trait_def.desc.clone(),
-                                    conf: trait_def.conf,
-                                    crit: trait_def.crit,
-                                    mbc: trait_def.mbc.clone(),
-                                    attack: trait_def.attack.clone(),
-                                });
-                        }
+                {
+                    // If exact is specified, add it directly
+                    if let Some(exact_val) = exact {
+                        symbol_map
+                            .entry(exact_val.clone())
+                            .or_insert_with(|| TraitInfo {
+                                id: trait_def.id.clone(),
+                                desc: trait_def.desc.clone(),
+                                conf: trait_def.conf,
+                                crit: trait_def.crit,
+                                mbc: trait_def.mbc.clone(),
+                                attack: trait_def.attack.clone(),
+                            });
+                    }
 
-                        // For each regex pattern (may contain "|" for alternatives)
-                        if let Some(regex_val) = regex {
-                            for symbol_pattern in regex_val.split('|') {
-                                let symbol: String = symbol_pattern.trim().to_string();
+                    // For each regex pattern (may contain "|" for alternatives)
+                    if let Some(regex_val) = regex {
+                        for symbol_pattern in regex_val.split('|') {
+                            let symbol: String = symbol_pattern.trim().to_string();
 
-                                // Only add if not already present (first match wins)
-                                symbol_map.entry(symbol).or_insert_with(|| TraitInfo {
-                                    id: trait_def.id.clone(),
-                                    desc: trait_def.desc.clone(),
-                                    conf: trait_def.conf,
-                                    crit: trait_def.crit,
-                                    mbc: trait_def.mbc.clone(),
-                                    attack: trait_def.attack.clone(),
-                                });
-                            }
+                            // Only add if not already present (first match wins)
+                            symbol_map.entry(symbol).or_insert_with(|| TraitInfo {
+                                id: trait_def.id.clone(),
+                                desc: trait_def.desc.clone(),
+                                conf: trait_def.conf,
+                                crit: trait_def.crit,
+                                mbc: trait_def.mbc.clone(),
+                                attack: trait_def.attack.clone(),
+                            });
                         }
                     }
                 } // is_universal
@@ -1519,10 +1514,18 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} YAML files are not in leaf directories",
                     non_leaf_yaml_files.len()
                 );
-                eprintln!("   A directory with YAML files must not also have YAML-bearing child directories.");
-                eprintln!("   Choose one taxonomy level: move parent YAML into a leaf named for the shared technique,");
-                eprintln!("   or flatten child YAML up when the extra directory adds no ML-visible technique signal.");
-                eprintln!("   Prefer language/platform-neutral technique names; use platform directories only when");
+                eprintln!(
+                    "   A directory with YAML files must not also have YAML-bearing child directories."
+                );
+                eprintln!(
+                    "   Choose one taxonomy level: move parent YAML into a leaf named for the shared technique,"
+                );
+                eprintln!(
+                    "   or flatten child YAML up when the extra directory adds no ML-visible technique signal."
+                );
+                eprintln!(
+                    "   Prefer language/platform-neutral technique names; use platform directories only when"
+                );
                 eprintln!("   the technique itself is platform-specific. Keep depth reasonable.\n");
                 for file in &non_leaf_yaml_files {
                     eprintln!("   {file}");
@@ -1571,11 +1574,15 @@ impl super::CapabilityMapper {
             let duplicate_dirs = find_duplicate_second_level_directories(&dir_list);
             if !duplicate_dirs.is_empty() {
                 eprintln!(
-                "\n❌ ERROR: {} second-level directories are duplicated across namespaces (TAXONOMY.md violation)",
-                duplicate_dirs.len()
-            );
-                eprintln!("   Second-level directories should not be repeated across metadata/, micro-behaviors/, objectives/, known/:");
-                eprintln!("   This indicates traits are misplaced - objectives should only be in objectives/, capabilities in micro-behaviors/.\n");
+                    "\n❌ ERROR: {} second-level directories are duplicated across namespaces (TAXONOMY.md violation)",
+                    duplicate_dirs.len()
+                );
+                eprintln!(
+                    "   Second-level directories should not be repeated across metadata/, micro-behaviors/, objectives/, known/:"
+                );
+                eprintln!(
+                    "   This indicates traits are misplaced - objectives should only be in objectives/, capabilities in micro-behaviors/.\n"
+                );
                 for (dir_name, namespaces) in &duplicate_dirs {
                     eprintln!(
                         "   '{}' appears in: {}/{}/ ",
@@ -1585,11 +1592,15 @@ impl super::CapabilityMapper {
                     );
                 }
                 eprintln!("\n   Examples:");
-                eprintln!("   - micro-behaviors/command-and-control/ and objectives/command-and-control/ → C2 is an objective, should only be in objectives/");
-                eprintln!("   - micro-behaviors/discovery/ and objectives/discovery/ → Discovery is an objective, should only be in objectives/");
                 eprintln!(
-                "   - micro-behaviors/malware/ and known/malware/ → Malware detection should not be in micro-behaviors/\n"
-            );
+                    "   - micro-behaviors/command-and-control/ and objectives/command-and-control/ → C2 is an objective, should only be in objectives/"
+                );
+                eprintln!(
+                    "   - micro-behaviors/discovery/ and objectives/discovery/ → Discovery is an objective, should only be in objectives/"
+                );
+                eprintln!(
+                    "   - micro-behaviors/malware/ and known/malware/ → Malware detection should not be in micro-behaviors/\n"
+                );
                 warnings.push(format!(
                     "{} second-level directories duplicated across namespaces",
                     duplicate_dirs.len()
@@ -1661,20 +1672,24 @@ impl super::CapabilityMapper {
 
                 if !shallow.is_empty() {
                     eprintln!(
-                    "\n❌ ERROR: {} files are too shallow (need 2-4 subdirectories in micro-behaviors/obj)",
-                    shallow.len()
-                );
-                    eprintln!("   Add technique-bearing directories, not filler names; filenames can carry language/platform.");
+                        "\n❌ ERROR: {} files are too shallow (need 2-4 subdirectories in micro-behaviors/obj)",
+                        shallow.len()
+                    );
+                    eprintln!(
+                        "   Add technique-bearing directories, not filler names; filenames can carry language/platform."
+                    );
                     for (path, depth, _) in &shallow {
                         eprintln!("   {} ({} subdirs, need 2-4)", path, depth);
                     }
                 }
                 if !deep.is_empty() {
                     eprintln!(
-                    "\n❌ ERROR: {} files are too deep (max 4 subdirectories in micro-behaviors/obj)",
-                    deep.len()
-                );
-                    eprintln!("   Collapse language/platform or filler levels into filenames; keep paths focused on technique.");
+                        "\n❌ ERROR: {} files are too deep (max 4 subdirectories in micro-behaviors/obj)",
+                        deep.len()
+                    );
+                    eprintln!(
+                        "   Collapse language/platform or filler levels into filenames; keep paths focused on technique."
+                    );
                     for (path, depth, _) in &deep {
                         eprintln!("   {} ({} subdirs, max 4)", path, depth);
                     }
@@ -1832,7 +1847,9 @@ impl super::CapabilityMapper {
                         );
                     }
                 }
-                eprintln!("\n   Cross-directory references must use directory paths (e.g., 'discovery/system')");
+                eprintln!(
+                    "\n   Cross-directory references must use directory paths (e.g., 'discovery/system')"
+                );
                 eprintln!("   that match existing trait directories, not exact trait IDs.\n");
             } else {
                 eprintln!("   Set CLEAVE_DEBUG=1 to see details\n");
@@ -1899,7 +1916,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules reference the retired metadata/internal/ namespace",
                     internal_refs.len()
                 );
-                eprintln!("   The metadata/internal/symbols::* auto-emit was removed; replace each reference with an inline `type: symbol, exact: <name>` condition.\n");
+                eprintln!(
+                    "   The metadata/internal/symbols::* auto-emit was removed; replace each reference with an inline `type: symbol, exact: <name>` condition.\n"
+                );
                 for (rule_id, ref_id, source_file) in &internal_refs {
                     let line_hint = find_line_number(source_file, ref_id);
                     if let Some(line) = line_hint {
@@ -1933,7 +1952,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} micro-behaviors/ rules reference objectives/ rules",
                     cap_obj_violations.len()
                 );
-                eprintln!("   Cap rules (micro-behaviors) should not depend on obj rules (larger behaviors):\n");
+                eprintln!(
+                    "   Cap rules (micro-behaviors) should not depend on obj rules (larger behaviors):\n"
+                );
                 for (rule_id, ref_id, source_file) in &cap_obj_violations {
                     let line_hint = find_line_number(source_file, ref_id);
                     if let Some(line) = line_hint {
@@ -1966,10 +1987,12 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} micro-behaviors/ rules have hostile criticality",
                     hostile_cap_rules.len()
                 );
-                eprintln!("   Cap contains micro-behaviors (atomic capabilities) which are generally neutral.");
                 eprintln!(
-                "   Hostile rules require intent inference and should be in objectives/ where they can be"
-            );
+                    "   Cap contains micro-behaviors (atomic capabilities) which are generally neutral."
+                );
+                eprintln!(
+                    "   Hostile rules require intent inference and should be in objectives/ where they can be"
+                );
                 eprintln!(
                     "   categorized properly by attacker objective (C2, exfil, impact, etc.):\n"
                 );
@@ -1981,8 +2004,12 @@ impl super::CapabilityMapper {
                         eprintln!("   {}: Rule '{}'", source_file, rule_id);
                     }
                 }
-                eprintln!("\n   Cap rules max criticality: suspicious (rarely legitimate but still a capability)");
-                eprintln!("   Move hostile rules to objectives/command-and-control/, objectives/exfiltration/, objectives/impact/, etc. based on objective.");
+                eprintln!(
+                    "\n   Cap rules max criticality: suspicious (rarely legitimate but still a capability)"
+                );
+                eprintln!(
+                    "   Move hostile rules to objectives/command-and-control/, objectives/exfiltration/, objectives/impact/, etc. based on objective."
+                );
                 warnings.push(format!(
                     "{} micro-behaviors/ rules have hostile criticality (should be in objectives/)",
                     hostile_cap_rules.len()
@@ -2013,7 +2040,9 @@ impl super::CapabilityMapper {
                     }
                 }
                 eprintln!("\n   Metadata rules should have baseline criticality only.");
-                eprintln!("   Move hostile composites to objectives/lateral-movement/supply-chain/ or similar.");
+                eprintln!(
+                    "   Move hostile composites to objectives/lateral-movement/supply-chain/ or similar."
+                );
                 warnings.push(format!(
                     "{} metadata/ rules have hostile criticality (should be in objectives/)",
                     hostile_meta_rules.len()
@@ -2174,10 +2203,12 @@ impl super::CapabilityMapper {
 
             if !malware_violations.is_empty() {
                 eprintln!(
-                "\n❌ ERROR: {} rules use malware/ as a subcategory of objectives/ or micro-behaviors/",
-                malware_violations.len()
-            );
-                eprintln!("   Malware-specific signatures belong in known/malware/, not objectives/ or micro-behaviors/.");
+                    "\n❌ ERROR: {} rules use malware/ as a subcategory of objectives/ or micro-behaviors/",
+                    malware_violations.len()
+                );
+                eprintln!(
+                    "   Malware-specific signatures belong in known/malware/, not objectives/ or micro-behaviors/."
+                );
                 eprintln!("   See TAXONOMY.md for the correct taxonomy structure:\n");
                 for (rule_id, source_file) in &malware_violations {
                     eprintln!("   {}: Rule '{}'", source_file, rule_id);
@@ -2198,11 +2229,15 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} unknown categories under well-known/",
                     wk_category_violations.len()
                 );
-                eprintln!("   Only whitelisted subcategories are allowed under well-known/malware/ and well-known/tool/:\n");
+                eprintln!(
+                    "   Only whitelisted subcategories are allowed under well-known/malware/ and well-known/tool/:\n"
+                );
                 for (dir_path, category) in &wk_category_violations {
                     eprintln!("   {}: unknown category '{}'", dir_path, category);
                 }
-                eprintln!("\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOL_CATEGORIES in taxonomy.rs if legitimate.");
+                eprintln!(
+                    "\n   Add the category to WELL_KNOWN_MALWARE_CATEGORIES or WELL_KNOWN_TOOL_CATEGORIES in taxonomy.rs if legitimate."
+                );
                 warnings.push(format!(
                     "{} unknown categories under well-known/",
                     wk_category_violations.len()
@@ -2217,11 +2252,15 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} well-known/ directories use generic technique names",
                     generic_leaf_violations.len()
                 );
-                eprintln!("   well-known/ directories should be named after specific malware families/tools:\n");
+                eprintln!(
+                    "   well-known/ directories should be named after specific malware families/tools:\n"
+                );
                 for (dir_path, word) in &generic_leaf_violations {
                     eprintln!("   {}: generic technique word '{}'", dir_path, word);
                 }
-                eprintln!("\n   Rename to a specific family name, or move generic detection to objectives/.");
+                eprintln!(
+                    "\n   Rename to a specific family name, or move generic detection to objectives/."
+                );
                 warnings.push(format!(
                     "{} well-known/ directories use generic technique names instead of family names",
                     generic_leaf_violations.len()
@@ -2237,8 +2276,12 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} well-known/ composites have no family-specific anchoring",
                     unanchored.len()
                 );
-                eprintln!("   well-known/ composites should reference at least one local or well-known/ trait:");
-                eprintln!("   Composites that only combine micro-behaviors/ or objectives/ refs belong in objectives/.\n");
+                eprintln!(
+                    "   well-known/ composites should reference at least one local or well-known/ trait:"
+                );
+                eprintln!(
+                    "   Composites that only combine micro-behaviors/ or objectives/ refs belong in objectives/.\n"
+                );
                 for (rule_id, source_file) in &unanchored {
                     let line_hint = find_line_number(source_file, rule_id);
                     if let Some(line) = line_hint {
@@ -2268,10 +2311,16 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} well-known/ directories contain only composites (no atomic traits in directory)",
                     composite_only.len()
                 );
-                eprintln!("   well-known/ directories should define family-specific fingerprints (atomic traits).");
+                eprintln!(
+                    "   well-known/ directories should define family-specific fingerprints (atomic traits)."
+                );
                 eprintln!("   Possible fixes:");
-                eprintln!("   - Move composite-only rules to objectives/ if they detect generic behaviors");
-                eprintln!("   - Move family-specific traits from micro-behaviors/ into well-known/ if they were misplaced\n");
+                eprintln!(
+                    "   - Move composite-only rules to objectives/ if they detect generic behaviors"
+                );
+                eprintln!(
+                    "   - Move family-specific traits from micro-behaviors/ into well-known/ if they were misplaced\n"
+                );
                 for (source_file, count) in &composite_only {
                     eprintln!(
                         "   {}: {} composite(s), 0 atomic traits in directory",
@@ -2326,7 +2375,9 @@ impl super::CapabilityMapper {
                     "\n⚠️  WARNING: {} traits list 'unix' with redundant specific platforms",
                     redundant_unix.len()
                 );
-                eprintln!("   'unix' already covers linux and macos. Use [unix, windows] instead of [linux, macos, unix, windows].");
+                eprintln!(
+                    "   'unix' already covers linux and macos. Use [unix, windows] instead of [linux, macos, unix, windows]."
+                );
                 eprintln!();
                 for (trait_id, source_file, redundant) in &redundant_unix {
                     let line_hint = find_line_number(source_file, "platforms:");
@@ -2446,11 +2497,15 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} well-known/ traits have no file size filter",
                     wk_no_size.len()
                 );
-                eprintln!("   well-known/ traits should include size_min/size_max to avoid false positives:\n");
+                eprintln!(
+                    "   well-known/ traits should include size_min/size_max to avoid false positives:\n"
+                );
                 for (trait_id, source_file) in &wk_no_size {
                     eprintln!("   {}: Trait '{}'", source_file, trait_id);
                 }
-                eprintln!("\n   Add 'size_min:' and/or 'size_max:' bounds appropriate to the malware family.");
+                eprintln!(
+                    "\n   Add 'size_min:' and/or 'size_max:' bounds appropriate to the malware family."
+                );
                 warnings.push(format!(
                     "{} well-known/ traits lack file size filters (add size_min/size_max)",
                     wk_no_size.len()
@@ -2466,8 +2521,12 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} well-known/ binary traits lack a section filter",
                     wk_no_section.len()
                 );
-                eprintln!("   Binary-targeting traits in well-known/ should scope string/raw/hex matches to a section:");
-                eprintln!("   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n");
+                eprintln!(
+                    "   Binary-targeting traits in well-known/ should scope string/raw/hex matches to a section:"
+                );
+                eprintln!(
+                    "   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n"
+                );
                 for (trait_id, source_file) in &wk_no_section {
                     eprintln!("   {}: Trait '{}'", source_file, trait_id);
                 }
@@ -2487,8 +2546,12 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} metadata/ binary traits lack a section filter",
                     meta_no_section.len()
                 );
-                eprintln!("   Binary-targeting traits in metadata/ should scope string/raw/hex matches to a section:");
-                eprintln!("   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n");
+                eprintln!(
+                    "   Binary-targeting traits in metadata/ should scope string/raw/hex matches to a section:"
+                );
+                eprintln!(
+                    "   Use 'section: .text' or 'section: .data' on the condition, or use 'type: section'.\n"
+                );
                 for (trait_id, source_file) in &meta_no_section {
                     eprintln!("   {}: Trait '{}'", source_file, trait_id);
                 }
@@ -2510,7 +2573,9 @@ impl super::CapabilityMapper {
                 eprintln!(
                     "   Hex patterns on binary targets must scope the search with 'section:'"
                 );
-                eprintln!("   (use 'section: text', 'section: data', etc., or add 'offset:' to pin location)\n");
+                eprintln!(
+                    "   (use 'section: text', 'section: data', etc., or add 'offset:' to pin location)\n"
+                );
                 for trait_id in &hex_no_section {
                     let source_file = rule_source_files
                         .get(trait_id)
@@ -2551,7 +2616,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules have redundant any: clauses",
                     redundant_any_refs.len()
                 );
-                eprintln!("   Rules with 4+ trait references from the same directory should use directory notation:\n");
+                eprintln!(
+                    "   Rules with 4+ trait references from the same directory should use directory notation:\n"
+                );
                 for (rule_id, dir, count, trait_ids, source_file) in &redundant_any_refs {
                     let line_hint = find_line_number(source_file, rule_id);
                     if let Some(line) = line_hint {
@@ -2566,7 +2633,10 @@ impl super::CapabilityMapper {
                         );
                     }
                     eprintln!("      Traits: {}", trait_ids.join(", "));
-                    eprintln!("      Recommendation: Use 'id: {}', or create a new subdirectory within it to hold common traits instead.\n", dir);
+                    eprintln!(
+                        "      Recommendation: Use 'id: {}', or create a new subdirectory within it to hold common traits instead.\n",
+                        dir
+                    );
                 }
                 warnings.push(format!(
                     "{} composite rules have redundant any: clauses (use directory notation)",
@@ -2618,7 +2688,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules hand-maintain many refs to one directory",
                     many_dir_ref_clauses.len()
                 );
-                eprintln!("   A composite should not hand-maintain long lists of atomic traits from one directory:\n");
+                eprintln!(
+                    "   A composite should not hand-maintain long lists of atomic traits from one directory:\n"
+                );
                 for (rule_id, clause, dir, count, trait_ids, source_file) in &many_dir_ref_clauses {
                     let line_hint = find_line_number(source_file, rule_id);
                     if let Some(line) = line_hint {
@@ -2639,7 +2711,9 @@ impl super::CapabilityMapper {
                             dir
                         );
                     } else {
-                        eprintln!("      Recommendation: Keep small intentional bundles together; split only when there are clear sub-techniques.\n");
+                        eprintln!(
+                            "      Recommendation: Keep small intentional bundles together; split only when there are clear sub-techniques.\n"
+                        );
                     }
                 }
                 warnings.push_count(
@@ -2771,7 +2845,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} composite rules have overlapping all:/any: conditions",
                     overlapping.len()
                 );
-                eprintln!("   A directory reference already includes all traits within it;\n   remove the specific trait reference:\n");
+                eprintln!(
+                    "   A directory reference already includes all traits within it;\n   remove the specific trait reference:\n"
+                );
                 for (rule_id, clause, dir_ref, specific_ref, source_file) in &overlapping {
                     let line_hint = find_line_number(source_file, rule_id);
                     if let Some(line) = line_hint {
@@ -2841,7 +2917,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} trait groups differ only in `for:` field",
                     for_duplicates.len()
                 );
-                eprintln!("   These traits have identical logic (same criticality, condition, etc.) but different file types.");
+                eprintln!(
+                    "   These traits have identical logic (same criticality, condition, etc.) but different file types."
+                );
                 eprintln!("   Merge them into a single trait with combined `for:` values:\n");
                 for (trait_ids, _pattern) in &for_duplicates {
                     // Find source file for the first trait
@@ -2919,7 +2997,9 @@ impl super::CapabilityMapper {
                     "\n❌ ERROR: {} trait groups have regex patterns that should use alternation",
                     alternation_candidates.len()
                 );
-                eprintln!("   These traits have identical criticality and regex patterns where the first token differs only in case.");
+                eprintln!(
+                    "   These traits have identical criticality and regex patterns where the first token differs only in case."
+                );
                 eprintln!("   Merge them into a single trait using alternation syntax:\n");
                 for (trait_ids, _suffix, suggested) in &alternation_candidates {
                     let first_id = &trait_ids[0];
@@ -3016,9 +3096,9 @@ impl super::CapabilityMapper {
             let impossible_counts = find_impossible_count_constraints(&trait_definitions);
             if !impossible_counts.is_empty() {
                 eprintln!(
-                "\n❌ ERROR: {} traits have impossible count constraints (count_min > count_max)",
-                impossible_counts.len()
-            );
+                    "\n❌ ERROR: {} traits have impossible count constraints (count_min > count_max)",
+                    impossible_counts.len()
+                );
                 for (id, min, max) in &impossible_counts {
                     let source = rule_source_files
                         .get(id)
@@ -3084,7 +3164,9 @@ impl super::CapabilityMapper {
                     "\n⚠️  WARNING: {} composite rules have `needs` without `any:`",
                     needs_without_any.len()
                 );
-                eprintln!("   `needs` only applies to `any:` conditions and is ignored on `all:`-only rules:\n");
+                eprintln!(
+                    "   `needs` only applies to `any:` conditions and is ignored on `all:`-only rules:\n"
+                );
                 for rule_id in &needs_without_any {
                     let source = rule_source_files
                         .get(rule_id)
@@ -3139,8 +3221,8 @@ impl super::CapabilityMapper {
                     missing_patterns.len()
                 );
                 eprintln!(
-                "   String/content conditions need at least one of: exact, substr, regex, word:\n"
-            );
+                    "   String/content conditions need at least one of: exact, substr, regex, word:\n"
+                );
                 for id in &missing_patterns {
                     let source = rule_source_files
                         .get(id)
@@ -3403,7 +3485,9 @@ impl super::CapabilityMapper {
                 eprintln!("   - No filtering (count_min, count_max, section, etc.)");
                 eprintln!("   - Same criticality as referenced trait");
                 eprintln!("   - No unless/not/downgrade modifiers");
-                eprintln!("   Either add constraints/modifiers or reference the original trait directly:\n");
+                eprintln!(
+                    "   Either add constraints/modifiers or reference the original trait directly:\n"
+                );
                 for (trait_id, ref_id) in &pure_aliases {
                     let source = rule_source_files
                         .get(trait_id)
@@ -3500,10 +3584,18 @@ impl super::CapabilityMapper {
                     oversized_dirs.len(),
                     MAX_TRAITS_PER_DIRECTORY
                 );
-                eprintln!("   Why: the ML pipeline sees directory structure, not trait IDs; broad directories hide shared behavior.");
-                eprintln!("   Split by language/platform-neutral technique so similar behavior groups across implementations.");
-                eprintln!("   Use platform directories only when the technique itself is platform-specific.");
-                eprintln!("   Keep depth reasonable; prefer one meaningful subdirectory level over a deep taxonomy.\n");
+                eprintln!(
+                    "   Why: the ML pipeline sees directory structure, not trait IDs; broad directories hide shared behavior."
+                );
+                eprintln!(
+                    "   Split by language/platform-neutral technique so similar behavior groups across implementations."
+                );
+                eprintln!(
+                    "   Use platform directories only when the technique itself is platform-specific."
+                );
+                eprintln!(
+                    "   Keep depth reasonable; prefer one meaningful subdirectory level over a deep taxonomy.\n"
+                );
                 for (dir_path, count) in &oversized_dirs {
                     eprintln!("   {}: {} traits", dir_path, count);
                 }
@@ -3652,18 +3744,19 @@ impl super::CapabilityMapper {
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 
             for trait_def in &trait_definitions {
-                if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if {
-                    if !valid_metric_fields.contains(field) && !in_filefacts_namespace(field) {
-                        let source_file = trait_source_files
-                            .get(&trait_def.id)
-                            .map(String::as_str)
-                            .unwrap_or("unknown");
-                        invalid_metric_refs.push((
-                            trait_def.id.clone(),
-                            field.clone(),
-                            source_file.to_string(),
-                        ));
-                    }
+                if let crate::composite_rules::Condition::Metrics { field, .. } = &trait_def.r#if
+                    && !valid_metric_fields.contains(field)
+                    && !in_filefacts_namespace(field)
+                {
+                    let source_file = trait_source_files
+                        .get(&trait_def.id)
+                        .map(String::as_str)
+                        .unwrap_or("unknown");
+                    invalid_metric_refs.push((
+                        trait_def.id.clone(),
+                        field.clone(),
+                        source_file.to_string(),
+                    ));
                 }
             }
 
@@ -3680,9 +3773,9 @@ impl super::CapabilityMapper {
                     if let Some(line) = line_hint {
                         if let Some(suggested) = suggestion {
                             eprintln!(
-                            "   {}:{}: Trait '{}' references unknown metric '{}' (did you mean '{}'?)",
-                            source_file, line, trait_id, field, suggested
-                        );
+                                "   {}:{}: Trait '{}' references unknown metric '{}' (did you mean '{}'?)",
+                                source_file, line, trait_id, field, suggested
+                            );
                         } else {
                             eprintln!(
                                 "   {}:{}: Trait '{}' references unknown metric '{}'",
@@ -3857,8 +3950,8 @@ impl super::CapabilityMapper {
                     redundant_composites.len()
                 );
                 eprintln!(
-                "   These composites only reference one trait with identical file types and no unless/downgrade clauses.\n"
-            );
+                    "   These composites only reference one trait with identical file types and no unless/downgrade clauses.\n"
+                );
                 eprintln!("   Consider removing them or adding more conditions:\n");
                 for (rule_id, ref_id, source_file) in &redundant_composites {
                     let line_hint = find_line_number(source_file, rule_id);
@@ -3954,23 +4047,22 @@ impl super::CapabilityMapper {
         }
 
         if enable_full_validation && !warnings.is_empty() {
-            {
-                let rendered = match std::env::var("CLEAVE_VALIDATE_FORMAT").ok().as_deref() {
-                    Some("tiny") => crate::validation_controls::format_validation_issues_tiny(
+            use crate::validation_controls::ValidationOutputFormat;
+            let rendered = match crate::validation_controls::validation_output_format() {
+                Some(ValidationOutputFormat::Tiny) => {
+                    crate::validation_controls::format_validation_issues_tiny(warnings.as_slice())
+                }
+                Some(ValidationOutputFormat::Json) => {
+                    crate::validation_controls::format_validation_issues_json(warnings.as_slice())
+                }
+                Some(ValidationOutputFormat::Terminal) | None => {
+                    crate::validation_controls::format_validation_issues_terminal(
                         warnings.as_slice(),
-                    ),
-                    Some("json") | Some("jsonl") => {
-                        crate::validation_controls::format_validation_issues_json(
-                            warnings.as_slice(),
-                        )
-                    }
-                    _ => crate::validation_controls::format_validation_issues_terminal(
-                        warnings.as_slice(),
-                    ),
-                };
-                eprintln!("{rendered}");
-                has_fatal_errors = true;
-            }
+                    )
+                }
+            };
+            eprintln!("{rendered}");
+            has_fatal_errors = true;
         }
 
         // Bail if any fatal errors occurred (parse errors, validation failures, etc.)
@@ -3991,35 +4083,36 @@ impl super::CapabilityMapper {
         }
 
         // Save to cache for future runs (only if not in validation mode)
-        if !enable_full_validation && !skip_cache {
-            if let Ok(cache_path) = crate::cache::mapper_cache_path() {
-                let cache_data = MapperCacheData {
-                    symbol_map: symbol_map.clone(),
-                    trait_definitions: trait_definitions.clone(),
-                    composite_rules: composite_rules.clone(),
-                };
-                match serde_json::to_vec(&cache_data) {
-                    Ok(bytes) => {
-                        if let Err(e) = fs::write(&cache_path, &bytes) {
-                            tracing::warn!("Failed to write mapper cache: {}", e);
-                        } else {
-                            tracing::info!(
-                                "Saved mapper cache ({} bytes): {:?}",
-                                bytes.len(),
-                                cache_path
-                            );
-                            // Also save rule stats for fast banner display
-                            if let Err(e) = crate::cache::save_rule_stats(
-                                trait_definitions.len(),
-                                composite_rules.len(),
-                            ) {
-                                tracing::warn!("Failed to save rule stats: {}", e);
-                            }
+        if !enable_full_validation
+            && !skip_cache
+            && let Ok(cache_path) = crate::cache::mapper_cache_path()
+        {
+            let cache_data = MapperCacheData {
+                symbol_map: symbol_map.clone(),
+                trait_definitions: trait_definitions.clone(),
+                composite_rules: composite_rules.clone(),
+            };
+            match serde_json::to_vec(&cache_data) {
+                Ok(bytes) => {
+                    if let Err(e) = fs::write(&cache_path, &bytes) {
+                        tracing::warn!("Failed to write mapper cache: {}", e);
+                    } else {
+                        tracing::info!(
+                            "Saved mapper cache ({} bytes): {:?}",
+                            bytes.len(),
+                            cache_path
+                        );
+                        // Also save rule stats for fast banner display
+                        if let Err(e) = crate::cache::save_rule_stats(
+                            trait_definitions.len(),
+                            composite_rules.len(),
+                        ) {
+                            tracing::warn!("Failed to save rule stats: {}", e);
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!("Failed to serialize mapper cache: {}", e);
-                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to serialize mapper cache: {}", e);
                 }
             }
         }

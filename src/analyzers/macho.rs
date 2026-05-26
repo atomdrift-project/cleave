@@ -491,10 +491,10 @@ impl MachOAnalyzer {
     /// lookups against each, and merge into the report.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         for imp in ctx.imports_from_filefacts() {
-            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source) {
-                if !report.findings.iter().any(|c| c.id == cap.id) {
-                    report.findings.push(cap);
-                }
+            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source)
+                && !report.findings.iter().any(|c| c.id == cap.id)
+            {
+                report.findings.push(cap);
             }
             report.imports.push(imp);
         }
@@ -672,10 +672,10 @@ impl MachOAnalyzer {
 /// `unknown_0x<hex>` when the cpu type isn't in filefacts's known set.
 fn arch_name_from_ctx(ctx: &Ctx<'_>) -> String {
     let v = ctx.parsed.values();
-    if let Some(name) = v.get("macho.cpu_type").and_then(|x| x.as_str()) {
-        if name != "unknown" {
-            return name.to_string();
-        }
+    if let Some(name) = v.get("macho.cpu_type").and_then(|x| x.as_str())
+        && name != "unknown"
+    {
+        return name.to_string();
     }
     let raw = v
         .get("macho.cpu_type_raw")
@@ -1118,10 +1118,10 @@ impl MachOAnalyzer {
                     source: import_source.clone(),
                     ..imp
                 });
-                if let Some(cap) = self.capability_mapper.lookup(&symbol, "macho-bind") {
-                    if !report.findings.iter().any(|c| c.id == cap.id) {
-                        report.findings.push(cap);
-                    }
+                if let Some(cap) = self.capability_mapper.lookup(&symbol, "macho-bind")
+                    && !report.findings.iter().any(|c| c.id == cap.id)
+                {
+                    report.findings.push(cap);
                 }
             }
 
@@ -1520,10 +1520,12 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report
-            .metadata
-            .tools_used
-            .contains(&"filefacts".to_string()));
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .contains(&"filefacts".to_string())
+        );
     }
 
     #[test]
@@ -1583,10 +1585,12 @@ mod tests {
                 // Entitlements should have proper evidence
                 assert!(!finding.evidence.is_empty());
                 // Method should be "entitlements_plist"
-                assert!(finding
-                    .evidence
-                    .iter()
-                    .any(|e| e.method == "entitlements_plist"));
+                assert!(
+                    finding
+                        .evidence
+                        .iter()
+                        .any(|e| e.method == "entitlements_plist")
+                );
             }
         }
     }

@@ -10,7 +10,7 @@ pub(crate) mod ooxml;
 pub(crate) mod vba;
 pub(crate) mod vba_symbols;
 
-use super::{analyzer_for_file_type_arc, AnalysisInput, Analyzer, FileType};
+use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
 use crate::capabilities::CapabilityMapper;
 use crate::types::office_metrics::{OleMetrics, OoxmlMetrics, XlmMetrics};
 use crate::types::{AnalysisReport, ArchiveEntry, Criticality, Finding, FindingKind, TargetInfo};
@@ -268,34 +268,33 @@ impl OfficeAnalyzer {
         // VBA modules were recovered. Document format identity itself
         // comes from filefacts (`office.kind`), so we don't duplicate it
         // here.
-        use crate::types::{flatten_into_metrics, MetricsExt};
+        use crate::types::{MetricsExt, flatten_into_metrics};
         let flat = report
             .filefacts_metrics
             .get_or_insert_with(Default::default);
-        if flat.get_b("office.is_macro_enabled_extension").is_none() {
-            if let Some(ext) = file_path
+        if flat.get_b("office.is_macro_enabled_extension").is_none()
+            && let Some(ext) = file_path
                 .extension()
                 .and_then(|e| e.to_str())
                 .map(str::to_ascii_lowercase)
-            {
-                flat.set_b(
-                    "office.is_macro_enabled_extension",
-                    matches!(
-                        ext.as_str(),
-                        "docm"
-                            | "xlsm"
-                            | "pptm"
-                            | "dotm"
-                            | "xltm"
-                            | "potm"
-                            | "xla"
-                            | "xlam"
-                            | "xll"
-                            | "xlsb"
-                            | "ppam"
-                    ),
-                );
-            }
+        {
+            flat.set_b(
+                "office.is_macro_enabled_extension",
+                matches!(
+                    ext.as_str(),
+                    "docm"
+                        | "xlsm"
+                        | "pptm"
+                        | "dotm"
+                        | "xltm"
+                        | "potm"
+                        | "xla"
+                        | "xlam"
+                        | "xll"
+                        | "xlsb"
+                        | "ppam"
+                ),
+            );
         }
 
         if modules.is_empty() {
@@ -426,7 +425,7 @@ impl OfficeAnalyzer {
             prev_source_size.saturating_add(vba_source_size),
         );
         let _ = file_size; // Reserved for size-ratio metrics in a later phase.
-                           // Flatten the VbaMetrics aggregator into `office.vba.*`.
+        // Flatten the VbaMetrics aggregator into `office.vba.*`.
         flatten_into_metrics(&agg, "office.vba", flat);
     }
 
@@ -448,7 +447,7 @@ impl OfficeAnalyzer {
         cross: OfficeCrossCounts,
         embedded_executable_count: u32,
     ) {
-        use crate::types::{flatten_into_metrics, MetricsExt};
+        use crate::types::{MetricsExt, flatten_into_metrics};
         let flat = report
             .filefacts_metrics
             .get_or_insert_with(Default::default);
@@ -1370,10 +1369,10 @@ impl OfficeAnalyzer {
         let suspicious_exts = ["exe", "dll", "hta", "lnk", "bat", "js", "scr", "vbs"];
         let mut suspicious_extension_count: u32 = 0;
         for name in &doc.entry_names {
-            if let Some(ext) = name.rsplit('.').next() {
-                if suspicious_exts.iter().any(|s| ext.eq_ignore_ascii_case(s)) {
-                    suspicious_extension_count = suspicious_extension_count.saturating_add(1);
-                }
+            if let Some(ext) = name.rsplit('.').next()
+                && suspicious_exts.iter().any(|s| ext.eq_ignore_ascii_case(s))
+            {
+                suspicious_extension_count = suspicious_extension_count.saturating_add(1);
             }
         }
         let image_part_count = doc

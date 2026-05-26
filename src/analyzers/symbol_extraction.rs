@@ -37,18 +37,18 @@ pub(crate) fn ingest_filefacts_imports(
         });
     }
 
-    if matches!(file_type, FileType::Python) {
-        if let Some(ast) = parsed.source_ast() {
-            let mut alias_map = std::collections::HashMap::new();
-            let mut alias_cursor = ast.tree.walk();
-            collect_dunder_import_aliases(&mut alias_cursor, ast.source.as_bytes(), &mut alias_map);
-            if !alias_map.is_empty() {
-                for import in &mut report.imports {
-                    if let Some(dot_pos) = import.symbol.find('.') {
-                        let prefix = &import.symbol[..dot_pos];
-                        if let Some(module) = alias_map.get(prefix) {
-                            import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
-                        }
+    if matches!(file_type, FileType::Python)
+        && let Some(ast) = parsed.source_ast()
+    {
+        let mut alias_map = std::collections::HashMap::new();
+        let mut alias_cursor = ast.tree.walk();
+        collect_dunder_import_aliases(&mut alias_cursor, ast.source.as_bytes(), &mut alias_map);
+        if !alias_map.is_empty() {
+            for import in &mut report.imports {
+                if let Some(dot_pos) = import.symbol.find('.') {
+                    let prefix = &import.symbol[..dot_pos];
+                    if let Some(module) = alias_map.get(prefix) {
+                        import.symbol = format!("{}.{}", module, &import.symbol[dot_pos + 1..]);
                     }
                 }
             }
@@ -69,10 +69,10 @@ fn collect_dunder_import_aliases<'a>(
 
         // Look for: assignment where RHS is __import__('module')
         // Python tree-sitter: assignment node with left (identifier) and right (call)
-        if node.kind() == "assignment" || node.kind() == "expression_statement" {
-            if let Some(alias) = try_extract_dunder_import_alias(&node, source) {
-                alias_map.insert(alias.0, alias.1);
-            }
+        if (node.kind() == "assignment" || node.kind() == "expression_statement")
+            && let Some(alias) = try_extract_dunder_import_alias(&node, source)
+        {
+            alias_map.insert(alias.0, alias.1);
         }
 
         if cursor.goto_first_child() {
@@ -135,12 +135,11 @@ fn try_extract_dunder_import_alias<'a>(
     // Extract the module name from first string argument
     let args = right.child_by_field_name("arguments")?;
     for i in 0..args.child_count() {
-        if let Some(arg) = args.child(i as u32) {
-            if arg.kind() == "string" {
-                if let Some(module) = extract_string_content(&arg, source) {
-                    return Some((alias_name.to_string(), module));
-                }
-            }
+        if let Some(arg) = args.child(i as u32)
+            && arg.kind() == "string"
+            && let Some(module) = extract_string_content(&arg, source)
+        {
+            return Some((alias_name.to_string(), module));
         }
     }
 
@@ -221,16 +220,16 @@ fn extract_calls<'a>(
         let node_type = node.kind();
 
         // Check if this is a call node type we're interested in
-        if call_types.contains(&node_type) {
-            if let Some(func_name) = extract_function_name(&node, source) {
-                // Clean up the function name
-                let clean_name = func_name
-                    .trim()
-                    .trim_start_matches('_')
-                    .trim_start_matches('$');
-                if !clean_name.is_empty() && clean_name.len() < 100 {
-                    call_sites.push((clean_name.to_string(), node.start_byte() as u64));
-                }
+        if call_types.contains(&node_type)
+            && let Some(func_name) = extract_function_name(&node, source)
+        {
+            // Clean up the function name
+            let clean_name = func_name
+                .trim()
+                .trim_start_matches('_')
+                .trim_start_matches('$');
+            if !clean_name.is_empty() && clean_name.len() < 100 {
+                call_sites.push((clean_name.to_string(), node.start_byte() as u64));
             }
         }
 

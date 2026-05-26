@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use cleave::cli;
 use cleave::commands::{
-    analyze_command, diff_command, expand_paths, extract_exports_command,
-    extract_functions_command, extract_imports_command, extract_kv_command,
-    extract_metrics_command, extract_sections_command, extract_strings_command,
+    AnalyzeConfig, IterFilesConfig, analyze_command, diff_command, expand_paths,
+    extract_exports_command, extract_functions_command, extract_imports_command,
+    extract_kv_command, extract_metrics_command, extract_sections_command, extract_strings_command,
     extract_symbols_command, inspect_command, iter_files_command, test_match, test_rules,
-    validate_command, AnalyzeConfig, IterFilesConfig,
+    validate_command,
 };
 use std::fs;
 
@@ -227,10 +227,10 @@ fn run_server(
         path.canonicalize().unwrap_or(path)
     });
 
-    if let Some(ref extract_path) = extract_dir_path {
-        if !allowed_local_paths.contains(extract_path) {
-            allowed_local_paths.push(extract_path.clone());
-        }
+    if let Some(ref extract_path) = extract_dir_path
+        && !allowed_local_paths.contains(extract_path)
+    {
+        allowed_local_paths.push(extract_path.clone());
     }
 
     let config = cleave::server::ServerConfig {
@@ -546,10 +546,10 @@ pub(crate) fn write_output(
     } else {
         print!("{}", result);
         use std::io::Write;
-        if let Err(e) = std::io::stdout().flush() {
-            if e.kind() == std::io::ErrorKind::BrokenPipe {
-                tracing::info!("stdout pipe closed");
-            }
+        if let Err(e) = std::io::stdout().flush()
+            && e.kind() == std::io::ErrorKind::BrokenPipe
+        {
+            tracing::info!("stdout pipe closed");
         }
     }
     Ok(())

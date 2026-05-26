@@ -7,7 +7,7 @@
 //! - String count analysis
 
 use super::{
-    resolve_effective_range, resolve_effective_range_opt, symbol_matches, ContentLocationParams,
+    ContentLocationParams, resolve_effective_range, resolve_effective_range_opt, symbol_matches,
 };
 use crate::composite_rules::condition::{NotException, StringValidator, SymbolKind};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
@@ -102,21 +102,21 @@ pub(crate) fn eval_symbol<'a>(
     // FAST PATH 0: Use pre-computed evidence from indexed matching if available.
     // Safe only when no exclusion filters, validators, or category filters narrow
     // what the index resolved — the index is built from unrestricted lookups.
-    if not.is_none() && is_check.is_none() && kind.is_none() {
-        if let Some(trait_idx) = ctx.current_trait_idx {
-            if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
-                if !cached.is_empty() {
-                    return ConditionResult {
-                        matched: true,
-                        evidence: cached.clone(),
-                        match_count: cached.len(),
-                        warnings: Vec::new(),
-                        precision: 2.0, // Symbols are high-precision by default
-                        matched_trait_ids: Vec::new(),
-                    };
-                }
-            }
-        }
+    if not.is_none()
+        && is_check.is_none()
+        && kind.is_none()
+        && let Some(trait_idx) = ctx.current_trait_idx
+        && let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx))
+        && !cached.is_empty()
+    {
+        return ConditionResult {
+            matched: true,
+            evidence: cached.clone(),
+            match_count: cached.len(),
+            warnings: Vec::new(),
+            precision: 2.0, // Symbols are high-precision by default
+            matched_trait_ids: Vec::new(),
+        };
     }
 
     // Normalize exact/substr patterns the same way symbols are normalized at load time,
@@ -442,10 +442,10 @@ fn match_value_against_params(
         return re.find(value).map(|mat| mat.as_str().to_string());
     }
 
-    if let Some(regex_pattern) = params.regex {
-        if let Ok(re) = super::build_regex(regex_pattern, params.case_insensitive) {
-            return re.find(value).map(|mat| mat.as_str().to_string());
-        }
+    if let Some(regex_pattern) = params.regex
+        && let Ok(re) = super::build_regex(regex_pattern, params.case_insensitive)
+    {
+        return re.find(value).map(|mat| mat.as_str().to_string());
     }
 
     None
@@ -505,79 +505,16 @@ pub(crate) fn eval_text<'a, 'b>(
     let effective_range = resolve_string_effective_range(params, ctx);
     let has_location_constraint = has_string_location_constraint(params);
 
-    if !has_location_constraint && trait_not.is_none() && params.is_check.is_none() {
-        if let Some(trait_idx) = ctx.current_trait_idx {
-            if let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx)) {
-                let evidence = cached_text_evidence(cached);
-                if !evidence.is_empty() {
-                    return ConditionResult {
-                        matched: true,
-                        match_count: evidence.len(),
-                        evidence,
-                        warnings: Vec::new(),
-                        precision: string_match_precision(params),
-                        matched_trait_ids: Vec::new(),
-                    };
-                }
-            }
-        }
-    }
-
-    if let Some(exact_str) = params.exact {
-        if effective_range.is_none() {
-            let mut evidence = Vec::new();
-
-            if params.case_insensitive {
-                if let Some(match_list) = ctx
-                    .get_string_exact_index_ci()
-                    .get(&exact_str.to_lowercase())
-                {
-                    for (i, (original_value, source, offset)) in match_list.iter().enumerate() {
-                        if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
-                            continue;
-                        }
-                        let excluded_by_not = trait_not
-                            .map(|exceptions| {
-                                exceptions.iter().any(|exc| exc.matches(original_value))
-                            })
-                            .unwrap_or(false);
-                        let excluded_by_is = !validate_match(original_value, params.is_check);
-
-                        if !excluded_by_not && !excluded_by_is {
-                            evidence.push(Evidence {
-                                method: "text".to_string(),
-                                source: source.to_string(),
-                                value: original_value.to_string(),
-                                location: offset.map(|o| format!("{:#x}", o)),
-                                ..Default::default()
-                            });
-                        }
-                    }
-                }
-            } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
-                for (i, (source, offset)) in match_list.iter().enumerate() {
-                    if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
-                        continue;
-                    }
-                    let excluded_by_not = trait_not
-                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
-                        .unwrap_or(false);
-                    let excluded_by_is = !validate_match(exact_str, params.is_check);
-
-                    if !excluded_by_not && !excluded_by_is {
-                        evidence.push(Evidence {
-                            method: "text".to_string(),
-                            source: source.to_string(),
-                            value: exact_str.to_string(),
-                            location: offset.map(|o| format!("{:#x}", o)),
-                            ..Default::default()
-                        });
-                    }
-                }
-            }
-
+    if !has_location_constraint
+        && trait_not.is_none()
+        && params.is_check.is_none()
+        && let Some(trait_idx) = ctx.current_trait_idx
+        && let Some(cached) = ctx.cached_evidence.and_then(|m| m.get(&trait_idx))
+    {
+        let evidence = cached_text_evidence(cached);
+        if !evidence.is_empty() {
             return ConditionResult {
-                matched: !evidence.is_empty(),
+                matched: true,
                 match_count: evidence.len(),
                 evidence,
                 warnings: Vec::new(),
@@ -585,6 +522,68 @@ pub(crate) fn eval_text<'a, 'b>(
                 matched_trait_ids: Vec::new(),
             };
         }
+    }
+
+    if let Some(exact_str) = params.exact
+        && effective_range.is_none()
+    {
+        let mut evidence = Vec::new();
+
+        if params.case_insensitive {
+            if let Some(match_list) = ctx
+                .get_string_exact_index_ci()
+                .get(&exact_str.to_lowercase())
+            {
+                for (i, (original_value, source, offset)) in match_list.iter().enumerate() {
+                    if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
+                        continue;
+                    }
+                    let excluded_by_not = trait_not
+                        .map(|exceptions| exceptions.iter().any(|exc| exc.matches(original_value)))
+                        .unwrap_or(false);
+                    let excluded_by_is = !validate_match(original_value, params.is_check);
+
+                    if !excluded_by_not && !excluded_by_is {
+                        evidence.push(Evidence {
+                            method: "text".to_string(),
+                            source: source.to_string(),
+                            value: original_value.to_string(),
+                            location: offset.map(|o| format!("{:#x}", o)),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
+            for (i, (source, offset)) in match_list.iter().enumerate() {
+                if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
+                    continue;
+                }
+                let excluded_by_not = trait_not
+                    .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
+                    .unwrap_or(false);
+                let excluded_by_is = !validate_match(exact_str, params.is_check);
+
+                if !excluded_by_not && !excluded_by_is {
+                    evidence.push(Evidence {
+                        method: "text".to_string(),
+                        source: source.to_string(),
+                        value: exact_str.to_string(),
+                        location: offset.map(|o| format!("{:#x}", o)),
+                        ..Default::default()
+                    });
+                }
+            }
+        }
+
+        return ConditionResult {
+            matched: !evidence.is_empty(),
+            match_count: evidence.len(),
+            evidence,
+            warnings: Vec::new(),
+            precision: string_match_precision(params),
+            matched_trait_ids: Vec::new(),
+        };
     }
 
     let substr_lower = if params.case_insensitive {
@@ -797,48 +796,47 @@ fn arg_matches(
         return false;
     };
     let shape = obj.get("shape").and_then(|v| v.as_str()).unwrap_or("");
-    if let Some(want_kind) = filter.kind.as_deref() {
-        if shape != want_kind {
-            return false;
-        }
+    if let Some(want_kind) = filter.kind.as_deref()
+        && shape != want_kind
+    {
+        return false;
     }
     match shape {
         "number" => {
-            if let Some(want_value) = filter.value {
-                if obj.get("value").and_then(serde_json::Value::as_i64) != Some(want_value) {
-                    return false;
-                }
+            if let Some(want_value) = filter.value
+                && obj.get("value").and_then(serde_json::Value::as_i64) != Some(want_value)
+            {
+                return false;
             }
-            if let Some(want_radix) = filter.radix {
-                if obj
+            if let Some(want_radix) = filter.radix
+                && obj
                     .get("radix")
                     .and_then(serde_json::Value::as_u64)
                     .map(|r| r as u32)
                     != Some(want_radix)
-                {
-                    return false;
-                }
+            {
+                return false;
             }
         }
         "string" | "template" => {
             let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
-            if let Some(want_exact) = filter.exact.as_deref() {
-                if value != want_exact {
-                    return false;
-                }
+            if let Some(want_exact) = filter.exact.as_deref()
+                && value != want_exact
+            {
+                return false;
             }
-            if let Some(want_substr) = filter.substr.as_deref() {
-                if !value.contains(want_substr) {
-                    return false;
-                }
+            if let Some(want_substr) = filter.substr.as_deref()
+                && !value.contains(want_substr)
+            {
+                return false;
             }
         }
         "identifier" => {
             let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
-            if let Some(want_name) = filter.name.as_deref() {
-                if name != want_name {
-                    return false;
-                }
+            if let Some(want_name) = filter.name.as_deref()
+                && name != want_name
+            {
+                return false;
             }
         }
         _ => {
@@ -879,15 +877,15 @@ pub(crate) fn eval_numeric_literal<'a>(
         let Ok(parsed_radix) = string_info.encoding.parse::<u32>() else {
             continue;
         };
-        if let Some(v) = want_value {
-            if parsed_value != v {
-                continue;
-            }
+        if let Some(v) = want_value
+            && parsed_value != v
+        {
+            continue;
         }
-        if let Some(r) = want_radix {
-            if parsed_radix != r {
-                continue;
-            }
+        if let Some(r) = want_radix
+            && parsed_radix != r
+        {
+            continue;
         }
         match_count += 1;
         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -938,15 +936,15 @@ pub(crate) fn eval_raw<'a>(
         let has_section_pinpoint = location.section.is_some()
             && (location.section_offset.is_some() || location.section_offset_range.is_some());
         if !has_pinpoint && !has_section_pinpoint {
-            if let Some(s) = exact {
-                if s.len() < MIN_PATTERN_LEN {
-                    return ConditionResult::no_match();
-                }
+            if let Some(s) = exact
+                && s.len() < MIN_PATTERN_LEN
+            {
+                return ConditionResult::no_match();
             }
-            if let Some(s) = substr {
-                if s.len() < MIN_PATTERN_LEN {
-                    return ConditionResult::no_match();
-                }
+            if let Some(s) = substr
+                && s.len() < MIN_PATTERN_LEN
+            {
+                return ConditionResult::no_match();
             }
         }
     }
@@ -1039,10 +1037,10 @@ pub(crate) fn eval_raw<'a>(
                         if !validate_match(&match_str, is_check) {
                             continue;
                         }
-                        if let Some(not_filters) = not {
-                            if not_filters.iter().any(|filter| filter.matches(&match_str)) {
-                                continue;
-                            }
+                        if let Some(not_filters) = not
+                            && not_filters.iter().any(|filter| filter.matches(&match_str))
+                        {
+                            continue;
                         }
                         if first_match.is_none() {
                             first_match = Some(match_str.to_string());
@@ -1058,17 +1056,18 @@ pub(crate) fn eval_raw<'a>(
 
                     match_count += 1;
                 }
-                if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                    if let Some(matched) = first_match {
-                        evidence.push(Evidence {
-                            method: "raw".to_string(),
-                            source: "raw_content".to_string(),
-                            value: matched,
-                            location: None,
-                            offsets: first_offset.into_iter().collect(),
-                            ..Default::default()
-                        });
-                    }
+                if match_count > 0
+                    && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+                    && let Some(matched) = first_match
+                {
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: matched,
+                        location: None,
+                        offsets: first_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
                 }
             }
         } else {
@@ -1102,10 +1101,10 @@ pub(crate) fn eval_raw<'a>(
                     continue;
                 }
                 // Skip matches that trigger 'not' filters
-                if let Some(not_filters) = not {
-                    if not_filters.iter().any(|filter| filter.matches(match_str)) {
-                        continue;
-                    }
+                if let Some(not_filters) = not
+                    && not_filters.iter().any(|filter| filter.matches(match_str))
+                {
+                    continue;
                 }
                 match_count += 1;
                 if first_match.is_none() {
@@ -1113,17 +1112,18 @@ pub(crate) fn eval_raw<'a>(
                     first_offset = Some((search_start + mat.start()) as u64);
                 }
             }
-            if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                if let Some(matched) = first_match {
-                    evidence.push(Evidence {
-                        method: "raw".to_string(),
-                        source: "raw_content".to_string(),
-                        value: matched,
-                        location: None,
-                        offsets: first_offset.into_iter().collect(),
-                        ..Default::default()
-                    });
-                }
+            if match_count > 0
+                && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+                && let Some(matched) = first_match
+            {
+                evidence.push(Evidence {
+                    method: "raw".to_string(),
+                    source: "raw_content".to_string(),
+                    value: matched,
+                    location: None,
+                    offsets: first_offset.into_iter().collect(),
+                    ..Default::default()
+                });
             }
         }
     } else if let Some(exact_str) = exact {
@@ -1486,10 +1486,10 @@ pub(crate) fn eval_raw<'a>(
         }
     }
 
-    if let Some(t) = t_start {
-        if profile {
-            eprintln!("[PROFILE]   eval_raw: {}ms", t.elapsed().as_millis());
-        }
+    if let Some(t) = t_start
+        && profile
+    {
+        eprintln!("[PROFILE]   eval_raw: {}ms", t.elapsed().as_millis());
     }
 
     // Calculate precision
@@ -1633,24 +1633,20 @@ pub(crate) fn eval_encoded<'a>(
         }
 
         // Check substring match
-        if !matches {
-            if let Some(substr_str) = substr {
-                matches = if case_insensitive {
-                    string_info
-                        .value
-                        .to_lowercase()
-                        .contains(&substr_str.to_lowercase())
-                } else {
-                    string_info.value.contains(substr_str.as_str())
-                };
-            }
+        if !matches && let Some(substr_str) = substr {
+            matches = if case_insensitive {
+                string_info
+                    .value
+                    .to_lowercase()
+                    .contains(&substr_str.to_lowercase())
+            } else {
+                string_info.value.contains(substr_str.as_str())
+            };
         }
 
         // Check regex or word match
-        if !matches {
-            if let Some(ref re) = regex_matcher {
-                matches = re.is_match(&string_info.value);
-            }
+        if !matches && let Some(ref re) = regex_matcher {
+            matches = re.is_match(&string_info.value);
         }
 
         if matches {

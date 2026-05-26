@@ -307,24 +307,24 @@ fn match_pattern_at(data: &[u8], pos: usize, segments: &[HexSegment]) -> bool {
                     // locate it within the gap window instead of trying every
                     // possible gap length. This turns O(max-min) recursive calls
                     // into a single SIMD-accelerated search.
-                    if let Some(HexSegment::Bytes(needle)) = remaining_segments.first() {
-                        if !needle.is_empty() {
-                            let window_start = (offset + min).min(data.len());
-                            // Needle can start at most at offset+max; include
-                            // needle.len() extra bytes so the last position fits.
-                            let window_end = (offset + max + needle.len()).min(data.len());
-                            if window_start < window_end {
-                                let finder = memchr::memmem::Finder::new(needle.as_slice());
-                                let after_needle = &remaining_segments[1..];
-                                for hit in finder.find_iter(&data[window_start..window_end]) {
-                                    let needle_end = window_start + hit + needle.len();
-                                    if match_pattern_at(data, needle_end, after_needle) {
-                                        return true;
-                                    }
+                    if let Some(HexSegment::Bytes(needle)) = remaining_segments.first()
+                        && !needle.is_empty()
+                    {
+                        let window_start = (offset + min).min(data.len());
+                        // Needle can start at most at offset+max; include
+                        // needle.len() extra bytes so the last position fits.
+                        let window_end = (offset + max + needle.len()).min(data.len());
+                        if window_start < window_end {
+                            let finder = memchr::memmem::Finder::new(needle.as_slice());
+                            let after_needle = &remaining_segments[1..];
+                            for hit in finder.find_iter(&data[window_start..window_end]) {
+                                let needle_end = window_start + hit + needle.len();
+                                if match_pattern_at(data, needle_end, after_needle) {
+                                    return true;
                                 }
                             }
-                            return false;
                         }
+                        return false;
                     }
                     // Fallback: try each gap length
                     for gap_len in *min..=*max {

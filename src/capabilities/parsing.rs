@@ -946,7 +946,7 @@ pub(crate) fn apply_composite_defaults(
     let warn_start = warnings.len();
     let mut check_conditions = |conditions: &Option<Vec<crate::composite_rules::Condition>>,
                                 clause_name: &str| {
-        if let Some(ref conds) = conditions {
+        if let Some(conds) = conditions {
             for (idx, cond) in conds.iter().enumerate() {
                 let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
                 check_regex_length(&ctx, cond, warnings);
@@ -1031,12 +1031,12 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
             substr,
             ..
         } if substr.is_none() => {
-            if let Some(pattern) = regex_opt {
-                if is_literal(pattern) {
-                    // Convert regex to substr
-                    *substr = Some(pattern.clone());
-                    *regex_opt = None;
-                }
+            if let Some(pattern) = regex_opt
+                && is_literal(pattern)
+            {
+                // Convert regex to substr
+                *substr = Some(pattern.clone());
+                *regex_opt = None;
             }
         }
         Condition::Symbol {
@@ -1044,12 +1044,12 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
             substr,
             ..
         } if substr.is_none() => {
-            if let Some(pattern) = regex_opt {
-                if is_literal(pattern) {
-                    // Convert regex to substr
-                    *substr = Some(pattern.clone());
-                    *regex_opt = None;
-                }
+            if let Some(pattern) = regex_opt
+                && is_literal(pattern)
+            {
+                // Convert regex to substr
+                *substr = Some(pattern.clone());
+                *regex_opt = None;
             }
         }
         Condition::Basename {
@@ -1057,12 +1057,12 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
             substr,
             ..
         } if substr.is_none() => {
-            if let Some(pattern) = regex_opt {
-                if is_literal(pattern) {
-                    // Convert regex to substr
-                    *substr = Some(pattern.clone());
-                    *regex_opt = None;
-                }
+            if let Some(pattern) = regex_opt
+                && is_literal(pattern)
+            {
+                // Convert regex to substr
+                *substr = Some(pattern.clone());
+                *regex_opt = None;
             }
         }
         _ => {}
@@ -2229,9 +2229,11 @@ mod tests {
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, &mut warnings);
-        assert!(warnings
-            .iter()
-            .any(|w| w.contains("simple alphanumeric alternation chain")));
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("simple alphanumeric alternation chain"))
+        );
     }
 
     #[test]
@@ -2246,9 +2248,11 @@ mod tests {
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, &mut warnings);
-        assert!(!warnings
-            .iter()
-            .any(|w| w.contains("simple alphanumeric alternation chain")));
+        assert!(
+            !warnings
+                .iter()
+                .any(|w| w.contains("simple alphanumeric alternation chain"))
+        );
     }
 }
 

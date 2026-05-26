@@ -37,9 +37,12 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
     }
 
     let old_tmp = std::env::var_os("TMPDIR");
-    let old_skip = std::env::var_os("CLEAVE_SKIP_TRAITS");
-    std::env::set_var("TMPDIR", &tmp);
-    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    // SAFETY: TMPDIR is a system env var that std/libc reads; the test
+    // serializes via the surrounding `env_lock` so no other thread mutates it.
+    unsafe {
+        std::env::set_var("TMPDIR", &tmp);
+    }
+    cleave::set_skip_traits_override(Some(true));
     let result = cleave::analyze_file(
         &zip_path,
         &cleave::AnalysisOptions {
@@ -48,14 +51,14 @@ fn zip_analysis_does_not_extract_to_tmpdir_by_default() -> anyhow::Result<()> {
             ..Default::default()
         },
     );
-    match old_tmp {
-        Some(value) => std::env::set_var("TMPDIR", value),
-        None => std::env::remove_var("TMPDIR"),
+    // SAFETY: see above.
+    unsafe {
+        match old_tmp {
+            Some(value) => std::env::set_var("TMPDIR", value),
+            None => std::env::remove_var("TMPDIR"),
+        }
     }
-    match old_skip {
-        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
-        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
-    }
+    cleave::set_skip_traits_override(None);
     result?;
 
     // TMPDIR is process-global; other tests running in parallel may legitimately

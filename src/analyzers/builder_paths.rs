@@ -140,15 +140,16 @@ pub(crate) fn extract(data: &[u8]) -> BuilderPaths {
             // Pull the username (the path component immediately
             // after the prefix).
             let after_prefix = &path_str[needle.len()..];
-            if let Some((user, _rest)) = split_first_component(after_prefix, prefix.separator) {
-                if !user.is_empty() && is_valid_username(user) {
-                    raw_user_set.insert(user.to_string());
-                    if !is_generic_username(user) {
-                        user_set.insert(user.to_string());
-                    }
-                    let dir = format!("{}{}", String::from_utf8_lossy(needle), user);
-                    dir_set.insert(dir);
+            if let Some((user, _rest)) = split_first_component(after_prefix, prefix.separator)
+                && !user.is_empty()
+                && is_valid_username(user)
+            {
+                raw_user_set.insert(user.to_string());
+                if !is_generic_username(user) {
+                    user_set.insert(user.to_string());
                 }
+                let dir = format!("{}{}", String::from_utf8_lossy(needle), user);
+                dir_set.insert(dir);
             }
 
             if paths.len() < MAX_FULL_PATHS && !paths.iter().any(|p| p == &path_str) {
@@ -227,11 +228,7 @@ pub(crate) fn find_build_root(paths: &[String]) -> Option<String> {
 fn parent_dir(p: &str) -> Option<&str> {
     let separator = if p.contains('\\') { '\\' } else { '/' };
     let last = p.rfind(separator)?;
-    if last == 0 {
-        None
-    } else {
-        Some(&p[..last])
-    }
+    if last == 0 { None } else { Some(&p[..last]) }
 }
 
 fn common_prefix_len(a: &str, b: &str) -> usize {
@@ -364,10 +361,11 @@ mod tests {
         let data = b"...some bytes...\x00/home/alice/projects/sample/main.go\x00more...";
         let bp = extract(data);
         assert!(bp.usernames.contains(&"alice".to_string()));
-        assert!(bp
-            .full_paths
-            .iter()
-            .any(|p| p.starts_with("/home/alice/projects/sample/main.go")));
+        assert!(
+            bp.full_paths
+                .iter()
+                .any(|p| p.starts_with("/home/alice/projects/sample/main.go"))
+        );
         assert!(bp.source_dirs.contains(&"/home/alice".to_string()));
     }
 
@@ -376,10 +374,11 @@ mod tests {
         let data = b"\x00/Users/bob/go/src/github.com/foo/bar\x00";
         let bp = extract(data);
         assert!(bp.usernames.contains(&"bob".to_string()));
-        assert!(bp
-            .full_paths
-            .iter()
-            .any(|p| p.starts_with("/Users/bob/go/src/")));
+        assert!(
+            bp.full_paths
+                .iter()
+                .any(|p| p.starts_with("/Users/bob/go/src/"))
+        );
     }
 
     #[test]

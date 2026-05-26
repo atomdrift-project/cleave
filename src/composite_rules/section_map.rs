@@ -149,10 +149,10 @@ impl SectionMap {
     #[must_use]
     pub(crate) fn bounds(&self, name: &str) -> Option<(u64, u64)> {
         // Check cache first (read lock)
-        if let Ok(cache) = self.bounds_cache.read() {
-            if let Some(cached) = cache.get(name) {
-                return *cached;
-            }
+        if let Ok(cache) = self.bounds_cache.read()
+            && let Some(cached) = cache.get(name)
+        {
+            return *cached;
         }
 
         // SLOW PATH: Iterate through sections

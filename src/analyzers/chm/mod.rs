@@ -16,7 +16,7 @@
 //! it were a member of a ZIP. Evidence locations naturally come out as
 //! `archive:foo.chm!help.html`.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use lzx::{Lzxd, WindowSize};
 
 /// Directory entry parsed from a CHM PMGL chunk.

@@ -13,8 +13,8 @@
 //! - Alpine Linux packages (.apk) - TAR.GZ format (detected by magic)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, ExtractedMemberMetadata, ExtractionGuard,
-    HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+    ExtractedMemberMetadata, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
+    MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use anyhow::{Context, Result};
 use std::fs::{self, File};
@@ -99,13 +99,13 @@ pub(crate) fn extract_tar_entries_safe<R: Read>(
         });
 
         if entry_type.is_symlink() || entry_type.is_hard_link() {
-            if let Some(target_str) = linkname_opt.as_deref() {
-                if symlink_escapes(&outpath, target_str, dest_dir) {
-                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                        "{} -> {}",
-                        entry_name, target_str
-                    )));
-                }
+            if let Some(target_str) = linkname_opt.as_deref()
+                && symlink_escapes(&outpath, target_str, dest_dir)
+            {
+                guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                    "{} -> {}",
+                    entry_name, target_str
+                )));
             }
             // Skip symlinks regardless (we don't extract them)
             continue;

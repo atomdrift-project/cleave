@@ -21,20 +21,72 @@ use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicI8, Ordering};
 use std::time::SystemTime;
 use walkdir::WalkDir;
 
+/// Process-wide override for the analysis-cache skip flag.
+///
+/// 0 = unset (defer to env var / debug default), 1 = force skip,
+/// -1 = force enable. Lets library callers (and the validate command) override
+/// the cache without mutating process environment.
+static SKIP_CACHE_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+static SKIP_YARA_CACHE_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+
+fn decode_override(atom: &AtomicI8) -> Option<bool> {
+    match atom.load(Ordering::Relaxed) {
+        1 => Some(true),
+        -1 => Some(false),
+        _ => None,
+    }
+}
+
+fn store_override(atom: &AtomicI8, value: Option<bool>) {
+    atom.store(
+        match value {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => -1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Force the analysis cache on or off for the rest of the process.
+///
+/// `Some(true)` skips the cache, `Some(false)` enables it,
+/// `None` clears the override.
+pub fn set_skip_cache_override(value: Option<bool>) {
+    store_override(&SKIP_CACHE_OVERRIDE, value);
+}
+
+fn skip_cache_override() -> Option<bool> {
+    decode_override(&SKIP_CACHE_OVERRIDE)
+}
+
+/// Force the YARA-rule compilation cache on or off for the rest of the process.
+pub fn set_skip_yara_cache_override(value: Option<bool>) {
+    store_override(&SKIP_YARA_CACHE_OVERRIDE, value);
+}
+
+fn skip_yara_cache_override() -> Option<bool> {
+    decode_override(&SKIP_YARA_CACHE_OVERRIDE)
+}
+
 /// Returns `true` if the analysis-result cache should be skipped.
 ///
-/// - `CLEAVE_SKIP_CACHE=1` / `true`  → skip
-/// - `CLEAVE_SKIP_CACHE=0` / `false` → don't skip
-/// - Env var unset + debug build      → skip (debug builds default to no cache)
-/// - Env var unset + release build    → don't skip
+/// Resolution order:
+/// 1. Process-wide override set via [`set_skip_cache_override`]
+/// 2. `CLEAVE_SKIP_CACHE=1` / `true`  → skip; `=0` / `false` → don't skip
+/// 3. Default → don't skip (debug and release behave the same so iteration is predictable)
 #[must_use]
 pub fn skip_cache() -> bool {
+    if let Some(v) = skip_cache_override() {
+        return v;
+    }
     match std::env::var("CLEAVE_SKIP_CACHE") {
         Ok(v) => v == "1" || v.eq_ignore_ascii_case("true"),
-        Err(_) => cfg!(debug_assertions),
+        Err(_) => false,
     }
 }
 
@@ -74,8 +126,14 @@ pub fn skip_mapper_cache() -> bool {
 /// - Env vars unset                      → don't skip (even in debug)
 #[must_use]
 pub fn skip_yara_cache() -> bool {
+    if let Some(v) = skip_yara_cache_override() {
+        return v;
+    }
     if let Ok(v) = std::env::var("CLEAVE_SKIP_YARA_CACHE") {
         return v == "1" || v.eq_ignore_ascii_case("true");
+    }
+    if let Some(true) = skip_cache_override() {
+        return true;
     }
     if let Ok(v) = std::env::var("CLEAVE_SKIP_CACHE") {
         return v == "1" || v.eq_ignore_ascii_case("true");
@@ -119,10 +177,13 @@ pub fn cache_dir() -> Result<PathBuf> {
     anyhow::bail!("Failed to create cache directory")
 }
 
-/// Returns the traits directory path from env var, local dir, or platform data dir.
+/// Returns the traits directory path from override, env var, or platform data dir.
 /// Does NOT auto-clone — use `traits_repo::resolve_and_ensure()` for that.
 #[must_use]
 pub fn traits_path() -> PathBuf {
+    if let Some(explicit) = crate::traits_repo::override_dir() {
+        return explicit;
+    }
     if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
         return PathBuf::from(explicit);
     }
@@ -161,15 +222,12 @@ pub fn most_recent_yar_file() -> Result<(SystemTime, PathBuf)> {
                     .extension()
                     .map(|ext| ext == "yar" || ext == "yara")
                     .unwrap_or(false)
+                && let Ok(metadata) = fs::metadata(path)
+                && let Ok(mtime) = metadata.modified()
+                && mtime > most_recent
             {
-                if let Ok(metadata) = fs::metadata(path) {
-                    if let Ok(mtime) = metadata.modified() {
-                        if mtime > most_recent {
-                            most_recent = mtime;
-                            most_recent_path = path.to_path_buf();
-                        }
-                    }
-                }
+                most_recent = mtime;
+                most_recent_path = path.to_path_buf();
             }
         }
     }
@@ -239,15 +297,12 @@ pub fn most_recent_yaml_file() -> Result<(SystemTime, PathBuf)> {
                     .extension()
                     .map(|ext| ext == "yaml" || ext == "yml")
                     .unwrap_or(false)
+                && let Ok(metadata) = fs::metadata(path)
+                && let Ok(mtime) = metadata.modified()
+                && mtime > most_recent
             {
-                if let Ok(metadata) = fs::metadata(path) {
-                    if let Ok(mtime) = metadata.modified() {
-                        if mtime > most_recent {
-                            most_recent = mtime;
-                            most_recent_path = path.to_path_buf();
-                        }
-                    }
-                }
+                most_recent = mtime;
+                most_recent_path = path.to_path_buf();
             }
         }
     }
@@ -288,15 +343,14 @@ pub(crate) fn trait_yaml_revision() -> Result<RuleFilesRevision> {
                     .extension()
                     .map(|ext| ext == "yaml" || ext == "yml")
                     .unwrap_or(false)
+                && let Ok(metadata) = fs::metadata(path)
             {
-                if let Ok(metadata) = fs::metadata(path) {
-                    count += 1;
-                    hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
-                    if let Ok(mtime) = metadata.modified() {
-                        if mtime > most_recent {
-                            most_recent = mtime;
-                        }
-                    }
+                count += 1;
+                hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
+                if let Ok(mtime) = metadata.modified()
+                    && mtime > most_recent
+                {
+                    most_recent = mtime;
                 }
             }
         }
@@ -340,15 +394,14 @@ pub(crate) fn rule_files_revision() -> Result<RuleFilesRevision> {
                     .extension()
                     .map(|ext| ext == "yar" || ext == "yara" || ext == "yaml" || ext == "yml")
                     .unwrap_or(false)
+                && let Ok(metadata) = fs::metadata(path)
             {
-                if let Ok(metadata) = fs::metadata(path) {
-                    count += 1;
-                    hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
-                    if let Ok(mtime) = metadata.modified() {
-                        if mtime > most_recent {
-                            most_recent = mtime;
-                        }
-                    }
+                count += 1;
+                hash_path_metadata(&mut hasher, &traits_dir, path, &metadata);
+                if let Ok(mtime) = metadata.modified()
+                    && mtime > most_recent
+                {
+                    most_recent = mtime;
                 }
             }
         }
@@ -645,8 +698,8 @@ mod tests {
         filetime::set_file_mtime(&rule, filetime::FileTime::from_system_time(fixed))
             .expect("set mtime");
 
-        let old = std::env::var("CLEAVE_TRAITS_DIR").ok();
-        std::env::set_var("CLEAVE_TRAITS_DIR", traits_dir);
+        let original = crate::traits_repo::override_dir();
+        crate::traits_repo::set_override_dir(Some(traits_dir.to_path_buf()));
         let first = rule_files_revision().expect("first revision");
 
         let mut file = fs::OpenOptions::new()
@@ -658,10 +711,7 @@ mod tests {
             .expect("reset mtime");
         let second = rule_files_revision().expect("second revision");
 
-        match old {
-            Some(value) => std::env::set_var("CLEAVE_TRAITS_DIR", value),
-            None => std::env::remove_var("CLEAVE_TRAITS_DIR"),
-        }
+        crate::traits_repo::set_override_dir(original);
 
         assert_eq!(first.newest_mtime, second.newest_mtime);
         assert_ne!(first.fingerprint, second.fingerprint);

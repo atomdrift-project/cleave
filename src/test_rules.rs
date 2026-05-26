@@ -11,11 +11,11 @@
 //! - Context about available data (strings, symbols, etc.)
 //! - Size constraints, downgrade evaluation, proximity constraints
 
+use crate::capabilities::CapabilityMapper;
 use crate::capabilities::validation::{
     atomic_calibrated_max, calculate_composite_precision, composite_calibrated_max,
     composite_inflation_warning_threshold, file_type_precision_penalty, platform_precision_penalty,
 };
-use crate::capabilities::CapabilityMapper;
 use crate::composite_rules::debug::{DebugCollector, EvaluationDebug, RuleType};
 use crate::composite_rules::{
     Arch, CompositeTrait, Condition, EvaluationContext, FileType as RuleFileType, Platform,
@@ -160,36 +160,36 @@ impl<'a> RuleDebugger<'a> {
         let file_size_i64 = file_size as i64;
 
         // First, try using SectionMap if we have section constraints
-        if let Some(sec_name) = section {
-            if let Some((sec_start, sec_end)) = self.section_map.bounds(sec_name) {
-                let sec_start = sec_start as usize;
-                let sec_end = sec_end as usize;
-                let sec_len = sec_end - sec_start;
-                // Apply section-relative constraints
-                if let Some(sec_off) = section_offset {
-                    let resolved = if sec_off < 0 {
-                        (sec_len as i64 + sec_off).max(0) as usize
-                    } else {
-                        (sec_off as usize).min(sec_len)
-                    };
-                    return (sec_start + resolved, sec_end);
-                }
-                if let Some((start, end_opt)) = section_offset_range {
-                    let start_resolved = if *start < 0 {
-                        (sec_len as i64 + *start).max(0) as usize
-                    } else {
-                        (*start as usize).min(sec_len)
-                    };
-                    let end_resolved = match end_opt {
-                        None => sec_len,
-                        Some(e) if *e < 0 => (sec_len as i64 + *e).max(0) as usize,
-                        Some(e) => (*e as usize).min(sec_len),
-                    };
-                    return (sec_start + start_resolved, sec_start + end_resolved);
-                }
-                // Just section constraint, no offset within it
-                return (sec_start, sec_end);
+        if let Some(sec_name) = section
+            && let Some((sec_start, sec_end)) = self.section_map.bounds(sec_name)
+        {
+            let sec_start = sec_start as usize;
+            let sec_end = sec_end as usize;
+            let sec_len = sec_end - sec_start;
+            // Apply section-relative constraints
+            if let Some(sec_off) = section_offset {
+                let resolved = if sec_off < 0 {
+                    (sec_len as i64 + sec_off).max(0) as usize
+                } else {
+                    (sec_off as usize).min(sec_len)
+                };
+                return (sec_start + resolved, sec_end);
             }
+            if let Some((start, end_opt)) = section_offset_range {
+                let start_resolved = if *start < 0 {
+                    (sec_len as i64 + *start).max(0) as usize
+                } else {
+                    (*start as usize).min(sec_len)
+                };
+                let end_resolved = match end_opt {
+                    None => sec_len,
+                    Some(e) if *e < 0 => (sec_len as i64 + *e).max(0) as usize,
+                    Some(e) => (*e as usize).min(sec_len),
+                };
+                return (sec_start + start_resolved, sec_start + end_resolved);
+            }
+            // Just section constraint, no offset within it
+            return (sec_start, sec_end);
         }
 
         // Handle absolute offset constraints
@@ -281,17 +281,18 @@ impl<'a> RuleDebugger<'a> {
         );
 
         // Add warning about trait-level `not` exclusions
-        if let Some(not_exceptions) = &trait_def.not {
-            if !not_exceptions.is_empty() && !result.condition_results.is_empty() {
-                let not_warning = ConditionDebugResult::new(
-                    format!(
-                        "⚠️  {} trait-level not: exclusion(s) may filter matches in production",
-                        not_exceptions.len()
-                    ),
-                    true, // just informational
-                );
-                result.condition_results.push(not_warning);
-            }
+        if let Some(not_exceptions) = &trait_def.not
+            && !not_exceptions.is_empty()
+            && !result.condition_results.is_empty()
+        {
+            let not_warning = ConditionDebugResult::new(
+                format!(
+                    "⚠️  {} trait-level not: exclusion(s) may filter matches in production",
+                    not_exceptions.len()
+                ),
+                true, // just informational
+            );
+            result.condition_results.push(not_warning);
         }
 
         result
@@ -680,26 +681,25 @@ impl<'a> RuleDebugger<'a> {
                     && exact.is_some()
                     && substr.is_none()
                     && regex.is_none()
+                    && let Some(pat) = exact
                 {
-                    if let Some(pat) = exact {
-                        let hit = if *case_insensitive {
-                            String::from_utf8_lossy(self.binary_data)
-                                .to_ascii_lowercase()
-                                .contains(&pat.to_ascii_lowercase())
-                        } else {
-                            String::from_utf8_lossy(self.binary_data).contains(pat.as_str())
-                        };
-                        if hit {
-                            debug.details.push(format!(
-                                "💡 '{pat}' appears as substring but never as a standalone line."
-                            ));
-                            debug.details.push(
+                    let hit = if *case_insensitive {
+                        String::from_utf8_lossy(self.binary_data)
+                            .to_ascii_lowercase()
+                            .contains(&pat.to_ascii_lowercase())
+                    } else {
+                        String::from_utf8_lossy(self.binary_data).contains(pat.as_str())
+                    };
+                    if hit {
+                        debug.details.push(format!(
+                            "💡 '{pat}' appears as substring but never as a standalone line."
+                        ));
+                        debug.details.push(
                                 "   In raw-text mode (source/manifests), `text exact:` matches a complete trimmed line.".to_string(),
                             );
-                            debug.details.push(
+                        debug.details.push(
                                 "   Use `substr:` to match anywhere in the file, or `regex: '\\b<pat>\\b'` for word-boundary match.".to_string(),
                             );
-                        }
                     }
                 }
                 debug
@@ -1344,13 +1344,13 @@ impl<'a> RuleDebugger<'a> {
                             .details
                             .push(format!("Available top-level keys: {:?}", top_keys));
                     }
-                } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content) {
-                    if let Some(obj) = yaml.as_object() {
-                        let top_keys: Vec<_> = obj.keys().take(10).collect();
-                        result
-                            .details
-                            .push(format!("Available top-level keys: {:?}", top_keys));
-                    }
+                } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content)
+                    && let Some(obj) = yaml.as_object()
+                {
+                    let top_keys: Vec<_> = obj.keys().take(10).collect();
+                    result
+                        .details
+                        .push(format!("Available top-level keys: {:?}", top_keys));
                 }
             }
 
@@ -1473,36 +1473,36 @@ impl<'a> RuleDebugger<'a> {
             // matches. Detect the pattern and suggest the canonical
             // workarounds, preferring `type: symbol` when the name is
             // already extracted by the symbol pass.
-            if kind.as_deref() == Some("call") {
-                if let Some(name) = exact.as_deref() {
-                    let looks_like_bare_name = !name.is_empty()
-                        && !name.contains('(')
-                        && name
-                            .bytes()
-                            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':');
-                    if looks_like_bare_name {
-                        let found_as_symbol = self.report.imports.iter().any(|i| i.symbol == name)
-                            || self.report.exports.iter().any(|e| e.symbol == name)
-                            || self.report.functions.iter().any(|f| f.name == name);
-                        result.details.push(format!(
-                            "  hint: `ast kind=call exact: {n}` compares against the full \
+            if kind.as_deref() == Some("call")
+                && let Some(name) = exact.as_deref()
+            {
+                let looks_like_bare_name = !name.is_empty()
+                    && !name.contains('(')
+                    && name
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b':');
+                if looks_like_bare_name {
+                    let found_as_symbol = self.report.imports.iter().any(|i| i.symbol == name)
+                        || self.report.exports.iter().any(|e| e.symbol == name)
+                        || self.report.functions.iter().any(|f| f.name == name);
+                    result.details.push(format!(
+                        "  hint: `ast kind=call exact: {n}` compares against the full \
                              call expression text (e.g. `{n}(args)`), not just the name, so \
                              it never matches.",
+                        n = name
+                    ));
+                    if found_as_symbol {
+                        result.details.push(format!(
+                            "        the symbol extractor sees `{n}` — switch this \
+                                 condition to `type: symbol exact: {n}`.",
                             n = name
                         ));
-                        if found_as_symbol {
-                            result.details.push(format!(
-                                "        the symbol extractor sees `{n}` — switch this \
-                                 condition to `type: symbol exact: {n}`.",
-                                n = name
-                            ));
-                        } else {
-                            result.details.push(format!(
-                                "        switch to `type: symbol exact: {n}`, or stay on \
+                    } else {
+                        result.details.push(format!(
+                            "        switch to `type: symbol exact: {n}`, or stay on \
                                  AST with `substr: \"{n}(\"` or `regex: \"^{n}\\\\b\"`.",
-                                n = name
-                            ));
-                        }
+                            n = name
+                        ));
                     }
                 }
             }
@@ -1520,7 +1520,7 @@ impl<'a> RuleDebugger<'a> {
         section_offset: Option<i64>,
         section_offset_range: Option<(i64, Option<i64>)>,
     ) -> ConditionDebugResult {
-        use crate::composite_rules::evaluators::{eval_hex, ContentLocationParams};
+        use crate::composite_rules::evaluators::{ContentLocationParams, eval_hex};
 
         let mut desc = format!("hex: \"{}\"", truncate_string(pattern, 40));
         if let Some(sec) = section {
@@ -1861,7 +1861,7 @@ fn evaluate_condition_simple(
     ctx: &EvaluationContext<'_>,
 ) -> crate::composite_rules::context::ConditionResult {
     use crate::composite_rules::evaluators::{
-        eval_basename, eval_section, eval_syscall, SectionParams,
+        SectionParams, eval_basename, eval_section, eval_syscall,
     };
 
     // Evaluate conditions that fall through to the _ => case in debug_condition
@@ -2406,17 +2406,17 @@ composite_rules:
                 let matched_in_sub = cond_result.sub_results.iter().filter(|r| r.matched).count();
 
                 // The description should contain the correct count
-                if let Some(start) = cond_result.condition_desc.find('(') {
-                    if let Some(slash) = cond_result.condition_desc.find('/') {
-                        let claimed_count: usize = cond_result.condition_desc[start + 1..slash]
-                            .parse()
-                            .unwrap_or(999);
-                        assert_eq!(
-                            claimed_count, matched_in_sub,
-                            "Claimed match count {} doesn't match actual {}",
-                            claimed_count, matched_in_sub
-                        );
-                    }
+                if let Some(start) = cond_result.condition_desc.find('(')
+                    && let Some(slash) = cond_result.condition_desc.find('/')
+                {
+                    let claimed_count: usize = cond_result.condition_desc[start + 1..slash]
+                        .parse()
+                        .unwrap_or(999);
+                    assert_eq!(
+                        claimed_count, matched_in_sub,
+                        "Claimed match count {} doesn't match actual {}",
+                        claimed_count, matched_in_sub
+                    );
                 }
             }
         }
@@ -2529,7 +2529,8 @@ composite_rules:
                 result.matched,
                 "All condition groups show matched but overall is NOT MATCHED - this is the mismatch bug!\n\
                  Condition results: {:?}",
-                result.condition_results
+                result
+                    .condition_results
                     .iter()
                     .map(|c| format!("{}: {}", c.condition_desc, c.matched))
                     .collect::<Vec<_>>()

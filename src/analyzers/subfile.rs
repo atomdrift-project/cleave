@@ -28,7 +28,7 @@
 //! deeper than the policy ceiling.
 
 use crate::analyzers::archive::ArchiveAnalyzer;
-use crate::analyzers::{analyzer_for_file_type_arc, AnalysisInput, FileType};
+use crate::analyzers::{AnalysisInput, FileType, analyzer_for_file_type_arc};
 use crate::capabilities::CapabilityMapper;
 use crate::types::FileAnalysis;
 use std::path::Path;

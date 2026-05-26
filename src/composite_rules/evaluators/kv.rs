@@ -137,27 +137,27 @@ impl KvMatcher {
         // Check size constraints FIRST (applies to arrays and objects)
         match value {
             Value::Array(arr) => {
-                if let Some(min) = self.size_min {
-                    if arr.len() < min {
-                        return false;
-                    }
+                if let Some(min) = self.size_min
+                    && arr.len() < min
+                {
+                    return false;
                 }
-                if let Some(max) = self.size_max {
-                    if arr.len() > max {
-                        return false;
-                    }
+                if let Some(max) = self.size_max
+                    && arr.len() > max
+                {
+                    return false;
                 }
             }
             Value::Object(obj) => {
-                if let Some(min) = self.size_min {
-                    if obj.len() < min {
-                        return false;
-                    }
+                if let Some(min) = self.size_min
+                    && obj.len() < min
+                {
+                    return false;
                 }
-                if let Some(max) = self.size_max {
-                    if obj.len() > max {
-                        return false;
-                    }
+                if let Some(max) = self.size_max
+                    && obj.len() > max
+                {
+                    return false;
                 }
             }
             _ => {
@@ -549,18 +549,18 @@ pub(crate) fn navigate<'a>(value: &'a Value, segments: &[PathSegment]) -> Vec<&'
 
     match segment {
         PathSegment::Key(key) => {
-            if let Value::Object(obj) = value {
-                if let Some(v) = obj.get(key) {
-                    return navigate(v, remaining);
-                }
+            if let Value::Object(obj) = value
+                && let Some(v) = obj.get(key)
+            {
+                return navigate(v, remaining);
             }
             Vec::new()
         }
         PathSegment::Index(idx) => {
-            if let Value::Array(arr) = value {
-                if let Some(v) = arr.get(*idx) {
-                    return navigate(v, remaining);
-                }
+            if let Value::Array(arr) = value
+                && let Some(v) = arr.get(*idx)
+            {
+                return navigate(v, remaining);
             }
             Vec::new()
         }
@@ -701,10 +701,10 @@ fn parse_systemd_service(content: &[u8]) -> Option<Value> {
                 append_string_items(section_obj, "environment_list", items.clone());
                 if let Some(env_obj) = ensure_child_json_object(section_obj, "environment") {
                     for item in items {
-                        if let Some((name, value)) = item.split_once('=') {
-                            if !name.is_empty() {
-                                append_string_occurrence(env_obj, name, value.to_string());
-                            }
+                        if let Some((name, value)) = item.split_once('=')
+                            && !name.is_empty()
+                        {
+                            append_string_occurrence(env_obj, name, value.to_string());
                         }
                     }
                 }
@@ -884,12 +884,12 @@ fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
                     children.insert(name, value);
                 }
             }
-        } else if child.is_text() {
-            if let Some(t) = child.text() {
-                let trimmed = t.trim();
-                if !trimmed.is_empty() {
-                    text_parts.push(trimmed.to_string());
-                }
+        } else if child.is_text()
+            && let Some(t) = child.text()
+        {
+            let trimmed = t.trim();
+            if !trimmed.is_empty() {
+                text_parts.push(trimmed.to_string());
             }
         }
     }
@@ -1298,11 +1298,11 @@ fn push_radix_escape(
         return;
     }
 
-    if let Ok(value) = u32::from_str_radix(&digits, radix) {
-        if let Some(decoded) = char::from_u32(value) {
-            out.push(decoded);
-            return;
-        }
+    if let Ok(value) = u32::from_str_radix(&digits, radix)
+        && let Some(decoded) = char::from_u32(value)
+    {
+        out.push(decoded);
+        return;
     }
 
     out.push(fallback_prefix);
@@ -1334,11 +1334,11 @@ fn push_unicode_escape(
         return;
     }
 
-    if let Ok(value) = u32::from_str_radix(&buf, 16) {
-        if let Some(decoded) = char::from_u32(value) {
-            out.push(decoded);
-            return;
-        }
+    if let Ok(value) = u32::from_str_radix(&buf, 16)
+        && let Some(decoded) = char::from_u32(value)
+    {
+        out.push(decoded);
+        return;
     }
 
     out.push(fallback_prefix);
@@ -1364,11 +1364,11 @@ fn push_octal_escape(
         }
     }
 
-    if let Ok(value) = u32::from_str_radix(&digits, 8) {
-        if let Some(decoded) = char::from_u32(value) {
-            out.push(decoded);
-            return;
-        }
+    if let Ok(value) = u32::from_str_radix(&digits, 8)
+        && let Some(decoded) = char::from_u32(value)
+    {
+        out.push(decoded);
+        return;
     }
 
     out.push_str(&digits);
@@ -1694,12 +1694,12 @@ fn resolve_first_value(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Opt
             // whose path tail is exactly `package.json` regardless of
             // surrounding directory.
             for file in &ctx.report.files {
-                if sibling_path_matches(&file.path, name) {
-                    if let Some(tree) = file.values_tree.as_deref() {
-                        let hits = navigate(tree, &segments);
-                        if let Some(first) = hits.first() {
-                            return Some((*first).clone());
-                        }
+                if sibling_path_matches(&file.path, name)
+                    && let Some(tree) = file.values_tree.as_deref()
+                {
+                    let hits = navigate(tree, &segments);
+                    if let Some(first) = hits.first() {
+                        return Some((*first).clone());
                     }
                 }
             }

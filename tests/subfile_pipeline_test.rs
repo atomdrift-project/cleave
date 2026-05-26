@@ -21,7 +21,7 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use cleave::analyzers::{analyzer_for_file_type, AnalysisInput, FileType};
+use cleave::analyzers::{AnalysisInput, FileType, analyzer_for_file_type};
 use cleave::capabilities::CapabilityMapper;
 use cleave::types::AnalysisReport;
 use std::io::Write;
@@ -33,13 +33,9 @@ use std::path::Path;
 fn empty_mapper() -> CapabilityMapper {
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap();
-    let previous = std::env::var_os("CLEAVE_SKIP_TRAITS");
-    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    cleave::set_skip_traits_override(Some(true));
     let m = CapabilityMapper::new();
-    match previous {
-        Some(v) => std::env::set_var("CLEAVE_SKIP_TRAITS", v),
-        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
-    }
+    cleave::set_skip_traits_override(None);
     m
 }
 

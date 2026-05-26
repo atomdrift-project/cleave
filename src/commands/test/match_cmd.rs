@@ -3,7 +3,7 @@
 //! This module provides the `test-match` command implementation, which validates
 //! search patterns, count constraints, and location filters with detailed diagnostics.
 
-use crate::analyzers::{detect_file_type, FileType};
+use crate::analyzers::{FileType, detect_file_type};
 use crate::commands::shared::{cli_file_type_to_internal, create_analysis_report};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::composite_rules::condition::StringValidator;
@@ -106,11 +106,15 @@ pub fn run(
             || entropy_min.is_some()
             || entropy_max.is_some();
         if pattern.is_none() && !has_constraints {
-            anyhow::bail!("--pattern is required for section searches unless using size/entropy constraints (--count-min/max, --length-min/max, --entropy-min/max)");
+            anyhow::bail!(
+                "--pattern is required for section searches unless using size/entropy constraints (--count-min/max, --length-min/max, --entropy-min/max)"
+            );
         }
     } else if search_type == cli::SearchType::Metrics {
         if pattern.is_none() {
-            anyhow::bail!("--pattern is required for metrics searches (use field path like 'binary.avg_complexity')");
+            anyhow::bail!(
+                "--pattern is required for metrics searches (use field path like 'binary.avg_complexity')"
+            );
         }
         if value_min.is_none() && value_max.is_none() {
             anyhow::bail!(
@@ -133,7 +137,7 @@ pub fn run(
     }
 
     let pattern = pattern.unwrap_or("");
-    use test_rules::{find_matching_strings, find_matching_symbols, RuleDebugger};
+    use test_rules::{RuleDebugger, find_matching_strings, find_matching_symbols};
 
     let path = Path::new(target);
     if !path.exists() {
@@ -492,29 +496,23 @@ pub fn run(
                         match_count, count_min
                     ));
                 }
-                if !count_max_ok {
-                    if let Some(max) = count_max {
-                        out.push_str(&format!(
-                            "  count_max: {} > {} (FAILED)\n",
-                            match_count, max
-                        ));
-                    }
+                if !count_max_ok && let Some(max) = count_max {
+                    out.push_str(&format!(
+                        "  count_max: {} > {} (FAILED)\n",
+                        match_count, max
+                    ));
                 }
-                if !per_kb_min_ok {
-                    if let Some(min) = per_kb_min {
-                        out.push_str(&format!(
-                            "  per_kb_min: {:.3} < {:.3} (FAILED)\n",
-                            density, min
-                        ));
-                    }
+                if !per_kb_min_ok && let Some(min) = per_kb_min {
+                    out.push_str(&format!(
+                        "  per_kb_min: {:.3} < {:.3} (FAILED)\n",
+                        density, min
+                    ));
                 }
-                if !per_kb_max_ok {
-                    if let Some(max) = per_kb_max {
-                        out.push_str(&format!(
-                            "  per_kb_max: {:.3} > {:.3} (FAILED)\n",
-                            density, max
-                        ));
-                    }
+                if !per_kb_max_ok && let Some(max) = per_kb_max {
+                    out.push_str(&format!(
+                        "  per_kb_max: {:.3} > {:.3} (FAILED)\n",
+                        density, max
+                    ));
                 }
             }
 
@@ -859,11 +857,7 @@ pub fn run(
                 // Exact: entire content slice must equal the pattern
                 cli::MatchMethod::Exact => {
                     let matched = &*content == pattern && validate_match(pattern, is_check);
-                    if matched {
-                        1
-                    } else {
-                        0
-                    }
+                    if matched { 1 } else { 0 }
                 }
                 cli::MatchMethod::Contains => {
                     if is_check.is_some() {
@@ -982,29 +976,23 @@ pub fn run(
                         match_count, count_min
                     ));
                 }
-                if !count_max_ok {
-                    if let Some(max) = count_max {
-                        out.push_str(&format!(
-                            "  count_max: {} > {} (FAILED)\n",
-                            match_count, max
-                        ));
-                    }
+                if !count_max_ok && let Some(max) = count_max {
+                    out.push_str(&format!(
+                        "  count_max: {} > {} (FAILED)\n",
+                        match_count, max
+                    ));
                 }
-                if !per_kb_min_ok {
-                    if let Some(min) = per_kb_min {
-                        out.push_str(&format!(
-                            "  per_kb_min: {:.3} < {:.3} (FAILED)\n",
-                            density, min
-                        ));
-                    }
+                if !per_kb_min_ok && let Some(min) = per_kb_min {
+                    out.push_str(&format!(
+                        "  per_kb_min: {:.3} < {:.3} (FAILED)\n",
+                        density, min
+                    ));
                 }
-                if !per_kb_max_ok {
-                    if let Some(max) = per_kb_max {
-                        out.push_str(&format!(
-                            "  per_kb_max: {:.3} > {:.3} (FAILED)\n",
-                            density, max
-                        ));
-                    }
+                if !per_kb_max_ok && let Some(max) = per_kb_max {
+                    out.push_str(&format!(
+                        "  per_kb_max: {:.3} > {:.3} (FAILED)\n",
+                        density, max
+                    ));
                 }
             }
 
@@ -1110,11 +1098,11 @@ pub fn run(
                             let keys: Vec<_> = obj.keys().take(15).collect();
                             out.push_str(&format!("Available top-level keys: {:?}\n", keys));
                         }
-                    } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content) {
-                        if let Some(obj) = yaml.as_object() {
-                            let keys: Vec<_> = obj.keys().take(15).collect();
-                            out.push_str(&format!("Available top-level keys: {:?}\n", keys));
-                        }
+                    } else if let Ok(yaml) = serde_yaml::from_str::<serde_json::Value>(content)
+                        && let Some(obj) = yaml.as_object()
+                    {
+                        let keys: Vec<_> = obj.keys().take(15).collect();
+                        out.push_str(&format!("Available top-level keys: {:?}\n", keys));
                     }
                 }
 
@@ -1122,8 +1110,8 @@ pub fn run(
             }
         }
         cli::SearchType::Hex => {
-            use composite_rules::evaluators::eval_hex;
             use composite_rules::SectionMap;
+            use composite_rules::evaluators::eval_hex;
 
             // Create section map for location constraints
             let section_map = SectionMap::from_binary(binary_data);
@@ -1519,27 +1507,27 @@ pub fn run(
                     }
 
                     // Check length constraints
-                    if let Some(min) = length_min {
-                        if sec.size < min {
-                            return false;
-                        }
+                    if let Some(min) = length_min
+                        && sec.size < min
+                    {
+                        return false;
                     }
-                    if let Some(max) = length_max {
-                        if sec.size > max {
-                            return false;
-                        }
+                    if let Some(max) = length_max
+                        && sec.size > max
+                    {
+                        return false;
                     }
 
                     // Check entropy constraints
-                    if let Some(min) = entropy_min {
-                        if sec.entropy < min {
-                            return false;
-                        }
+                    if let Some(min) = entropy_min
+                        && sec.entropy < min
+                    {
+                        return false;
                     }
-                    if let Some(max) = entropy_max {
-                        if sec.entropy > max {
-                            return false;
-                        }
+                    if let Some(max) = entropy_max
+                        && sec.entropy > max
+                    {
+                        return false;
                     }
 
                     true
@@ -1696,21 +1684,21 @@ pub fn run(
                     let value = types::scores::get_metric_value(report, field);
                     if let Some(val) = value {
                         out.push_str(&format!("  Current value: {:.2}\n", val));
-                        if let Some(min) = value_min {
-                            if val < min {
-                                out.push_str(&format!(
-                                    "  Value {:.2} is below minimum {:.2}\n",
-                                    val, min
-                                ));
-                            }
+                        if let Some(min) = value_min
+                            && val < min
+                        {
+                            out.push_str(&format!(
+                                "  Value {:.2} is below minimum {:.2}\n",
+                                val, min
+                            ));
                         }
-                        if let Some(max) = value_max {
-                            if val > max {
-                                out.push_str(&format!(
-                                    "  Value {:.2} exceeds maximum {:.2}\n",
-                                    val, max
-                                ));
-                            }
+                        if let Some(max) = value_max
+                            && val > max
+                        {
+                            out.push_str(&format!(
+                                "  Value {:.2} exceeds maximum {:.2}\n",
+                                val, max
+                            ));
                         }
                     } else {
                         out.push_str(&format!(
@@ -1722,21 +1710,21 @@ pub fn run(
 
                 // Show file size constraint failures
                 let file_size = report.target.size_bytes;
-                if let Some(min) = min_size {
-                    if file_size < min {
-                        out.push_str(&format!(
-                            "  File size {} bytes is below minimum {} bytes\n",
-                            file_size, min
-                        ));
-                    }
+                if let Some(min) = min_size
+                    && file_size < min
+                {
+                    out.push_str(&format!(
+                        "  File size {} bytes is below minimum {} bytes\n",
+                        file_size, min
+                    ));
                 }
-                if let Some(max) = max_size {
-                    if file_size > max {
-                        out.push_str(&format!(
-                            "  File size {} bytes exceeds maximum {} bytes\n",
-                            file_size, max
-                        ));
-                    }
+                if let Some(max) = max_size
+                    && file_size > max
+                {
+                    out.push_str(&format!(
+                        "  File size {} bytes exceeds maximum {} bytes\n",
+                        file_size, max
+                    ));
                 }
             }
 

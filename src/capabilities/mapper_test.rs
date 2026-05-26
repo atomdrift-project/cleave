@@ -475,10 +475,12 @@ traits:
     assert!(report.findings.len() >= 2);
 
     // Verify we have the malloc capability
-    assert!(report
-        .findings
-        .iter()
-        .any(|f| f.id == "micro-behaviors/mem/allocate::malloc"));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "micro-behaviors/mem/allocate::malloc")
+    );
 
     // Verify we have the string check trait
     assert!(report.findings.iter().any(|f| f.id == "test/string::check"));

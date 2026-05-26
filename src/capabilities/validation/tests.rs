@@ -3198,8 +3198,8 @@ mod pattern_tests {
 #[cfg(test)]
 mod taxonomy_tests {
     use crate::capabilities::validation::taxonomy::{
-        find_cap_obj_violations, find_cap_wellknown_violations, find_metadata_cross_tier_refs,
-        find_objectives_wellknown_violations, ObjectivesWellknownViolation,
+        ObjectivesWellknownViolation, find_cap_obj_violations, find_cap_wellknown_violations,
+        find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
     };
     use crate::composite_rules::traits::CompositeTrait;
     use crate::composite_rules::{Arch, Condition, FileType, Platform, TraitDefinition};

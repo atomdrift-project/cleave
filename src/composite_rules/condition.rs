@@ -178,15 +178,15 @@ impl NotException {
                 }
             }
             NotException::Structured(s) => {
-                if let Some(regex_str) = &s.regex {
-                    if s.compiled_regex.is_none() {
-                        s.compiled_regex = regex::Regex::new(regex_str).ok();
-                    }
+                if let Some(regex_str) = &s.regex
+                    && s.compiled_regex.is_none()
+                {
+                    s.compiled_regex = regex::Regex::new(regex_str).ok();
                 }
-                if let Some(substr_str) = &s.substr {
-                    if s.lowered_substr.is_none() {
-                        s.lowered_substr = Some(substr_str.to_lowercase());
-                    }
+                if let Some(substr_str) = &s.substr
+                    && s.lowered_substr.is_none()
+                {
+                    s.lowered_substr = Some(substr_str.to_lowercase());
                 }
             }
         }
@@ -2104,10 +2104,8 @@ impl Condition {
                 }
 
                 // Validate query if present — skip in fast mode (query compiles at eval time)
-                if full {
-                    if let Some(q) = query {
-                        validate_ast_query(q, language.as_deref())?;
-                    }
+                if full && let Some(q) = query {
+                    validate_ast_query(q, language.as_deref())?;
                 }
 
                 Ok(())
@@ -2215,13 +2213,12 @@ impl Condition {
         if let Condition::Yara {
             source, compiled, ..
         } = self
+            && compiled.is_none()
         {
-            if compiled.is_none() {
-                let mut compiler = yara_x::Compiler::new();
-                compiler.new_namespace("inline");
-                if compiler.add_source(source.as_bytes()).is_ok() {
-                    *compiled = Some(Arc::new(compiler.build()));
-                }
+            let mut compiler = yara_x::Compiler::new();
+            compiler.new_namespace("inline");
+            if compiler.add_source(source.as_bytes()).is_ok() {
+                *compiled = Some(Arc::new(compiler.build()));
             }
         }
     }
@@ -2248,13 +2245,13 @@ impl Condition {
             _ => None,
         };
 
-        if let Some(regex) = regex_to_check {
-            if let Some(issue) = find_backtrack_issue(regex) {
-                return Some(format!(
-                    "{} - use bounded pattern like .{{0,50}} instead: {}",
-                    issue, regex
-                ));
-            }
+        if let Some(regex) = regex_to_check
+            && let Some(issue) = find_backtrack_issue(regex)
+        {
+            return Some(format!(
+                "{} - use bounded pattern like .{{0,50}} instead: {}",
+                issue, regex
+            ));
         }
         None
     }
@@ -2461,7 +2458,9 @@ impl Condition {
             if s.len() < min_len {
                 return Some(format!(
                     "{}: pattern '{}' is very short ({} chars) and may match too broadly - consider using a longer, more specific pattern",
-                    field, s, s.len()
+                    field,
+                    s,
+                    s.len()
                 ));
             }
             None
@@ -3166,7 +3165,9 @@ fn find_backtrack_issue(regex: &str) -> Option<&'static str> {
                         let inner: String = chars[start..j].iter().collect();
                         // Open-ended: has a comma with nothing after it, e.g. "1," or "0,"
                         if inner.contains(',') && inner.ends_with(',') {
-                            return Some("open-ended range quantifier (.{n,}) — use a bounded range like .{0,50} instead");
+                            return Some(
+                                "open-ended range quantifier (.{n,}) — use a bounded range like .{0,50} instead",
+                            );
                         }
                     }
                 }
@@ -3175,10 +3176,8 @@ fn find_backtrack_issue(regex: &str) -> Option<&'static str> {
             '*' | '+' => {
                 // A bare quantifier on a plain character or escape sequence.
                 let lazy = i + 1 < len && chars[i + 1] == '?';
-                if !lazy {
-                    if let Some(top) = group_stack.last_mut() {
-                        *top = true;
-                    }
+                if !lazy && let Some(top) = group_stack.last_mut() {
+                    *top = true;
                 }
                 i += 1;
             }
@@ -3225,27 +3224,31 @@ fn validate_location_constraints(
     }
 
     // Validate offset_range format
-    if let Some((start, Some(e))) = offset_range {
-        if start >= 0 && e >= 0 && start > e {
-            return Err(anyhow::anyhow!(
-                "{} condition 'offset_range' start ({}) must be <= end ({})",
-                condition_type,
-                start,
-                e
-            ));
-        }
+    if let Some((start, Some(e))) = offset_range
+        && start >= 0
+        && e >= 0
+        && start > e
+    {
+        return Err(anyhow::anyhow!(
+            "{} condition 'offset_range' start ({}) must be <= end ({})",
+            condition_type,
+            start,
+            e
+        ));
     }
 
     // Validate section_offset_range format
-    if let Some((start, Some(e))) = section_offset_range {
-        if start >= 0 && e >= 0 && start > e {
-            return Err(anyhow::anyhow!(
-                "{} condition 'section_offset_range' start ({}) must be <= end ({})",
-                condition_type,
-                start,
-                e
-            ));
-        }
+    if let Some((start, Some(e))) = section_offset_range
+        && start >= 0
+        && e >= 0
+        && start > e
+    {
+        return Err(anyhow::anyhow!(
+            "{} condition 'section_offset_range' start ({}) must be <= end ({})",
+            condition_type,
+            start,
+            e
+        ));
     }
 
     Ok(())
@@ -3306,10 +3309,12 @@ mod location_constraint_tests {
     fn test_validate_location_section_offset_without_section_fails() {
         let result = validate_location_constraints(&None, None, None, Some(0x100), None, "content");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("requires 'section'"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("requires 'section'")
+        );
     }
 
     #[test]
@@ -3557,8 +3562,8 @@ mod location_constraint_tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod backtrack_tests {
     use super::find_backtrack_issue;
-    use crate::composite_rules::condition::SymbolKind;
     use crate::composite_rules::Condition;
+    use crate::composite_rules::condition::SymbolKind;
 
     // ── patterns that MUST be flagged ──────────────────────────────────────
 

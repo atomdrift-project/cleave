@@ -960,9 +960,11 @@ fn test_excessive_line_length_skips_binary_like_unknown_blob() {
         None,
     );
 
-    assert!(!findings
-        .iter()
-        .any(|f| f.id == "objectives/anti-static/excessive-line-length"));
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
+    );
 }
 
 #[test]
@@ -992,9 +994,11 @@ fn test_excessive_line_length_skips_escaped_tensor_text_blob() {
         None,
     );
 
-    assert!(!findings
-        .iter()
-        .any(|f| f.id == "objectives/anti-static/excessive-line-length"));
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
+    );
 }
 
 #[test]
@@ -1958,9 +1962,11 @@ fn test_suspicious_precision_threshold_validation() {
         .find(|r| r.id == "test/suspicious-low-precision")
         .unwrap();
     assert_eq!(low_rule.crit, Criticality::Suspicious);
-    assert!(warnings
-        .iter()
-        .any(|w| w.contains("test/suspicious-low-precision")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("test/suspicious-low-precision"))
+    );
 
     // Check that sufficient precision suspicious rule was NOT downgraded
     let ok_rule = composites
@@ -2066,9 +2072,11 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         .find(|t| t.id == "test/atomic-suspicious-low")
         .unwrap();
     assert_eq!(low_trait.crit, Criticality::Suspicious);
-    assert!(warnings
-        .iter()
-        .any(|w| w.contains("test/atomic-suspicious-low")));
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("test/atomic-suspicious-low"))
+    );
 
     let ok_trait = traits
         .iter()
@@ -3002,14 +3010,18 @@ fn test_generate_import_findings_preserves_existing() {
 
     // Should have 2 findings: original + new import
     assert_eq!(report.findings.len(), 2);
-    assert!(report
-        .findings
-        .iter()
-        .any(|f| f.id == "micro-behaviors/execution/shell"));
-    assert!(report
-        .findings
-        .iter()
-        .any(|f| f.id == "metadata/import/python::socket"));
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "micro-behaviors/execution/shell")
+    );
+    assert!(
+        report
+            .findings
+            .iter()
+            .any(|f| f.id == "metadata/import/python::socket")
+    );
 }
 
 #[test]

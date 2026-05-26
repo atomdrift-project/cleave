@@ -289,22 +289,21 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
     let start_idx = reported_line.saturating_sub(1);
 
     // For unknown field errors, try to find the field
-    if error_msg.contains("unknown field") || error_msg.contains("Unknown field") {
-        if let Some(field_start) = error_msg.find("`") {
-            if let Some(field_end) = error_msg[field_start + 1..].find("`") {
-                let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
-                // Search for the field in nearby lines
-                for (i, &line) in lines
-                    .iter()
-                    .enumerate()
-                    .skip(start_idx)
-                    .take(15.min(lines.len().saturating_sub(start_idx)))
-                {
-                    let trimmed = line.trim_start();
-                    if trimmed.starts_with(&format!("{}:", field_name)) {
-                        return i + 1; // Return 1-indexed line number
-                    }
-                }
+    if (error_msg.contains("unknown field") || error_msg.contains("Unknown field"))
+        && let Some(field_start) = error_msg.find("`")
+        && let Some(field_end) = error_msg[field_start + 1..].find("`")
+    {
+        let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
+        // Search for the field in nearby lines
+        for (i, &line) in lines
+            .iter()
+            .enumerate()
+            .skip(start_idx)
+            .take(15.min(lines.len().saturating_sub(start_idx)))
+        {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with(&format!("{}:", field_name)) {
+                return i + 1; // Return 1-indexed line number
             }
         }
     }
@@ -335,23 +334,22 @@ fn find_actual_error_line(lines: &[&str], reported_line: usize, error_msg: &str)
 fn clean_error_message(error_msg: &str) -> String {
     // Extract unknown field name if present
     if error_msg.contains("unknown field") {
-        if let Some(field_start) = error_msg.find("`") {
-            if let Some(field_end) = error_msg[field_start + 1..].find("`") {
-                let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
-                return format!("Unknown field '{}' in condition.", field_name);
-            }
+        if let Some(field_start) = error_msg.find("`")
+            && let Some(field_end) = error_msg[field_start + 1..].find("`")
+        {
+            let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
+            return format!("Unknown field '{}' in condition.", field_name);
         }
         return "Unknown field in condition.".to_string();
     }
 
     // Check for invalid variant errors (wrong condition type)
-    if error_msg.contains("unknown variant") {
-        if let Some(variant_start) = error_msg.find("`") {
-            if let Some(variant_end) = error_msg[variant_start + 1..].find("`") {
-                let variant_name = &error_msg[variant_start + 1..variant_start + 1 + variant_end];
-                return format!("Invalid condition type '{}'.", variant_name);
-            }
-        }
+    if error_msg.contains("unknown variant")
+        && let Some(variant_start) = error_msg.find("`")
+        && let Some(variant_end) = error_msg[variant_start + 1..].find("`")
+    {
+        let variant_name = &error_msg[variant_start + 1..variant_start + 1 + variant_end];
+        return format!("Invalid condition type '{}'.", variant_name);
     }
 
     // Replace technical jargon with plain language
@@ -432,60 +430,58 @@ fn provide_error_guidance(
     }
 
     // Check for specific invalid fields based on condition type and field name
-    if !found_hallucination {
-        if let Some(field) = unknown_field {
-            // Detect condition type from context
-            let condition_type = if context.contains("type: raw") {
-                Some("raw")
-            } else if context.contains("type: string_literal") {
-                Some("string_literal")
-            } else if context.contains("type: text") {
-                Some("text")
-            } else if context.contains("type: symbol") {
-                Some("symbol")
-            } else if context.contains("type: hex") {
-                Some("hex")
-            } else if context.contains("type: encoded") {
-                Some("encoded")
-            } else if context.contains("type: ast") {
-                Some("ast")
-            } else if context.contains("type: syscall") {
-                Some("syscall")
-            } else {
-                None
-            };
+    if !found_hallucination && let Some(field) = unknown_field {
+        // Detect condition type from context
+        let condition_type = if context.contains("type: raw") {
+            Some("raw")
+        } else if context.contains("type: string_literal") {
+            Some("string_literal")
+        } else if context.contains("type: text") {
+            Some("text")
+        } else if context.contains("type: symbol") {
+            Some("symbol")
+        } else if context.contains("type: hex") {
+            Some("hex")
+        } else if context.contains("type: encoded") {
+            Some("encoded")
+        } else if context.contains("type: ast") {
+            Some("ast")
+        } else if context.contains("type: syscall") {
+            Some("syscall")
+        } else {
+            None
+        };
 
-            // Provide specific guidance based on field and condition type
-            match (field.as_str(), condition_type) {
-                ("needs", _) => {
-                    guidance.push_str(&format!(
-                        "\n   Field '{}' is not valid in atomic trait conditions.\n",
-                        field
-                    ));
-                    guidance.push_str("   💡 The 'needs' field only works in composite rules (with 'any:' clauses).\n");
-                    guidance.push_str(
-                        "   💡 For atomic traits, use 'count_min' to require multiple matches.\n",
-                    );
-                    found_hallucination = true;
-                }
-                (field_name, Some(cond_type)) => {
-                    guidance.push_str(&format!(
-                        "\n   Field '{}' is not valid for 'type: {}'.\n",
-                        field_name, cond_type
-                    ));
-                    guidance.push_str(&format!(
-                        "   💡 Check the valid fields for 'type: {}' conditions.\n",
-                        cond_type
-                    ));
-                    found_hallucination = true;
-                }
-                (field_name, None) => {
-                    guidance.push_str(&format!(
-                        "\n   Unknown field '{}' in condition.\n",
-                        field_name
-                    ));
-                    found_hallucination = true;
-                }
+        // Provide specific guidance based on field and condition type
+        match (field.as_str(), condition_type) {
+            ("needs", _) => {
+                guidance.push_str(&format!(
+                    "\n   Field '{}' is not valid in atomic trait conditions.\n",
+                    field
+                ));
+                guidance.push_str("   💡 The 'needs' field only works in composite rules (with 'any:' clauses).\n");
+                guidance.push_str(
+                    "   💡 For atomic traits, use 'count_min' to require multiple matches.\n",
+                );
+                found_hallucination = true;
+            }
+            (field_name, Some(cond_type)) => {
+                guidance.push_str(&format!(
+                    "\n   Field '{}' is not valid for 'type: {}'.\n",
+                    field_name, cond_type
+                ));
+                guidance.push_str(&format!(
+                    "   💡 Check the valid fields for 'type: {}' conditions.\n",
+                    cond_type
+                ));
+                found_hallucination = true;
+            }
+            (field_name, None) => {
+                guidance.push_str(&format!(
+                    "\n   Unknown field '{}' in condition.\n",
+                    field_name
+                ));
+                found_hallucination = true;
             }
         }
     }
@@ -575,26 +571,23 @@ fn provide_error_guidance(
     }
 
     // Check for invalid field names
-    if error_msg.contains("unknown field") {
-        if let Some(field_start) = error_msg.find("`") {
-            if let Some(field_end) = error_msg[field_start + 1..].find("`") {
-                let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
-                guidance.push_str(&format!(
-                    "\n   Unknown field '{}' in condition.\n",
-                    field_name
-                ));
+    if error_msg.contains("unknown field")
+        && let Some(field_start) = error_msg.find("`")
+        && let Some(field_end) = error_msg[field_start + 1..].find("`")
+    {
+        let field_name = &error_msg[field_start + 1..field_start + 1 + field_end];
+        guidance.push_str(&format!(
+            "\n   Unknown field '{}' in condition.\n",
+            field_name
+        ));
 
-                // Suggest corrections
-                match field_name {
-                    "match" => {
-                        guidance.push_str("   💡 Did you mean 'exact', 'substr', or 'regex'?\n")
-                    }
-                    "pattern" => guidance.push_str("   💡 Did you mean 'regex' or 'substr'?\n"),
-                    "value" => guidance.push_str("   💡 Did you mean 'exact' or 'word'?\n"),
-                    "name" => guidance.push_str("   💡 Did you mean 'id' for trait references?\n"),
-                    _ => {}
-                }
-            }
+        // Suggest corrections
+        match field_name {
+            "match" => guidance.push_str("   💡 Did you mean 'exact', 'substr', or 'regex'?\n"),
+            "pattern" => guidance.push_str("   💡 Did you mean 'regex' or 'substr'?\n"),
+            "value" => guidance.push_str("   💡 Did you mean 'exact' or 'word'?\n"),
+            "name" => guidance.push_str("   💡 Did you mean 'id' for trait references?\n"),
+            _ => {}
         }
     }
 

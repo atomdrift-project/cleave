@@ -238,7 +238,7 @@ mod tests {
         let data = b"test data";
         let hash = calculate_sha256(data);
         assert_eq!(hash.len(), 64); // SHA256 produces 64 hex characters
-                                    // SHA256 of "test data"
+        // SHA256 of "test data"
         assert_eq!(
             hash,
             "916f0027a575074ce72a331777c3478d6513f786a591bd892da1a577bf2335f9"

@@ -5,7 +5,7 @@
 
 use crate::cli::OutputFormat;
 use anyhow::Result;
-use cleave::{validation_controls, AnalysisReport, CapabilityMapper, Criticality, FileAnalysis};
+use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::collections::HashSet;
@@ -77,17 +77,16 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
     validation_controls::set_disabled_validators_override(exclude)?;
     let targets = collect_targets()?;
 
-    // Skip the analysis cache so every run reflects the current trait set.
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
-    std::env::set_var(
-        "CLEAVE_VALIDATE_FORMAT",
-        match format {
-            OutputFormat::Terminal => "terminal",
-            OutputFormat::Tiny => "tiny",
-            OutputFormat::Json => "json",
-            OutputFormat::Jsonl => "jsonl",
-        },
-    );
+    // Skip the analysis cache so every run reflects the current trait set,
+    // and route validation-issue rendering through the chosen output format.
+    cleave::cache::set_skip_cache_override(Some(true));
+    cleave::validation_controls::set_validation_output_format(Some(match format {
+        OutputFormat::Tiny => cleave::validation_controls::ValidationOutputFormat::Tiny,
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            cleave::validation_controls::ValidationOutputFormat::Json
+        }
+        OutputFormat::Terminal => cleave::validation_controls::ValidationOutputFormat::Terminal,
+    }));
     let options = cleave::AnalysisOptions {
         disable_yara: true,
         disable_radare2: true,

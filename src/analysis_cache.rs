@@ -24,15 +24,15 @@
 //! is bounded while still keeping the cache close to the configured ceiling
 //! on long-running scans (10M+ files over multiple days).
 
+use crate::AnalysisOptions;
 use crate::cache::{cache_dir, cache_revision};
 use crate::types::AnalysisReport;
 use crate::types::FileAnalysis;
-use crate::AnalysisOptions;
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::SystemTime;
 
 /// Maximum number of toplevel report cache entries before eviction triggers.
@@ -76,7 +76,7 @@ fn db_path() -> Option<&'static Path> {
     DB_PATH
         .get_or_init(|| {
             if crate::cache::skip_cache() {
-                tracing::info!("Analysis cache disabled (debug build or CLEAVE_SKIP_CACHE)");
+                tracing::info!("Analysis cache disabled (CLEAVE_SKIP_CACHE or override)");
                 return None;
             }
             match cache_dir() {
@@ -291,10 +291,10 @@ fn traits_revision_key() -> Option<i64> {
     let mut hasher = DefaultHasher::new();
     traits_fingerprint.hash(&mut hasher);
     env!("CARGO_PKG_VERSION").hash(&mut hasher);
-    if let Ok(mtime) = super::cache::binary_mtime() {
-        if let Ok(d) = mtime.duration_since(SystemTime::UNIX_EPOCH) {
-            d.as_nanos().hash(&mut hasher);
-        }
+    if let Ok(mtime) = super::cache::binary_mtime()
+        && let Ok(d) = mtime.duration_since(SystemTime::UNIX_EPOCH)
+    {
+        d.as_nanos().hash(&mut hasher);
     }
     Some(i64::from_ne_bytes(hasher.finish().to_ne_bytes()))
 }
@@ -462,8 +462,8 @@ fn maybe_evict_file_analysis_cache(conn: &Connection) {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
-    use crate::types::core::{AnalysisReport, TargetInfo};
     use crate::types::FileAnalysis;
+    use crate::types::core::{AnalysisReport, TargetInfo};
 
     fn test_report(sha256: &str) -> AnalysisReport {
         let target = TargetInfo {
@@ -694,8 +694,8 @@ mod tests {
 
     #[test]
     fn test_file_cache_preserves_findings() {
-        use crate::types::traits_findings::Finding;
         use crate::types::Criticality;
+        use crate::types::traits_findings::Finding;
 
         let conn = file_analysis_test_conn();
         let sha = "cafebabe";
@@ -742,7 +742,7 @@ mod tests {
     fn test_file_cache_options_hash_excludes_cancellation() {
         // The cancellation flag must not affect the cache key — same content should
         // hit regardless of whether the caller has a cancellation token set.
-        use std::sync::{atomic::AtomicBool, Arc};
+        use std::sync::{Arc, atomic::AtomicBool};
 
         let opts_without = AnalysisOptions::default();
         let opts_with = AnalysisOptions {

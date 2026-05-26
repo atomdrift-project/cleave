@@ -94,8 +94,8 @@ static BYTES_REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), regex::b
     OnceLock::new();
 
 /// Access the bytes regex cache.
-pub(crate) fn bytes_regex_cache(
-) -> &'static RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>> {
+pub(crate) fn bytes_regex_cache()
+-> &'static RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>> {
     BYTES_REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
@@ -244,10 +244,10 @@ pub(crate) fn symbol_matches(symbol: &str, pattern: &str) -> bool {
     }
 
     // Try as regex if pattern contains regex metacharacters
-    if pattern.contains('|') || pattern.contains('*') || pattern.contains('[') {
-        if let Ok(re) = build_regex(pattern, false) {
-            return re.is_match(symbol);
-        }
+    if (pattern.contains('|') || pattern.contains('*') || pattern.contains('['))
+        && let Ok(re) = build_regex(pattern, false)
+    {
+        return re.is_match(symbol);
     }
 
     false

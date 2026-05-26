@@ -11,7 +11,7 @@
 
 #![allow(missing_docs)]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use std::time::Duration;
 
 /// Load a testdata file, returning None if it doesn't exist (CI may lack large fixtures).
@@ -80,7 +80,7 @@ const CORE_SAMPLES: &[(&str, &str)] = &[
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_bytes(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_bytes");
     g.sample_size(10);
@@ -106,7 +106,7 @@ fn bench_analyze_bytes(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_yara(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_yara");
     g.sample_size(10);
@@ -148,7 +148,7 @@ fn bench_analyze_yara(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_full(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_full");
     g.sample_size(10);
@@ -182,7 +182,7 @@ fn bench_analyze_full(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_file_cached(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "0");
+    cleave::cache::set_skip_cache_override(Some(false));
 
     let mut g = c.benchmark_group("analyze_file_cached");
     g.sample_size(10);
@@ -225,7 +225,7 @@ fn bench_analyze_file_cached(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_file_uncached(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_file_uncached");
     g.sample_size(10);
@@ -265,7 +265,7 @@ fn bench_analyze_file_uncached(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_lnk(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_lnk");
 
@@ -300,7 +300,7 @@ fn bench_analyze_lnk(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_analyze_archive(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("analyze_archive");
     g.sample_size(10);
@@ -333,7 +333,7 @@ fn bench_analyze_archive(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 fn bench_diff(c: &mut Criterion) {
-    std::env::set_var("CLEAVE_SKIP_CACHE", "1");
+    cleave::cache::set_skip_cache_override(Some(true));
 
     let mut g = c.benchmark_group("diff_files");
     g.sample_size(10);

@@ -14,10 +14,10 @@ use crate::types::{
 
 use super::ledger::sort_in_place;
 use super::{
-    count_badges, crit_dots, crit_rank, file_max_roc, format_value, is_significant_file,
-    max_added_crit, paint_crit, paint_roc, paint_sign, short_id, truncate, WIDTH,
+    WIDTH, count_badges, crit_dots, crit_rank, file_max_roc, format_value, is_significant_file,
+    max_added_crit, paint_crit, paint_roc, paint_sign, short_id, truncate,
 };
-use crate::theme::{pill_scope, ScopePill};
+use crate::theme::{ScopePill, pill_scope};
 
 pub(super) fn write(out: &mut String, diff: &DiffReportV1) {
     let mut files: Vec<&FileDiffEntry> = diff
@@ -351,10 +351,10 @@ fn relative_change_value(old: &Value, new: &Value) -> f64 {
 /// the field name suggests a byte-valued size.  Other numeric / string
 /// values fall through to [`format_metric_value`].
 fn format_metric_value_with_units(path: &str, v: &Value) -> String {
-    if is_byte_metric(path) {
-        if let Some(bytes) = v.as_u64() {
-            return format!("{} ({})", humanize_bytes(bytes), bytes);
-        }
+    if is_byte_metric(path)
+        && let Some(bytes) = v.as_u64()
+    {
+        return format!("{} ({})", humanize_bytes(bytes), bytes);
     }
     format_metric_value(v)
 }
@@ -402,10 +402,8 @@ fn humanize_bytes(bytes: u64) -> String {
 fn format_metric_value(v: &Value) -> String {
     if let Value::Number(n) = v {
         let is_int = n.is_i64() || n.is_u64();
-        if !is_int {
-            if let Some(f) = n.as_f64() {
-                return format!("{f:.2}");
-            }
+        if !is_int && let Some(f) = n.as_f64() {
+            return format!("{f:.2}");
         }
     }
     format_value(v)

@@ -3,8 +3,8 @@
 //! Many self-extracting archives (SFX) work by appending a ZIP/7z/RAR archive
 //! to a PE/ELF/Mach-O stub. This module detects and analyzes such overlays.
 
-use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::analyzers::Analyzer;
+use crate::analyzers::archive::ArchiveAnalyzer;
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind, TargetInfo};
 use crate::yara_engine::YaraEngine;

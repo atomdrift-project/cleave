@@ -54,11 +54,11 @@ pub(crate) mod traits_findings;
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary
 #[allow(unused_imports)]
-pub use compact::{compact_from_files, CompactReport};
+pub use compact::{CompactReport, compact_from_files};
 #[allow(unused_imports)]
 pub use core::{
-    flatten_into_metrics, kv_set_path, AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload,
-    MetricsExt, TargetInfo,
+    AnalysisReport, ArchiveEntry, Criticality, ExtractedPayload, MetricsExt, TargetInfo,
+    flatten_into_metrics, kv_set_path,
 };
 
 pub use filefacts_view::FilefactsView;
@@ -66,13 +66,13 @@ pub use filefacts_view::FilefactsView;
 pub use file_analysis::FileAnalysis;
 #[allow(unused_imports)]
 pub(crate) use file_analysis::{
-    encode_archive_path, encode_decoded_path, FindingCounts, ReportSummary, ARCHIVE_DELIMITER,
-    ENCODING_DELIMITER,
+    ARCHIVE_DELIMITER, ENCODING_DELIMITER, FindingCounts, ReportSummary, encode_archive_path,
+    encode_decoded_path,
 };
 
-pub(crate) use traits_findings::{deduplicate_evidence, MAX_EVIDENCE_PER_TRAIT};
 #[allow(unused_imports)]
 pub use traits_findings::{Evidence, Finding, FindingKind, StructuralFeature, Trait, TraitKind};
+pub(crate) use traits_findings::{MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence};
 
 #[allow(unused_imports)]
 pub(crate) use paths_env::{
@@ -194,18 +194,18 @@ impl SampleExtractionConfig {
         }
 
         // Skip if file already exists with correct size (same sha256 + size = same content)
-        if let Ok(metadata) = std::fs::metadata(&full_path) {
-            if metadata.len() == data.len() as u64 {
-                return Some(full_path);
-            }
+        if let Ok(metadata) = std::fs::metadata(&full_path)
+            && metadata.len() == data.len() as u64
+        {
+            return Some(full_path);
         }
 
         // Create parent directories if needed
-        if let Some(parent) = full_path.parent() {
-            if let Err(e) = std::fs::create_dir_all(parent) {
-                tracing::warn!("Failed to create directory {:?}: {}", parent, e);
-                return None;
-            }
+        if let Some(parent) = full_path.parent()
+            && let Err(e) = std::fs::create_dir_all(parent)
+        {
+            tracing::warn!("Failed to create directory {:?}: {}", parent, e);
+            return None;
         }
 
         if let Err(e) = std::fs::write(&full_path, data) {

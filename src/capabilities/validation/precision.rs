@@ -5,8 +5,8 @@
 //! precision for atomic traits and recursively for composite rules.
 
 use crate::composite_rules::{
-    condition::{EncodingSpec, NotExceptionStructured},
     CompositeTrait, Condition, FileType as RuleFileType, Platform, TraitDefinition,
+    condition::{EncodingSpec, NotExceptionStructured},
 };
 use crate::types::Criticality;
 use std::collections::{HashMap, HashSet};
@@ -95,11 +95,7 @@ fn regex_structural_bonus(value: &str) -> f32 {
 }
 
 fn score_presence<T>(value: Option<&T>) -> f32 {
-    if value.is_some() {
-        PARAM_UNIT
-    } else {
-        0.0
-    }
+    if value.is_some() { PARAM_UNIT } else { 0.0 }
 }
 
 fn scope_bonus(concrete_count: usize, single_bonus: f32, multi_bonus: f32) -> f32 {
@@ -881,37 +877,31 @@ fn calculate_composite_precision_indexed(
             let branch_scores: Vec<f32> = conditions
                 .iter()
                 .enumerate()
-                .map(|(i, cond)| {
-                    let score = match cond {
-                        Condition::Trait { id } => {
-                            let s = referenced_precision(
-                                id,
-                                composite_lookup,
-                                trait_lookup,
-                                reference_index,
-                                cache,
-                                visiting,
+                .map(|(i, cond)| match cond {
+                    Condition::Trait { id } => {
+                        let s = referenced_precision(
+                            id,
+                            composite_lookup,
+                            trait_lookup,
+                            reference_index,
+                            cache,
+                            visiting,
+                        );
+                        if debug {
+                            eprintln!(
+                                "  [DEBUG] {} any[{}] trait '{}' inherited score: {:.2}",
+                                rule_id, i, id, s
                             );
-                            if debug {
-                                eprintln!(
-                                    "  [DEBUG] {} any[{}] trait '{}' inherited score: {:.2}",
-                                    rule_id, i, id, s
-                                );
-                            }
-                            s
                         }
-                        _ => {
-                            let s = score_condition(cond);
-                            if debug {
-                                eprintln!(
-                                    "  [DEBUG] {} any[{}] condition score: {:.2}",
-                                    rule_id, i, s
-                                );
-                            }
-                            s
+                        s
+                    }
+                    _ => {
+                        let s = score_condition(cond);
+                        if debug {
+                            eprintln!("  [DEBUG] {} any[{}] condition score: {:.2}", rule_id, i, s);
                         }
-                    };
-                    score
+                        s
+                    }
                 })
                 .collect();
 

@@ -112,10 +112,10 @@ pub(crate) fn eval_section<'a>(
             if p.entropy_min.is_some() || p.entropy_max.is_some() {
                 details.push(format!("entropy: {:.2}", section.entropy));
             }
-            if p.readable.is_some() || p.writable.is_some() || p.executable.is_some() {
-                if let Some(perms) = &section.permissions {
-                    details.push(format!("perms: {}", perms));
-                }
+            if (p.readable.is_some() || p.writable.is_some() || p.executable.is_some())
+                && let Some(perms) = &section.permissions
+            {
+                details.push(format!("perms: {}", perms));
             }
             let value = if details.is_empty() {
                 section.name.clone()

@@ -4,7 +4,7 @@
 //! from OLE2 compound documents. Works for both legacy Office formats (.doc/.xls/.ppt)
 //! and OOXML vbaProject.bin containers.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::io::{Cursor, Read};
 
 /// A single VBA module extracted from a document.
@@ -457,9 +457,11 @@ mod tests {
     #[test]
     #[allow(clippy::expect_used)]
     fn test_decompress_empty() {
-        assert!(decompress_vba(&[])
-            .expect("Empty data should return empty vec")
-            .is_empty());
+        assert!(
+            decompress_vba(&[])
+                .expect("Empty data should return empty vec")
+                .is_empty()
+        );
     }
 
     #[test]

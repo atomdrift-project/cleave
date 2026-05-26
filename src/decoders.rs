@@ -7,7 +7,7 @@ use crate::types::DecodedString;
 /// Returns decoded strings that are valid UTF-8 and > 10 characters
 #[must_use]
 pub fn extract_base64_strings(data: &[u8]) -> Vec<DecodedString> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
     let mut results = Vec::new();
 
     // Find base64-like sequences (alphanumeric + +/= characters, min 12 chars to catch short IPs)

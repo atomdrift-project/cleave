@@ -4,8 +4,8 @@
 //! Uses tree-sitter for symbol extraction where available, otherwise
 //! falls back to basic text/regex-based analysis.
 
-use crate::analyzers::symbol_extraction;
 use crate::analyzers::FileType;
+use crate::analyzers::symbol_extraction;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, StringInfo, TargetInfo};
@@ -263,7 +263,10 @@ impl GenericAnalyzer {
             } else {
                 // No tree-sitter and no stng: fallback to regex (inefficient, shouldn't happen)
                 self.extract_strings(content, tree, &mut report);
-                tracing::warn!("GenericAnalyzer: Fallback regex string extraction in {:?} (stng strings should be passed)", t_strings.elapsed());
+                tracing::warn!(
+                    "GenericAnalyzer: Fallback regex string extraction in {:?} (stng strings should be passed)",
+                    t_strings.elapsed()
+                );
             }
 
             // Analyze embedded code in strings
@@ -359,30 +362,29 @@ impl GenericAnalyzer {
             let kind = node.kind();
 
             // Common string node types across languages
-            if kind.contains("string")
+            if (kind.contains("string")
                 || kind == "string_literal"
                 || kind == "interpreted_string_literal"
-                || kind == "raw_string_literal"
+                || kind == "raw_string_literal")
+                && let Ok(text) = node.utf8_text(source)
             {
-                if let Ok(text) = node.utf8_text(source) {
-                    let s = text
-                        .trim_start_matches('"')
-                        .trim_end_matches('"')
-                        .trim_start_matches('\'')
-                        .trim_end_matches('\'')
-                        .trim_start_matches('`')
-                        .trim_end_matches('`');
-                    if !s.is_empty() && s.len() < 10000 {
-                        report.strings.push(StringInfo {
-                            value: s.to_string(),
-                            offset: Some(node.start_byte() as u64),
-                            string_type: None,
-                            encoding: "utf-8".to_string(),
-                            section: Some("ast".to_string()),
-                            encoding_chain: Vec::new(),
-                            fragments: None,
-                        });
-                    }
+                let s = text
+                    .trim_start_matches('"')
+                    .trim_end_matches('"')
+                    .trim_start_matches('\'')
+                    .trim_end_matches('\'')
+                    .trim_start_matches('`')
+                    .trim_end_matches('`');
+                if !s.is_empty() && s.len() < 10000 {
+                    report.strings.push(StringInfo {
+                        value: s.to_string(),
+                        offset: Some(node.start_byte() as u64),
+                        string_type: None,
+                        encoding: "utf-8".to_string(),
+                        section: Some("ast".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
                 }
             }
 
@@ -528,10 +530,12 @@ start payload.exe
         // Should extract strings (quoted strings are extracted)
         assert!(!report.strings.is_empty());
         // text.* metrics flow through filefacts_metrics now
-        assert!(report
-            .filefacts_metrics
-            .as_ref()
-            .is_some_and(|m| m.keys().any(|k| k.starts_with("text."))));
+        assert!(
+            report
+                .filefacts_metrics
+                .as_ref()
+                .is_some_and(|m| m.keys().any(|k| k.starts_with("text.")))
+        );
     }
 
     #[test]
@@ -563,10 +567,12 @@ test.c $(distdir)/runsuite.c | GZIP=$(GZIP_ENV) gzip -c >`echo "$(distdir)" | sh
         let report = analyzer.analyze_source(&path, content);
 
         assert!(report.strings.is_empty());
-        assert!(!report
-            .findings
-            .iter()
-            .any(|f| f.id == "metadata/lang/embedded::shell"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/lang/embedded::shell")
+        );
     }
 
     #[test]

@@ -74,7 +74,7 @@
 pub mod match_cmd;
 pub mod rules;
 
-use crate::analyzers::{macho::MachOAnalyzer, FileType};
+use crate::analyzers::{FileType, macho::MachOAnalyzer};
 use crate::commands::shared::create_analysis_report;
 use anyhow::Result;
 use std::fs;

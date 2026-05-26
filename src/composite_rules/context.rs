@@ -315,10 +315,10 @@ impl<'a> EvaluationContext<'a> {
 
     /// Run a closure against the debug collector if one is present.
     pub(crate) fn with_debug(&self, f: impl FnOnce(&mut EvaluationDebug)) {
-        if let Some(collector) = self.debug_collector {
-            if let Ok(mut debug) = collector.write() {
-                f(&mut debug);
-            }
+        if let Some(collector) = self.debug_collector
+            && let Ok(mut debug) = collector.write()
+        {
+            f(&mut debug);
         }
     }
 
@@ -330,10 +330,10 @@ impl<'a> EvaluationContext<'a> {
     /// Check if a finding ID exists (exact match only)
     #[must_use]
     pub(crate) fn has_finding_exact(&self, id: &str) -> bool {
-        if let Some(ref index) = self.finding_id_index {
-            if !index.contains(&hash_str(id)) {
-                return false;
-            }
+        if let Some(ref index) = self.finding_id_index
+            && !index.contains(&hash_str(id))
+        {
+            return false;
         }
         self.report.findings.iter().any(|f| f.id == id)
             || self

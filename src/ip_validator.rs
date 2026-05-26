@@ -11,8 +11,8 @@
 use lru::LruCache;
 use std::net::Ipv4Addr;
 use std::num::NonZeroUsize;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Thread-local storage for the current file ID, used to invalidate caches.
 /// We use AtomicU64 to allow safe access from multiple threads via thread_local!
@@ -158,11 +158,7 @@ fn parse_octet_fast(s: &str) -> Option<u8> {
     match b.len() {
         1 => {
             let d = b[0].wrapping_sub(b'0');
-            if d <= 9 {
-                Some(d)
-            } else {
-                None
-            }
+            if d <= 9 { Some(d) } else { None }
         }
         2 => {
             // Leading zero check
@@ -187,11 +183,7 @@ fn parse_octet_fast(s: &str) -> Option<u8> {
             let d2 = b[2].wrapping_sub(b'0');
             if d0 <= 9 && d1 <= 9 && d2 <= 9 {
                 let v = d0 as u16 * 100 + d1 as u16 * 10 + d2 as u16;
-                if v <= 255 {
-                    Some(v as u8)
-                } else {
-                    None
-                }
+                if v <= 255 { Some(v as u8) } else { None }
             } else {
                 None
             }
@@ -221,11 +213,7 @@ pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
 
     let ip = Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]);
 
-    if is_external_ip(&ip) {
-        Some(ip)
-    } else {
-        None
-    }
+    if is_external_ip(&ip) { Some(ip) } else { None }
 }
 
 /// Optimized check for external IPs in text, with identity-based caching.

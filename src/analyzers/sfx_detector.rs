@@ -15,8 +15,8 @@ use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use crate::yara_engine::YaraEngine;
 use memchr::memmem;
 use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 /// NSIS installer marker (little-endian 0xDEADBEEF).
 const NSIS_DEADBEEF: &[u8] = &[0xEF, 0xBE, 0xAD, 0xDE];
@@ -234,7 +234,7 @@ fn sevenzip_cmd() -> &'static str {
         1 => "7zz",
         2 => "7z",
         _ => {
-            let cmd = if std::process::Command::new("7zz")
+            (if std::process::Command::new("7zz")
                 .arg("i")
                 .stdout(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
@@ -246,8 +246,7 @@ fn sevenzip_cmd() -> &'static str {
             } else {
                 CHOICE.store(2, Ordering::Relaxed);
                 "7z"
-            };
-            cmd
+            }) as _
         }
     }
 }

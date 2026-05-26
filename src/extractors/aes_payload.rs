@@ -169,13 +169,13 @@ fn extract_ciphertext_blobs(content: &str) -> Vec<CiphertextBlob> {
             continue;
         }
 
-        if let Ok(data) = hex::decode(hex_str) {
-            if data.len() <= MAX_CIPHERTEXT_BYTES {
-                blobs.push(CiphertextBlob {
-                    data,
-                    offset: caps.get(0).map(|m| m.start()).unwrap_or(0),
-                });
-            }
+        if let Ok(data) = hex::decode(hex_str)
+            && data.len() <= MAX_CIPHERTEXT_BYTES
+        {
+            blobs.push(CiphertextBlob {
+                data,
+                offset: caps.get(0).map(|m| m.start()).unwrap_or(0),
+            });
         }
     }
 
@@ -196,14 +196,15 @@ fn extract_ciphertext_blobs(content: &str) -> Vec<CiphertextBlob> {
                 continue;
             }
 
-            if let Ok(data) = hex::decode(hex_str) {
-                if data.len() <= MAX_CIPHERTEXT_BYTES && data.len() % 16 == 0 {
-                    // AES block size check
-                    blobs.push(CiphertextBlob {
-                        data,
-                        offset: caps.get(0).map(|m| m.start()).unwrap_or(0),
-                    });
-                }
+            if let Ok(data) = hex::decode(hex_str)
+                && data.len() <= MAX_CIPHERTEXT_BYTES
+                && data.len() % 16 == 0
+            {
+                // AES block size check
+                blobs.push(CiphertextBlob {
+                    data,
+                    offset: caps.get(0).map(|m| m.start()).unwrap_or(0),
+                });
             }
         }
     }
@@ -230,7 +231,7 @@ fn is_valid_key_length(algo: &str, len: usize) -> bool {
 
 /// Decrypt AES-256-CBC ciphertext
 pub(crate) fn decrypt_aes_256_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 
     if key.len() != 32 || iv.len() != 16 {
@@ -251,7 +252,7 @@ pub(crate) fn decrypt_aes_256_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> O
 
 /// Decrypt AES-128-CBC ciphertext
 pub(crate) fn decrypt_aes_128_cbc(ciphertext: &[u8], key: &[u8], iv: &[u8]) -> Option<Vec<u8>> {
-    use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, KeyIvInit};
+    use aes::cipher::{BlockDecryptMut, KeyIvInit, block_padding::Pkcs7};
     type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 
     if key.len() != 16 || iv.len() != 16 {
@@ -433,12 +434,12 @@ fn decrypt_nested(data: &[u8], chain: Vec<String>, depth: usize) -> (Vec<u8>, Ve
     // Try first valid decryption
     for params in &params_list {
         for blob in &ciphertext_list {
-            if let Some(decrypted) = try_decrypt(&blob.data, params) {
-                if validate_decrypted_content(&decrypted) {
-                    let mut new_chain = chain.clone();
-                    new_chain.push(params.algorithm.clone());
-                    return decrypt_nested(&decrypted, new_chain, depth + 1);
-                }
+            if let Some(decrypted) = try_decrypt(&blob.data, params)
+                && validate_decrypted_content(&decrypted)
+            {
+                let mut new_chain = chain.clone();
+                new_chain.push(params.algorithm.clone());
+                return decrypt_nested(&decrypted, new_chain, depth + 1);
             }
         }
     }

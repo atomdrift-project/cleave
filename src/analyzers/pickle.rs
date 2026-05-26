@@ -155,10 +155,11 @@ fn extract_pickle_globals(data: &[u8]) -> Vec<String> {
                 if i + 2 + length > data.len() {
                     break;
                 }
-                if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length]) {
-                    if s.is_ascii() && s.len() > 1 {
-                        recent_strings.push(s.to_string());
-                    }
+                if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length])
+                    && s.is_ascii()
+                    && s.len() > 1
+                {
+                    recent_strings.push(s.to_string());
                 }
                 i += 2 + length;
             }
@@ -181,21 +182,21 @@ fn extract_pickle_globals(data: &[u8]) -> Vec<String> {
             b'c' => {
                 if let Some(end) = data[i + 1..].iter().position(|&b| b == b'\n') {
                     let module_end = i + 1 + end;
-                    if let Ok(module) = std::str::from_utf8(&data[i + 1..module_end]) {
-                        if let Some(end2) = data[module_end + 1..].iter().position(|&b| b == b'\n')
+                    if let Ok(module) = std::str::from_utf8(&data[i + 1..module_end])
+                        && let Some(end2) = data[module_end + 1..].iter().position(|&b| b == b'\n')
+                    {
+                        let attr_end = module_end + 1 + end2;
+                        if let Ok(attr) = std::str::from_utf8(&data[module_end + 1..attr_end])
+                            && is_python_identifier(module)
+                            && is_python_identifier(attr)
                         {
-                            let attr_end = module_end + 1 + end2;
-                            if let Ok(attr) = std::str::from_utf8(&data[module_end + 1..attr_end]) {
-                                if is_python_identifier(module) && is_python_identifier(attr) {
-                                    let global_ref = format!("{module}.{attr}");
-                                    if seen.insert(global_ref.clone()) {
-                                        globals.push(global_ref);
-                                    }
-                                }
+                            let global_ref = format!("{module}.{attr}");
+                            if seen.insert(global_ref.clone()) {
+                                globals.push(global_ref);
                             }
-                            i = attr_end + 1;
-                            continue;
                         }
+                        i = attr_end + 1;
+                        continue;
                     }
                 }
                 i += 1;
@@ -225,10 +226,12 @@ fn extract_pickle_strings(data: &[u8]) -> Vec<String> {
             if i + 2 + length > data.len() {
                 break;
             }
-            if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length]) {
-                if s.is_ascii() && s.len() > 2 && seen.insert(s.to_string()) {
-                    strings.push(s.to_string());
-                }
+            if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length])
+                && s.is_ascii()
+                && s.len() > 2
+                && seen.insert(s.to_string())
+            {
+                strings.push(s.to_string());
             }
             i += 2 + length;
         } else {
@@ -437,10 +440,12 @@ mod tests {
         assert_eq!(report.target.file_type, "pickle");
         assert_eq!(report.target.size_bytes, data.len() as u64);
         assert!(!report.target.sha256.is_empty());
-        assert!(report
-            .metadata
-            .tools_used
-            .contains(&"pickle-analyzer".to_string()));
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .contains(&"pickle-analyzer".to_string())
+        );
         // Should find the os.system global import
         assert!(report.imports.iter().any(|i| i.symbol == "os.system"));
     }

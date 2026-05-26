@@ -133,11 +133,7 @@ fn next_line(bytes: &[u8], from: usize) -> usize {
     while j < bytes.len() && bytes[j] != b'\n' {
         j += 1;
     }
-    if j < bytes.len() {
-        j + 1
-    } else {
-        j
-    }
+    if j < bytes.len() { j + 1 } else { j }
 }
 
 // ---------------------------------------------------------------------------

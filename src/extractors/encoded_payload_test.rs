@@ -30,7 +30,7 @@ fn encode_utf16le_with_bom(text: &str) -> Vec<u8> {
 mod tests {
     use super::super::*;
     use super::extract_encoded_payloads_from_content;
-    use base64::{engine::general_purpose, Engine as _};
+    use base64::{Engine as _, engine::general_purpose};
 
     #[test]
     fn test_is_base64_candidate_valid() {
@@ -94,8 +94,8 @@ mod tests {
         let original = b"import os; os.system('rm -rf /')";
         let mut compressed = Vec::new();
         {
-            use flate2::write::ZlibEncoder;
             use flate2::Compression;
+            use flate2::write::ZlibEncoder;
             use std::io::Write;
             let mut encoder = ZlibEncoder::new(&mut compressed, Compression::default());
             encoder.write_all(original).unwrap();

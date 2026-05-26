@@ -12,8 +12,8 @@
 use std::io::Seek;
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, CancellableWriter, ExtractionGuard, HostileArchiveReason,
-    LimitedReader, MAX_FILE_SIZE,
+    CancellableWriter, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
+    sanitize_entry_path, symlink_escapes,
 };
 use super::tar::extract_tar_entries_safe;
 use anyhow::{Context, Result};
@@ -150,16 +150,15 @@ pub(crate) fn extract_7z_from_data(
         for password in zip_passwords {
             debug!("Trying 7z password ({}B)", password.len());
             let password_obj = Password::from(password.as_str());
-            if let Ok(mut sz) = SevenZReader::new(Cursor::new(data), size, password_obj) {
-                if sz
+            if let Ok(mut sz) = SevenZReader::new(Cursor::new(data), size, password_obj)
+                && sz
                     .for_each_entries(|entry, reader| {
                         extract_7z_entry_safe(entry, reader, dest_dir, guard)
                     })
                     .is_ok()
-                {
-                    info!("✓ Decrypted 7z with password");
-                    return Ok(());
-                }
+            {
+                info!("✓ Decrypted 7z with password");
+                return Ok(());
             }
         }
         anyhow::bail!(
@@ -225,14 +224,14 @@ pub(crate) fn extract_pkg_from_reader<R: Read + Seek + std::fmt::Debug>(
         };
 
         // Check file size
-        if let Some(size) = file_entry.size {
-            if size > MAX_FILE_SIZE {
-                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
-                    file: path.clone(),
-                    size,
-                });
-                continue;
-            }
+        if let Some(size) = file_entry.size
+            && size > MAX_FILE_SIZE
+        {
+            guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                file: path.clone(),
+                size,
+            });
+            continue;
         }
 
         // Check symlinks and hardlinks
@@ -557,15 +556,14 @@ fn extract_cpio<R: Read>(mut reader: R, dest_dir: &Path, guard: &ExtractionGuard
             if file_size > 0 && file_size < 4096 {
                 // Reasonable symlink path length
                 let mut limited = LimitedReader::new(entry_reader, file_size.min(4096));
-                if limited.read_to_end(&mut target_buf).is_ok() {
-                    if let Ok(target_str) = String::from_utf8(target_buf) {
-                        if symlink_escapes(&out_path, &target_str, dest_dir) {
-                            guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                                "{} -> {}",
-                                clean_name, target_str
-                            )));
-                        }
-                    }
+                if limited.read_to_end(&mut target_buf).is_ok()
+                    && let Ok(target_str) = String::from_utf8(target_buf)
+                    && symlink_escapes(&out_path, &target_str, dest_dir)
+                {
+                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                        "{} -> {}",
+                        clean_name, target_str
+                    )));
                 }
             } else {
                 // Consume the entry data

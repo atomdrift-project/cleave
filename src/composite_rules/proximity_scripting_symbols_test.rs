@@ -16,8 +16,8 @@
 
 #[cfg(test)]
 mod proximity_scripting_symbols_tests {
-    use crate::analyzers::unified::UnifiedSourceAnalyzer;
     use crate::analyzers::FileType;
+    use crate::analyzers::unified::UnifiedSourceAnalyzer;
     use crate::composite_rules::condition::SymbolKind;
     use crate::composite_rules::context::EvaluationContext;
     use crate::composite_rules::types::{FileType as CFileType, Platform};

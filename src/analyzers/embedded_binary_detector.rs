@@ -362,12 +362,12 @@ fn validate_pe(data: &[u8], offset: usize) -> Option<EmbeddedBinary> {
     if let (Some(cert_offset), Some(cert_size)) = (
         read_u32_le(data, data_directory_base + 4 * 8).map(|v| v as usize),
         read_u32_le(data, data_directory_base + 4 * 8 + 4).map(|v| v as usize),
-    ) {
-        if cert_offset > 0 && cert_size > 0 {
-            let cert_end = cert_offset.checked_add(cert_size)?;
-            if cert_end <= available_size {
-                physical_size = physical_size.max(cert_end);
-            }
+    ) && cert_offset > 0
+        && cert_size > 0
+    {
+        let cert_end = cert_offset.checked_add(cert_size)?;
+        if cert_end <= available_size {
+            physical_size = physical_size.max(cert_end);
         }
     }
 
@@ -691,7 +691,7 @@ mod tests {
         // MZ header
         buf[offset] = 0x4D; // M
         buf[offset + 1] = 0x5A; // Z
-                                // e_lfanew at offset + 0x3C = 0x80 (128) — typical for real PEs
+        // e_lfanew at offset + 0x3C = 0x80 (128) — typical for real PEs
         let e_lfanew: u32 = 0x80;
         buf[offset + 0x3C..offset + 0x40].copy_from_slice(&e_lfanew.to_le_bytes());
 
@@ -736,7 +736,7 @@ mod tests {
         buf[offset + 4] = 2; // 64-bit
         buf[offset + 5] = 1; // LE
         buf[offset + 6] = 1; // version
-                             // e_type = EXEC (2)
+        // e_type = EXEC (2)
         buf[offset + 16..offset + 18].copy_from_slice(&2u16.to_le_bytes());
         // e_machine = x86-64 (0x3E)
         buf[offset + 18..offset + 20].copy_from_slice(&0x3Eu16.to_le_bytes());

@@ -17,7 +17,7 @@
 //!    fromCharCode obfuscation, identifier entropy, etc.) on the
 //!    actual code rather than the bare metadata count.
 
-use super::{analyzer_for_file_type_arc, AnalysisInput, Analyzer, FileType};
+use super::{AnalysisInput, Analyzer, FileType, analyzer_for_file_type_arc};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, TargetInfo};
 use anyhow::Result;

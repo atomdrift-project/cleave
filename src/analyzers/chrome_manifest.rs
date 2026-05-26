@@ -774,24 +774,24 @@ impl ChromeManifestAnalyzer {
         }
 
         // Check for persistent background (MV2 only)
-        if let Some(ref bg) = manifest.background {
-            if bg.persistent == Some(true) {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/chrome-ext/persistent-background".to_string(),
-                        "Extension uses persistent background page".to_string(),
-                        0.8,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: "persistent: true".to_string(),
-                        location: Some("background".to_string()),
-                        ..Default::default()
-                    }]),
-                );
-            }
+        if let Some(ref bg) = manifest.background
+            && bg.persistent == Some(true)
+        {
+            report.add_finding(
+                Finding::indicator(
+                    "supply-chain/chrome-ext/persistent-background".to_string(),
+                    "Extension uses persistent background page".to_string(),
+                    0.8,
+                )
+                .with_criticality(Criticality::Notable)
+                .with_evidence(vec![Evidence {
+                    method: "parser".to_string(),
+                    source: "manifest.json".to_string(),
+                    value: "persistent: true".to_string(),
+                    location: Some("background".to_string()),
+                    ..Default::default()
+                }]),
+            );
         }
     }
 
@@ -843,15 +843,15 @@ impl Analyzer for ChromeManifestAnalyzer {
 
     fn can_analyze(&self, file_path: &Path) -> bool {
         // Check if it's a manifest.json that looks like a Chrome extension
-        if let Some(name) = file_path.file_name() {
-            if name == "manifest.json" {
-                // Try to peek at content to verify it's a Chrome extension manifest
-                if let Ok(content) = fs::read_to_string(file_path) {
-                    return content.contains("manifest_version")
-                        && (content.contains("permissions")
-                            || content.contains("content_scripts")
-                            || content.contains("background"));
-                }
+        if let Some(name) = file_path.file_name()
+            && name == "manifest.json"
+        {
+            // Try to peek at content to verify it's a Chrome extension manifest
+            if let Ok(content) = fs::read_to_string(file_path) {
+                return content.contains("manifest_version")
+                    && (content.contains("permissions")
+                        || content.contains("content_scripts")
+                        || content.contains("background"));
             }
         }
         false
@@ -895,14 +895,18 @@ mod tests {
             .unwrap();
 
         // Should have findings for dangerous permissions
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("permission-critical")));
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("overprivileged")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("permission-critical"))
+        );
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("overprivileged"))
+        );
     }
 
     #[test]
@@ -919,10 +923,12 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.desc.contains("ALL websites")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.desc.contains("ALL websites"))
+        );
     }
 
     #[test]
@@ -944,10 +950,12 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("targets-shopping")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("targets-shopping"))
+        );
     }
 
     #[test]
@@ -964,9 +972,11 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("external-update-url")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("external-update-url"))
+        );
     }
 }

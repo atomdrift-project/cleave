@@ -9,7 +9,7 @@
 
 use crate::capabilities::CapabilityMapper;
 use crate::types::{
-    deduplicate_evidence, Evidence, MatchedString, YaraMatch, MAX_EVIDENCE_PER_TRAIT,
+    Evidence, MAX_EVIDENCE_PER_TRAIT, MatchedString, YaraMatch, deduplicate_evidence,
 };
 use anyhow::{Context, Result};
 use rayon::prelude::*;
@@ -17,8 +17,62 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicI8, Ordering};
+
+/// Process-wide override for "load built-in YARA rules only" (skip third-party).
+///
+/// 0 = unset, 1 = force builtin-only, -1 = force third-party-allowed.
+static BUILTIN_YARA_ONLY_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+
+/// Process-wide override for skipping YARA entirely. Used by tests that don't
+/// need YARA scanning to keep startup time low.
+static SKIP_YARA_OVERRIDE: AtomicI8 = AtomicI8::new(0);
+
+fn decode(atom: &AtomicI8) -> Option<bool> {
+    match atom.load(Ordering::Relaxed) {
+        1 => Some(true),
+        -1 => Some(false),
+        _ => None,
+    }
+}
+
+fn store(atom: &AtomicI8, value: Option<bool>) {
+    atom.store(
+        match value {
+            None => 0,
+            Some(true) => 1,
+            Some(false) => -1,
+        },
+        Ordering::Relaxed,
+    );
+}
+
+/// Force YARA loading to use built-in rules only (skipping third-party).
+/// `Some(true)` skips third-party, `Some(false)` keeps them, `None` clears.
+pub fn set_builtin_yara_only_override(value: Option<bool>) {
+    store(&BUILTIN_YARA_ONLY_OVERRIDE, value);
+}
+
+/// Force YARA scanning off for the rest of the process. Mirrors
+/// `CLEAVE_SKIP_YARA` but without env-var mutation.
+pub fn set_skip_yara_override(value: Option<bool>) {
+    store(&SKIP_YARA_OVERRIDE, value);
+}
+
+fn builtin_yara_only_active() -> bool {
+    if let Some(v) = decode(&BUILTIN_YARA_ONLY_OVERRIDE) {
+        return v;
+    }
+    std::env::var("CLEAVE_BUILTIN_YARA_ONLY").is_ok()
+}
+
+fn skip_yara_active() -> bool {
+    if let Some(v) = decode(&SKIP_YARA_OVERRIDE) {
+        return v;
+    }
+    std::env::var("CLEAVE_SKIP_YARA").is_ok()
+}
 use walkdir::WalkDir;
 use yara_classify::YaraTier;
 
@@ -232,14 +286,14 @@ impl YaraEngine {
         let _span = tracing::info_span!("load_yara_rules").entered();
 
         // Fast path: skip YARA entirely for tests that don't need it
-        if std::env::var("CLEAVE_SKIP_YARA").is_ok() {
-            tracing::info!("YARA skipped (CLEAVE_SKIP_YARA set)");
+        if skip_yara_active() {
+            tracing::info!("YARA skipped (CLEAVE_SKIP_YARA or override)");
             return (0, 0);
         }
 
-        // Override third-party setting via environment (for tests that need YARA but not 14k rules)
-        let enable_third_party =
-            enable_third_party && std::env::var("CLEAVE_BUILTIN_YARA_ONLY").is_err();
+        // Tests that need YARA but not 14k rules can disable third-party rules
+        // via env var or `set_builtin_yara_only_override`.
+        let enable_third_party = enable_third_party && !builtin_yara_only_active();
 
         self.tiers.clear();
         self.rule_contexts.clear();
@@ -250,7 +304,9 @@ impl YaraEngine {
 
         let skip_cache = crate::cache::skip_yara_cache();
         if skip_cache {
-            tracing::info!("Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE set or debug build)");
+            tracing::info!(
+                "Skipping YARA cache (CLEAVE_SKIP_YARA_CACHE / CLEAVE_SKIP_CACHE set or debug build)"
+            );
         } else {
             // Try to load from cache
             if let Ok(cache_path) = crate::cache::yara_cache_path(enable_third_party) {
@@ -1162,35 +1218,35 @@ impl YaraEngine {
             let trimmed = line.trim();
             if (trimmed.starts_with("filetype") || trimmed.starts_with("filetypes"))
                 && trimmed.contains('=')
+                && let Some(val) = trimmed.split('=').nth(1)
             {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    filetypes = val
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    if !filetypes.is_empty() {
-                        filetype_source = "metadata".to_string();
-                    }
+                filetypes = val
+                    .split(',')
+                    .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !filetypes.is_empty() {
+                    filetype_source = "metadata".to_string();
                 }
             }
             if trimmed.starts_with("os") && trimmed.contains('=') {
                 let after_os = &trimmed[2..];
-                if after_os.starts_with(' ') || after_os.starts_with('=') {
-                    if let Some(val) = trimmed.split('=').nth(1) {
-                        let val = val.trim().trim_matches('"').trim_matches('\'');
-                        if !val.is_empty() {
-                            os_meta = Some(val.to_string());
-                        }
+                if (after_os.starts_with(' ') || after_os.starts_with('='))
+                    && let Some(val) = trimmed.split('=').nth(1)
+                {
+                    let val = val.trim().trim_matches('"').trim_matches('\'');
+                    if !val.is_empty() {
+                        os_meta = Some(val.to_string());
                     }
                 }
             }
-            if trimmed.starts_with("arch_context") && trimmed.contains('=') {
-                if let Some(val) = trimmed.split('=').nth(1) {
-                    let val = val.trim().trim_matches('"').trim_matches('\'');
-                    if !val.is_empty() {
-                        arch_context = Some(val.to_string());
-                    }
+            if trimmed.starts_with("arch_context")
+                && trimmed.contains('=')
+                && let Some(val) = trimmed.split('=').nth(1)
+            {
+                let val = val.trim().trim_matches('"').trim_matches('\'');
+                if !val.is_empty() {
+                    arch_context = Some(val.to_string());
                 }
             }
             if let Some((key, val)) = trimmed.split_once('=') {
@@ -1557,35 +1613,37 @@ impl YaraEngine {
             let trimmed = line.trim();
 
             // Single filetype
-            if trimmed.starts_with("filetype") && trimmed.contains('=') {
-                if let Some(value_part) = trimmed.split('=').nth(1) {
-                    let value = value_part
-                        .trim()
-                        .trim_matches('"')
-                        .trim_matches('\'')
-                        .to_lowercase();
+            if trimmed.starts_with("filetype")
+                && trimmed.contains('=')
+                && let Some(value_part) = trimmed.split('=').nth(1)
+            {
+                let value = value_part
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_lowercase();
 
-                    // Check if any filter type matches
-                    for filter_type in filter_types {
-                        if value == filter_type.to_lowercase() {
-                            return true;
-                        }
+                // Check if any filter type matches
+                for filter_type in filter_types {
+                    if value == filter_type.to_lowercase() {
+                        return true;
                     }
                 }
             }
 
             // Multiple filetypes (comma-separated)
-            if trimmed.starts_with("filetypes") && trimmed.contains('=') {
-                if let Some(value_part) = trimmed.split('=').nth(1) {
-                    let value = value_part.trim().trim_matches('"').trim_matches('\'');
+            if trimmed.starts_with("filetypes")
+                && trimmed.contains('=')
+                && let Some(value_part) = trimmed.split('=').nth(1)
+            {
+                let value = value_part.trim().trim_matches('"').trim_matches('\'');
 
-                    // Split by comma and check each type
-                    for rule_type in value.split(',') {
-                        let rule_type = rule_type.trim().to_lowercase();
-                        for filter_type in filter_types {
-                            if rule_type == filter_type.to_lowercase() {
-                                return true;
-                            }
+                // Split by comma and check each type
+                for rule_type in value.split(',') {
+                    let rule_type = rule_type.trim().to_lowercase();
+                    for filter_type in filter_types {
+                        if rule_type == filter_type.to_lowercase() {
+                            return true;
                         }
                     }
                 }
@@ -1781,24 +1839,24 @@ impl YaraEngine {
             &filetype_source,
         );
 
-        if let Some(filter_types) = file_type_filter {
-            if !rule_filetypes.is_empty() {
-                let matches_filter = rule_filetypes.iter().any(|rule_type| {
-                    filter_types
-                        .iter()
-                        .any(|ft| rule_type == &ft.to_lowercase())
-                });
-                if !matches_filter {
-                    tracing::warn!(
-                        rule = %rule_name,
-                        rule_targets = ?rule_filetypes,
-                        scanning = ?filter_types,
-                        "YARA rule filtered: targets {:?}, not applicable to {:?}",
-                        rule_filetypes,
-                        filter_types,
-                    );
-                    return None;
-                }
+        if let Some(filter_types) = file_type_filter
+            && !rule_filetypes.is_empty()
+        {
+            let matches_filter = rule_filetypes.iter().any(|rule_type| {
+                filter_types
+                    .iter()
+                    .any(|ft| rule_type == &ft.to_lowercase())
+            });
+            if !matches_filter {
+                tracing::warn!(
+                    rule = %rule_name,
+                    rule_targets = ?rule_filetypes,
+                    scanning = ?filter_types,
+                    "YARA rule filtered: targets {:?}, not applicable to {:?}",
+                    rule_filetypes,
+                    filter_types,
+                );
+                return None;
             }
         }
 
@@ -2343,10 +2401,12 @@ rule test_rule {
         let engine = YaraEngine::new_for_test();
         let result = engine.scan_bytes(b"test data");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No YARA rules loaded"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("No YARA rules loaded")
+        );
     }
 
     #[test]

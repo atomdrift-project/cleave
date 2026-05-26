@@ -4533,16 +4533,16 @@ fn test_proximity_filters_evidence_to_window() {
 
     // All evidence should be within the proximity window (lines 5-7)
     for ev in &finding.evidence {
-        if let Some(ref loc) = ev.location {
-            if let Some(colon) = loc.find(':') {
-                let line: usize = loc[..colon].parse().unwrap_or(0);
-                assert!(
-                    (5..=7).contains(&line),
-                    "Evidence at line {} is outside proximity window 5-7: {:?}",
-                    line,
-                    ev
-                );
-            }
+        if let Some(ref loc) = ev.location
+            && let Some(colon) = loc.find(':')
+        {
+            let line: usize = loc[..colon].parse().unwrap_or(0);
+            assert!(
+                (5..=7).contains(&line),
+                "Evidence at line {} is outside proximity window 5-7: {:?}",
+                line,
+                ev
+            );
         }
     }
 

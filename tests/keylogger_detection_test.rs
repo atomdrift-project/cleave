@@ -24,20 +24,20 @@ fn test_keylogger_detection() {
         if line.trim().is_empty() || line.starts_with("cleave") {
             continue;
         }
-        if let Ok(json) = serde_json::from_str::<Value>(line) {
-            if let Some(findings) = json.get("findings").and_then(|f| f.as_array()) {
-                for finding in findings {
-                    if let Some(id) = finding.get("id").and_then(|i| i.as_str()) {
-                        if id == "objectives/credential-access/keylog/capture::js-keylogger-exfil" {
-                            found = true;
-                            // Check criticality
-                            let crit = finding.get("crit").and_then(|c| c.as_str()).unwrap_or("");
-                            assert_eq!(
-                                crit, "suspicious",
-                                "Criticality mismatch for js-keylogger-exfil"
-                            );
-                        }
-                    }
+        if let Ok(json) = serde_json::from_str::<Value>(line)
+            && let Some(findings) = json.get("findings").and_then(|f| f.as_array())
+        {
+            for finding in findings {
+                if let Some(id) = finding.get("id").and_then(|i| i.as_str())
+                    && id == "objectives/credential-access/keylog/capture::js-keylogger-exfil"
+                {
+                    found = true;
+                    // Check criticality
+                    let crit = finding.get("crit").and_then(|c| c.as_str()).unwrap_or("");
+                    assert_eq!(
+                        crit, "suspicious",
+                        "Criticality mismatch for js-keylogger-exfil"
+                    );
                 }
             }
         }

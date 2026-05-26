@@ -7,7 +7,7 @@
 //! followed by trait/composite evaluation with inline YARA results. The only
 //! difference is the addition of debug tracing via `DebugCollector`.
 
-use crate::analyzers::{detect_file_type, FileType};
+use crate::analyzers::{FileType, detect_file_type};
 use crate::commands::shared::{find_rules_in_directory, find_similar_rules, process_yara_result};
 use crate::commands::test::{build_test_capability_mapper, evaluation_data, prepare_test_analysis};
 use crate::yara_engine::YaraEngine;

@@ -233,11 +233,7 @@ pub(crate) fn detect_rust_mangling(
             return Some("v0");
         }
     }
-    if saw_legacy {
-        Some("legacy")
-    } else {
-        None
-    }
+    if saw_legacy { Some("legacy") } else { None }
 }
 
 fn is_legacy_rust_mangling_candidate(s: &str) -> bool {
@@ -267,7 +263,7 @@ pub(crate) fn has_rustc_section(data: &[u8]) -> bool {
 /// Run all post-analysis extractors and merge their results into
 /// `report.values_tree`. Idempotent: safe to call multiple times.
 pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
 
     // Build the augmenting Value first so we don't have to worry
     // about partial-update consistency.
@@ -349,10 +345,10 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
             // linker LC_BUILD_VERSION names. Move any prior toolchain_family
             // value (e.g. `ld` from Mach-O LC_BUILD_VERSION) to `linker`
             // so both signals are preserved.
-            if let Some(prior) = obj.get("toolchain_family").cloned() {
-                if prior.as_str() != Some("rustc") {
-                    obj.entry("linker".to_string()).or_insert(prior);
-                }
+            if let Some(prior) = obj.get("toolchain_family").cloned()
+                && prior.as_str() != Some("rustc")
+            {
+                obj.entry("linker".to_string()).or_insert(prior);
             }
             obj.insert("toolchain_family".into(), json!("rustc"));
             if !rust_symbols.is_empty() {
@@ -419,19 +415,19 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         .and_then(|p| p.get("path"))
         .and_then(|v| v.as_str())
         .map(str::to_string);
-    if let Some(pdb) = pdb_path_from_filefacts.as_deref() {
-        if let Some(user) = super::builder_paths::extract_username_from_pdb(pdb) {
-            let build_extra = augment
-                .entry(String::from("build"))
-                .or_insert_with(|| Value::Object(serde_json::Map::new()));
-            if let Some(obj) = build_extra.as_object_mut() {
-                // PDB is high-confidence; supersede byte-scan
-                // results.  Drop `usernames[]` if PDB gave us a
-                // canonical answer.
-                obj.remove("usernames");
-                obj.insert("username".into(), json!(user.clone()));
-                obj.insert("username_from".into(), json!("pdb_path"));
-            }
+    if let Some(pdb) = pdb_path_from_filefacts.as_deref()
+        && let Some(user) = super::builder_paths::extract_username_from_pdb(pdb)
+    {
+        let build_extra = augment
+            .entry(String::from("build"))
+            .or_insert_with(|| Value::Object(serde_json::Map::new()));
+        if let Some(obj) = build_extra.as_object_mut() {
+            // PDB is high-confidence; supersede byte-scan
+            // results.  Drop `usernames[]` if PDB gave us a
+            // canonical answer.
+            obj.remove("usernames");
+            obj.insert("username".into(), json!(user.clone()));
+            obj.insert("username_from".into(), json!("pdb_path"));
         }
     }
 
@@ -441,10 +437,10 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
     // rather than a Go-specific duplicate field.
     if let Some(go) = super::go_buildinfo::extract(raw_data) {
         let go_value = serialize_go_buildinfo(&go);
-        if let Some(obj) = go_value.as_object() {
-            if !obj.is_empty() {
-                augment.insert("go".into(), go_value);
-            }
+        if let Some(obj) = go_value.as_object()
+            && !obj.is_empty()
+        {
+            augment.insert("go".into(), go_value);
         }
         // Toolchain attribution feeds the cross-format build.*
         // section.  `go.main_path` (the import path) lives ONLY on
@@ -453,13 +449,13 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         let build_extra = augment
             .entry(String::from("build"))
             .or_insert_with(|| Value::Object(serde_json::Map::new()));
-        if let Some(obj) = build_extra.as_object_mut() {
-            if !go.version.is_empty() {
-                obj.entry("toolchain".to_string())
-                    .or_insert_with(|| json!(go.version.clone()));
-                obj.entry("toolchain_family".to_string())
-                    .or_insert_with(|| json!("go"));
-            }
+        if let Some(obj) = build_extra.as_object_mut()
+            && !go.version.is_empty()
+        {
+            obj.entry("toolchain".to_string())
+                .or_insert_with(|| json!(go.version.clone()));
+            obj.entry("toolchain_family".to_string())
+                .or_insert_with(|| json!("go"));
         }
     }
 
@@ -497,7 +493,7 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
 /// Unknown keys land in a fallback `go.build.other.<key>` map so
 /// nothing is lost.
 fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json::Value {
-    use serde_json::{json, Map, Value};
+    use serde_json::{Map, Value, json};
     let mut go = Map::new();
     if !info.version.is_empty() {
         go.insert("version".into(), json!(info.version));
@@ -505,20 +501,20 @@ fn serialize_go_buildinfo(info: &super::go_buildinfo::GoBuildInfo) -> serde_json
     if !info.main_path.is_empty() {
         go.insert("main_path".into(), json!(info.main_path));
     }
-    if let Some(bid) = info.build_id.as_deref() {
-        if !bid.is_empty() {
-            go.insert("build_id".into(), json!(bid));
-        }
+    if let Some(bid) = info.build_id.as_deref()
+        && !bid.is_empty()
+    {
+        go.insert("build_id".into(), json!(bid));
     }
-    if let Some(gr) = info.go_root.as_deref() {
-        if !gr.is_empty() {
-            go.insert("go_root".into(), json!(gr));
-        }
+    if let Some(gr) = info.go_root.as_deref()
+        && !gr.is_empty()
+    {
+        go.insert("go_root".into(), json!(gr));
     }
-    if let Some(mr) = info.main_root.as_deref() {
-        if !mr.is_empty() {
-            go.insert("main_root".into(), json!(mr));
-        }
+    if let Some(mr) = info.main_root.as_deref()
+        && !mr.is_empty()
+    {
+        go.insert("main_root".into(), json!(mr));
     }
     if info.deps_std + info.deps_thirdparty + info.deps_replaced + info.deps_vendored > 0 {
         let mut deps_breakdown = Map::new();

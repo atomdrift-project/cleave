@@ -17,8 +17,8 @@
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rayon::prelude::*;
@@ -32,12 +32,12 @@ const WATCHDOG_TIMEOUT: Duration = Duration::from_secs(120);
 fn yara_init_does_not_deadlock_under_concurrent_rayon_load() {
     // Force the cold-compile path so the deadlock-prone code actually runs.
     // Without this, the cache returns in ~25 ms and never touches the par_iter.
-    std::env::set_var("CLEAVE_SKIP_YARA_CACHE", "1");
+    cleave::cache::set_skip_yara_cache_override(Some(true));
     // Keep third-party rules out so compile is fast enough to fit the budget.
     // The deadlock manifests on any cold compile regardless of rule count —
     // restricting to built-in rules keeps the test responsive without
     // changing the code path under test.
-    std::env::set_var("CLEAVE_BUILTIN_YARA_ONLY", "1");
+    cleave::yara_engine::set_builtin_yara_only_override(Some(true));
 
     // Watchdog: a deadlocked main thread cannot panic its way out. Abort the
     // process from an independent thread so cargo records the test as failed.

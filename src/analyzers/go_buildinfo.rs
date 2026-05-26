@@ -177,10 +177,10 @@ pub(crate) fn extract(data: &[u8]) -> Option<GoBuildInfo> {
             }
             "=>" => {
                 // Replacement of the most-recently-seen dep.
-                if let Some(replacement) = parse_module_ref(rest) {
-                    if let Some(last) = info.dependencies.last_mut() {
-                        last.replaced_by = Some(Box::new(replacement));
-                    }
+                if let Some(replacement) = parse_module_ref(rest)
+                    && let Some(last) = info.dependencies.last_mut()
+                {
+                    last.replaced_by = Some(Box::new(replacement));
                 }
             }
             "build" => {
@@ -252,10 +252,11 @@ fn is_stdlib_path(path: &str) -> bool {
 ///      the binary lacks a recognizable rodata section.
 #[must_use]
 fn extract_go_build_id(data: &[u8]) -> Option<String> {
-    if data.len() >= 4 && &data[..4] == b"\x7fELF" {
-        if let Some(id) = read_elf_go_buildid(data) {
-            return Some(id);
-        }
+    if data.len() >= 4
+        && &data[..4] == b"\x7fELF"
+        && let Some(id) = read_elf_go_buildid(data)
+    {
+        return Some(id);
     }
     let needle = b"Go build ID: \"";
     let scan_in = |bytes: &[u8]| -> Option<String> {
@@ -265,10 +266,10 @@ fn extract_go_build_id(data: &[u8]) -> Option<String> {
         let id = std::str::from_utf8(&after[..end]).ok()?;
         (!id.is_empty()).then(|| id.to_string())
     };
-    if let Some(rodata) = read_rodata(data) {
-        if let Some(id) = scan_in(rodata) {
-            return Some(id);
-        }
+    if let Some(rodata) = read_rodata(data)
+        && let Some(id) = scan_in(rodata)
+    {
+        return Some(id);
     }
     // Last-ditch fallback for unusual layouts. Capped tight (4 MB) —
     // when present, the marker sits in the linker-emitted runtime
@@ -408,10 +409,10 @@ fn extract_go_main_root(data: &[u8], go_root: Option<&str>) -> Option<String> {
         let Ok(s) = std::str::from_utf8(path_bytes) else {
             continue;
         };
-        if let Some(root) = go_root {
-            if s.starts_with(root) {
-                continue;
-            }
+        if let Some(root) = go_root
+            && s.starts_with(root)
+        {
+            continue;
         }
         if s.contains("/pkg/mod/") || s.contains("/src/runtime/") {
             continue;

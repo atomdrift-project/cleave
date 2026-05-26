@@ -8,9 +8,9 @@
 
 use std::path::Path;
 
-use cleave::diff::{diff_paths, ScopeMask, DEFAULT_LIMIT_CHANGES};
-use cleave::types::FileStatus;
 use cleave::AnalysisOptions;
+use cleave::diff::{DEFAULT_LIMIT_CHANGES, ScopeMask, diff_paths};
+use cleave::types::FileStatus;
 
 const ELF: &str = "tests/fixtures/test.elf";
 const MACHO: &str = "tests/fixtures/test.macho";

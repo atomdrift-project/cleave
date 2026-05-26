@@ -11,8 +11,8 @@
 //! - Firefox extensions (.xpi)
 
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractedMemberMetadata,
-    ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+    CancellableReader, ExtractedMemberMetadata, ExtractionGuard, HostileArchiveReason,
+    LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use crate::types::ArchiveEntry;
 use anyhow::{Context, Result};
@@ -295,42 +295,44 @@ pub(crate) fn extract_zip_entries_safe<R: Read + Seek>(
 
         // Check for symlinks (zip files can contain them via external attributes)
         // S_IFLNK = 0o120000, S_IFMT = 0o170000
-        if let Some(mode) = entry.unix_mode() {
-            if mode & 0o170000 == 0o120000 {
-                // Symlink target is stored as file content in ZIP
-                // Use LimitedReader to prevent unbounded allocation from malicious entries
-                let mut target_buf = Vec::new();
-                let mut limited = LimitedReader::new(&mut entry, 4096);
-                if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
-                    if read_size > 0 && read_size < 4096 {
-                        // Reasonable symlink path length
-                        if let Ok(target_str) = String::from_utf8(target_buf) {
-                            if symlink_escapes(&outpath, &target_str, dest_dir) {
-                                guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(
-                                    format!("{} -> {}", entry_name, target_str),
-                                ));
-                            }
-                            linkname_capture = Some(target_str);
-                        }
+        if let Some(mode) = entry.unix_mode()
+            && mode & 0o170000 == 0o120000
+        {
+            // Symlink target is stored as file content in ZIP
+            // Use LimitedReader to prevent unbounded allocation from malicious entries
+            let mut target_buf = Vec::new();
+            let mut limited = LimitedReader::new(&mut entry, 4096);
+            if let Ok(read_size) = limited.read_to_end(&mut target_buf)
+                && read_size > 0
+                && read_size < 4096
+            {
+                // Reasonable symlink path length
+                if let Ok(target_str) = String::from_utf8(target_buf) {
+                    if symlink_escapes(&outpath, &target_str, dest_dir) {
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{} -> {}",
+                            entry_name, target_str
+                        )));
                     }
+                    linkname_capture = Some(target_str);
                 }
-                guard.record_member_metadata(ExtractedMemberMetadata {
-                    archive_path: rel_path,
-                    compressed_size,
-                    compression_method,
-                    mtime_unix,
-                    mode_octal,
-                    uid: None,
-                    gid: None,
-                    uname: None,
-                    gname: None,
-                    entry_type: Some(entry_type_str.to_string()),
-                    linkname: linkname_capture,
-                    host_os: None,
-                });
-                // Skip symlinks regardless (we don't extract them)
-                continue;
             }
+            guard.record_member_metadata(ExtractedMemberMetadata {
+                archive_path: rel_path,
+                compressed_size,
+                compression_method,
+                mtime_unix,
+                mode_octal,
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some(entry_type_str.to_string()),
+                linkname: linkname_capture,
+                host_os: None,
+            });
+            // Skip symlinks regardless (we don't extract them)
+            continue;
         }
 
         guard.record_member_metadata(ExtractedMemberMetadata {
@@ -576,9 +578,11 @@ mod tests {
 
         let result = extract_crx_from_data(&crx_data, &dest, &guard);
         assert!(result.is_err());
-        assert!(result
-            .expect_err("Expected error")
-            .to_string()
-            .contains("Unsupported CRX version"));
+        assert!(
+            result
+                .expect_err("Expected error")
+                .to_string()
+                .contains("Unsupported CRX version")
+        );
     }
 }

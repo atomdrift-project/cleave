@@ -55,48 +55,48 @@ pub(crate) fn find_redundant_explicit_defaults(
     let mut violations = Vec::new();
 
     for t in raw_traits {
-        if let (Some(def), Some(val)) = (&defaults.platforms, &t.platforms) {
-            if vec_values_equal(def, val) {
-                violations.push((t.id.clone(), "platforms"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.platforms, &t.platforms)
+            && vec_values_equal(def, val)
+        {
+            violations.push((t.id.clone(), "platforms"));
         }
-        if let (Some(def), Some(val)) = (&defaults.r#for, &t.file_types) {
-            if vec_values_equal(def, val) {
-                violations.push((t.id.clone(), "for"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.r#for, &t.file_types)
+            && vec_values_equal(def, val)
+        {
+            violations.push((t.id.clone(), "for"));
         }
-        if let (Some(def), Some(val)) = (&defaults.mbc, &t.mbc) {
-            if def == val {
-                violations.push((t.id.clone(), "mbc"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.mbc, &t.mbc)
+            && def == val
+        {
+            violations.push((t.id.clone(), "mbc"));
         }
-        if let (Some(def), Some(val)) = (&defaults.attack, &t.attack) {
-            if def == val {
-                violations.push((t.id.clone(), "attack"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.attack, &t.attack)
+            && def == val
+        {
+            violations.push((t.id.clone(), "attack"));
         }
     }
 
     for r in raw_composites {
-        if let (Some(def), Some(val)) = (&defaults.platforms, &r.platforms) {
-            if vec_values_equal(def, val) {
-                violations.push((r.id.clone(), "platforms"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.platforms, &r.platforms)
+            && vec_values_equal(def, val)
+        {
+            violations.push((r.id.clone(), "platforms"));
         }
-        if let (Some(def), Some(val)) = (&defaults.r#for, &r.file_types) {
-            if vec_values_equal(def, val) {
-                violations.push((r.id.clone(), "for"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.r#for, &r.file_types)
+            && vec_values_equal(def, val)
+        {
+            violations.push((r.id.clone(), "for"));
         }
-        if let (Some(def), Some(val)) = (&defaults.mbc, &r.mbc) {
-            if def == val {
-                violations.push((r.id.clone(), "mbc"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.mbc, &r.mbc)
+            && def == val
+        {
+            violations.push((r.id.clone(), "mbc"));
         }
-        if let (Some(def), Some(val)) = (&defaults.attack, &r.attack) {
-            if def == val {
-                violations.push((r.id.clone(), "attack"));
-            }
+        if let (Some(def), Some(val)) = (&defaults.attack, &r.attack)
+            && def == val
+        {
+            violations.push((r.id.clone(), "attack"));
         }
     }
 
@@ -244,18 +244,18 @@ pub(crate) fn find_impossible_size_constraints(
     let mut violations = Vec::new();
 
     for t in trait_definitions {
-        if let (Some(min), Some(max)) = (t.size_min, t.size_max) {
-            if min > max {
-                violations.push((t.id.clone(), min, max, false));
-            }
+        if let (Some(min), Some(max)) = (t.size_min, t.size_max)
+            && min > max
+        {
+            violations.push((t.id.clone(), min, max, false));
         }
     }
 
     for r in composite_rules {
-        if let (Some(min), Some(max)) = (r.size_min, r.size_max) {
-            if min > max {
-                violations.push((r.id.clone(), min, max, true));
-            }
+        if let (Some(min), Some(max)) = (r.size_min, r.size_max)
+            && min > max
+        {
+            violations.push((r.id.clone(), min, max, true));
         }
     }
 
@@ -273,10 +273,10 @@ pub(crate) fn find_impossible_count_constraints(
 
     for t in trait_definitions {
         // count_min and count_max are now at trait level on TraitDefinition
-        if let (Some(min), Some(max)) = (t.count_min, t.count_max) {
-            if min > max {
-                violations.push((t.id.clone(), min, max));
-            }
+        if let (Some(min), Some(max)) = (t.count_min, t.count_max)
+            && min > max
+        {
+            violations.push((t.id.clone(), min, max));
         }
     }
 
@@ -297,16 +297,16 @@ pub(crate) fn find_empty_condition_clauses(
     let mut violations = Vec::new();
 
     for rule in composite_rules {
-        if let Some(all) = &rule.all {
-            if all.is_empty() {
-                violations.push((rule.id.clone(), "all"));
-            }
+        if let Some(all) = &rule.all
+            && all.is_empty()
+        {
+            violations.push((rule.id.clone(), "all"));
         }
 
-        if let Some(any) = &rule.any {
-            if any.is_empty() {
-                violations.push((rule.id.clone(), "any"));
-            }
+        if let Some(any) = &rule.any
+            && any.is_empty()
+        {
+            violations.push((rule.id.clone(), "any"));
         }
     }
 
@@ -717,15 +717,15 @@ pub(crate) fn find_too_short_patterns(
             _ => continue,
         };
 
-        if let Some(s) = exact {
-            if s.len() < MIN_PATTERN_LENGTH {
-                violations.push((t.id.clone(), s.to_string(), "exact"));
-            }
+        if let Some(s) = exact
+            && s.len() < MIN_PATTERN_LENGTH
+        {
+            violations.push((t.id.clone(), s.to_string(), "exact"));
         }
-        if let Some(s) = substr {
-            if s.len() < MIN_PATTERN_LENGTH {
-                violations.push((t.id.clone(), s.to_string(), "substr"));
-            }
+        if let Some(s) = substr
+            && s.len() < MIN_PATTERN_LENGTH
+        {
+            violations.push((t.id.clone(), s.to_string(), "substr"));
         }
     }
 

@@ -325,16 +325,15 @@ pub(crate) fn find_cap_obj_violations(
             }
 
             // Check if the trait condition references other traits
-            if let Condition::Trait { id: ref_id } = &trait_def.r#if {
-                if let Some(ref_tier) = extract_tier(ref_id) {
-                    if ref_tier == "objectives" {
-                        let source = rule_source_files
-                            .get(&trait_def.id)
-                            .cloned()
-                            .unwrap_or_else(|| "unknown".to_string());
-                        violations.push((trait_def.id.clone(), ref_id.clone(), source));
-                    }
-                }
+            if let Condition::Trait { id: ref_id } = &trait_def.r#if
+                && let Some(ref_tier) = extract_tier(ref_id)
+                && ref_tier == "objectives"
+            {
+                let source = rule_source_files
+                    .get(&trait_def.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                violations.push((trait_def.id.clone(), ref_id.clone(), source));
             }
         }
     }
@@ -350,14 +349,14 @@ pub(crate) fn find_cap_obj_violations(
             // Collect all trait references from this rule
             let trait_refs = collect_trait_refs_from_rule(rule);
             for (ref_id, _) in trait_refs {
-                if let Some(ref_tier) = extract_tier(&ref_id) {
-                    if ref_tier == "objectives" {
-                        let source = rule_source_files
-                            .get(&rule.id)
-                            .cloned()
-                            .unwrap_or_else(|| "unknown".to_string());
-                        violations.push((rule.id.clone(), ref_id.clone(), source));
-                    }
+                if let Some(ref_tier) = extract_tier(&ref_id)
+                    && ref_tier == "objectives"
+                {
+                    let source = rule_source_files
+                        .get(&rule.id)
+                        .cloned()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    violations.push((rule.id.clone(), ref_id.clone(), source));
                 }
             }
         }
@@ -398,14 +397,14 @@ pub(crate) fn find_metadata_cross_tier_refs(
         if extract_tier(&trait_def.id) != Some("metadata") {
             continue;
         }
-        if let Condition::Trait { id: ref_id } = &trait_def.r#if {
-            if is_cross_tier_ref(ref_id) {
-                let source = rule_source_files
-                    .get(&trait_def.id)
-                    .cloned()
-                    .unwrap_or_else(|| "unknown".to_string());
-                violations.push((trait_def.id.clone(), ref_id.clone(), source));
-            }
+        if let Condition::Trait { id: ref_id } = &trait_def.r#if
+            && is_cross_tier_ref(ref_id)
+        {
+            let source = rule_source_files
+                .get(&trait_def.id)
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
+            violations.push((trait_def.id.clone(), ref_id.clone(), source));
         }
     }
 
@@ -1241,10 +1240,10 @@ pub(crate) fn find_composite_only_wellknown_files(
 
     for t in trait_definitions {
         let source = t.defined_in.to_string_lossy().to_string();
-        if source.contains("well-known/") {
-            if let Some(dir) = Path::new(&source).parent() {
-                dirs_with_traits.insert(dir.to_string_lossy().to_string());
-            }
+        if source.contains("well-known/")
+            && let Some(dir) = Path::new(&source).parent()
+        {
+            dirs_with_traits.insert(dir.to_string_lossy().to_string());
         }
     }
 

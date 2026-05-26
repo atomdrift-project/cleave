@@ -71,7 +71,7 @@ pub mod validate;
 pub use shared::expand_paths;
 
 // Re-export command functions for main.rs
-pub use analyze::{run as analyze_command, AnalyzeConfig};
+pub use analyze::{AnalyzeConfig, run as analyze_command};
 pub use diff::run as diff_command;
 pub use extract::{
     kv::run as extract_kv_command,
@@ -84,6 +84,6 @@ pub use extract::{
     },
 };
 pub use inspect::run as inspect_command;
-pub use iter_files::{run as iter_files_command, IterFilesConfig};
+pub use iter_files::{IterFilesConfig, run as iter_files_command};
 pub use test::{test_match, test_rules};
 pub use validate::run as validate_command;

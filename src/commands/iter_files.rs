@@ -11,7 +11,7 @@
 //! — that work happens during full analysis and is split out by the caller
 //! (see hopper's ExplodeArchiveMembers).
 
-use crate::analyzers::{detect_file_type, is_analyzable, FileTypeExt};
+use crate::analyzers::{FileTypeExt, detect_file_type, is_analyzable};
 use anyhow::Result;
 use serde::Serialize;
 use std::io::{BufWriter, Write};
@@ -54,10 +54,10 @@ pub fn run(config: &IterFilesConfig<'_>) -> Result<()> {
         }
         if path.is_dir() {
             walk_directory(path, config, &mut out);
-        } else if path.is_file() {
-            if let Err(e) = list_file(path, config, &mut out) {
-                tracing::debug!(path = %path.display(), error = %e, "list_file failed");
-            }
+        } else if path.is_file()
+            && let Err(e) = list_file(path, config, &mut out)
+        {
+            tracing::debug!(path = %path.display(), error = %e, "list_file failed");
         }
     }
     out.flush()?;

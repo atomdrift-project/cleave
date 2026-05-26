@@ -14,8 +14,8 @@
 
 use super::shared::{MatchSignature, PatternLocation};
 use crate::composite_rules::{
-    condition::EncodingSpec, evaluators::build_regex, CompositeTrait, Condition,
-    FileType as RuleFileType, TraitDefinition,
+    CompositeTrait, Condition, FileType as RuleFileType, TraitDefinition, condition::EncodingSpec,
+    evaluators::build_regex,
 };
 use crate::types::Criticality;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -444,12 +444,12 @@ pub(super) fn decode_hex_escapes(pattern: &str) -> String {
 
                 // Try to read 2 hex digits
                 let hex_str: String = chars.by_ref().take(2).collect();
-                if hex_str.len() == 2 {
-                    if let Ok(byte) = u8::from_str_radix(&hex_str, 16) {
-                        // Valid hex escape - decode it
-                        result.push(byte as char);
-                        continue;
-                    }
+                if hex_str.len() == 2
+                    && let Ok(byte) = u8::from_str_radix(&hex_str, 16)
+                {
+                    // Valid hex escape - decode it
+                    result.push(byte as char);
+                    continue;
                 }
                 // Invalid hex escape - keep original
                 result.push('\\');
@@ -738,10 +738,10 @@ fn is_rodata_scope(section: &str) -> bool {
 }
 
 fn condition_label(location: &PatternLocation) -> String {
-    if location.condition_type == "encoded" {
-        if let Some(encodings) = &location.encoding {
-            return format!("encoded[{}]", encodings.join("|"));
-        }
+    if location.condition_type == "encoded"
+        && let Some(encodings) = &location.encoding
+    {
+        return format!("encoded[{}]", encodings.join("|"));
     }
     location.condition_type.clone()
 }
@@ -2573,17 +2573,16 @@ pub(crate) fn check_regex_alternative_subsets(
             let mut p2_subset_of_p1 =
                 !set2.is_empty() && set2.is_subset(&set1) && set2.len() < set1.len();
 
-            if !(p1_subset_of_p2 || p2_subset_of_p1) {
-                if let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
+            if !(p1_subset_of_p2 || p2_subset_of_p1)
+                && let (Some((prefix1, alts1, suffix1)), Some((prefix2, alts2, suffix2))) =
                     (&p1.grouped_alternatives, &p2.grouped_alternatives)
-                {
-                    if prefix1 == prefix2 && suffix1 == suffix2 {
-                        let set1: HashSet<&String> = alts1.iter().collect();
-                        let set2: HashSet<&String> = alts2.iter().collect();
-                        p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
-                        p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
-                    }
-                }
+                && prefix1 == prefix2
+                && suffix1 == suffix2
+            {
+                let set1: HashSet<&String> = alts1.iter().collect();
+                let set2: HashSet<&String> = alts2.iter().collect();
+                p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
+                p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
             }
 
             if p1_subset_of_p2 {
@@ -2726,10 +2725,10 @@ fn regex_could_match_literal(regex: &str, literal: &str) -> bool {
 
     // Slow path: actually compile and test the regex (using cache)
     // This catches cases like "c?mod" matching "chmod"
-    if let Some(re) = get_cached_regex(regex) {
-        if re.is_match(literal) {
-            return true;
-        }
+    if let Some(re) = get_cached_regex(regex)
+        && re.is_match(literal)
+    {
+        return true;
     }
 
     false
@@ -3555,10 +3554,10 @@ fn strip_leading_boundary(s: &str) -> &str {
             regex::Regex::new(r"^(?:\\b|\^|\(\?:\^\|[^()]{1,8}\)|\(\^\|[^()]{1,8}\))").ok()
         })
         .as_ref();
-    if let Some(re) = re {
-        if let Some(m) = re.find(s) {
-            return &s[m.end()..];
-        }
+    if let Some(re) = re
+        && let Some(m) = re.find(s)
+    {
+        return &s[m.end()..];
     }
     s
 }
@@ -3570,10 +3569,10 @@ fn strip_leading_flags(s: &str) -> &str {
     let re = RE
         .get_or_init(|| regex::Regex::new(r"^\(\?[a-zA-Z\-]{1,8}\)").ok())
         .as_ref();
-    if let Some(re) = re {
-        if let Some(m) = re.find(s) {
-            return &s[m.end()..];
-        }
+    if let Some(re) = re
+        && let Some(m) = re.find(s)
+    {
+        return &s[m.end()..];
     }
     s
 }

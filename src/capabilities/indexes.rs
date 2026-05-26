@@ -8,7 +8,7 @@
 use crate::composite_rules::evaluators::{match_window, truncate_evidence};
 use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
 use crate::types::binary::normalize_symbol;
-use crate::types::{deduplicate_evidence, Evidence, StringInfo, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, StringInfo, deduplicate_evidence};
 use aho_corasick::AhoCorasick;
 use rayon::prelude::*;
 use regex::bytes::{RegexSet, RegexSetBuilder};
@@ -96,10 +96,10 @@ impl TraitIndex {
     /// Get trait indices applicable to a given file type
     pub(crate) fn get_applicable(&self, file_type: &RuleFileType) -> TraitBitSet {
         // 1. Check cache first (fast path)
-        if let Ok(cache) = self.combined_cache.read() {
-            if let Some(bitset) = cache.get(file_type) {
-                return bitset.clone();
-            }
+        if let Ok(cache) = self.combined_cache.read()
+            && let Some(bitset) = cache.get(file_type)
+        {
+            return bitset.clone();
         }
 
         // 2. Compute and cache (slow path)
@@ -191,18 +191,20 @@ impl TraitBitSet {
         let mut current_val = 0u64;
         let bits = &self.bits;
 
-        std::iter::from_fn(move || loop {
-            if current_val != 0 {
-                let bit_idx = current_val.trailing_zeros() as usize;
-                current_val &= !(1 << bit_idx);
-                return Some(current_u_idx * 64 + bit_idx);
+        std::iter::from_fn(move || {
+            loop {
+                if current_val != 0 {
+                    let bit_idx = current_val.trailing_zeros() as usize;
+                    current_val &= !(1 << bit_idx);
+                    return Some(current_u_idx * 64 + bit_idx);
+                }
+                if next_u_idx >= bits.len() {
+                    return None;
+                }
+                current_u_idx = next_u_idx;
+                current_val = bits[current_u_idx];
+                next_u_idx += 1;
             }
-            if next_u_idx >= bits.len() {
-                return None;
-            }
-            current_u_idx = next_u_idx;
-            current_val = bits[current_u_idx];
-            next_u_idx += 1;
         })
     }
 
@@ -213,18 +215,20 @@ impl TraitBitSet {
         let mut current_val = 0u64;
         let bitset = self;
 
-        std::iter::from_fn(move || loop {
-            if current_val != 0 {
-                let bit_idx = current_val.trailing_zeros() as usize;
-                current_val &= !(1 << bit_idx);
-                return Some(current_u_idx * 64 + bit_idx);
+        std::iter::from_fn(move || {
+            loop {
+                if current_val != 0 {
+                    let bit_idx = current_val.trailing_zeros() as usize;
+                    current_val &= !(1 << bit_idx);
+                    return Some(current_u_idx * 64 + bit_idx);
+                }
+                if next_u_idx >= bitset.bits.len() {
+                    return None;
+                }
+                current_u_idx = next_u_idx;
+                current_val = bitset.bits[current_u_idx];
+                next_u_idx += 1;
             }
-            if next_u_idx >= bitset.bits.len() {
-                return None;
-            }
-            current_u_idx = next_u_idx;
-            current_val = bitset.bits[current_u_idx];
-            next_u_idx += 1;
         })
     }
 
@@ -521,11 +525,11 @@ impl SymbolMatchIndex {
                         if !seen_candidates.insert(trait_idx) {
                             continue;
                         }
-                        if let Some(Some(re)) = self.trait_regex.get(trait_idx) {
-                            if re.is_match(normalized) {
-                                matched.insert(trait_idx);
-                                Self::push_evidence(&mut evidence, trait_idx, symbol);
-                            }
+                        if let Some(Some(re)) = self.trait_regex.get(trait_idx)
+                            && re.is_match(normalized)
+                        {
+                            matched.insert(trait_idx);
+                            Self::push_evidence(&mut evidence, trait_idx, symbol);
                         }
                     }
                 }
@@ -647,8 +651,8 @@ impl StringMatchIndex {
     ///
     /// Returns None if no useful literal (>= 3 chars) can be extracted.
     pub(crate) fn extract_regex_literal(pattern: &str) -> Option<String> {
-        use regex_syntax::hir::literal::{ExtractKind, Extractor};
         use regex_syntax::Parser;
+        use regex_syntax::hir::literal::{ExtractKind, Extractor};
 
         // Parse the regex pattern into HIR (High-level Intermediate Representation)
         let hir = Parser::new().parse(pattern).ok()?;
@@ -733,7 +737,7 @@ impl StringMatchIndex {
             match &trait_def.r#if {
                 // Exact string patterns
                 Condition::Text {
-                    exact: Some(ref exact_str),
+                    exact: Some(exact_str),
                     case_insensitive,
                     ..
                 } => {
@@ -756,7 +760,7 @@ impl StringMatchIndex {
                 }
                 // Substr string patterns - add to Aho-Corasick index
                 Condition::Text {
-                    substr: Some(ref substr_str),
+                    substr: Some(substr_str),
                     case_insensitive,
                     // Skip patterns with location constraints - they need special handling
                     section: None,
@@ -788,7 +792,7 @@ impl StringMatchIndex {
                 }
                 // Regex string patterns - extract literal prefix for pre-filtering
                 Condition::Text {
-                    regex: Some(ref regex_str),
+                    regex: Some(regex_str),
                     ..
                 } => {
                     regex_trait_indices.insert(trait_idx);
@@ -923,20 +927,20 @@ impl StringMatchIndex {
 
             // Experiment 1 + 3: O(1) HashSet lookup with length pre-filter
             // Case-sensitive exact matching
-            if len >= self.min_pattern_length {
-                if let Some(trait_indices) = self.exact_patterns.get(&string_info.value) {
-                    for &trait_idx in trait_indices {
-                        matching_traits.insert(trait_idx);
-                        let entry = trait_evidence.entry(trait_idx).or_default();
-                        if entry.len() < MAX_EVIDENCE_PER_TRAIT {
-                            entry.push(Evidence {
-                                method: "string".to_string(),
-                                source: "string_extractor".to_string(),
-                                value: truncate_evidence(&string_info.value, 120),
-                                location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                ..Default::default()
-                            });
-                        }
+            if len >= self.min_pattern_length
+                && let Some(trait_indices) = self.exact_patterns.get(&string_info.value)
+            {
+                for &trait_idx in trait_indices {
+                    matching_traits.insert(trait_idx);
+                    let entry = trait_evidence.entry(trait_idx).or_default();
+                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                        entry.push(Evidence {
+                            method: "string".to_string(),
+                            source: "string_extractor".to_string(),
+                            value: truncate_evidence(&string_info.value, 120),
+                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                            ..Default::default()
+                        });
                     }
                 }
             }
@@ -1052,20 +1056,20 @@ impl StringMatchIndex {
                     let len = string_info.value.len();
 
                     // Case-sensitive exact matching with length pre-filter
-                    if len >= self.min_pattern_length {
-                        if let Some(trait_indices) = self.exact_patterns.get(&string_info.value) {
-                            for &trait_idx in trait_indices {
-                                matching_traits.insert(trait_idx);
-                                let entry = trait_evidence.entry(trait_idx).or_default();
-                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
-                                    entry.push(Evidence {
-                                        method: "string".to_string(),
-                                        source: "string_extractor".to_string(),
-                                        value: truncate_evidence(&string_info.value, 120),
-                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
-                                        ..Default::default()
-                                    });
-                                }
+                    if len >= self.min_pattern_length
+                        && let Some(trait_indices) = self.exact_patterns.get(&string_info.value)
+                    {
+                        for &trait_idx in trait_indices {
+                            matching_traits.insert(trait_idx);
+                            let entry = trait_evidence.entry(trait_idx).or_default();
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                entry.push(Evidence {
+                                    method: "string".to_string(),
+                                    source: "string_extractor".to_string(),
+                                    value: truncate_evidence(&string_info.value, 120),
+                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    ..Default::default()
+                                });
                             }
                         }
                     }
@@ -1416,11 +1420,11 @@ impl FileTypeRegexSet {
                 if trait_indices.iter().all(|t| matched_traits.contains(t)) {
                     continue;
                 }
-                if let Some(Some(regex)) = self.individual_regexes.get(pattern_idx) {
-                    if regex.is_match(content) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
+                if let Some(Some(regex)) = self.individual_regexes.get(pattern_idx)
+                    && regex.is_match(content)
+                {
+                    for &t in trait_indices {
+                        matched_traits.insert(t);
                     }
                 }
             }
@@ -1429,11 +1433,11 @@ impl FileTypeRegexSet {
         // Step 3: Run smaller RegexSet for patterns without literals (unavoidable)
         if let Some(ref no_lit_set) = self.no_literal_regex_set {
             for no_lit_idx in no_lit_set.matches(content).iter() {
-                if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx) {
-                    if let Some(trait_indices) = self.pattern_to_traits.get(original_idx) {
-                        for &t in trait_indices {
-                            matched_traits.insert(t);
-                        }
+                if let Some(&original_idx) = self.no_literal_to_original.get(no_lit_idx)
+                    && let Some(trait_indices) = self.pattern_to_traits.get(original_idx)
+                {
+                    for &t in trait_indices {
+                        matched_traits.insert(t);
                     }
                 }
             }
@@ -1467,7 +1471,7 @@ impl RawContentRegexIndex {
             // Word patterns are routed to a dedicated Aho-Corasick automaton
             match &trait_def.r#if {
                 Condition::Raw {
-                    regex: Some(ref regex_str),
+                    regex: Some(regex_str),
                     case_insensitive,
                     ..
                 } => {
@@ -1488,7 +1492,7 @@ impl RawContentRegexIndex {
                     }
                 }
                 Condition::Raw {
-                    word: Some(ref word_str),
+                    word: Some(word_str),
                     case_insensitive,
                     ..
                 } => {

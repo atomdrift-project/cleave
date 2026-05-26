@@ -9,7 +9,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use super::super::*;
-    use aes::cipher::{block_padding::Pkcs7, BlockEncryptMut, KeyIvInit};
+    use aes::cipher::{BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
 
     // Helper to encrypt test data with AES-256-CBC
     fn encrypt_aes_256_cbc(

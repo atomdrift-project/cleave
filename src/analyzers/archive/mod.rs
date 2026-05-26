@@ -28,8 +28,8 @@ use std::sync::Arc;
 use crate::composite_rules::SectionMap;
 use ::zip::ZipArchive;
 use guards::{
-    sanitize_entry_path, ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE,
-    MAX_TOTAL_SIZE,
+    ExtractedMemberMetadata, ExtractionGuard, MAX_FILE_COUNT, MAX_FILE_SIZE, MAX_TOTAL_SIZE,
+    sanitize_entry_path,
 };
 use utils::calculate_sha256;
 
@@ -1250,7 +1250,7 @@ fn merge_archive_member_metadata(
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
-    use guards::{sanitize_entry_path, ExtractionGuard, MAX_FILE_COUNT};
+    use guards::{ExtractionGuard, MAX_FILE_COUNT, sanitize_entry_path};
     use std::fs::File;
     use std::io::{Cursor, Write};
 
@@ -1400,10 +1400,12 @@ composite_rules:
         assert!(result.is_ok());
         let report = result.unwrap();
         assert_eq!(report.target.file_type, "zip");
-        assert!(report
-            .structure
-            .iter()
-            .any(|s| s.id.starts_with("archive/")));
+        assert!(
+            report
+                .structure
+                .iter()
+                .any(|s| s.id.starts_with("archive/"))
+        );
     }
 
     #[test]
@@ -1424,10 +1426,12 @@ composite_rules:
 
         let result = analyzer.analyze(&zip_path);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Maximum archive depth"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Maximum archive depth")
+        );
     }
 
     #[test]
@@ -1491,10 +1495,12 @@ composite_rules:
         let analyzer = ArchiveAnalyzer::new().with_zip_passwords(vec!["wrongpass".to_string()]);
         let result = analyzer.analyze(&zip_path);
         assert!(result.is_err(), "Should fail with wrong password");
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("tried 1 passwords"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("tried 1 passwords")
+        );
     }
 
     #[test]
@@ -1647,9 +1653,11 @@ composite_rules:
 
         // Verify hostile reason was recorded
         let reasons = guard.take_reasons();
-        assert!(reasons
-            .iter()
-            .any(|r| matches!(r, HostileArchiveReason::ExcessiveFileCount(_))));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, HostileArchiveReason::ExcessiveFileCount(_)))
+        );
     }
 
     #[test]
@@ -1663,14 +1671,16 @@ composite_rules:
         assert!(!guard.check_compression_ratio(100, 200_000_000)); // 2_000_000:1
 
         let reasons = guard.take_reasons();
-        assert!(reasons
-            .iter()
-            .any(|r| matches!(r, HostileArchiveReason::ZipBomb { .. })));
+        assert!(
+            reasons
+                .iter()
+                .any(|r| matches!(r, HostileArchiveReason::ZipBomb { .. }))
+        );
     }
     #[test]
     fn test_nested_archive_zip_containing_tar_gz() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use tar::Builder;
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1741,8 +1751,8 @@ composite_rules:
 
     #[test]
     fn test_archive_member_metadata_captured() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use tar::Builder;
 
         let temp_dir = tempfile::tempdir().unwrap();
@@ -1903,14 +1913,18 @@ composite_rules:
         assert!(!report.archive_contents.is_empty());
 
         // Verify files were extracted and analyzed
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("package.json")));
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("index.js")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("package.json"))
+        );
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("index.js"))
+        );
     }
 
     #[test]
@@ -1939,10 +1953,12 @@ composite_rules:
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.archive_contents.is_empty());
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("background.js")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("background.js"))
+        );
     }
 
     #[test]
@@ -1971,10 +1987,12 @@ composite_rules:
 
         assert!(result.is_ok());
         let report = result.unwrap();
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("Info.plist")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("Info.plist"))
+        );
     }
 
     #[test]
@@ -2056,10 +2074,12 @@ composite_rules:
         let report = result.unwrap();
         assert_eq!(report.target.file_type, "crx");
         assert!(!report.archive_contents.is_empty());
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("manifest.json")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("manifest.json"))
+        );
         assert!(
             report
                 .metadata
@@ -2283,10 +2303,12 @@ composite_rules:
         let analyzer = ArchiveAnalyzer::new();
         let report = analyzer.analyze(&zip_path).unwrap();
 
-        assert!(!report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-analysis/archive/path-traversal"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-analysis/archive/path-traversal")
+        );
     }
 
     #[test]
@@ -2301,10 +2323,12 @@ composite_rules:
         let analyzer = ArchiveAnalyzer::new();
         let report = analyzer.analyze(sample).unwrap();
 
-        assert!(!report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-analysis/archive/path-traversal"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-analysis/archive/path-traversal")
+        );
 
         let suspicious = report
             .findings
@@ -2380,10 +2404,12 @@ traits:
         assert!(result.is_ok());
         let report = result.unwrap();
         assert!(!report.archive_contents.is_empty());
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("__init__.py")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("__init__.py"))
+        );
     }
 
     #[test]
@@ -2413,10 +2439,12 @@ traits:
         let report = result.unwrap();
         assert_eq!(report.target.file_type, "7z");
         assert!(!report.archive_contents.is_empty());
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("test.txt")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("test.txt"))
+        );
     }
 
     #[test]
@@ -2451,10 +2479,12 @@ traits:
         assert!(result.is_ok(), "Failed to decrypt 7z: {:?}", result.err());
         let report = result.unwrap();
         assert_eq!(report.target.file_type, "7z");
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("secret_test.txt")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("secret_test.txt"))
+        );
     }
 
     #[test]
@@ -2488,10 +2518,12 @@ traits:
         );
         let report = result.unwrap();
         assert!(!report.archive_contents.is_empty());
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|e| e.path.contains("test.txt")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|e| e.path.contains("test.txt"))
+        );
     }
 
     #[test]
@@ -2524,11 +2556,13 @@ traits:
         let report = result.unwrap();
 
         // Should have detected excessive file size
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id == "anti-analysis/archive/large-file"
-                && f.desc.contains("excessively large file")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "anti-analysis/archive/large-file"
+                    && f.desc.contains("excessively large file"))
+        );
     }
 
     // =========================================================================
@@ -3003,10 +3037,12 @@ traits:
                 .any(|t| t == "in_memory_jar"),
             "small JAR archives should use the in-memory JAR selector"
         );
-        assert!(report
-            .archive_contents
-            .iter()
-            .any(|entry| entry.path.ends_with("HelloWorld.class")));
+        assert!(
+            report
+                .archive_contents
+                .iter()
+                .any(|entry| entry.path.ends_with("HelloWorld.class"))
+        );
     }
 
     #[test]
@@ -3065,8 +3101,8 @@ traits:
     #[test]
     fn test_extract_dir_tar_gz_archive_members() {
         // tar.gz archives use the generic path — this was the bug
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use tar::Builder;
 
         #[allow(clippy::expect_used)]
@@ -3134,8 +3170,8 @@ traits:
     #[test]
     fn test_extract_dir_standalone_gz() {
         // Standalone .gz (not .tar.gz) — decompressed content should be persisted
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
 
         #[allow(clippy::expect_used)]
         let temp_dir = tempfile::tempdir().expect("create temp dir");
@@ -3233,8 +3269,8 @@ traits:
 
     #[test]
     fn test_alpine_apk_uses_tar_gz_path() {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use tar::Builder;
 
         #[allow(clippy::expect_used)]

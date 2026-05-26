@@ -153,7 +153,7 @@ fn decompress_if_compressed(data: &[u8]) -> Option<(Vec<u8>, String)> {
 /// NOTE: This is kept for nested decoding only. Initial base64 detection uses stng.
 #[must_use]
 pub(crate) fn decode_base64(encoded: &str) -> Option<(Vec<u8>, Option<String>)> {
-    use base64::{engine::general_purpose::STANDARD, Engine as _};
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
 
     // Strip whitespace before decoding
     let cleaned: String = encoded
@@ -220,22 +220,24 @@ pub(crate) fn decompress_and_nest(
         let text = text.trim();
 
         // Check for additional base64 (nested)
-        if text.len() >= MIN_PAYLOAD_LENGTH && is_base64_candidate(text) {
-            if let Some((decoded, compression)) = decode_base64(text) {
-                chain.push("base64".to_string());
-                if let Some(comp_type) = compression {
-                    chain.push(comp_type);
-                }
-                return decompress_and_nest(&decoded, chain, depth + 1);
+        if text.len() >= MIN_PAYLOAD_LENGTH
+            && is_base64_candidate(text)
+            && let Some((decoded, compression)) = decode_base64(text)
+        {
+            chain.push("base64".to_string());
+            if let Some(comp_type) = compression {
+                chain.push(comp_type);
             }
+            return decompress_and_nest(&decoded, chain, depth + 1);
         }
 
         // Check for additional hex (nested)
-        if text.len() >= 48 && is_hex_string(text) {
-            if let Some(decoded) = decode_hex_string(text) {
-                chain.push("hex".to_string());
-                return decompress_and_nest(&decoded, chain, depth + 1);
-            }
+        if text.len() >= 48
+            && is_hex_string(text)
+            && let Some(decoded) = decode_hex_string(text)
+        {
+            chain.push("hex".to_string());
+            return decompress_and_nest(&decoded, chain, depth + 1);
         }
     }
 

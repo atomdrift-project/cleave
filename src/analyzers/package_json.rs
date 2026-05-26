@@ -175,11 +175,7 @@ fn sanitize_json(content: &str) -> Option<String> {
         }
     }
 
-    if changed {
-        Some(out)
-    } else {
-        None
-    }
+    if changed { Some(out) } else { None }
 }
 
 /// Best-effort extraction of package.json fields from malformed JSON using
@@ -1122,24 +1118,25 @@ impl PackageJsonAnalyzer {
         }
 
         // Check for suspicious package name patterns
-        if let Some(name) = &pkg.name {
-            if self.is_suspicious_package_name(name) && !is_official_react_native {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/suspicious-name".to_string(),
-                        format!("Package name '{}' matches suspicious patterns", name),
-                        0.7,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: name.clone(),
-                        location: Some("name".to_string()),
-                        ..Default::default()
-                    }]),
-                );
-            }
+        if let Some(name) = &pkg.name
+            && self.is_suspicious_package_name(name)
+            && !is_official_react_native
+        {
+            report.add_finding(
+                Finding::indicator(
+                    "supply-chain/suspicious-name".to_string(),
+                    format!("Package name '{}' matches suspicious patterns", name),
+                    0.7,
+                )
+                .with_criticality(Criticality::Notable)
+                .with_evidence(vec![Evidence {
+                    method: "pattern".to_string(),
+                    source: "package.json".to_string(),
+                    value: name.clone(),
+                    location: Some("name".to_string()),
+                    ..Default::default()
+                }]),
+            );
         }
 
         // Check for version 1.0.0 with install hooks (common in malicious packages)
@@ -1789,10 +1786,12 @@ mod tests {
             .unwrap();
 
         // Should detect both the install hook and the network operation
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("install-hook")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("install-hook"))
+        );
         assert!(report.findings.iter().any(|f| f.id.contains("net/")));
     }
 
@@ -1811,10 +1810,12 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(!report
-            .findings
-            .iter()
-            .any(|f| f.id == "evasion/hidden-file"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
     }
 
     #[test]
@@ -1832,10 +1833,12 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id == "evasion/hidden-file"));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
     }
 
     #[test]
@@ -1853,10 +1856,12 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(!report
-            .findings
-            .iter()
-            .any(|f| f.id == "evasion/hidden-file"));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id == "evasion/hidden-file")
+        );
     }
 
     #[test]
@@ -1934,10 +1939,12 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        assert!(report
-            .findings
-            .iter()
-            .any(|f| f.id.contains("git-dependency")));
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("git-dependency"))
+        );
     }
 
     #[test]
@@ -2187,10 +2194,12 @@ var http = require('http'); var cp = require('child_process'); eval(cp.execSync(
             report.findings.iter().map(|f| &f.id).collect::<Vec<_>>()
         );
         // Should still produce valid structure
-        assert!(report
-            .structure
-            .iter()
-            .any(|s| s.id == "manifest/npm/package.json"));
+        assert!(
+            report
+                .structure
+                .iter()
+                .any(|s| s.id == "manifest/npm/package.json")
+        );
     }
 
     #[test]

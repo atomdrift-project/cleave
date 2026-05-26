@@ -71,11 +71,13 @@ fn classify_path_category(path: &str) -> PathCategory {
     }
     // Check for hidden files in paths (e.g., /home/user/.bashrc)
     // Exclude relative path components: /../ and /./
-    if let Some(filename) = path.rsplit('/').next() {
-        if filename.starts_with('.') && !filename.is_empty() && filename != "." && filename != ".."
-        {
-            return PathCategory::Hidden;
-        }
+    if let Some(filename) = path.rsplit('/').next()
+        && filename.starts_with('.')
+        && !filename.is_empty()
+        && filename != "."
+        && filename != ".."
+    {
+        return PathCategory::Hidden;
     }
 
     // System paths
@@ -229,13 +231,14 @@ fn determine_access_pattern(files: &[String], paths: &[&PathInfo]) -> DirectoryA
         .filter_map(|p| p.access_type.as_ref())
         .collect();
 
-    if access_types.len() == 1 && files.len() > 2 {
-        if let Some(op_type) = access_types.iter().next() {
-            return DirectoryAccessPattern::BatchOperation {
-                operation: format!("{:?}", op_type),
-                count: files.len(),
-            };
-        }
+    if access_types.len() == 1
+        && files.len() > 2
+        && let Some(op_type) = access_types.iter().next()
+    {
+        return DirectoryAccessPattern::BatchOperation {
+            operation: format!("{:?}", op_type),
+            count: files.len(),
+        };
     }
 
     DirectoryAccessPattern::MultipleSpecific { count: files.len() }

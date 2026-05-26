@@ -64,7 +64,7 @@ pub mod server;
 
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;
-pub use analyzers::{detect_file_type, AnalysisInput, Analyzer, FileType};
+pub use analyzers::{AnalysisInput, Analyzer, FileType, detect_file_type};
 pub use capabilities::CapabilityMapper;
 pub use composite_rules::Platform;
 pub use types::binary::StringInfo;
@@ -79,13 +79,13 @@ pub use types::diff::{
 // text-metrics migration; downstream consumers should read keys
 // from `report.filefacts_metrics` (BTreeMap<String, f64>) under the
 // `text.*` prefix instead.
-pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 pub use types::FileAnalysis;
 pub use types::SampleExtractionConfig;
+pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
 pub use composite_rules::clear_condition_stats;
-pub use shared_resources::reload_capability_mapper;
+pub use shared_resources::{reload_capability_mapper, set_skip_traits_override};
 
 use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
@@ -458,42 +458,39 @@ where
         // the file's architecture.  arch_context takes priority because it is
         // an authoritative signal written by the rule author.  "x86" in
         // arch_context means the x86 ISA family (32-bit and 64-bit).
-        if let Some(ref ctx) = yara_match.arch_context {
-            if !ctx.is_empty()
-                && !file_archs.is_empty()
-                && !file_archs.contains(&composite_rules::Arch::All)
-            {
-                let rule_archs = crate::third_party_yara::archs_from_arch_context(ctx);
-                if !rule_archs.is_empty() && !rule_archs.iter().any(|a| file_archs.contains(a)) {
-                    tracing::debug!(
-                        "Skipping YARA rule {} (arch_context {:?} doesn't match file {:?})",
-                        yara_match.rule,
-                        ctx,
-                        file_archs,
-                    );
-                    continue;
-                }
+        if let Some(ref ctx) = yara_match.arch_context
+            && !ctx.is_empty()
+            && !file_archs.is_empty()
+            && !file_archs.contains(&composite_rules::Arch::All)
+        {
+            let rule_archs = crate::third_party_yara::archs_from_arch_context(ctx);
+            if !rule_archs.is_empty() && !rule_archs.iter().any(|a| file_archs.contains(a)) {
+                tracing::debug!(
+                    "Skipping YARA rule {} (arch_context {:?} doesn't match file {:?})",
+                    yara_match.rule,
+                    ctx,
+                    file_archs,
+                );
+                continue;
             }
         }
 
         // Fallback: skip YARA findings whose rule name implies an architecture
         // that doesn't match the file (e.g., an _X64_ rule firing on ARM64).
         // Only applied when arch_context metadata is absent.
-        if yara_match.arch_context.is_none() {
-            if let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule) {
-                if !file_archs.is_empty()
-                    && !file_archs.contains(&composite_rules::Arch::All)
-                    && !file_archs.contains(&rule_arch)
-                {
-                    tracing::debug!(
-                        "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
-                        yara_match.rule,
-                        rule_arch,
-                        file_archs,
-                    );
-                    continue;
-                }
-            }
+        if yara_match.arch_context.is_none()
+            && let Some(rule_arch) = composite_rules::Arch::from_yara_rule_name(&yara_match.rule)
+            && !file_archs.is_empty()
+            && !file_archs.contains(&composite_rules::Arch::All)
+            && !file_archs.contains(&rule_arch)
+        {
+            tracing::debug!(
+                "Skipping YARA rule {} (arch {:?} doesn't match file {:?})",
+                yara_match.rule,
+                rule_arch,
+                file_archs,
+            );
+            continue;
         }
 
         let cap_id = yara_match
@@ -733,15 +730,15 @@ fn snapshot_active_phases() -> Vec<PhaseSnapshot> {
     if let Ok(mut reg) = PHASE_REGISTRY.lock() {
         reg.retain(|w| w.strong_count() > 0);
         for weak in reg.iter() {
-            if let Some(arc) = weak.upgrade() {
-                if let Ok(state) = arc.state.read() {
-                    out.push((
-                        arc.label.clone(),
-                        state.name.clone(),
-                        state.started_at.elapsed(),
-                        arc.created_at.elapsed(),
-                    ));
-                }
+            if let Some(arc) = weak.upgrade()
+                && let Ok(state) = arc.state.read()
+            {
+                out.push((
+                    arc.label.clone(),
+                    state.name.clone(),
+                    state.started_at.elapsed(),
+                    arc.created_at.elapsed(),
+                ));
             }
         }
     }
@@ -1944,35 +1941,35 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let handled_yara_internally =
         matches!(file_type, FileType::MachO | FileType::Elf | FileType::Pe)
             || file_type.is_archive();
-    if !handled_yara_internally {
-        if let Some(engine) = yara_engine {
-            if file_type.is_program() && engine.is_loaded() {
-                let file_types = file_type.yara_filetypes();
-                let filter = if file_types.is_empty() {
-                    None
-                } else {
-                    Some(file_types.as_slice())
-                };
+    if !handled_yara_internally
+        && let Some(engine) = yara_engine
+        && file_type.is_program()
+        && engine.is_loaded()
+    {
+        let file_types = file_type.yara_filetypes();
+        let filter = if file_types.is_empty() {
+            None
+        } else {
+            Some(file_types.as_slice())
+        };
 
-                match engine.scan_bytes_to_findings(file_data, filter) {
-                    Ok((matches, findings)) => {
-                        report.yara_matches = matches;
-                        let existing: std::collections::HashSet<String> =
-                            report.findings.iter().map(|f| f.id.clone()).collect();
-                        for finding in findings {
-                            if !existing.contains(finding.id.as_str()) {
-                                report.findings.push(finding);
-                            }
-                        }
-                        if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
-                            report.metadata.tools_used.push("yara-x".to_string());
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
-                        report.metadata.errors.push(format!("yara: {e:#}"));
+        match engine.scan_bytes_to_findings(file_data, filter) {
+            Ok((matches, findings)) => {
+                report.yara_matches = matches;
+                let existing: std::collections::HashSet<String> =
+                    report.findings.iter().map(|f| f.id.clone()).collect();
+                for finding in findings {
+                    if !existing.contains(finding.id.as_str()) {
+                        report.findings.push(finding);
                     }
                 }
+                if !report.metadata.tools_used.iter().any(|t| t == "yara-x") {
+                    report.metadata.tools_used.push("yara-x".to_string());
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "YARA scan failed, continuing without YARA results");
+                report.metadata.errors.push(format!("yara: {e:#}"));
             }
         }
     }
@@ -2250,9 +2247,9 @@ where
         // poison the rayon thread pool and kill the entire scan.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         // Skip files exceeding the size limit (avoids mmap'ing huge ISOs/disk images).
-        if max_scan_size > 0 {
-            if let Ok(meta) = std::fs::metadata(&file_path) {
-                if meta.len() > max_scan_size {
+        if max_scan_size > 0
+            && let Ok(meta) = std::fs::metadata(&file_path)
+                && meta.len() > max_scan_size {
                     tracing::debug!(
                         path = %file_path.display(),
                         size_mb = meta.len() / (1024 * 1024),
@@ -2262,8 +2259,6 @@ where
                     skipped.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
-            }
-        }
 
         // File-type filtering: read the file once and check type from loaded data.
         // Previously this was done during collection (reading every file twice).

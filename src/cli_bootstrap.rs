@@ -23,12 +23,11 @@ pub(crate) fn get_parent_pid() -> u32 {
         if let Ok(output) = std::process::Command::new("ps")
             .args(["-o", "ppid=", "-p", &std::process::id().to_string()])
             .output()
+            && output.status.success()
         {
-            if output.status.success() {
-                let ppid_str = String::from_utf8_lossy(&output.stdout);
-                if let Ok(ppid) = ppid_str.trim().parse::<u32>() {
-                    return ppid;
-                }
+            let ppid_str = String::from_utf8_lossy(&output.stdout);
+            if let Ok(ppid) = ppid_str.trim().parse::<u32>() {
+                return ppid;
             }
         }
         0
@@ -94,7 +93,7 @@ pub(crate) fn apply_runtime_overrides(
     disabled: &cli::DisabledComponents,
 ) {
     if let Some(traits_dir) = traits_dir {
-        std::env::set_var("CLEAVE_TRAITS_DIR", traits_dir);
+        cleave::traits_repo::set_override_dir(Some(std::path::PathBuf::from(traits_dir)));
     }
 
     if disabled.radare2 {
@@ -134,9 +133,9 @@ pub(crate) fn init_logging(
     if let Some(log_file) = effective_log_file {
         use std::fs::OpenOptions;
         use std::sync::{Arc, Mutex};
+        use tracing_subscriber::Layer;
         use tracing_subscriber::layer::SubscriberExt;
         use tracing_subscriber::util::SubscriberInitExt;
-        use tracing_subscriber::Layer;
 
         let (stderr_filter, file_filter) = if std::env::var("RUST_LOG").is_ok() {
             (EnvFilter::from_default_env(), EnvFilter::from_default_env())
@@ -289,11 +288,7 @@ fn preferred_default_thread_count() -> Option<usize> {
     // a uniform-core Mac (Intel, or future symmetric Apple Silicon) gets
     // rayon's default and we don't second-guess it.
     let total = std::thread::available_parallelism().ok()?.get();
-    if p > 0 && p < total {
-        Some(p)
-    } else {
-        None
-    }
+    if p > 0 && p < total { Some(p) } else { None }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -398,24 +393,26 @@ pub(crate) fn start_memory_logger(
 pub(crate) fn start_deadlock_detector() {
     let result = std::thread::Builder::new()
         .name("deadlock-detector".into())
-        .spawn(|| loop {
-            std::thread::sleep(std::time::Duration::from_secs(5));
-            let deadlocks = parking_lot::deadlock::check_deadlock();
-            if deadlocks.is_empty() {
-                continue;
-            }
-            tracing::error!(
-                count = deadlocks.len(),
-                "parking_lot deadlock detected — threads involved:"
-            );
-            for (i, threads) in deadlocks.iter().enumerate() {
-                for t in threads {
-                    tracing::error!(
-                        cycle = i,
-                        thread_id = ?t.thread_id(),
-                        backtrace = ?t.backtrace(),
-                        "deadlocked thread"
-                    );
+        .spawn(|| {
+            loop {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let deadlocks = parking_lot::deadlock::check_deadlock();
+                if deadlocks.is_empty() {
+                    continue;
+                }
+                tracing::error!(
+                    count = deadlocks.len(),
+                    "parking_lot deadlock detected — threads involved:"
+                );
+                for (i, threads) in deadlocks.iter().enumerate() {
+                    for t in threads {
+                        tracing::error!(
+                            cycle = i,
+                            thread_id = ?t.thread_id(),
+                            backtrace = ?t.backtrace(),
+                            "deadlocked thread"
+                        );
+                    }
                 }
             }
         });

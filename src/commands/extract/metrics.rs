@@ -6,7 +6,7 @@
 //! - Structural metrics (function counts, string statistics)
 //! - Supports layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
-use crate::analyzers::{self, detect_file_type, FileType};
+use crate::analyzers::{self, FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::{analyze_binary_report, extract_layer_file_analysis};
 use anyhow::Result;

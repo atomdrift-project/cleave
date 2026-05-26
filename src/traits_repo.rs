@@ -11,9 +11,47 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{OnceLock, RwLock};
 
 const TRAITS_REPO_URL: &str = "https://codeberg.org/atomdrift/cleave-traits.git";
 const STALENESS_DAYS: u64 = 30;
+
+/// Process-wide override for the traits directory.
+///
+/// Set by [`set_override_dir`] (e.g. from a CLI flag or library caller) and
+/// consulted before the `CLEAVE_TRAITS_DIR` env var. Lets library callers
+/// configure traits resolution without mutating process environment.
+static TRAITS_DIR_OVERRIDE: OnceLock<RwLock<Option<PathBuf>>> = OnceLock::new();
+
+fn traits_dir_override_lock() -> &'static RwLock<Option<PathBuf>> {
+    TRAITS_DIR_OVERRIDE.get_or_init(|| RwLock::new(None))
+}
+
+/// Set a process-wide override for the traits directory.
+///
+/// Takes precedence over `CLEAVE_TRAITS_DIR`. Pass `None` to clear.
+pub fn set_override_dir(dir: Option<PathBuf>) {
+    if let Ok(mut guard) = traits_dir_override_lock().write() {
+        *guard = dir;
+    }
+}
+
+/// Returns the active override, if any.
+#[must_use]
+pub fn override_dir() -> Option<PathBuf> {
+    traits_dir_override_lock()
+        .read()
+        .ok()
+        .and_then(|g| g.clone())
+}
+
+/// Returns the explicit traits dir from override-or-env, if either is set.
+fn explicit_traits_dir() -> Option<String> {
+    if let Some(p) = override_dir() {
+        return Some(p.to_string_lossy().into_owned());
+    }
+    std::env::var("CLEAVE_TRAITS_DIR").ok()
+}
 
 /// Resolve the traits directory, auto-cloning if necessary.
 ///
@@ -21,14 +59,14 @@ const STALENESS_DAYS: u64 = 30;
 /// be obtained.
 #[allow(dead_code)] // Used by binary target
 pub fn resolve_and_ensure() -> Result<PathBuf, String> {
-    // 1. Explicit override via env var (set by --traits-dir or directly)
-    if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
+    // 1. Explicit override via API setter or CLEAVE_TRAITS_DIR env var
+    if let Some(explicit) = explicit_traits_dir() {
         let p = PathBuf::from(&explicit);
         if p.is_dir() || p.is_file() {
-            tracing::debug!("Using traits from CLEAVE_TRAITS_DIR={}", p.display());
+            tracing::debug!("Using traits from explicit override: {}", p.display());
             return Ok(p);
         }
-        return Err(format!("CLEAVE_TRAITS_DIR={explicit} does not exist"));
+        return Err(format!("traits dir override {explicit} does not exist"));
     }
 
     // 2. Platform data directory — auto-clone if missing
@@ -54,12 +92,12 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
 /// on a bad traits path is unacceptable.
 #[allow(dead_code)] // Used by library target (shared_resources reload)
 pub fn try_resolve() -> Result<PathBuf, String> {
-    if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
+    if let Some(explicit) = explicit_traits_dir() {
         let p = PathBuf::from(&explicit);
         if p.is_dir() || p.is_file() {
             return Ok(p);
         }
-        return Err(format!("CLEAVE_TRAITS_DIR={explicit} does not exist"));
+        return Err(format!("traits dir override {explicit} does not exist"));
     }
 
     let data_dir = default_traits_dir();
@@ -183,12 +221,11 @@ pub fn update(force: bool) -> Result<(), String> {
                 &format!("{before}..{after}"),
             ])
             .output()
+            && diff_output.status.success()
         {
-            if diff_output.status.success() {
-                let summary = String::from_utf8_lossy(&diff_output.stdout);
-                if !summary.is_empty() {
-                    eprint!("{summary}");
-                }
+            let summary = String::from_utf8_lossy(&diff_output.stdout);
+            if !summary.is_empty() {
+                eprint!("{summary}");
             }
         }
     }
@@ -285,7 +322,7 @@ pub fn version() -> Option<String> {
 
 /// Resolve the traits directory that is currently in use (without auto-cloning).
 fn resolve_current_traits_dir() -> PathBuf {
-    if let Ok(explicit) = std::env::var("CLEAVE_TRAITS_DIR") {
+    if let Some(explicit) = explicit_traits_dir() {
         return PathBuf::from(explicit);
     }
     default_traits_dir()
@@ -293,12 +330,12 @@ fn resolve_current_traits_dir() -> PathBuf {
 
 /// Print a staleness warning if traits haven't been updated recently.
 fn check_staleness(path: &Path) {
-    if let Some(days) = days_since_last_commit(path) {
-        if days > STALENESS_DAYS {
-            eprintln!(
-                "Note: Traits last updated {days} days ago. Run 'cleave update-rules' to refresh."
-            );
-        }
+    if let Some(days) = days_since_last_commit(path)
+        && days > STALENESS_DAYS
+    {
+        eprintln!(
+            "Note: Traits last updated {days} days ago. Run 'cleave update-rules' to refresh."
+        );
     }
 }
 
@@ -373,16 +410,13 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_current_prefers_env_var() {
-        // Save and restore env
-        let original = std::env::var("CLEAVE_TRAITS_DIR").ok();
-        std::env::set_var("CLEAVE_TRAITS_DIR", "/tmp/test-traits");
+    fn test_resolve_current_prefers_override() {
+        // Process-wide override; restore on exit so other tests aren't affected.
+        let original = override_dir();
+        set_override_dir(Some(PathBuf::from("/tmp/test-traits")));
         let result = resolve_current_traits_dir();
         assert_eq!(result, PathBuf::from("/tmp/test-traits"));
-        match original {
-            Some(v) => std::env::set_var("CLEAVE_TRAITS_DIR", v),
-            None => std::env::remove_var("CLEAVE_TRAITS_DIR"),
-        }
+        set_override_dir(original);
     }
 
     #[test]

@@ -3,10 +3,10 @@
 
 //! Integration tests for embedded code detection in strings
 
-use cleave::analyzers::embedded_code_detector::{
-    analyze_embedded_string, detect_language, EmbeddedAnalysisResult,
-};
 use cleave::analyzers::FileType;
+use cleave::analyzers::embedded_code_detector::{
+    EmbeddedAnalysisResult, analyze_embedded_string, detect_language,
+};
 use cleave::capabilities::CapabilityMapper;
 use cleave::types::binary::StringInfo;
 use std::sync::Arc;
@@ -16,13 +16,9 @@ fn make_capability_mapper() -> Arc<CapabilityMapper> {
     static ENV_LOCK: Mutex<()> = Mutex::new(());
     let _guard = ENV_LOCK.lock().expect("lock env guard");
 
-    let previous = std::env::var_os("CLEAVE_SKIP_TRAITS");
-    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    cleave::set_skip_traits_override(Some(true));
     let mapper = Arc::new(CapabilityMapper::new());
-    match previous {
-        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
-        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
-    }
+    cleave::set_skip_traits_override(None);
     mapper
 }
 

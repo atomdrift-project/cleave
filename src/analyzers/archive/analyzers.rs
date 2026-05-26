@@ -23,16 +23,16 @@
 //! concurrent archives compete for the same rayon threads, so individual
 //! member analyses must be bounded to avoid stalling the entire pool.
 
+use super::ArchiveAnalyzer;
 use super::guards::{
-    sanitize_entry_path, symlink_escapes, CancellableReader, ExtractionGuard, HostileArchiveReason,
-    LimitedReader, MAX_FILE_SIZE, MAX_PATH_COMPONENT_LEN,
+    CancellableReader, ExtractionGuard, HostileArchiveReason, LimitedReader, MAX_FILE_SIZE,
+    MAX_PATH_COMPONENT_LEN, sanitize_entry_path, symlink_escapes,
 };
 use super::utils::{calculate_sha256, find_main_class, is_benign_java_path};
-use super::ArchiveAnalyzer;
-use crate::analyzers::{detect_file_type, AnalysisInput, FileType, FileTypeExt};
+use crate::analyzers::{AnalysisInput, FileType, FileTypeExt, detect_file_type};
 use crate::types::{
-    encode_archive_path, AnalysisReport, ArchiveEntry, FileAnalysis, Finding, StringInfo,
-    StringType, TargetInfo, YaraMatch,
+    AnalysisReport, ArchiveEntry, FileAnalysis, Finding, StringInfo, StringType, TargetInfo,
+    YaraMatch, encode_archive_path,
 };
 use anyhow::Result;
 use rayon::prelude::*;
@@ -636,13 +636,13 @@ impl ArchiveAnalyzer {
                 let target = super::zip::read_indexed_zip_member(data, entry, 4096)
                     .ok()
                     .and_then(|bytes| String::from_utf8(bytes).ok());
-                if let Some(target_str) = target.as_deref() {
-                    if symlink_escapes(&outpath, target_str, fake_root) {
-                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
-                            "{} -> {}",
-                            entry_name, target_str
-                        )));
-                    }
+                if let Some(target_str) = target.as_deref()
+                    && symlink_escapes(&outpath, target_str, fake_root)
+                {
+                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                        "{} -> {}",
+                        entry_name, target_str
+                    )));
                 }
                 guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
                     archive_path: relative_path,
@@ -854,39 +854,40 @@ impl ArchiveAnalyzer {
                 "regular"
             };
 
-            if let Some(mode) = entry.unix_mode() {
-                if mode & 0o170000 == 0o120000 {
-                    let mut target_buf = Vec::new();
-                    let mut limited = LimitedReader::new(&mut entry, 4096);
-                    let mut linkname_capture: Option<String> = None;
-                    if let Ok(read_size) = limited.read_to_end(&mut target_buf) {
-                        if read_size > 0 && read_size < 4096 {
-                            if let Ok(target_str) = String::from_utf8(target_buf) {
-                                if symlink_escapes(&outpath, &target_str, fake_root) {
-                                    guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(
-                                        format!("{} -> {}", entry_name, target_str),
-                                    ));
-                                }
-                                linkname_capture = Some(target_str);
-                            }
-                        }
+            if let Some(mode) = entry.unix_mode()
+                && mode & 0o170000 == 0o120000
+            {
+                let mut target_buf = Vec::new();
+                let mut limited = LimitedReader::new(&mut entry, 4096);
+                let mut linkname_capture: Option<String> = None;
+                if let Ok(read_size) = limited.read_to_end(&mut target_buf)
+                    && read_size > 0
+                    && read_size < 4096
+                    && let Ok(target_str) = String::from_utf8(target_buf)
+                {
+                    if symlink_escapes(&outpath, &target_str, fake_root) {
+                        guard.add_hostile_reason(HostileArchiveReason::SymlinkEscape(format!(
+                            "{} -> {}",
+                            entry_name, target_str
+                        )));
                     }
-                    guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
-                        archive_path: relative_path.clone(),
-                        compressed_size: Some(entry_compressed_size),
-                        compression_method: Some(entry_compression),
-                        mtime_unix: entry_mtime,
-                        mode_octal: entry_mode_octal,
-                        uid: None,
-                        gid: None,
-                        uname: None,
-                        gname: None,
-                        entry_type: Some(entry_type_label.to_string()),
-                        linkname: linkname_capture,
-                        host_os: None,
-                    });
-                    continue;
+                    linkname_capture = Some(target_str);
                 }
+                guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                    archive_path: relative_path.clone(),
+                    compressed_size: Some(entry_compressed_size),
+                    compression_method: Some(entry_compression),
+                    mtime_unix: entry_mtime,
+                    mode_octal: entry_mode_octal,
+                    uid: None,
+                    gid: None,
+                    uname: None,
+                    gname: None,
+                    entry_type: Some(entry_type_label.to_string()),
+                    linkname: linkname_capture,
+                    host_os: None,
+                });
+                continue;
             }
 
             if entry.is_dir() {

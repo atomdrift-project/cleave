@@ -410,91 +410,90 @@ impl PEAnalyzer {
 
         match UPXDecompressor::decompress(file_path) {
             Ok(unpacked_data) => {
-                if let Ok(temp_file) = tempfile::NamedTempFile::new() {
-                    if fs::write(temp_file.path(), &unpacked_data).is_ok() {
-                        let opts = crate::analyzers::stng_analysis_opts(4);
-                        let unpacked_strings =
-                            stng::extract_strings_with_options(&unpacked_data, &opts);
-                        // UPX-unpacked bytes differ from the caller's
-                        // bytes; open a fresh context on the
-                        // decompressed payload so the downstream
-                        // helpers see a self-consistent view.
-                        let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
-                            temp_file.path(),
-                            &unpacked_data,
-                        ) else {
-                            return report;
-                        };
-                        let mut unpacked_report = self.analyze_structural_with_strings(
-                            temp_file.path(),
-                            temp_file.path(),
-                            &unpacked_data,
-                            Some(&unpacked_strings),
-                            true,
-                            None, // Hash will change after decompression
-                            &unpacked_ctx,
-                        );
-                        crate::analyzers::binary_extractors::augment_report(
+                if let Ok(temp_file) = tempfile::NamedTempFile::new()
+                    && fs::write(temp_file.path(), &unpacked_data).is_ok()
+                {
+                    let opts = crate::analyzers::stng_analysis_opts(4);
+                    let unpacked_strings =
+                        stng::extract_strings_with_options(&unpacked_data, &opts);
+                    // UPX-unpacked bytes differ from the caller's
+                    // bytes; open a fresh context on the
+                    // decompressed payload so the downstream
+                    // helpers see a self-consistent view.
+                    let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
+                        temp_file.path(),
+                        &unpacked_data,
+                    ) else {
+                        return report;
+                    };
+                    let mut unpacked_report = self.analyze_structural_with_strings(
+                        temp_file.path(),
+                        temp_file.path(),
+                        &unpacked_data,
+                        Some(&unpacked_strings),
+                        true,
+                        None, // Hash will change after decompression
+                        &unpacked_ctx,
+                    );
+                    crate::analyzers::binary_extractors::augment_report(
+                        &mut unpacked_report,
+                        &unpacked_data,
+                    );
+                    if let Some(yara) = &self.yara_engine {
+                        match yara.scan_bytes_to_findings(&unpacked_data, Some(&["pe"])) {
+                            Ok((matches, findings)) => {
+                                unpacked_report.yara_matches = matches;
+                                for finding in findings {
+                                    unpacked_report.push_finding_capped(finding);
+                                }
+                            }
+                            Err(e) => unpacked_report
+                                .metadata
+                                .errors
+                                .push(format!("yara(upx): {e:#}")),
+                        }
+                    }
+                    // Evaluate composites against the unpacked layer so that
+                    // objective-level findings (infostealers, etc.) appear in the child.
+                    self.capability_mapper
+                        .evaluate_and_merge_findings_with_precomputed(
                             &mut unpacked_report,
                             &unpacked_data,
+                            crate::capabilities::AnalysisBorrow::with_filefacts(
+                                None,
+                                Some(&unpacked_ctx),
+                            ),
+                            None,
+                            None,
+                            None,
+                            None,
                         );
-                        if let Some(yara) = &self.yara_engine {
-                            match yara.scan_bytes_to_findings(&unpacked_data, Some(&["pe"])) {
-                                Ok((matches, findings)) => {
-                                    unpacked_report.yara_matches = matches;
-                                    for finding in findings {
-                                        unpacked_report.push_finding_capped(finding);
-                                    }
-                                }
-                                Err(e) => unpacked_report
-                                    .metadata
-                                    .errors
-                                    .push(format!("yara(upx): {e:#}")),
-                            }
-                        }
-                        // Evaluate composites against the unpacked layer so that
-                        // objective-level findings (infostealers, etc.) appear in the child.
-                        self.capability_mapper
-                            .evaluate_and_merge_findings_with_precomputed(
-                                &mut unpacked_report,
-                                &unpacked_data,
-                                crate::capabilities::AnalysisBorrow::with_filefacts(
-                                    None,
-                                    Some(&unpacked_ctx),
-                                ),
-                                None,
-                                None,
-                                None,
-                                None,
-                            );
 
-                        // Create separate FileAnalysis for unpacked layer
-                        let unpacked_sha256 =
-                            crate::analyzers::utils::calculate_sha256(&unpacked_data);
-                        let virtual_path = encode_upx_path(&file_path.display().to_string());
+                    // Create separate FileAnalysis for unpacked layer
+                    let unpacked_sha256 = crate::analyzers::utils::calculate_sha256(&unpacked_data);
+                    let virtual_path = encode_upx_path(&file_path.display().to_string());
 
-                        let mut unpacked_file = unpacked_report.to_file_analysis(0);
-                        unpacked_file.path = virtual_path;
-                        unpacked_file.sha256 = unpacked_sha256;
-                        unpacked_file.size = unpacked_data.len() as u64;
-                        unpacked_file.depth = 1;
-                        unpacked_file.parent_id = Some(0);
-                        unpacked_file.encoding = Some(vec!["upx".to_string()]);
-                        unpacked_file.compute_summary();
+                    let mut unpacked_file = unpacked_report.to_file_analysis(0);
+                    unpacked_file.path = virtual_path;
+                    unpacked_file.sha256 = unpacked_sha256;
+                    unpacked_file.size = unpacked_data.len() as u64;
+                    unpacked_file.depth = 1;
+                    unpacked_file.parent_id = Some(0);
+                    unpacked_file.encoding = Some(vec!["upx".to_string()]);
+                    unpacked_file.compute_summary();
 
-                        // The packed wrapper represents the executable users see, so
-                        // its findings include the behavior exposed by the UPX layer
-                        // while the child retains layer-specific attribution.
-                        for finding in &unpacked_file.findings {
-                            report.push_finding_capped(finding.clone());
-                        }
-
-                        // Add nested files from unpacked analysis (e.g., embedded code)
-                        report.files.extend(unpacked_report.files);
-                        report.files.push(unpacked_file);
-
-                        report.metadata.tools_used.push("upx".to_string());
+                    // The packed wrapper represents the executable users see, so
+                    // its findings include the behavior exposed by the UPX layer
+                    // while the child retains layer-specific attribution.
+                    for finding in &unpacked_file.findings {
+                        report.push_finding_capped(finding.clone());
                     }
+
+                    // Add nested files from unpacked analysis (e.g., embedded code)
+                    report.files.extend(unpacked_report.files);
+                    report.files.push(unpacked_file);
+
+                    report.metadata.tools_used.push("upx".to_string());
                 }
             }
             Err(e) => {
@@ -1028,11 +1027,11 @@ impl PEAnalyzer {
                 // Merge per-format kv subtrees from the inner archive report
                 // (e.g. `pyinstaller.*`) into the host PE's values_tree so they
                 // surface in the host's `k` field at finalize time.
-                if let Some(inner_kv) = archive_report.values_tree {
-                    if let serde_json::Value::Object(map) = *inner_kv {
-                        for (ns, value) in map {
-                            report.merge_kv_subtree(&ns, value);
-                        }
+                if let Some(inner_kv) = archive_report.values_tree
+                    && let serde_json::Value::Object(map) = *inner_kv
+                {
+                    for (ns, value) in map {
+                        report.merge_kv_subtree(&ns, value);
                     }
                 }
                 for tool in archive_report.metadata.tools_used {
@@ -1713,10 +1712,12 @@ mod tests {
         }
 
         let report = analyzer.analyze(&test_file).unwrap();
-        assert!(report
-            .metadata
-            .tools_used
-            .contains(&"filefacts".to_string()));
+        assert!(
+            report
+                .metadata
+                .tools_used
+                .contains(&"filefacts".to_string())
+        );
     }
 
     #[test]
@@ -1867,7 +1868,7 @@ mod tests {
 
     #[test]
     fn test_pe_upx_tool_missing_creates_finding() {
-        use crate::upx::{disable_upx, UPXDecompressor};
+        use crate::upx::{UPXDecompressor, disable_upx};
 
         // Temporarily disable UPX to simulate tool not available
         disable_upx();

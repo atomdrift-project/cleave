@@ -22,12 +22,13 @@ mod scopes;
 
 pub mod format;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{Context, Result, anyhow};
 use rayon::prelude::*;
 use rustc_hash::FxHashMap;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
+use crate::AnalysisOptions;
 use crate::types::binary::{Export, Import, Section, StringInfo};
 use crate::types::file_analysis::FileAnalysis;
 use crate::types::traits_findings::Finding;
@@ -35,7 +36,6 @@ use crate::types::{
     AnalysisReport, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, Scope, ScopeDiff,
     ScopeDiffs, ScopeRocs, TargetInfo,
 };
-use crate::AnalysisOptions;
 
 /// Default limit for the size of each scope's `added` / `removed` / `changed`
 /// list. Counts and ROCs are unaffected. `0` removes the cap.
@@ -567,11 +567,7 @@ fn mean_nonempty_rocs(rocs: &ScopeRocs, scopes: &ScopeDiffs) -> f32 {
         })
         .map(|&scope| rocs.get(scope))
         .fold((0.0_f32, 0_u32), |(s, n), r| (s + r, n + 1));
-    if n == 0 {
-        0.0
-    } else {
-        sum / n as f32
-    }
+    if n == 0 { 0.0 } else { sum / n as f32 }
 }
 
 /// Build the v3-envelope `AnalysisReport` carrying the diff. The envelope is

@@ -7,7 +7,7 @@
 //! - String classification (URLs, IPs, emails, paths, shell commands)
 //! - Layer filtering (e.g., --layer upx@0 for UPX-unpacked content)
 
-use crate::analyzers::{detect_file_type, FileType};
+use crate::analyzers::{FileType, detect_file_type};
 use crate::cli;
 use crate::commands::extract::extract_layer_file_analysis;
 use crate::commands::shared::extract_strings_from_ast;
@@ -59,23 +59,23 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
 
     // Reject archives — strings on compressed data is meaningless.
     // Use `cleave strings <file> --layer <member>` or run on extracted members.
-    if let Ok(file_type) = detect_file_type(path) {
-        if file_type.is_archive() {
-            anyhow::bail!(
-                "Unsupported file type for string extraction: {:?}. \
+    if let Ok(file_type) = detect_file_type(path)
+        && file_type.is_archive()
+    {
+        anyhow::bail!(
+            "Unsupported file type for string extraction: {:?}. \
                  Run on extracted archive members instead (e.g. cleave strings <extracted_file>).",
-                file_type
-            );
-        }
+            file_type
+        );
     }
 
     let data = fs::read(path)?;
 
     // For source code files with AST support, extract strings via AST parsing
-    if let Ok(file_type) = detect_file_type(path) {
-        if file_type.is_source_code() {
-            return extract_strings_from_ast(path, &file_type, min_length, format);
-        }
+    if let Ok(file_type) = detect_file_type(path)
+        && file_type.is_source_code()
+    {
+        return extract_strings_from_ast(path, &file_type, min_length, format);
     }
 
     let mut imports = std::collections::HashSet::new();
@@ -90,27 +90,26 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
                 // macOS specific optimization: use nm -u -m for highly accurate import library mappings
                 #[cfg(target_os = "macos")]
                 {
-                    if file_type == FileType::MachO {
-                        if let Ok(nm_output) = std::process::Command::new("nm")
+                    if file_type == FileType::MachO
+                        && let Ok(nm_output) = std::process::Command::new("nm")
                             .args(["-u", "-m", &*path.to_string_lossy()])
                             .output()
-                        {
-                            let nm_str = String::from_utf8_lossy(&nm_output.stdout);
-                            for line in nm_str.lines() {
-                                let trimmed = line.trim();
-                                if let Some(sym_start) = trimmed.find("external ") {
-                                    let sym_part = &trimmed[sym_start + 9..];
-                                    if let Some(lib_start) = sym_part.find(" (from ") {
-                                        let mut sym = sym_part[..lib_start].trim().to_string();
-                                        // Strip leading underscore for consistency
-                                        if sym.starts_with('_') {
-                                            sym = sym[1..].to_string();
-                                        }
-                                        let lib_part = &sym_part[lib_start + 7..];
-                                        let lib = lib_part.trim_end_matches(')').to_string();
-                                        imports.insert(sym.clone());
-                                        import_libraries.insert(sym, lib);
+                    {
+                        let nm_str = String::from_utf8_lossy(&nm_output.stdout);
+                        for line in nm_str.lines() {
+                            let trimmed = line.trim();
+                            if let Some(sym_start) = trimmed.find("external ") {
+                                let sym_part = &trimmed[sym_start + 9..];
+                                if let Some(lib_start) = sym_part.find(" (from ") {
+                                    let mut sym = sym_part[..lib_start].trim().to_string();
+                                    // Strip leading underscore for consistency
+                                    if sym.starts_with('_') {
+                                        sym = sym[1..].to_string();
                                     }
+                                    let lib_part = &sym_part[lib_start + 7..];
+                                    let lib = lib_part.trim_end_matches(')').to_string();
+                                    imports.insert(sym.clone());
+                                    import_libraries.insert(sym, lib);
                                 }
                             }
                         }
@@ -255,23 +254,21 @@ fn format_strings_output(
                     .replace('\t', "\\t");
 
                 if s.string_type == Some(crate::types::StringType::Base64) {
-                    use base64::{engine::general_purpose, Engine as _};
+                    use base64::{Engine as _, engine::general_purpose};
 
-                    if let Ok(decoded) = general_purpose::STANDARD.decode(s.value.trim()) {
-                        if !decoded.is_empty()
-                            && decoded.iter().all(|&b| {
-                                (0x20..=0x7e).contains(&b) || b == b'\n' || b == b'\r' || b == b'\t'
-                            })
-                        {
-                            if let Ok(decoded_str) = String::from_utf8(decoded) {
-                                let escaped = decoded_str
-                                    .replace('\n', "\\n")
-                                    .replace('\r', "\\r")
-                                    .replace('\t', "\\t");
+                    if let Ok(decoded) = general_purpose::STANDARD.decode(s.value.trim())
+                        && !decoded.is_empty()
+                        && decoded.iter().all(|&b| {
+                            (0x20..=0x7e).contains(&b) || b == b'\n' || b == b'\r' || b == b'\t'
+                        })
+                        && let Ok(decoded_str) = String::from_utf8(decoded)
+                    {
+                        let escaped = decoded_str
+                            .replace('\n', "\\n")
+                            .replace('\r', "\\r")
+                            .replace('\t', "\\t");
 
-                                val_display = format!("{}  [{}]", val_display, escaped);
-                            }
-                        }
+                        val_display = format!("{}  [{}]", val_display, escaped);
                     }
                 }
 

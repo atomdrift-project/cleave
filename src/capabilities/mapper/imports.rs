@@ -39,13 +39,13 @@ impl super::CapabilityMapper {
                 std::collections::HashMap::new();
 
             for import in &report.imports {
-                if let Some(lib) = &import.library {
-                    if !lib.is_empty() {
-                        libs_with_symbols
-                            .entry(lib.clone())
-                            .or_default()
-                            .push(import.symbol.clone());
-                    }
+                if let Some(lib) = &import.library
+                    && !lib.is_empty()
+                {
+                    libs_with_symbols
+                        .entry(lib.clone())
+                        .or_default()
+                        .push(import.symbol.clone());
                 }
             }
 

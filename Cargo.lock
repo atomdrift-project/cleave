@@ -752,7 +752,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cleave"
-version = "2.0.0-rc.1"
+version = "2.0.0-rc.2"
 dependencies = [
  "aes 0.8.4",
  "aho-corasick",
@@ -816,7 +816,7 @@ dependencies = [
  "sha2 0.10.9",
  "simd-json",
  "smallvec",
- "stng 1.4.0 (git+https://codeberg.org/atomdrift/stng.git)",
+ "stng 1.5.0",
  "streaming-iterator",
  "strsim",
  "sysmem",
@@ -1591,7 +1591,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.7.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#f624200cc8388c341c6cf94fc2220795b1433c2a"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#74b002fde68e6fdec761c58e0b24dfbff445d829"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -1620,7 +1620,7 @@ dependencies = [
  "serde_yaml",
  "sha1 0.10.6",
  "sha2 0.10.9",
- "stng 1.4.0 (git+https://codeberg.org/atomdrift/stng.git?rev=d1e272d9)",
+ "stng 1.4.0",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -4240,8 +4240,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "1.4.0"
-source = "git+https://codeberg.org/atomdrift/stng.git#45a560c8133e04e7786e61dd91d1bda527169f3d"
+version = "1.5.0"
+source = "git+https://codeberg.org/atomdrift/stng.git#1dfb0972562ef09bc4e18a03965e41aea5123a67"
 dependencies = [
  "aho-corasick",
  "anyhow",

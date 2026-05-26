@@ -296,30 +296,30 @@ fn walk_ast_for_pattern_multi<'a>(
     crate::analyzers::ast_walker::walk_tree_with_stats(cursor, deadline, |node, _depth| {
         // Check if this node matches any of the target types
         let node_kind = node.kind();
-        if target_node_types.contains(&node_kind) {
-            if let Ok(text) = node.utf8_text(source) {
-                // For call-kind nodes, also try the extracted function
-                // name as a fallback so `exact: foo` matches `foo(args)`.
-                // Mirrors the cache path; see `Evidence.alt_value` docs.
-                let alt = crate::analyzers::symbol_extraction::extract_function_name(&node, source);
-                let matched = matcher(text) || alt.as_deref().is_some_and(&matcher);
-                if matched {
-                    *match_count += 1;
-                    if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
-                        evidence.push(Evidence {
-                            method: "ast".to_string(),
-                            source: "tree-sitter".to_string(),
-                            value: truncate_evidence(text, 100),
-                            location: Some(format!(
-                                "{}:{}",
-                                node.start_position().row + 1,
-                                node.start_position().column + 1
-                            )),
-                            offsets: vec![node.start_byte() as u64],
-                            alt_value: alt,
-                            ..Default::default()
-                        });
-                    }
+        if target_node_types.contains(&node_kind)
+            && let Ok(text) = node.utf8_text(source)
+        {
+            // For call-kind nodes, also try the extracted function
+            // name as a fallback so `exact: foo` matches `foo(args)`.
+            // Mirrors the cache path; see `Evidence.alt_value` docs.
+            let alt = crate::analyzers::symbol_extraction::extract_function_name(&node, source);
+            let matched = matcher(text) || alt.as_deref().is_some_and(&matcher);
+            if matched {
+                *match_count += 1;
+                if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    evidence.push(Evidence {
+                        method: "ast".to_string(),
+                        source: "tree-sitter".to_string(),
+                        value: truncate_evidence(text, 100),
+                        location: Some(format!(
+                            "{}:{}",
+                            node.start_position().row + 1,
+                            node.start_position().column + 1
+                        )),
+                        offsets: vec![node.start_byte() as u64],
+                        alt_value: alt,
+                        ..Default::default()
+                    });
                 }
             }
         }
@@ -399,10 +399,10 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let deadline = ctx.deadline;
     let mut timed_out = false;
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
-        if let Some(dl) = deadline {
-            if std::time::Instant::now() > dl {
-                return ControlFlow::Break(());
-            }
+        if let Some(dl) = deadline
+            && std::time::Instant::now() > dl
+        {
+            return ControlFlow::Break(());
         }
         ControlFlow::Continue(())
     };
@@ -413,11 +413,11 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let mut buffer2: Vec<u8> = Vec::new();
     while let Some(m) = matches.next() {
         // Check deadline between matches too
-        if let Some(dl) = deadline {
-            if std::time::Instant::now() > dl {
-                timed_out = true;
-                break;
-            }
+        if let Some(dl) = deadline
+            && std::time::Instant::now() > dl
+        {
+            timed_out = true;
+            break;
         }
         // Check text predicates (e.g., #eq?, #match?) using tree-sitter's built-in method
         // This is REQUIRED - tree-sitter does NOT automatically filter by text predicates

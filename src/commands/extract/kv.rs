@@ -171,11 +171,11 @@ fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     // `pe.*` / `elf.*` / `macho.*` come exclusively from filefacts
     // (single source of truth). `binary_extractors` augments with
     // `.comment` / sanitizer detections.
-    if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, content) {
-        if let Value::Object(map) = ctx.values_tree() {
-            for (namespace, subtree) in map {
-                report.merge_kv_subtree(&namespace, subtree);
-            }
+    if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, content)
+        && let Value::Object(map) = ctx.values_tree()
+    {
+        for (namespace, subtree) in map {
+            report.merge_kv_subtree(&namespace, subtree);
         }
     }
     analyzers::binary_extractors::augment_report(&mut report, content);

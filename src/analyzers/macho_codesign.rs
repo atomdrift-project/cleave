@@ -5,7 +5,7 @@
 //! - Team identifier from CMS certificate
 //! - Entitlements from XML plist blob
 
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use roxmltree::Document;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -454,11 +454,11 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
                             }
                         }
                         "string" => {
-                            if let Some(key) = current_key.take() {
-                                if let Some(text) = child.text() {
-                                    entitlements
-                                        .insert(key, EntitlementValue::String(text.to_string()));
-                                }
+                            if let Some(key) = current_key.take()
+                                && let Some(text) = child.text()
+                            {
+                                entitlements
+                                    .insert(key, EntitlementValue::String(text.to_string()));
                             }
                         }
                         "array" => {
@@ -467,10 +467,9 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
                                 for array_child in child.children() {
                                     if array_child.is_element()
                                         && array_child.tag_name().name() == "string"
+                                        && let Some(text) = array_child.text()
                                     {
-                                        if let Some(text) = array_child.text() {
-                                            array_values.push(text.to_string());
-                                        }
+                                        array_values.push(text.to_string());
                                     }
                                 }
                                 entitlements.insert(key, EntitlementValue::Array(array_values));
@@ -511,19 +510,19 @@ fn extract_certificate_info(cms_data: &[u8]) -> (Option<String>, SignatureType, 
 
     // Extract all OU fields
     for i in 0..cms_data.len().saturating_sub(5) {
-        if cms_data[i..i + 3] == [0x55, 0x04, 0x0B] {
-            if let Some(ou) = extract_der_string(&cms_data[i..], &[0x55, 0x04, 0x0B]) {
-                all_ous.push(ou);
-            }
+        if cms_data[i..i + 3] == [0x55, 0x04, 0x0B]
+            && let Some(ou) = extract_der_string(&cms_data[i..], &[0x55, 0x04, 0x0B])
+        {
+            all_ous.push(ou);
         }
     }
 
     // Extract all CN fields
     for i in 0..cms_data.len().saturating_sub(5) {
-        if cms_data[i..i + 3] == [0x55, 0x04, 0x03] {
-            if let Some(cn) = extract_der_string(&cms_data[i..], &[0x55, 0x04, 0x03]) {
-                all_cns.push(cn);
-            }
+        if cms_data[i..i + 3] == [0x55, 0x04, 0x03]
+            && let Some(cn) = extract_der_string(&cms_data[i..], &[0x55, 0x04, 0x03])
+        {
+            all_cns.push(cn);
         }
     }
 
@@ -837,10 +836,12 @@ mod tests {
         let data = vec![0xBA, 0xD0, 0xBA, 0xD0, 0x00, 0x00, 0x00, 0x10];
         let result = parse_superblob(&data);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid superblob magic"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid superblob magic")
+        );
     }
 
     #[test]

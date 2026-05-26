@@ -237,7 +237,7 @@ fn test_density_uses_effective_range() {
 
     // Create a large file with pattern only in a small range
     let mut data = vec![0u8; 10240]; // 10KB file
-                                     // Put "DEADBEEF" pattern in first 100 bytes (hex: 44454144424545)
+    // Put "DEADBEEF" pattern in first 100 bytes (hex: 44454144424545)
     data[0..8].copy_from_slice(b"DEADBEEF");
     data[10..18].copy_from_slice(b"DEADBEEF");
     data[20..28].copy_from_slice(b"DEADBEEF");

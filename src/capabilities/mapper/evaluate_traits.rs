@@ -64,78 +64,71 @@ impl super::CapabilityMapper {
 
         // Idea 9: Batch AST node collection
         let mut ast_kind_cache = None;
-        if let Some(tree) = cached_ast {
-            if let Ok(source) = std::str::from_utf8(binary_data) {
-                let mut required_node_types = FxHashSet::default();
-                for &idx in &applicable_indices {
-                    let trait_def = &self.trait_definitions[idx];
-                    if let Condition::TreeSitter { kind, node, .. } = &trait_def.r#if {
-                        if let Some(k) = kind {
-                            for nt in map_kind_to_node_types(k, file_type) {
-                                required_node_types.insert(nt);
-                            }
-                        } else if let Some(n) = node {
-                            required_node_types.insert(n.as_str());
+        if let Some(tree) = cached_ast
+            && let Ok(source) = std::str::from_utf8(binary_data)
+        {
+            let mut required_node_types = FxHashSet::default();
+            for &idx in &applicable_indices {
+                let trait_def = &self.trait_definitions[idx];
+                if let Condition::TreeSitter { kind, node, .. } = &trait_def.r#if {
+                    if let Some(k) = kind {
+                        for nt in map_kind_to_node_types(k, file_type) {
+                            required_node_types.insert(nt);
                         }
+                    } else if let Some(n) = node {
+                        required_node_types.insert(n.as_str());
                     }
                 }
+            }
 
-                if !required_node_types.is_empty() {
-                    // Pre-compute the set of call-node kinds for this
-                    // file type. For these, also populate `alt_value`
-                    // with the extracted function name so `exact:`
-                    // patterns spelled the natural way (`exact: foo`)
-                    // can match `foo(args)` call expressions. See
-                    // `Evidence.alt_value` docs.
-                    let call_node_types: FxHashSet<&'static str> =
-                        crate::composite_rules::ast_kinds::map_kind_to_node_types(
-                            "call", file_type,
-                        )
+            if !required_node_types.is_empty() {
+                // Pre-compute the set of call-node kinds for this
+                // file type. For these, also populate `alt_value`
+                // with the extracted function name so `exact:`
+                // patterns spelled the natural way (`exact: foo`)
+                // can match `foo(args)` call expressions. See
+                // `Evidence.alt_value` docs.
+                let call_node_types: FxHashSet<&'static str> =
+                    crate::composite_rules::ast_kinds::map_kind_to_node_types("call", file_type)
                         .into_iter()
                         .collect();
-                    let mut cache = FxHashMap::default();
-                    let mut cursor = tree.walk();
-                    crate::analyzers::ast_walker::walk_tree_with_stats(
-                        &mut cursor,
-                        None,
-                        |node, _| {
-                            let kind = node.kind();
-                            if required_node_types.contains(kind) {
-                                if let Ok(text) = node.utf8_text(source.as_bytes()) {
-                                    let alt_value = if call_node_types.contains(kind) {
-                                        crate::analyzers::symbol_extraction::extract_function_name(
-                                            &node,
-                                            source.as_bytes(),
-                                        )
-                                    } else {
-                                        None
-                                    };
-                                    cache
-                                        .entry(kind.to_string())
-                                        .or_insert_with(Vec::new)
-                                        .push(Evidence {
-                                        method: "ast".to_string(),
-                                        source: "tree-sitter".to_string(),
-                                        value:
-                                            crate::composite_rules::evaluators::truncate_evidence(
-                                                text, 100,
-                                            ),
-                                        location: Some(format!(
-                                            "{}:{}",
-                                            node.start_position().row + 1,
-                                            node.start_position().column + 1
-                                        )),
-                                        offsets: vec![node.start_byte() as u64],
-                                        alt_value,
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                            true
-                        },
-                    );
-                    ast_kind_cache = Some(cache);
-                }
+                let mut cache = FxHashMap::default();
+                let mut cursor = tree.walk();
+                crate::analyzers::ast_walker::walk_tree_with_stats(&mut cursor, None, |node, _| {
+                    let kind = node.kind();
+                    if required_node_types.contains(kind)
+                        && let Ok(text) = node.utf8_text(source.as_bytes())
+                    {
+                        let alt_value = if call_node_types.contains(kind) {
+                            crate::analyzers::symbol_extraction::extract_function_name(
+                                &node,
+                                source.as_bytes(),
+                            )
+                        } else {
+                            None
+                        };
+                        cache
+                            .entry(kind.to_string())
+                            .or_insert_with(Vec::new)
+                            .push(Evidence {
+                                method: "ast".to_string(),
+                                source: "tree-sitter".to_string(),
+                                value: crate::composite_rules::evaluators::truncate_evidence(
+                                    text, 100,
+                                ),
+                                location: Some(format!(
+                                    "{}:{}",
+                                    node.start_position().row + 1,
+                                    node.start_position().column + 1
+                                )),
+                                offsets: vec![node.start_byte() as u64],
+                                alt_value,
+                                ..Default::default()
+                            });
+                    }
+                    true
+                });
+                ast_kind_cache = Some(cache);
             }
         }
 
@@ -474,22 +467,22 @@ impl super::CapabilityMapper {
                     && trait_def.per_kb_max.is_none();
 
                 if is_simple_exact_string {
-                    if let Some(evidence) = cache.cached_evidence.get(&idx) {
-                        if !evidence.is_empty() {
-                            return Some(Finding {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                                evidence: evidence.clone(),
-                                match_count: 0,
-                                kind: FindingKind::Capability,
-                                trait_refs: vec![],
-                                source_file: get_relative_source_file(&trait_def.defined_in),
-                            });
-                        }
+                    if let Some(evidence) = cache.cached_evidence.get(&idx)
+                        && !evidence.is_empty()
+                    {
+                        return Some(Finding {
+                            id: trait_def.id.clone(),
+                            desc: trait_def.desc.clone(),
+                            conf: trait_def.conf,
+                            crit: trait_def.crit,
+                            mbc: trait_def.mbc.clone(),
+                            attack: trait_def.attack.clone(),
+                            evidence: evidence.clone(),
+                            match_count: 0,
+                            kind: FindingKind::Capability,
+                            trait_refs: vec![],
+                            source_file: get_relative_source_file(&trait_def.defined_in),
+                        });
                     }
                     return None;
                 }
@@ -514,22 +507,22 @@ impl super::CapabilityMapper {
                     && trait_def.per_kb_max.is_none();
 
                 if is_simple_substr_string {
-                    if let Some(evidence) = cache.cached_evidence.get(&idx) {
-                        if !evidence.is_empty() {
-                            return Some(Finding {
-                                id: trait_def.id.clone(),
-                                desc: trait_def.desc.clone(),
-                                conf: trait_def.conf,
-                                crit: trait_def.crit,
-                                mbc: trait_def.mbc.clone(),
-                                attack: trait_def.attack.clone(),
-                                evidence: evidence.clone(),
-                                match_count: 0,
-                                kind: FindingKind::Capability,
-                                trait_refs: vec![],
-                                source_file: get_relative_source_file(&trait_def.defined_in),
-                            });
-                        }
+                    if let Some(evidence) = cache.cached_evidence.get(&idx)
+                        && !evidence.is_empty()
+                    {
+                        return Some(Finding {
+                            id: trait_def.id.clone(),
+                            desc: trait_def.desc.clone(),
+                            conf: trait_def.conf,
+                            crit: trait_def.crit,
+                            mbc: trait_def.mbc.clone(),
+                            attack: trait_def.attack.clone(),
+                            evidence: evidence.clone(),
+                            match_count: 0,
+                            kind: FindingKind::Capability,
+                            trait_refs: vec![],
+                            source_file: get_relative_source_file(&trait_def.defined_in),
+                        });
                     }
                     return None;
                 }

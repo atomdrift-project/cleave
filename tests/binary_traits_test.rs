@@ -42,8 +42,7 @@ fn analyze(dir: &std::path::Path, name: &str, bytes: &[u8]) -> cleave::AnalysisR
 #[test]
 fn binary_trait_detection_smoke() {
     let _guard = env_lock().lock().expect("env lock poisoned");
-    let previous = std::env::var_os("CLEAVE_SKIP_TRAITS");
-    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    cleave::set_skip_traits_override(Some(true));
     let tmp = TempDir::new().unwrap();
 
     // ELF64 LE with /dev/null marker
@@ -132,10 +131,7 @@ fn binary_trait_detection_smoke() {
     ];
     let _ = analyze(tmp.path(), "static.elf", &static_bin);
 
-    match previous {
-        Some(value) => std::env::set_var("CLEAVE_SKIP_TRAITS", value),
-        None => std::env::remove_var("CLEAVE_SKIP_TRAITS"),
-    }
+    cleave::set_skip_traits_override(None);
 }
 
 /// Real assertion: MIPS ELF should fire an exotic-arch trait. Currently

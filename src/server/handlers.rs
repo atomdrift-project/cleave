@@ -1,6 +1,6 @@
 //! HTTP request handlers for the cleave API server.
 
-use crate::{analyze_file, AnalysisOptions, Criticality};
+use crate::{AnalysisOptions, Criticality, analyze_file};
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
@@ -13,7 +13,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tempfile::Builder as TempBuilder;
-use tracing::{error, info, info_span, warn, Instrument, Span};
+use tracing::{Instrument, Span, error, info, info_span, warn};
 
 use super::AppState;
 
@@ -484,14 +484,14 @@ fn check_memory_pressure(state: &AppState) -> Option<Response> {
     if rss <= state.max_rss_bytes {
         // Memory is fine — reset overload timer if it was set.
         // Use try_lock to avoid contention on the happy path.
-        if let Some(mut overloaded) = state.overloaded_since.try_lock() {
-            if overloaded.is_some() {
-                info!(
-                    rss_mb = rss / 1024 / 1024,
-                    "Memory recovered below threshold"
-                );
-                *overloaded = None;
-            }
+        if let Some(mut overloaded) = state.overloaded_since.try_lock()
+            && overloaded.is_some()
+        {
+            info!(
+                rss_mb = rss / 1024 / 1024,
+                "Memory recovered below threshold"
+            );
+            *overloaded = None;
         }
         return None;
     }

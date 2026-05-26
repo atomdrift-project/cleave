@@ -8,23 +8,23 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    eval_ast, eval_basename, eval_encoded, eval_hex, eval_metrics, eval_raw, eval_section,
-    eval_string_literal, eval_symbol, eval_syscall, eval_text, eval_trait, eval_yara_inline,
-    ContentLocationParams, SectionParams,
+    ContentLocationParams, SectionParams, eval_ast, eval_basename, eval_encoded, eval_hex,
+    eval_metrics, eval_raw, eval_section, eval_string_literal, eval_symbol, eval_syscall,
+    eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
-    default_architectures, default_file_types, default_platforms, Arch, FileType, Platform,
+    Arch, FileType, Platform, default_architectures, default_file_types, default_platforms,
 };
 use crate::types::{
-    deduplicate_evidence, Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT,
+    Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence,
 };
 use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::collections::HashSet;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 /// Global concurrent statistics for condition evaluation timing
@@ -56,15 +56,16 @@ fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> us
         return 0;
     }
 
-    if let Condition::Trait { id } = condition {
-        if !id.contains("::") && id.contains('/') {
-            let distinct: HashSet<&str> = result
-                .matched_trait_ids
-                .iter()
-                .map(String::as_str)
-                .collect();
-            return distinct.len().max(1);
-        }
+    if let Condition::Trait { id } = condition
+        && !id.contains("::")
+        && id.contains('/')
+    {
+        let distinct: HashSet<&str> = result
+            .matched_trait_ids
+            .iter()
+            .map(String::as_str)
+            .collect();
+        return distinct.len().max(1);
     }
 
     1
@@ -371,13 +372,13 @@ impl TraitDefinition {
             return None;
         }
 
-        if let (Some(min), Some(max)) = (self.size_min, self.size_max) {
-            if max < min {
-                return Some(format!(
-                    "size_max ({}) cannot be less than size_min ({})",
-                    max, min
-                ));
-            }
+        if let (Some(min), Some(max)) = (self.size_min, self.size_max)
+            && max < min
+        {
+            return Some(format!(
+                "size_max ({}) cannot be less than size_min ({})",
+                max, min
+            ));
         }
         None
     }
@@ -387,29 +388,29 @@ impl TraitDefinition {
     #[must_use]
     pub(crate) fn check_entropy_constraints(&self) -> Option<String> {
         // Validate entropy range (0.0-8.0)
-        if let Some(min) = self.entropy_min {
-            if !(0.0..=8.0).contains(&min) {
-                return Some(format!(
-                    "entropy_min ({:.2}) must be between 0.0 and 8.0",
-                    min
-                ));
-            }
+        if let Some(min) = self.entropy_min
+            && !(0.0..=8.0).contains(&min)
+        {
+            return Some(format!(
+                "entropy_min ({:.2}) must be between 0.0 and 8.0",
+                min
+            ));
         }
-        if let Some(max) = self.entropy_max {
-            if !(0.0..=8.0).contains(&max) {
-                return Some(format!(
-                    "entropy_max ({:.2}) must be between 0.0 and 8.0",
-                    max
-                ));
-            }
+        if let Some(max) = self.entropy_max
+            && !(0.0..=8.0).contains(&max)
+        {
+            return Some(format!(
+                "entropy_max ({:.2}) must be between 0.0 and 8.0",
+                max
+            ));
         }
-        if let (Some(min), Some(max)) = (self.entropy_min, self.entropy_max) {
-            if max < min {
-                return Some(format!(
-                    "entropy_max ({:.2}) cannot be less than entropy_min ({:.2})",
-                    max, min
-                ));
-            }
+        if let (Some(min), Some(max)) = (self.entropy_min, self.entropy_max)
+            && max < min
+        {
+            return Some(format!(
+                "entropy_max ({:.2}) cannot be less than entropy_min ({:.2})",
+                max, min
+            ));
         }
         None
     }
@@ -417,13 +418,13 @@ impl TraitDefinition {
     /// Check if count constraints are valid.
     #[must_use]
     pub(crate) fn check_count_constraints(&self) -> Option<String> {
-        if let (Some(min), Some(max)) = (self.count_min, self.count_max) {
-            if max < min {
-                return Some(format!(
-                    "count_max ({}) is less than count_min ({})",
-                    max, min
-                ));
-            }
+        if let (Some(min), Some(max)) = (self.count_min, self.count_max)
+            && max < min
+        {
+            return Some(format!(
+                "count_max ({}) is less than count_min ({})",
+                max, min
+            ));
         }
         self.r#if.check_count_constraints()
     }
@@ -431,13 +432,13 @@ impl TraitDefinition {
     /// Check if density constraints are valid.
     #[must_use]
     pub(crate) fn check_density_constraints(&self) -> Option<String> {
-        if let (Some(min), Some(max)) = (self.per_kb_min, self.per_kb_max) {
-            if max < min {
-                return Some(format!(
-                    "per_kb_max ({}) is less than per_kb_min ({})",
-                    max, min
-                ));
-            }
+        if let (Some(min), Some(max)) = (self.per_kb_min, self.per_kb_max)
+            && max < min
+        {
+            return Some(format!(
+                "per_kb_max ({}) is less than per_kb_min ({})",
+                max, min
+            ));
         }
         self.r#if.check_density_constraints()
     }
@@ -466,7 +467,8 @@ impl TraitDefinition {
         if desc.len() < 5 {
             return Some(format!(
                 "desc: '{}' is too short ({} chars). Write a clear description. Examples: 'JOIN command for IRC' or 'Detects IRC communication patterns'",
-                desc, desc.len()
+                desc,
+                desc.len()
             ));
         }
 
@@ -477,13 +479,13 @@ impl TraitDefinition {
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_empty_not_array(&self) -> Option<String> {
-        if let Some(not_exceptions) = &self.not {
-            if not_exceptions.is_empty() {
-                return Some(
-                    "not: array is empty - either remove the not: field or add exception patterns"
-                        .to_string(),
-                );
-            }
+        if let Some(not_exceptions) = &self.not
+            && not_exceptions.is_empty()
+        {
+            return Some(
+                "not: array is empty - either remove the not: field or add exception patterns"
+                    .to_string(),
+            );
         }
         None
     }
@@ -492,12 +494,13 @@ impl TraitDefinition {
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_empty_unless_array(&self) -> Option<String> {
-        if let Some(unless_conditions) = &self.unless {
-            if unless_conditions.is_empty() {
-                return Some(
-                    "unless: array is empty - either remove the unless: field or add skip conditions".to_string()
-                );
-            }
+        if let Some(unless_conditions) = &self.unless
+            && unless_conditions.is_empty()
+        {
+            return Some(
+                "unless: array is empty - either remove the unless: field or add skip conditions"
+                    .to_string(),
+            );
         }
         None
     }
@@ -851,23 +854,23 @@ impl TraitDefinition {
 
         // Check size constraints (from if: block)
         let file_size = ctx.report.target.size_bytes as usize;
-        if let Some(min) = self.size_min {
-            if file_size < min {
-                ctx.record_skip(SkipReason::SizeTooSmall {
-                    actual: file_size,
-                    min,
-                });
-                return None;
-            }
+        if let Some(min) = self.size_min
+            && file_size < min
+        {
+            ctx.record_skip(SkipReason::SizeTooSmall {
+                actual: file_size,
+                min,
+            });
+            return None;
         }
-        if let Some(max) = self.size_max {
-            if file_size > max {
-                ctx.record_skip(SkipReason::SizeTooLarge {
-                    actual: file_size,
-                    max,
-                });
-                return None;
-            }
+        if let Some(max) = self.size_max
+            && file_size > max
+        {
+            ctx.record_skip(SkipReason::SizeTooLarge {
+                actual: file_size,
+                max,
+            });
+            return None;
         }
 
         // Check entropy constraints (from if: block)
@@ -887,23 +890,23 @@ impl TraitDefinition {
                 .and_then(|m| m.get("text.char_entropy").copied());
             let file_entropy = binary_entropy.or(text_entropy).unwrap_or(0.0);
 
-            if let Some(min) = self.entropy_min {
-                if file_entropy < min {
-                    ctx.record_skip(SkipReason::EntropyTooLow {
-                        actual: file_entropy,
-                        min,
-                    });
-                    return None;
-                }
+            if let Some(min) = self.entropy_min
+                && file_entropy < min
+            {
+                ctx.record_skip(SkipReason::EntropyTooLow {
+                    actual: file_entropy,
+                    min,
+                });
+                return None;
             }
-            if let Some(max) = self.entropy_max {
-                if file_entropy > max {
-                    ctx.record_skip(SkipReason::EntropyTooHigh {
-                        actual: file_entropy,
-                        max,
-                    });
-                    return None;
-                }
+            if let Some(max) = self.entropy_max
+                && file_entropy > max
+            {
+                ctx.record_skip(SkipReason::EntropyTooHigh {
+                    actual: file_entropy,
+                    max,
+                });
+                return None;
             }
         }
 
@@ -1002,39 +1005,39 @@ impl TraitDefinition {
             let file_kb = (file_size as f64) / 1024.0;
 
             // Check count_min constraint
-            if let Some(min) = self.count_min {
-                if match_count < min {
-                    ctx.record_skip(SkipReason::CountBelowMinimum {
-                        actual: match_count,
-                        min,
-                    });
-                    return None;
-                }
+            if let Some(min) = self.count_min
+                && match_count < min
+            {
+                ctx.record_skip(SkipReason::CountBelowMinimum {
+                    actual: match_count,
+                    min,
+                });
+                return None;
             }
 
             // Check count_max constraint
-            if let Some(max) = self.count_max {
-                if match_count > max {
-                    ctx.record_skip(SkipReason::CountAboveMaximum {
-                        actual: match_count,
-                        max,
-                    });
-                    return None;
-                }
+            if let Some(max) = self.count_max
+                && match_count > max
+            {
+                ctx.record_skip(SkipReason::CountAboveMaximum {
+                    actual: match_count,
+                    max,
+                });
+                return None;
             }
 
             // Check per_kb_min constraint (density threshold).
             // Zero-byte files have infinite density — trivially satisfy any minimum.
-            if let Some(min_density) = self.per_kb_min {
-                if file_kb > 0.0 {
-                    let actual_density = (match_count as f64) / file_kb;
-                    if actual_density < min_density {
-                        ctx.record_skip(SkipReason::DensityBelowMinimum {
-                            actual: actual_density,
-                            min: min_density,
-                        });
-                        return None;
-                    }
+            if let Some(min_density) = self.per_kb_min
+                && file_kb > 0.0
+            {
+                let actual_density = (match_count as f64) / file_kb;
+                if actual_density < min_density {
+                    ctx.record_skip(SkipReason::DensityBelowMinimum {
+                        actual: actual_density,
+                        min: min_density,
+                    });
+                    return None;
                 }
             }
 
@@ -1684,20 +1687,19 @@ fn strip_byte_offset_location(location: &str) -> &str {
         return "";
     }
 
-    if let Some((prefix, suffix)) = location.rsplit_once(":offset:") {
-        if parse_hex_or_dec_offset(suffix).is_some() {
-            return prefix;
-        }
+    if let Some((prefix, suffix)) = location.rsplit_once(":offset:")
+        && parse_hex_or_dec_offset(suffix).is_some()
+    {
+        return prefix;
     }
 
-    if let Some((prefix, suffix)) = location.rsplit_once(':') {
-        if (suffix.starts_with("0x")
+    if let Some((prefix, suffix)) = location.rsplit_once(':')
+        && (suffix.starts_with("0x")
             || suffix.starts_with("0X")
             || suffix.bytes().all(|b| b.is_ascii_digit()))
-            && parse_location_as_byte_offset(suffix).is_some()
-        {
-            return prefix;
-        }
+        && parse_location_as_byte_offset(suffix).is_some()
+    {
+        return prefix;
     }
 
     location
@@ -1860,19 +1862,19 @@ impl CompositeTrait {
     fn get_required_trait_ids(&self) -> Vec<String> {
         let mut ids = Vec::new();
 
-        if let Some(ref conds) = self.all {
+        if let Some(conds) = &self.all {
             for cond in conds {
-                if let Condition::Trait { ref id } = cond {
+                if let Condition::Trait { id } = cond {
                     ids.push(id.clone());
                 }
             }
         }
 
-        if let Some(ref conds) = self.any {
+        if let Some(conds) = &self.any {
             let required_from_any = self.needs.unwrap_or(1);
             if required_from_any >= conds.len() {
                 for cond in conds {
-                    if let Condition::Trait { ref id } = cond {
+                    if let Condition::Trait { id } = cond {
                         ids.push(id.clone());
                     }
                 }
@@ -2036,23 +2038,23 @@ impl CompositeTrait {
 
         // Check size constraints
         let file_size = ctx.report.target.size_bytes as usize;
-        if let Some(min) = self.size_min {
-            if file_size < min {
-                ctx.record_skip(SkipReason::SizeTooSmall {
-                    actual: file_size,
-                    min,
-                });
-                return None;
-            }
+        if let Some(min) = self.size_min
+            && file_size < min
+        {
+            ctx.record_skip(SkipReason::SizeTooSmall {
+                actual: file_size,
+                min,
+            });
+            return None;
         }
-        if let Some(max) = self.size_max {
-            if file_size > max {
-                ctx.record_skip(SkipReason::SizeTooLarge {
-                    actual: file_size,
-                    max,
-                });
-                return None;
-            }
+        if let Some(max) = self.size_max
+            && file_size > max
+        {
+            ctx.record_skip(SkipReason::SizeTooLarge {
+                actual: file_size,
+                max,
+            });
+            return None;
         }
 
         // Start timing for timeout detection (covers all evaluation phases)
@@ -3053,15 +3055,15 @@ impl CompositeTrait {
         let filtered: Vec<Evidence> = evidence
             .into_iter()
             .filter(|ev| {
-                if let (Some((start, end)), Some(ref ls)) = (line_window, &line_starts_cache) {
-                    if let Some(line) = evidence_to_line(ev, ls) {
-                        return line >= start && line <= end;
-                    }
+                if let (Some((start, end)), Some(ls)) = (line_window, &line_starts_cache)
+                    && let Some(line) = evidence_to_line(ev, ls)
+                {
+                    return line >= start && line <= end;
                 }
-                if let Some((start, end)) = byte_window {
-                    if let Some(offset) = evidence_to_byte_offset(ev) {
-                        return offset >= start && offset <= end;
-                    }
+                if let Some((start, end)) = byte_window
+                    && let Some(offset) = evidence_to_byte_offset(ev)
+                {
+                    return offset >= start && offset <= end;
                 }
                 // Evidence without location info: keep (e.g., exclusion sentinels from none:)
                 true
@@ -3093,14 +3095,12 @@ pub(super) struct TaggedLocation {
 /// Extract a line number from a TaggedLocation.
 fn tagged_to_line(tagged: &TaggedLocation, line_starts: &[usize]) -> Option<usize> {
     // Try "line:column" format first
-    if let Some(ref loc) = tagged.location {
-        if let Some(colon_pos) = loc.find(':') {
-            if let Ok(line) = loc[..colon_pos].parse::<usize>() {
-                if line > 0 {
-                    return Some(line);
-                }
-            }
-        }
+    if let Some(ref loc) = tagged.location
+        && let Some(colon_pos) = loc.find(':')
+        && let Ok(line) = loc[..colon_pos].parse::<usize>()
+        && line > 0
+    {
+        return Some(line);
     }
 
     // Try byte offset
@@ -3109,10 +3109,10 @@ fn tagged_to_line(tagged: &TaggedLocation, line_starts: &[usize]) -> Option<usiz
     }
 
     // Try hex offset from location
-    if let Some(ref loc) = tagged.location {
-        if let Some(offset) = parse_location_as_byte_offset(loc) {
-            return Some(byte_offset_to_line(line_starts, offset as usize));
-        }
+    if let Some(ref loc) = tagged.location
+        && let Some(offset) = parse_location_as_byte_offset(loc)
+    {
+        return Some(byte_offset_to_line(line_starts, offset as usize));
     }
 
     None
@@ -3169,14 +3169,13 @@ pub(super) fn byte_offset_to_line(line_starts: &[usize], offset: usize) -> usize
 /// 3. Parse `location` as hex byte offset (e.g., "0x1234") — older string evidence
 pub(super) fn evidence_to_line(evidence: &Evidence, line_starts: &[usize]) -> Option<usize> {
     // Try "line:column" format first
-    if let Some(ref loc) = evidence.location {
-        if let Some(colon_pos) = loc.find(':') {
-            if let Ok(line) = loc[..colon_pos].parse::<usize>() {
-                // Sanity check: line numbers from AST are positive integers, not hex
-                if line > 0 {
-                    return Some(line);
-                }
-            }
+    if let Some(ref loc) = evidence.location
+        && let Some(colon_pos) = loc.find(':')
+        && let Ok(line) = loc[..colon_pos].parse::<usize>()
+    {
+        // Sanity check: line numbers from AST are positive integers, not hex
+        if line > 0 {
+            return Some(line);
         }
     }
 
@@ -3186,10 +3185,10 @@ pub(super) fn evidence_to_line(evidence: &Evidence, line_starts: &[usize]) -> Op
     }
 
     // Try hex offset from location (e.g., "0x1234", "offset:0x1234")
-    if let Some(ref loc) = evidence.location {
-        if let Some(offset) = parse_location_as_byte_offset(loc) {
-            return Some(byte_offset_to_line(line_starts, offset as usize));
-        }
+    if let Some(ref loc) = evidence.location
+        && let Some(offset) = parse_location_as_byte_offset(loc)
+    {
+        return Some(byte_offset_to_line(line_starts, offset as usize));
     }
 
     None
@@ -3673,9 +3672,11 @@ mod scope_tests {
             .apply_scope_filter(evidence, tags)
             .expect("a.so bucket wins");
         assert_eq!(filtered_ev.len(), 2);
-        assert!(filtered_ev
-            .iter()
-            .all(|e| e.location.as_deref() == Some("archive:a.so")));
+        assert!(
+            filtered_ev
+                .iter()
+                .all(|e| e.location.as_deref() == Some("archive:a.so"))
+        );
         assert_eq!(filtered_tags.len(), 2);
     }
 

@@ -65,10 +65,10 @@ pub(crate) fn extract_version_info(data: &[u8]) -> VersionInfo {
             if aligned + 2 > window.len() {
                 continue;
             }
-            if let Some(value) = read_utf16le_string(&window[aligned..]) {
-                if !value.is_empty() {
-                    out.insert(key.to_string(), value);
-                }
+            if let Some(value) = read_utf16le_string(&window[aligned..])
+                && !value.is_empty()
+            {
+                out.insert(key.to_string(), value);
             }
         }
     }

@@ -60,10 +60,10 @@ pub(crate) fn build_source_kv(report: &AnalysisReport, content: Option<&[u8]>) -
         let mut libraries: BTreeSet<&str> = BTreeSet::new();
         for imp in &report.imports {
             symbols.insert(imp.symbol.as_str());
-            if let Some(lib) = imp.library.as_deref() {
-                if !lib.is_empty() {
-                    libraries.insert(lib);
-                }
+            if let Some(lib) = imp.library.as_deref()
+                && !lib.is_empty()
+            {
+                libraries.insert(lib);
             }
         }
         if !symbols.is_empty() {

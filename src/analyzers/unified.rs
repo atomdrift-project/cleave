@@ -865,12 +865,11 @@ impl UnifiedSourceAnalyzer {
         source: &[u8],
     ) -> Option<String> {
         // Try the configured field name first
-        if let Some(name_node) = node.child_by_field_name(self.config.function_name_field) {
-            if let Ok(name) = name_node.utf8_text(source) {
-                if !name.is_empty() {
-                    return Some(name.to_string());
-                }
-            }
+        if let Some(name_node) = node.child_by_field_name(self.config.function_name_field)
+            && let Ok(name) = name_node.utf8_text(source)
+            && !name.is_empty()
+        {
+            return Some(name.to_string());
         }
 
         // Fallback: look for identifier children
@@ -878,12 +877,11 @@ impl UnifiedSourceAnalyzer {
         if cursor.goto_first_child() {
             loop {
                 let child = cursor.node();
-                if child.kind() == "identifier" || child.kind() == "name" {
-                    if let Ok(name) = child.utf8_text(source) {
-                        if !name.is_empty() {
-                            return Some(name.to_string());
-                        }
-                    }
+                if (child.kind() == "identifier" || child.kind() == "name")
+                    && let Ok(name) = child.utf8_text(source)
+                    && !name.is_empty()
+                {
+                    return Some(name.to_string());
                 }
                 if !cursor.goto_next_sibling() {
                     break;
@@ -957,18 +955,18 @@ impl UnifiedSourceAnalyzer {
                 //   encoding: radix as a string ("8" / "10" / "16" / "2")
                 //   section:  "ast-number" sentinel — `eval_literal` filters
                 //             on this to route to numeric matching.
-                if let Ok(text) = node.utf8_text(source) {
-                    if let Some((value, radix)) = parse_numeric_literal(text) {
-                        report.strings.push(StringInfo {
-                            value: value.to_string(),
-                            offset: Some(node.start_byte() as u64),
-                            string_type: None,
-                            encoding: radix.to_string(),
-                            section: Some("ast-number".to_string()),
-                            encoding_chain: Vec::new(),
-                            fragments: None,
-                        });
-                    }
+                if let Ok(text) = node.utf8_text(source)
+                    && let Some((value, radix)) = parse_numeric_literal(text)
+                {
+                    report.strings.push(StringInfo {
+                        value: value.to_string(),
+                        offset: Some(node.start_byte() as u64),
+                        string_type: None,
+                        encoding: radix.to_string(),
+                        section: Some("ast-number".to_string()),
+                        encoding_chain: Vec::new(),
+                        fragments: None,
+                    });
                 }
             }
 
@@ -1571,10 +1569,12 @@ func main() {
     fn test_go_structural_feature() {
         let code = "package main\nfunc main() {}";
         let report = analyze_go_code(code);
-        assert!(report
-            .structure
-            .iter()
-            .any(|s| s.id == "source/language/go"));
+        assert!(
+            report
+                .structure
+                .iter()
+                .any(|s| s.id == "source/language/go")
+        );
     }
 
     #[test]

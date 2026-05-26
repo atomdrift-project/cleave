@@ -367,13 +367,13 @@ impl super::CapabilityMapper {
                 .iter()
                 .enumerate()
                 .filter_map(|(i, finding)| {
-                    if let Some(rule) = composite_map.get(finding.id.as_str()) {
-                        if let Some(downgrade_rules) = &rule.downgrade {
-                            let new_crit =
-                                rule.evaluate_downgrade(downgrade_rules, &finding.crit, &ctx);
-                            if new_crit != finding.crit {
-                                return Some((i, new_crit));
-                            }
+                    if let Some(rule) = composite_map.get(finding.id.as_str())
+                        && let Some(downgrade_rules) = &rule.downgrade
+                    {
+                        let new_crit =
+                            rule.evaluate_downgrade(downgrade_rules, &finding.crit, &ctx);
+                        if new_crit != finding.crit {
+                            return Some((i, new_crit));
                         }
                     }
                     None
@@ -468,18 +468,18 @@ impl super::CapabilityMapper {
             }
 
             // Composite rules: same dance, but against composite_rules.
-            if let Some(rule) = composite_by_id.get(finding.id.as_str()) {
-                if let Some(downgrade) = &rule.downgrade {
-                    let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
-                    if new_crit != finding.crit {
-                        if debug_downgrade {
-                            eprintln!(
-                                "DEBUG: Cross-scope downgrade for composite '{}': {:?} -> {:?}",
-                                finding.id, finding.crit, new_crit
-                            );
-                        }
-                        finding.crit = new_crit;
+            if let Some(rule) = composite_by_id.get(finding.id.as_str())
+                && let Some(downgrade) = &rule.downgrade
+            {
+                let new_crit = rule.evaluate_downgrade(downgrade, &rule.crit, &ctx);
+                if new_crit != finding.crit {
+                    if debug_downgrade {
+                        eprintln!(
+                            "DEBUG: Cross-scope downgrade for composite '{}': {:?} -> {:?}",
+                            finding.id, finding.crit, new_crit
+                        );
                     }
+                    finding.crit = new_crit;
                 }
             }
         }

@@ -417,7 +417,7 @@ fn test_per_kb_min_constraint_pass() {
     trait_def.per_kb_min = Some(1.0); // At least 1 match per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
-                                                    // Add 3 matches = 1.5 matches/KB
+    // Add 3 matches = 1.5 matches/KB
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,
@@ -462,7 +462,7 @@ fn test_per_kb_min_constraint_fail() {
     trait_def.per_kb_min = Some(5.0); // At least 5 matches per KB
 
     let mut report = create_report_with_size(2048); // 2KB file
-                                                    // Add 2 matches = 1.0 matches/KB (too low)
+    // Add 2 matches = 1.0 matches/KB (too low)
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,
@@ -504,7 +504,7 @@ fn test_per_kb_max_constraint_pass() {
     trait_def.per_kb_max = Some(10.0); // Max 10 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
-                                                    // Add 5 matches = 5.0 matches/KB
+    // Add 5 matches = 5.0 matches/KB
     for i in 0..5 {
         report.imports.push(Import {
             symbol: format!("func{}", i),
@@ -539,7 +539,7 @@ fn test_per_kb_max_constraint_fail() {
     trait_def.per_kb_max = Some(2.0); // Max 2 matches per KB
 
     let mut report = create_report_with_size(1024); // 1KB file
-                                                    // Add 10 matches = 10.0 matches/KB (too high)
+    // Add 10 matches = 10.0 matches/KB (too high)
     for i in 0..10 {
         report.imports.push(Import {
             symbol: format!("func{}", i),
@@ -1081,7 +1081,7 @@ fn test_all_constraints_combined() {
     trait_def.per_kb_max = Some(5.0);
 
     let mut report = create_report_with_size(1024); // 1KB file
-                                                    // Add 3 matches = 3.0 matches/KB
+    // Add 3 matches = 3.0 matches/KB
     report.imports.push(Import {
         symbol: "func1".to_string(),
         library: None,

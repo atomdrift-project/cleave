@@ -45,9 +45,6 @@ fn main() -> Result<()> {
     }
 
     let args = cli::Args::parse();
-    if args.verbose {
-        std::env::set_var("CLEAVE_VERBOSE", "1");
-    }
 
     let is_server = matches!(args.command, Some(cli::Command::Serve { .. }));
 

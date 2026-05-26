@@ -6,7 +6,7 @@
 //! Useful for quick triage and finding embedded indicators.
 
 use crate::types::{StringInfo, StringType};
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use stng::{ExtractedString, StringMethod};
@@ -622,9 +622,11 @@ mod tests {
 
         // Instead, let's just verify the structure and flag existence.
         let extractor = StringExtractor::new();
-        assert!(!extractor
-            .truncated
-            .load(std::sync::atomic::Ordering::SeqCst));
+        assert!(
+            !extractor
+                .truncated
+                .load(std::sync::atomic::Ordering::SeqCst)
+        );
     }
 
     #[test]

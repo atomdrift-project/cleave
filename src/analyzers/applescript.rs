@@ -9,8 +9,8 @@ use crate::types::{AnalysisReport, Import, TargetInfo};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Debug)]
 pub(crate) struct AppleScriptAnalyzer {
@@ -153,20 +153,20 @@ impl Analyzer for AppleScriptAnalyzer {
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {
-        if let Ok(metadata) = fs::metadata(file_path) {
-            if metadata.is_file() {
-                // Check for compiled AppleScript magic bytes "Fasd" or file extension
-                if let Ok(mut file) = fs::File::open(file_path) {
-                    use std::io::Read;
-                    let mut magic = [0u8; 4];
-                    if file.read_exact(&mut magic).is_ok() && &magic == b"Fasd" {
-                        return true;
-                    }
+        if let Ok(metadata) = fs::metadata(file_path)
+            && metadata.is_file()
+        {
+            // Check for compiled AppleScript magic bytes "Fasd" or file extension
+            if let Ok(mut file) = fs::File::open(file_path) {
+                use std::io::Read;
+                let mut magic = [0u8; 4];
+                if file.read_exact(&mut magic).is_ok() && &magic == b"Fasd" {
+                    return true;
                 }
+            }
 
-                if let Some(ext) = file_path.extension() {
-                    return ext == "scpt";
-                }
+            if let Some(ext) = file_path.extension() {
+                return ext == "scpt";
             }
         }
         false

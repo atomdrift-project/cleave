@@ -601,7 +601,9 @@ pub fn configure_jemalloc_low_memory() {
             let muzzy = tikv_jemalloc_ctl::raw::write(b"arenas.muzzy_decay_ms\0", 0_isize);
             match (dirty, muzzy) {
                 (Ok(()), Ok(())) => {
-                    info!("jemalloc: aggressive page return enabled (dirty_decay_ms=0, muzzy_decay_ms=0)");
+                    info!(
+                        "jemalloc: aggressive page return enabled (dirty_decay_ms=0, muzzy_decay_ms=0)"
+                    );
                 }
                 (d, m) => {
                     warn!("jemalloc: failed to configure decay timers (dirty={d:?}, muzzy={m:?})");

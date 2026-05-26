@@ -371,15 +371,15 @@ fn apply_criticality_filter(
     max_crit: Option<types::Criticality>,
 ) {
     let removed = report.filter_findings(|f| {
-        if let Some(min) = min_crit {
-            if f.crit < min {
-                return false;
-            }
+        if let Some(min) = min_crit
+            && f.crit < min
+        {
+            return false;
         }
-        if let Some(max) = max_crit {
-            if f.crit > max {
-                return false;
-            }
+        if let Some(max) = max_crit
+            && f.crit > max
+        {
+            return false;
         }
         true
     });

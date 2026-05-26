@@ -370,10 +370,10 @@ impl Evidence {
         self.count += other_count;
 
         // On first merge, extract self's location offset too (otherwise it's lost)
-        if self.offsets.is_empty() {
-            if let Some(offset) = self.parse_offset_from_location() {
-                self.offsets.push(offset);
-            }
+        if self.offsets.is_empty()
+            && let Some(offset) = self.parse_offset_from_location()
+        {
+            self.offsets.push(offset);
         }
 
         // Try to extract offset from other.location if it looks like a hex offset
@@ -638,7 +638,7 @@ mod tests {
     fn test_truncate_str_multibyte() {
         // "日" is 3 bytes in UTF-8
         let s = "日本語"; // 9 bytes total
-                          // Truncating at 5 bytes should give us just "日" (3 bytes)
+        // Truncating at 5 bytes should give us just "日" (3 bytes)
         let result = truncate_str(s, 5);
         assert_eq!(result, "日");
     }

@@ -10,9 +10,9 @@
 //! Each subcommand supports both JSONL and terminal output formats.
 
 use crate::analyzers::{
-    detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer, Analyzer, FileType,
+    Analyzer, FileType, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer,
 };
-use crate::types::{file_analysis::ENCODING_DELIMITER, AnalysisReport, FileAnalysis};
+use crate::types::{AnalysisReport, FileAnalysis, file_analysis::ENCODING_DELIMITER};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;

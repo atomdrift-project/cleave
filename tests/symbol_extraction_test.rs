@@ -16,10 +16,9 @@ use tempfile::TempDir;
 /// unnecessary. Returns the compact-format JSON output equivalent to
 /// `cleave --json analyze <path>`.
 fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
-    // CLEAVE_SKIP_TRAITS is honored by shared_resources at first mapper
-    // init in this process. Tests in this file all set it via the same
-    // helper, so it stays consistent.
-    std::env::set_var("CLEAVE_SKIP_TRAITS", "1");
+    // Tests in this file don't depend on trait content; force-skip trait
+    // loading so the mapper stays empty and startup is fast.
+    cleave::set_skip_traits_override(Some(true));
 
     let options = cleave::AnalysisOptions {
         disable_yara: true,

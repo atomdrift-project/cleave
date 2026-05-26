@@ -74,7 +74,7 @@ fn count_regex_min_literals(pattern: &str) -> usize {
                 // Escape sequence - peek ahead
                 if let Some(&next) = chars.peek() {
                     chars.next(); // Consume the next character
-                                  // Special escape sequences that match variable content don't count as literals
+                    // Special escape sequences that match variable content don't count as literals
                     if !matches!(
                         next,
                         'w' | 'W' | 'd' | 'D' | 's' | 'S' | 'b' | 'B' | 'A' | 'Z'
@@ -257,13 +257,13 @@ fn regex_performance_issues(facts: &RegexFacts<'_>) -> Vec<String> {
         RegexSearchScope::Broad => 1000,
         RegexSearchScope::Bounded => 4096,
     };
-    if let Some(upper) = facts.largest_broad_repeat {
-        if upper > repeat_limit {
-            issues.push(format!(
+    if let Some(upper) = facts.largest_broad_repeat
+        && upper > repeat_limit
+    {
+        issues.push(format!(
                 "`{}` regex has a broad counted repeat up to {}; keep broad repeats under {} or use a structured matcher",
                 facts.type_label, upper, repeat_limit
             ));
-        }
     }
 
     if facts.scope == RegexSearchScope::Broad {
@@ -395,19 +395,19 @@ pub(crate) fn find_short_pattern_warnings(
         // Check the condition
         if let Some((substr, regex, type_label)) = substr_regex_fields(&trait_def.r#if) {
             // Check substr length
-            if let Some(pattern) = substr {
-                if pattern.len() <= 3 {
-                    let source = rule_source_files
-                        .get(&trait_def.id)
-                        .cloned()
-                        .unwrap_or_else(|| "unknown".to_string());
-                    warnings.push((
-                        trait_def.id.clone(),
-                        pattern.to_string(),
-                        format!("{} substr", type_label),
-                        source,
-                    ));
-                }
+            if let Some(pattern) = substr
+                && pattern.len() <= 3
+            {
+                let source = rule_source_files
+                    .get(&trait_def.id)
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                warnings.push((
+                    trait_def.id.clone(),
+                    pattern.to_string(),
+                    format!("{} substr", type_label),
+                    source,
+                ));
             }
             // Check regex minimum literal content
             // Count characters that MUST appear (not quantified or optional)
@@ -467,27 +467,27 @@ pub(crate) fn find_non_capturing_groups(traits: &[TraitDefinition], warnings: &m
     for trait_def in traits {
         let pattern_opt = substr_regex_fields(&trait_def.r#if).and_then(|(_, r, _)| r);
 
-        if let Some(pattern) = pattern_opt {
-            if pattern.contains("(?:") {
-                let source_file = trait_def
-                    .defined_in
-                    .to_str()
-                    .unwrap_or("unknown")
-                    .to_string();
-                let line_hint = find_line_number(&source_file, &trait_def.id);
-                let location = if let Some(line) = line_hint {
-                    format!("{}:{}", source_file, line)
-                } else {
-                    source_file
-                };
+        if let Some(pattern) = pattern_opt
+            && pattern.contains("(?:")
+        {
+            let source_file = trait_def
+                .defined_in
+                .to_str()
+                .unwrap_or("unknown")
+                .to_string();
+            let line_hint = find_line_number(&source_file, &trait_def.id);
+            let location = if let Some(line) = line_hint {
+                format!("{}:{}", source_file, line)
+            } else {
+                source_file
+            };
 
-                warnings.push(format!(
+            warnings.push(format!(
                     "Unnecessary non-capturing group: trait '{}' in {} uses '(?:' — \
                      cleave preserves entire matched lines, not capture groups. \
                      Replace (?:...) with plain (...) or remove grouping if only used for alternation.",
                     trait_def.id, location
                 ));
-            }
         }
     }
 }
@@ -954,7 +954,7 @@ pub(crate) fn find_ast_function_call_should_use_symbol(
 
 #[cfg(test)]
 mod tests {
-    use super::{regex_performance_issues, RegexFacts};
+    use super::{RegexFacts, regex_performance_issues};
 
     fn issues(pattern: &str, type_label: &'static str) -> Vec<String> {
         regex_performance_issues(&RegexFacts::analyze(pattern, type_label))

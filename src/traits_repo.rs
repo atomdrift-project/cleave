@@ -6,8 +6,7 @@
 //!
 //! Resolution order:
 //! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var
-//! 2. `./traits/` relative to CWD (development convenience)
-//! 3. Platform data directory (auto-cloned from upstream)
+//! 2. Platform data directory (auto-cloned from upstream)
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -69,14 +68,7 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
         return Err(format!("traits dir override {explicit} does not exist"));
     }
 
-    // 2. Workspace-local traits checkout, if present.
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        tracing::debug!("Using traits from local checkout: {}", local_dir.display());
-        return Ok(local_dir);
-    }
-
-    // 3. Platform data directory — auto-clone if missing
+    // 2. Platform data directory — auto-clone if missing
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
@@ -105,11 +97,6 @@ pub fn try_resolve() -> Result<PathBuf, String> {
             return Ok(p);
         }
         return Err(format!("traits dir override {explicit} does not exist"));
-    }
-
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        return Ok(local_dir);
     }
 
     let data_dir = default_traits_dir();
@@ -336,10 +323,6 @@ pub fn version() -> Option<String> {
 fn resolve_current_traits_dir() -> PathBuf {
     if let Some(explicit) = explicit_traits_dir() {
         return PathBuf::from(explicit);
-    }
-    let local_dir = PathBuf::from("traits");
-    if has_traits(&local_dir) {
-        return local_dir;
     }
     default_traits_dir()
 }

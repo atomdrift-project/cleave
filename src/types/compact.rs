@@ -893,7 +893,11 @@ mod formula_tests {
             .flat_map(|cf| cf.ts.iter())
             .find(|t| t.i.ends_with("/x"))
             .expect("trait survived compact conversion");
-        assert_eq!(t.e.len(), 2, "both evidence values kept (different locations)");
+        assert_eq!(
+            t.e.len(),
+            2,
+            "both evidence values kept (different locations)"
+        );
         assert_eq!(t.el.len(), t.e.len(), "el is parallel to e");
         assert!(t.el.iter().any(|l| l.contains("assets.go")));
         assert!(t.el.iter().any(|l| l.contains("other.go")));
@@ -912,7 +916,10 @@ mod formula_tests {
             .flat_map(|cf| cf.ts.iter())
             .find(|t| t.i.contains("beacon"))
             .expect("trait survived compact conversion");
-        assert!(t.el.is_empty(), "el should stay empty when no location is known");
+        assert!(
+            t.el.is_empty(),
+            "el should stay empty when no location is known"
+        );
     }
 
     /// Findings below the 0.65 confidence floor must not contribute, even

@@ -977,11 +977,8 @@ mod tests {
         // an extension/content mismatch.
         let chrome_manifest = br#"{"manifest_version":3,"name":"X","version":"1.0.0"}"#;
         assert!(
-            check_extension_content_mismatch(
-                Path::new("ext/manifest.json"),
-                chrome_manifest
-            )
-            .is_none(),
+            check_extension_content_mismatch(Path::new("ext/manifest.json"), chrome_manifest)
+                .is_none(),
             "Chrome manifest.json must not flag as Json vs ChromeManifest mismatch"
         );
         // package.json: similarly a JSON specialization.

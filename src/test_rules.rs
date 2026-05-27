@@ -92,6 +92,7 @@ pub(crate) struct RuleDebugger<'a> {
     traits: &'a [TraitDefinition],
     section_map: SectionMap,
     inline_yara_results: Option<&'a HashMap<String, Vec<Evidence>>>,
+    parsed: Option<filefacts::ParsedFile<'a>>,
 }
 
 impl<'a> RuleDebugger<'a> {
@@ -113,6 +114,14 @@ impl<'a> RuleDebugger<'a> {
         let file_type = detect_file_type(&report.target.file_type);
         let section_map = SectionMap::from_binary(binary_data);
 
+        // Parse via filefacts so AST conditions have a real tree to walk.
+        // `values()` primes the parse so `source_ast()` returns Some.
+        let parsed =
+            filefacts::open_with_path(std::path::Path::new(&report.target.path), binary_data).ok();
+        if let Some(ref p) = parsed {
+            let _ = p.values();
+        }
+
         Self {
             mapper,
             report,
@@ -123,6 +132,7 @@ impl<'a> RuleDebugger<'a> {
             traits: mapper.trait_definitions(),
             section_map,
             inline_yara_results,
+            parsed,
         }
     }
 
@@ -237,7 +247,11 @@ impl<'a> RuleDebugger<'a> {
             arch: vec![Arch::All].into(),
             arch_ranges: None,
             additional_findings: None,
-            cached_ast: None,
+            cached_ast: self
+                .parsed
+                .as_ref()
+                .and_then(filefacts::ParsedFile::source_ast)
+                .map(|a| a.tree),
             ast_kind_cache: None,
             finding_id_index: Some(std::sync::Arc::new(self.build_finding_index())),
             debug_collector,
@@ -251,7 +265,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
-            cached_source_utf8: None,
+            cached_source_utf8: std::str::from_utf8(self.binary_data).ok(),
             cancellation: None,
         }
     }
@@ -1407,6 +1421,15 @@ impl<'a> RuleDebugger<'a> {
             return result;
         }
 
+        // Without `cached_ast`, every kind/node match short-circuits to
+        // no-match; reuse the filefacts parse we did at construction.
+        let cached_ast = self
+            .parsed
+            .as_ref()
+            .and_then(filefacts::ParsedFile::source_ast)
+            .map(|a| a.tree);
+        let cached_source_utf8 = std::str::from_utf8(self.binary_data).ok();
+
         // For simple mode, use eval_ast directly
         let ctx = EvaluationContext {
             report: self.report,
@@ -1416,7 +1439,7 @@ impl<'a> RuleDebugger<'a> {
             arch: vec![Arch::All].into(),
             arch_ranges: None,
             additional_findings: None,
-            cached_ast: None,
+            cached_ast,
             ast_kind_cache: None,
             finding_id_index: None,
             debug_collector: None,
@@ -1430,7 +1453,7 @@ impl<'a> RuleDebugger<'a> {
             slow_rule_ms: 4000,
             cached_evidence: None,
             current_trait_idx: None,
-            cached_source_utf8: None,
+            cached_source_utf8,
             cancellation: None,
         };
 

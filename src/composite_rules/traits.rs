@@ -1589,15 +1589,18 @@ impl TraitDefinition {
 /// to fire. Lower variants are more permissive; higher variants are more
 /// strict.
 ///
-/// The default (omitted from YAML) is [`Scope::Outer`], which preserves
-/// the historical behavior: any evidence within the on-disk input.
+/// The default (omitted from YAML) is [`Scope::File`]: evidence must
+/// share the same leaf-file (the deepest file-shaped unit, e.g. a PE
+/// extracted from a zip). Decoded payload layers below the file are
+/// pooled together at the file level.
 ///
 /// ```text
-/// Outer    →  anywhere within the input given to cleave (default)
+/// Outer    →  anywhere within the input given to cleave
 /// Archive  →  same nearest enclosing archive entry
 ///             (degrades to Outer when no archive is in the path)
 /// File     →  same leaf-file (the deepest file-shaped unit, e.g. a
 ///             PE inside a zip; ignores decoded payload layers below)
+///             (default)
 /// Leaf     →  same exact analyzed unit, including decoded payload layers
 /// ```
 ///
@@ -1607,8 +1610,7 @@ impl TraitDefinition {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum Scope {
-    /// Anywhere within the input given to cleave. Today's default.
-    #[default]
+    /// Anywhere within the input given to cleave.
     Outer,
     /// Same nearest enclosing archive entry. For evidence that is not
     /// inside an archive, degrades to [`Scope::Outer`] (empty key —
@@ -1616,7 +1618,8 @@ pub(crate) enum Scope {
     Archive,
     /// Same leaf-file. The deepest file-shaped unit (e.g. a PE
     /// extracted from a zip). Decoded payload layers below the
-    /// file are pooled together at the file level.
+    /// file are pooled together at the file level. Default.
+    #[default]
     File,
     /// Same exact analyzed unit, including decoded payload layers.
     Leaf,
@@ -1664,6 +1667,21 @@ fn strip_decode_suffix(location: &str) -> &str {
         // Decoded layer with no associated file path. Collapse to
         // input-wide key so file-scoped composites still pool input
         // evidence with decoded evidence from the same input.
+        ""
+    } else if location.starts_with("value:") {
+        // KV evidence carries the kv-path in `location` for display;
+        // it identifies a field within a single file, not a leaf-file
+        // boundary. Collapse to the input-wide key so file-scoped
+        // composites pool kv evidence with non-kv evidence in the
+        // same file.
+        ""
+    } else if location.starts_with("embedded@") || location.starts_with("embedded:") {
+        // Embedded-code findings (e.g. shell extracted from a
+        // Dockerfile RUN block, or a YAML `run:` step) carry a
+        // `embedded@<offset>:<inner>` prefix to record where in the
+        // parent file they came from. The parent is still one
+        // analyzed unit, so pool sibling embedded-code findings — and
+        // host-file findings — under the same file-scope key.
         ""
     } else if is_positional_only(location) {
         ""
@@ -1823,8 +1841,8 @@ pub(crate) struct CompositeTrait {
     pub near_bytes: Option<usize>,
 
     /// Scope of evidence co-occurrence (see [`Scope`]). When omitted,
-    /// defaults to [`Scope::Outer`] — historical behavior of pooling
-    /// all evidence in the input.
+    /// defaults to [`Scope::File`] — evidence must share the same
+    /// leaf-file (decoded payload layers pool with the file).
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub scope: Option<Scope>,
 
@@ -2139,8 +2157,7 @@ impl CompositeTrait {
         let mut result = positive_result;
 
         // Apply scope filter (e.g. `scope: leaf` for archive-FP suppression).
-        // Default Scope::Outer is a no-op. When the filter rejects all
-        // scope buckets, the rule does not fire.
+        // When the filter rejects all scope buckets, the rule does not fire.
         let proximity_tags = match self.apply_scope_filter(result.evidence, proximity_tags) {
             Some((ev, tags)) => {
                 result.evidence = ev;
@@ -2924,14 +2941,14 @@ impl CompositeTrait {
     /// minimum-distinct-conditions threshold; otherwise returns the
     /// filtered (`evidence`, `tagged_locations`) pair.
     ///
-    /// `Scope::Outer` (the default) is a no-op fast path: every key is
-    /// the empty string, so all evidence is in one bucket.
+    /// `Scope::Outer` is a no-op fast path: every key is the empty
+    /// string, so all evidence is in one bucket.
     fn apply_scope_filter(
         &self,
         evidence: Vec<Evidence>,
         tagged_locations: Vec<TaggedLocation>,
     ) -> Option<(Vec<Evidence>, Vec<TaggedLocation>)> {
-        let scope = self.scope.unwrap_or(Scope::Outer);
+        let scope = self.scope.unwrap_or_default();
         if scope == Scope::Outer {
             return Some((evidence, tagged_locations));
         }
@@ -2940,7 +2957,6 @@ impl CompositeTrait {
             // Vacuous rule (no positive conditions) — scope is moot.
             return Some((evidence, tagged_locations));
         }
-
         // Collect the unique scope keys appearing in tagged_locations,
         // then for each key count how many distinct condition indices
         // it covers. The first key meeting the threshold wins.
@@ -2950,6 +2966,15 @@ impl CompositeTrait {
             .iter()
             .map(|t| scope.key(t.location.as_deref()))
             .collect();
+
+        if unique_keys.iter().all(|k| k.is_empty()) {
+            // No location info to bucket on — every tag's scope key is
+            // empty (e.g. evidence from metric-derived findings, or
+            // AST/positional-only matches that don't carry a file
+            // path). Scope can't meaningfully filter, so pass through
+            // rather than reject.
+            return Some((evidence, tagged_locations));
+        }
 
         let winning_key = unique_keys
             .into_iter()
@@ -3538,6 +3563,25 @@ mod scope_tests {
     }
 
     #[test]
+    fn file_pools_embedded_code_findings_in_same_parent() {
+        // Embedded-code findings (shell extracted from a Dockerfile
+        // RUN block, a YAML `run:` step, etc.) prefix evidence
+        // locations with `embedded@<parent-offset>:<inner>`. Under
+        // `scope: file`, all such evidence within the same parent
+        // file must pool — otherwise composites like
+        // `chmod-arms-hidden-stage` and `stealth-fetch-hidden-stage`
+        // never fire on Dockerfile/GitHub Actions fixtures where
+        // each shell command lands in its own extracted snippet.
+        assert_eq!(Scope::File.key(Some("embedded@0x3f:1:5")), "");
+        assert_eq!(Scope::File.key(Some("embedded@0xd2:2:10")), "");
+        // Offset-only inner location (no row:col).
+        assert_eq!(Scope::File.key(Some("embedded@0x3f:0x10")), "");
+        // Older `embedded:<kind>@<offset>` form (used by base64 binary
+        // payload detection and office/ole extractors) also pools.
+        assert_eq!(Scope::File.key(Some("embedded:base64@0x100")), "");
+    }
+
+    #[test]
     fn leaf_does_not_collapse_positional_locations() {
         // `scope: leaf` is the strictest scope — every evidence must
         // share the EXACT location. We must NOT widen leaf semantics
@@ -3602,7 +3646,7 @@ mod scope_tests {
 
     #[test]
     fn outer_scope_is_a_no_op_passthrough() {
-        let rule = composite_with(2, None);
+        let rule = composite_with(2, Some(Scope::Outer));
         let evidence = vec![ev("archive:a.so"), ev("archive:b.so")];
         let tags = vec![tag(0, "archive:a.so"), tag(1, "archive:b.so")];
 

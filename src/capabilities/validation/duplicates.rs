@@ -507,11 +507,9 @@ pub(super) fn extract_pure_literal_from_regex(pattern: &str) -> Option<String> {
                 // shorthand classes (`\w`, `\d`, …) because those are not
                 // expressible as a substr.
                 match next {
-                    '.' | '/' | '-' | '_' | '\\' | '"' | '\''
-                    | ':' | ',' | '=' | '@' | '#' | '~' | ' '
-                    | '|' | '(' | ')' | '[' | ']' | '{' | '}'
-                    | '?' | '*' | '+' | '^' | '$' | '<' | '>'
-                    | '!' | '%' | '&' | ';' | '`' => {
+                    '.' | '/' | '-' | '_' | '\\' | '"' | '\'' | ':' | ',' | '=' | '@' | '#'
+                    | '~' | ' ' | '|' | '(' | ')' | '[' | ']' | '{' | '}' | '?' | '*' | '+'
+                    | '^' | '$' | '<' | '>' | '!' | '%' | '&' | ';' | '`' => {
                         result.push(next);
                         chars.next();
                     }

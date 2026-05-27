@@ -158,7 +158,19 @@ fn format_output(entries: &[KvEntry], target: &str, format: &cli::OutputFormat) 
 /// flows through this single helper.
 fn filefacts_values(path: &Path, content: &[u8]) -> Option<Value> {
     let ctx = crate::analysis_context::AnalysisContext::open(path, content).ok()?;
-    ctx.values_tree_if_nonempty()
+    let value = ctx.values_tree_if_nonempty()?;
+    if has_only_path_derived(&value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// `file.basename`/`file.stem` are path-derived and emitted for any
+/// input, so a tree containing only the `file` namespace means no
+/// format-specific extraction happened. Treat that as "no structured
+/// values" so callers fall through to the next extractor or bail.
+fn has_only_path_derived(value: &Value) -> bool {
+    matches!(value, Value::Object(map) if map.keys().all(|k| k == "file"))
 }
 
 fn extract_binary_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> {
@@ -207,7 +219,11 @@ fn extract_source_kv_via_analyzer(path: &Path, content: &[u8]) -> Option<Value> 
     }
     let analyzer = analyzers::analyzer_for_file_type(&detected, None)?;
     let report = analyzer.analyze(path).ok()?;
-    report.values_tree.as_deref().cloned()
+    let value = report.values_tree.as_deref().cloned()?;
+    if has_only_path_derived(&value) {
+        return None;
+    }
+    Some(value)
 }
 
 fn render_value(value: &Value) -> String {

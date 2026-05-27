@@ -1536,7 +1536,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: format!("field '{}' does not exist", path),
-                location: Some(path.clone()),
+                location: Some(format!("value:{}", path)),
                 ..Default::default()
             });
         }
@@ -1565,7 +1565,7 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: matched_value,
-                location: Some(path.clone()),
+                location: Some(format!("value:{}", path)),
                 ..Default::default()
             });
         }
@@ -1661,7 +1661,7 @@ fn evaluate_kv_eq_ne(
         method: "value".to_string(),
         source: ctx.report.target.path.clone(),
         value,
-        location: Some(left_path.to_string()),
+        location: Some(format!("value:{}", left_path)),
         ..Default::default()
     })
 }

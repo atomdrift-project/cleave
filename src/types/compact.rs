@@ -97,6 +97,15 @@ pub struct CompactTrait {
     /// Evidence values (flattened from Evidence structs)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub e: Vec<String>,
+    /// Evidence locations parallel to `e`. Populated when archive roll-up
+    /// has attributed a finding to a specific member (e.g.
+    /// `archive:k8s.io/kops/.../foo.go`); empty otherwise. The two vecs
+    /// always share a length when this is present, so downstream
+    /// consumers can pair `e[i]` with `el[i]`. Skipped entirely when no
+    /// location is known for any entry, so older consumers see the same
+    /// shape they always have.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub el: Vec<String>,
 }
 
 /// A string in compact tuple form
@@ -562,18 +571,34 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
     let mut trait_order: Vec<&str> = Vec::new();
 
     for finding in &file.findings {
-        let evidence_values: Vec<String> = finding
+        // Pair each evidence value with its location. Empty-value evidence
+        // is dropped, but a present value with no location keeps "" as its
+        // location placeholder so the e/el vectors stay aligned by index.
+        let pairs: Vec<(String, String)> = finding
             .evidence
             .iter()
             .filter(|e| !e.value.is_empty())
-            .map(|e| truncate_at_boundary(&e.value, MAX_EVIDENCE_CHARS).to_string())
+            .map(|e| {
+                (
+                    truncate_at_boundary(&e.value, MAX_EVIDENCE_CHARS).to_string(),
+                    e.location.clone().unwrap_or_default(),
+                )
+            })
             .collect();
 
         if let Some(existing) = trait_map.get_mut(finding.id.as_str()) {
-            // Merge evidence into existing trait
-            for ev in evidence_values {
-                if !existing.e.contains(&ev) {
-                    existing.e.push(ev);
+            // Dedup on the (value, location) pair so identical matches from
+            // the same place collapse, but the same value matched in two
+            // different members produces two entries.
+            for (val, loc) in pairs {
+                let already = existing
+                    .e
+                    .iter()
+                    .zip(existing.el.iter())
+                    .any(|(v, l)| v == &val && l == &loc);
+                if !already {
+                    existing.e.push(val);
+                    existing.el.push(loc);
                 }
             }
             // Keep highest criticality
@@ -583,6 +608,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
             }
         } else {
             trait_order.push(&finding.id);
+            let (e, el): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
@@ -592,9 +618,20 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
                     c: finding.conf,
                     m: finding.mbc.clone(),
                     a: finding.attack.clone(),
-                    e: evidence_values,
+                    e,
+                    el,
                 },
             );
+        }
+    }
+
+    // Drop `el` entirely when no location is known for any entry. Keeps
+    // the JSON output unchanged for findings that never went through an
+    // archive roll-up, and lets `skip_serializing_if = "Vec::is_empty"`
+    // omit the field on those traits.
+    for trait_entry in trait_map.values_mut() {
+        if trait_entry.el.iter().all(String::is_empty) {
+            trait_entry.el.clear();
         }
     }
 
@@ -820,6 +857,60 @@ mod formula_tests {
             !formula.contains("Md"),
             "did not expect Md (metadata/Baseline) in `{formula}`",
         );
+    }
+
+    /// Evidence locations populated by the archive roll-up must survive
+    /// the compact conversion. This was previously dropped — the bug
+    /// surfaced as archive-level rootkit traits with no way to attribute
+    /// back to the inner file that matched.
+    #[test]
+    fn evidence_location_preserved_in_compact() {
+        let mut f = finding("well-known/malware/rootkit/x", Criticality::Suspicious, 0.9);
+        f.evidence = vec![
+            Evidence {
+                method: "text".into(),
+                source: "yara".into(),
+                value: "package assets".into(),
+                location: Some("archive:k8s.io/kops/.../assets.go".into()),
+                ..Default::default()
+            },
+            // Same value matched in a different member — should round-trip
+            // as two parallel entries, not collapsed to one.
+            Evidence {
+                method: "text".into(),
+                source: "yara".into(),
+                value: "package assets".into(),
+                location: Some("archive:k8s.io/kops/.../other.go".into()),
+                ..Default::default()
+            },
+        ];
+
+        let compact = compact_from_files(&[file_with(vec![f])]);
+        let t = compact
+            .fs
+            .iter()
+            .flat_map(|cf| cf.ts.iter())
+            .find(|t| t.i.ends_with("/x"))
+            .expect("trait survived compact conversion");
+        assert_eq!(t.e.len(), 2, "both evidence values kept (different locations)");
+        assert_eq!(t.el.len(), t.e.len(), "el is parallel to e");
+        assert!(t.el.iter().any(|l| l.contains("assets.go")));
+        assert!(t.el.iter().any(|l| l.contains("other.go")));
+    }
+
+    /// Traits with no location info on any evidence must omit `el`
+    /// entirely so older consumers see the same JSON shape.
+    #[test]
+    fn evidence_location_absent_when_unknown() {
+        let f = finding("objectives/c2/http/beacon", Criticality::Notable, 0.9);
+        let compact = compact_from_files(&[file_with(vec![f])]);
+        let t = compact
+            .fs
+            .iter()
+            .flat_map(|cf| cf.ts.iter())
+            .find(|t| t.i.contains("beacon"))
+            .expect("trait survived compact conversion");
+        assert!(t.el.is_empty(), "el should stay empty when no location is known");
     }
 
     /// Findings below the 0.65 confidence floor must not contribute, even

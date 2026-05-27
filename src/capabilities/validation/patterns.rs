@@ -35,7 +35,7 @@ fn substr_regex_fields(
         }
         Condition::Raw { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "raw")),
         Condition::TreeSitter { substr, regex, .. } => {
-            Some((substr.as_deref(), regex.as_deref(), "ast"))
+            Some((substr.as_deref(), regex.as_deref(), "tree-sitter"))
         }
         Condition::Section { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "section"))
@@ -209,7 +209,7 @@ impl<'a> RegexFacts<'a> {
 
 fn regex_search_scope(type_label: &str) -> RegexSearchScope {
     match type_label {
-        "value" | "symbol" | "string_literal" | "basename" | "ast" | "section" => {
+        "value" | "symbol" | "string_literal" | "basename" | "tree-sitter" | "section" => {
             RegexSearchScope::Bounded
         }
         _ => RegexSearchScope::Broad,

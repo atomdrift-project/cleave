@@ -4,7 +4,7 @@
 //! Regression tests for two engine quirks surfaced while writing PHP
 //! supply-chain traits against testdata for the BFunky/http-parser case:
 //!
-//!   (1) `type: ast kind: call exact: <name>` does not match call
+//!   (1) `type: tree-sitter kind: call exact: <name>` does not match call
 //!       sites. The AST cache stores the full call-expression text
 //!       (`curl_exec($ch)`) under the `function_call_expression` node
 //!       kind, then `evaluators/ast.rs` compares that text via `==`
@@ -102,7 +102,7 @@ fn rule_matched(stdout: &str, rule_id: &str) -> bool {
         .any(|line| line.starts_with(&format!("MATCHED {rule_id}")))
 }
 
-/// Bug 1: `type: ast kind: call exact: curl_exec` MUST match a call
+/// Bug 1: `type: tree-sitter kind: call exact: curl_exec` MUST match a call
 /// site for `curl_exec($ch);` in a PHP file. The cache populates
 /// `Evidence.alt_value` with the extracted function name for
 /// call-kind nodes; the matcher tries `value` (full call text)
@@ -120,7 +120,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: curl_exec
   - id: curl-init-ast
@@ -128,7 +128,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: curl_init
 "#;
@@ -179,7 +179,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "curl_init("
 "#;
@@ -199,7 +199,7 @@ traits:
     );
     assert!(
         rule_matched(&stdout, "micro-behaviors/test::curl-init-via-substr"),
-        "type: ast kind: call substr: \"curl_init(\" must match — substr\n\
+        "type: tree-sitter kind: call substr: \"curl_init(\" must match — substr\n\
          is run against the full call expression text and the trailing\n\
          paren disambiguates from `curl_init_something_else`.\n\nGot:\n{stdout}"
     );
@@ -247,7 +247,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "eval("
   - id: print-ast
@@ -255,7 +255,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "print("
 composite_rules:

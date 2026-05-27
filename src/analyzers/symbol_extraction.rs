@@ -254,7 +254,7 @@ fn extract_calls<'a>(
 
 /// Extract the function name or identifier from a call, assignment, or declaration.
 /// Public to the crate so the AST evaluator can populate `Evidence.alt_value`
-/// for call-kind nodes — without that, `type: ast kind: call exact: <name>`
+/// for call-kind nodes — without that, `type: tree-sitter kind: call exact: <name>`
 /// can never match because the cache otherwise compares the pattern against
 /// `<name>(<args>)`.
 pub(crate) fn extract_function_name<'a>(

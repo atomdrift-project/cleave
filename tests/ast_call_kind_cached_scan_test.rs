@@ -1,5 +1,5 @@
 //! Integration test that pins the cached-path behavior of
-//! `type: ast kind: call exact: <name>` traits during a regular
+//! `type: tree-sitter kind: call exact: <name>` traits during a regular
 //! `cleave <file>` scan (NOT `test-rules`).
 //!
 //! `test-rules` always builds a fresh evaluation context with
@@ -90,7 +90,7 @@ traits:
     crit: notable
     conf: 0.9
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: pty.spawn
 "#,
@@ -121,7 +121,7 @@ traits:
     crit: notable
     conf: 0.9
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: spawn
 "#,
@@ -147,7 +147,7 @@ traits:
     crit: notable
     conf: 0.9
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: os.hostname
 "#,

@@ -197,7 +197,7 @@ ci: test lint ## Run all CI checks (test + lint)
 validate: ## Validate trait definitions (for: restrictions, taxonomy, precision, etc.)
 	@echo "Validating trait definitions..."
 	cargo build --quiet
-	./$(CARGO_TARGET)/debug/$(BINARY) validate
+	CLEAVE_TRAITS_DIR=traits ./$(CARGO_TARGET)/debug/$(BINARY) validate
 	@echo "✓ Validation passed"
 
 clean: ## Clean all build artifacts

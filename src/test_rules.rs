@@ -1371,7 +1371,7 @@ impl<'a> RuleDebugger<'a> {
     ) -> ConditionDebugResult {
         // Build description based on mode
         let desc = if let Some(q) = query {
-            format!("ast: query={}", truncate_string(q, 50))
+            format!("tree-sitter: query={}", truncate_string(q, 50))
         } else {
             let node_spec = kind
                 .as_ref()
@@ -1393,7 +1393,7 @@ impl<'a> RuleDebugger<'a> {
                 })
                 .unwrap_or_default();
             format!(
-                "ast: {} {} (case_insensitive: {})",
+                "tree-sitter: {} {} (case_insensitive: {})",
                 node_spec, pattern_spec, case_insensitive
             )
         };

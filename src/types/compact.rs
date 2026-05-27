@@ -886,6 +886,7 @@ mod formula_tests {
         ];
 
         let compact = compact_from_files(&[file_with(vec![f])]);
+        #[allow(clippy::expect_used)]
         let t = compact
             .fs
             .iter()
@@ -904,6 +905,7 @@ mod formula_tests {
     fn evidence_location_absent_when_unknown() {
         let f = finding("objectives/c2/http/beacon", Criticality::Notable, 0.9);
         let compact = compact_from_files(&[file_with(vec![f])]);
+        #[allow(clippy::expect_used)]
         let t = compact
             .fs
             .iter()

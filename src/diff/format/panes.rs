@@ -694,7 +694,7 @@ fn long_enough(s: &StringChange) -> bool {
 /// strings an analyst usually cares about. Unrecognised strings are
 /// either real-but-uncategorised text or noise; the cap applies.
 fn is_high_signal(s: &str) -> bool {
-    stng::classify_string(s).is_some_and(|k| k.is_classifier_output())
+    stng::classify_string(s).is_some_and(stng::StringKind::is_classifier_output)
 }
 
 fn write_strings(out: &mut String, scope: &ScopeDiff<StringChange>) {

@@ -2477,7 +2477,7 @@ impl super::CapabilityMapper {
                 }
                 eprintln!();
                 warnings.push(format!(
-                    "{} traits exceed filetype limit for condition type (ast≤2, symbol/hex/yara≤4)",
+                    "{} traits exceed filetype limit for condition type (tree-sitter≤2, symbol/hex/yara≤4)",
                     cond_scope.len()
                 ));
                 has_fatal_errors = true;

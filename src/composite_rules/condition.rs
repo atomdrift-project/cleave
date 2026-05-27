@@ -459,10 +459,9 @@ enum ConditionTagged {
     /// Simple mode: kind + exact/substr/regex (or node + exact/substr/regex for raw node types)
     /// Advanced mode: query (tree-sitter S-expression)
     ///
-    /// Renamed from `type: ast` for honesty: this evaluator spins up
-    /// tree-sitter and runs queries live. The old `type: ast` spelling
-    /// continues to work via serde alias.
-    #[serde(alias = "ast")]
+    /// Renamed from the old `type: ast` spelling for honesty: this
+    /// evaluator spins up tree-sitter and runs queries live.
+    #[serde(rename = "tree-sitter")]
     TreeSitter {
         /// Abstract node category (e.g., "call", "function", "class")
         /// Maps to language-specific tree-sitter node types automatically
@@ -1634,8 +1633,6 @@ pub(crate) enum Condition {
     ///     (#eq? @fn "eval"))
     /// language: javascript    # optional, for validation
     /// ```
-    ///
-    /// The old `type: ast` spelling continues to work via serde alias.
     TreeSitter {
         /// Abstract node category (e.g., "call", "function", "class")
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -2032,7 +2029,7 @@ impl Condition {
             Condition::Text { .. } => "text",
             Condition::Literal { .. } => "string_literal",
             Condition::Trait { .. } => "trait",
-            Condition::TreeSitter { .. } => "ast",
+            Condition::TreeSitter { .. } => "tree-sitter",
             Condition::Yara { .. } => "yara",
             Condition::Syscall { .. } => "syscall",
             Condition::Metrics { .. } => "metrics",
@@ -2075,31 +2072,31 @@ impl Condition {
 
                 if has_query && has_simple_mode {
                     return Err(anyhow::anyhow!(
-                        "ast condition cannot have both 'query' and 'kind'/'node'"
+                        "tree-sitter condition cannot have both 'query' and 'kind'/'node'"
                     ));
                 }
 
                 if !has_query && !has_simple_mode {
                     return Err(anyhow::anyhow!(
-                        "ast condition must have either 'kind'/'node' or 'query'"
+                        "tree-sitter condition must have either 'kind'/'node' or 'query'"
                     ));
                 }
 
                 if has_simple_mode && !has_pattern {
                     return Err(anyhow::anyhow!(
-                        "ast condition with 'kind'/'node' must have 'exact', 'substr', or 'regex'"
+                        "tree-sitter condition with 'kind'/'node' must have 'exact', 'substr', or 'regex'"
                     ));
                 }
 
                 if kind.is_some() && node.is_some() {
                     return Err(anyhow::anyhow!(
-                        "ast condition cannot have both 'kind' and 'node'"
+                        "tree-sitter condition cannot have both 'kind' and 'node'"
                     ));
                 }
 
                 if exact.is_some() && regex.is_some() {
                     return Err(anyhow::anyhow!(
-                        "ast condition cannot have both 'exact' and 'regex'"
+                        "tree-sitter condition cannot have both 'exact' and 'regex'"
                     ));
                 }
 

@@ -125,8 +125,8 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
         "encoded"
     } else if context.contains("type: syscall") {
         "syscall"
-    } else if context.contains("type: ast") {
-        "ast"
+    } else if context.contains("type: tree-sitter") {
+        "tree-sitter"
     } else if context.contains("type: value") {
         "value"
     } else {
@@ -218,7 +218,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "per_kb_min",
             "per_kb_max",
         ],
-        "ast" => &[
+        "tree-sitter" => &[
             "type",
             "kind",
             "node",
@@ -258,7 +258,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             if !valid_fields.contains(&field_name) {
                 return Some(match field_name {
                     "needs" => "needs".to_string(),
-                    "pattern" if condition_type != "hex" && condition_type != "ast" => {
+                    "pattern" if condition_type != "hex" && condition_type != "tree-sitter" => {
                         "pattern".to_string()
                     }
                     "match" => "match".to_string(),
@@ -444,8 +444,8 @@ fn provide_error_guidance(
             Some("hex")
         } else if context.contains("type: encoded") {
             Some("encoded")
-        } else if context.contains("type: ast") {
-            Some("ast")
+        } else if context.contains("type: tree-sitter") {
+            Some("tree-sitter")
         } else if context.contains("type: syscall") {
             Some("syscall")
         } else {
@@ -515,7 +515,7 @@ fn provide_error_guidance(
         guidance.push_str("   • hex        - Match hex patterns with wildcards\n");
         guidance.push_str("   • encoded    - Match encoded content (base64, hex, etc.)\n");
         guidance.push_str("   • trait      - Reference another trait by ID\n");
-        guidance.push_str("   • ast        - Match AST patterns (requires tree-sitter)\n");
+        guidance.push_str("   • tree-sitter - Match AST patterns via tree-sitter\n");
         guidance.push_str("   • yara       - Match YARA rule results\n");
         guidance.push_str("   • syscall    - Match system calls\n");
         guidance.push_str("   • section    - Section analysis (size/entropy ratio checks via compare_to + size_ratio_*/entropy_ratio_*)\n");

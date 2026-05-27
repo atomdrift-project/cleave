@@ -103,7 +103,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: platform.system
 "#,
@@ -132,7 +132,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: os.hostname
 "#,
@@ -159,7 +159,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: aes.NewCipher
 "#,
@@ -194,7 +194,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "url"
 "#,
@@ -238,7 +238,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       exact: "phpinfo()"
 "#,
@@ -270,7 +270,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "eval("
 "#,
@@ -305,7 +305,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "eval("
   - id: print-ast
@@ -313,7 +313,7 @@ traits:
     crit: notable
     conf: 0.8
     if:
-      type: ast
+      type: tree-sitter
       kind: call
       substr: "print("
 composite_rules:

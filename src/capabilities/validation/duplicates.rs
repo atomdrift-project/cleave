@@ -1948,13 +1948,13 @@ fn collect_case_insensitive_overlap_issues(
                 ..
             } => {
                 if let Some(v) = exact {
-                    add_case_pattern("ast", "exact", v.clone(), *case_insensitive);
+                    add_case_pattern("tree-sitter", "exact", v.clone(), *case_insensitive);
                 }
                 if let Some(v) = substr {
-                    add_case_pattern("ast", "substr", v.clone(), *case_insensitive);
+                    add_case_pattern("tree-sitter", "substr", v.clone(), *case_insensitive);
                 }
                 if let Some(v) = regex {
-                    add_case_pattern("ast", "regex", v.clone(), *case_insensitive);
+                    add_case_pattern("tree-sitter", "regex", v.clone(), *case_insensitive);
                 }
             }
             _ => {}

@@ -111,7 +111,7 @@ pyinstx = { path = "crates/pyinstx" }
 
 # YARA pattern matching
 yara-classify = { path = "crates/yara-classify" }
-yara-x = { version = "1.16", features = ["rules-profiling"] }
+yara-x = { version = "1.17", features = ["rules-profiling"] }
 
 # Tree-sitter core types only. Per-language grammars (and their parsers)
 # live in filefacts; cleave consumes the cached `tree_sitter::Tree`

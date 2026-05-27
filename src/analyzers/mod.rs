@@ -524,9 +524,28 @@ pub fn check_extension_content_mismatch(
         // extension's claim — that's the AppleDouble convention, not evasion.
         return None;
     }
+    if is_json_specialization(det.file_type, ext_type) {
+        return None;
+    }
     let content_desc = format!("{:?}", det.file_type);
     let ext_desc = format!("{ext_type:?}");
     Some((ext_desc, content_desc, false))
+}
+
+fn is_json_specialization(content_type: FileType, ext_type: FileType) -> bool {
+    // A `.json` extension maps to FileType::Json; the detector may further
+    // specialize to ChromeManifest / PackageJson / PackageLockJson / ComposerJson
+    // based on schema content. All are JSON-by-format, so the "mismatch" is
+    // really just analyzer routing, not evasion.
+    let json_family = matches!(
+        content_type,
+        FileType::Json
+            | FileType::PackageJson
+            | FileType::PackageLockJson
+            | FileType::ComposerJson
+            | FileType::ChromeManifest
+    );
+    json_family && ext_type == FileType::Json
 }
 
 fn is_appledouble_sidecar(file_path: &Path) -> bool {
@@ -948,6 +967,28 @@ mod tests {
         assert!(
             check_extension_content_mismatch(Path::new("legit.php"), pe).is_some(),
             "non-sidecar files with extension/content mismatch must still flag"
+        );
+    }
+
+    #[test]
+    fn check_extension_mismatch_allows_json_specializations() {
+        // Chrome extension manifest.json is JSON-by-format; the detector
+        // specializes it to ChromeManifest for analyzer routing. That is not
+        // an extension/content mismatch.
+        let chrome_manifest = br#"{"manifest_version":3,"name":"X","version":"1.0.0"}"#;
+        assert!(
+            check_extension_content_mismatch(
+                Path::new("ext/manifest.json"),
+                chrome_manifest
+            )
+            .is_none(),
+            "Chrome manifest.json must not flag as Json vs ChromeManifest mismatch"
+        );
+        // package.json: similarly a JSON specialization.
+        let pkg = br#"{"name":"x","version":"1.0.0","dependencies":{}}"#;
+        assert!(
+            check_extension_content_mismatch(Path::new("pkg/package.json"), pkg).is_none(),
+            "package.json must not flag as Json vs PackageJson mismatch"
         );
     }
 }

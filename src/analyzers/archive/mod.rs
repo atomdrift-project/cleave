@@ -43,6 +43,13 @@ const MIN_PATH_CORPUS_EDGE_CASE_ENTRIES: usize = 24;
 const MAX_PATH_CORPUS_FILE_SIZE: u64 = 512;
 const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
 
+fn is_zip_container(file_type: FileType) -> bool {
+    matches!(
+        file_type,
+        FileType::Zip | FileType::Jar | FileType::Whl | FileType::Crx | FileType::Xpi
+    )
+}
+
 fn archive_finding(
     id: &str,
     desc: String,
@@ -779,7 +786,7 @@ impl ArchiveAnalyzer {
             }
         }
 
-        if matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx) {
+        if is_zip_container(file_type) {
             report.archive_contents.extend(
                 filefacts_archive_entries
                     .iter()
@@ -855,12 +862,11 @@ impl ArchiveAnalyzer {
         }
 
         let archive_fits_memory = data.len() as u64 <= self.max_memory_file_size;
-        let zip_family_in_memory =
-            matches!(file_type, FileType::Zip | FileType::Jar | FileType::Crx)
-                && archive_fits_memory
-                && !filefacts_archive_entries
-                    .iter()
-                    .any(|entry| entry.encrypted);
+        let zip_family_in_memory = is_zip_container(file_type)
+            && archive_fits_memory
+            && !filefacts_archive_entries
+                .iter()
+                .any(|entry| entry.encrypted);
         if zip_family_in_memory {
             if matches!(file_type, FileType::Crx) {
                 let zip_offset = zip::crx_zip_offset(data)?;
@@ -965,8 +971,7 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled after archive extraction");
         }
 
-        let is_jar = matches!(file_type, FileType::Jar | FileType::Zip | FileType::Crx);
-        if is_jar {
+        if is_zip_container(file_type) {
             self.analyze_jar_archive(temp_dir.path(), &mut report, start);
         } else {
             self.analyze_generic_archive(temp_dir.path(), &mut report, start);
@@ -1154,7 +1159,7 @@ impl ArchiveAnalyzer {
                 data.len() as u64,
                 guard,
             ),
-            FileType::Zip | FileType::Jar => {
+            FileType::Zip | FileType::Jar | FileType::Whl | FileType::Xpi => {
                 zip::extract_zip_from_data(data, dest_dir, guard, &self.zip_passwords)
             }
             FileType::Crx => zip::extract_crx_from_data(data, dest_dir, guard),

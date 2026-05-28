@@ -71,6 +71,7 @@ impl GenericAnalyzer {
             FileType::Scala => "scala",
             FileType::Zig => "zig",
             FileType::Elixir => "elixir",
+            FileType::Clojure => "clojure",
             FileType::Batch => "batch",
             FileType::Vbs => "vbs",
             FileType::GithubActions => "github-actions",

@@ -1590,6 +1590,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.7.0"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#59d960a06b13c15629967a0de883acbc1160cb41"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -1899,9 +1900,9 @@ dependencies = [
 
 [[package]]
 name = "goblin"
-version = "0.10.6"
+version = "0.10.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d494b2004fbc8cf419a6d2115488df4e11140f6f4abd877519de1bbd90c5370"
+checksum = "983a6aafb3b12d4c41ea78d39e189af4298ce747353945ff5105b54a056e5cd9"
 dependencies = [
  "log",
  "plain",

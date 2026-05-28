@@ -30,6 +30,7 @@ mod entropy;
 pub mod extractors;
 pub mod file_io;
 pub mod ip_validator;
+pub mod mem_profile;
 pub mod memory_tracker;
 mod shared_resources;
 pub mod strings;
@@ -2328,7 +2329,10 @@ where
     })
     };
 
+    crate::mem_profile::start_sampler();
     analyze_files();
+
+    crate::mem_profile::report();
 
     let total = walked.load(Ordering::Relaxed);
     let final_analyzed = analyzed.load(Ordering::Relaxed);

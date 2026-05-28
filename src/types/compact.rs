@@ -527,19 +527,15 @@ fn compact_ast(
     let mut target_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut member_set: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for sym in &view.symbols {
-        let Some(kind) = sym.get("kind").and_then(|k| k.as_str()) else {
-            continue;
-        };
-        match kind {
-            "call" => {
-                if let Some(t) = sym.get("target").and_then(|v| v.as_str()) {
-                    target_set.insert(t.to_string());
-                }
+        match sym {
+            filefacts::Symbol::Call {
+                target: Some(target),
+                ..
+            } => {
+                target_set.insert(target.clone());
             }
-            "member" => {
-                if let Some(p) = sym.get("path").and_then(|v| v.as_str()) {
-                    member_set.insert(p.to_string());
-                }
+            filefacts::Symbol::Member { path, .. } => {
+                member_set.insert(path.clone());
             }
             _ => {}
         }
@@ -988,8 +984,18 @@ mod formula_tests {
         fa.kv.insert("pe.machine".into(), json!("x86_64"));
         fa.filefacts = Some(FilefactsView {
             symbols: vec![
-                json!({"kind": "call", "target": "fetch", "args": ["string"], "source": "javascript"}),
-                json!({"kind": "member", "path": "window.localStorage", "source": "javascript"}),
+                filefacts::Symbol::Call {
+                    target: Some("fetch".to_string()),
+                    args: vec![filefacts::Arg::String {
+                        value: "https://example.com".to_string(),
+                    }],
+                    source: "javascript".to_string(),
+                    offset: None,
+                },
+                filefacts::Symbol::Member {
+                    path: "window.localStorage".to_string(),
+                    source: "javascript".to_string(),
+                },
             ],
             ..FilefactsView::default()
         });

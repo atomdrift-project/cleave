@@ -1935,11 +1935,14 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = match std::fs::read(entry.path()) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        debug!("Failed to read archive member {}: {}", entry_path, e);
-                        return None;
+                let file_data = {
+                    let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
+                    match std::fs::read(entry.path()) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            debug!("Failed to read archive member {}: {}", entry_path, e);
+                            return None;
+                        }
                     }
                 };
                 let file_type =
@@ -1956,6 +1959,7 @@ impl ArchiveAnalyzer {
 
                 let member_start = std::time::Instant::now();
 
+                let _analyze = crate::mem_profile::phase(crate::mem_profile::Phase::Analyze);
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -2142,11 +2146,14 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = match std::fs::read(entry.path()) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        debug!("Failed to read archive member {}: {}", entry_path, e);
-                        return None;
+                let file_data = {
+                    let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
+                    match std::fs::read(entry.path()) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            debug!("Failed to read archive member {}: {}", entry_path, e);
+                            return None;
+                        }
                     }
                 };
                 let file_type =
@@ -2163,6 +2170,7 @@ impl ArchiveAnalyzer {
 
                 let member_start = std::time::Instant::now();
 
+                let _analyze = crate::mem_profile::phase(crate::mem_profile::Phase::Analyze);
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -2419,11 +2427,14 @@ impl ArchiveAnalyzer {
                 let entry_path = self.format_entry_path(&relative_path);
                 let archive_location = self.format_evidence_location(&relative_path);
 
-                let file_data = match std::fs::read(entry.path()) {
-                    Ok(data) => data,
-                    Err(e) => {
-                        debug!("Failed to read archive member {}: {}", entry_path, e);
-                        return None;
+                let file_data = {
+                    let _extract = crate::mem_profile::phase(crate::mem_profile::Phase::Extract);
+                    match std::fs::read(entry.path()) {
+                        Ok(data) => data,
+                        Err(e) => {
+                            debug!("Failed to read archive member {}: {}", entry_path, e);
+                            return None;
+                        }
                     }
                 };
                 let file_type =
@@ -2440,6 +2451,7 @@ impl ArchiveAnalyzer {
 
                 let member_start = std::time::Instant::now();
 
+                let _analyze = crate::mem_profile::phase(crate::mem_profile::Phase::Analyze);
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     self.analyze_extracted_member(
                         entry.path(),
@@ -2499,6 +2511,7 @@ impl ArchiveAnalyzer {
             });
 
         // Single-threaded aggregation
+        let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
         for result in generic_results {
             collected_archive_entries.push(result.entry_metadata);
 

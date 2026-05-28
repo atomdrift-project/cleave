@@ -12,7 +12,10 @@
 use crate::analyzers::{
     Analyzer, FileType, detect_file_type, elf::ElfAnalyzer, macho::MachOAnalyzer, pe::PEAnalyzer,
 };
-use crate::types::{AnalysisReport, FileAnalysis, file_analysis::ENCODING_DELIMITER};
+use crate::types::{
+    AnalysisReport, FileAnalysis,
+    file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER},
+};
 use anyhow::Result;
 use std::fs;
 use std::path::Path;
@@ -65,20 +68,28 @@ pub(crate) fn extract_layer_file_analysis(target: &str, layer: &str) -> Result<F
 
     report.finalize();
 
-    let layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);
+    let encoding_layer_suffix = format!("{}{}", ENCODING_DELIMITER, layer);
+    let archive_layer_suffix = format!("{}{}", ARCHIVE_DELIMITER, layer);
     report
         .files
         .iter()
-        .find(|f| f.path.ends_with(&layer_suffix))
+        .find(|f| {
+            f.path.ends_with(&encoding_layer_suffix) || f.path.ends_with(&archive_layer_suffix)
+        })
         .cloned()
         .ok_or_else(|| {
             let available: Vec<_> = report
                 .files
                 .iter()
                 .filter_map(|f| {
-                    f.path
-                        .rfind(ENCODING_DELIMITER)
-                        .map(|idx| &f.path[idx + ENCODING_DELIMITER.len()..])
+                    f.path.rfind(ENCODING_DELIMITER).map_or_else(
+                        || {
+                            f.path
+                                .rfind(ARCHIVE_DELIMITER)
+                                .map(|idx| &f.path[idx + ARCHIVE_DELIMITER.len()..])
+                        },
+                        |idx| Some(&f.path[idx + ENCODING_DELIMITER.len()..]),
+                    )
                 })
                 .collect();
             if available.is_empty() {

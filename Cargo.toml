@@ -233,6 +233,11 @@ jemalloc = ["tikv-jemallocator", "tikv-jemalloc-ctl"]
 # Build with: cargo build --release --features jemalloc-prof
 # Run with: MALLOC_CONF="prof:true,prof_active:true,lg_prof_interval:30,prof_prefix:out/heap/jeprof"
 jemalloc-prof = ["jemalloc", "tikv-jemallocator/profiling"]
+# Phase-tagged heap-growth accounting (src/mem_profile.rs). Reads jemalloc's
+# per-thread allocated/deallocated counters at analysis-phase boundaries to
+# attribute live-heap growth without symbol-based profiling. Diagnostic only.
+# Build with: cargo build --release --features memprofile
+memprofile = ["jemalloc"]
 
 # jemalloc for unix-like systems (Linux, macOS).
 # Excluded on FreeBSD/DragonFlyBSD where jemalloc is already the system allocator;

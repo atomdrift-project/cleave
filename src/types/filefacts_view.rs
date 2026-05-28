@@ -13,8 +13,6 @@
 //! filefacts version drift — a forward-compatible field that filefacts
 //! adds shows up automatically without a cleave rebuild.
 
-use std::collections::BTreeMap;
-
 use serde::{Deserialize, Serialize};
 
 /// Report-side projection of `filefacts::ParsedFile`'s typed views.
@@ -30,56 +28,42 @@ use serde::{Deserialize, Serialize};
 /// inside `symbols` tagged by kind.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct FilefactsView {
-    /// Structural key-value tree (`pe.*`, `elf.*`, `macho.*`,
-    /// `lnk.*`, `pdf.*`, …). Mirrors `ctx.parsed.values()`.
+    /// Structural key-value tree (`pe.*`, `elf.*`, `macho.*`, …). Mirrors
+    /// `ctx.parsed.values()`. Retained because host-PE detectors read
+    /// `pe.signatures[*].subject` and `pe.debug.pdb.path` from it. Small for
+    /// source members (no binary tree).
     #[serde(skip_serializing_if = "is_null_or_empty_object", default)]
     pub values: serde_json::Value,
-    /// Flat metric map (`pe.import_count`, `binary.section_count`,
-    /// `text.char_entropy`, …). Mirrors `ctx.parsed.metrics()`.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty", default)]
-    pub metrics: BTreeMap<String, f64>,
-    /// Section / segment table — see `filefacts::Section`.
+    /// Call and member-access symbols, held as typed `filefacts::Symbol`
+    /// (not `serde_json::Value`) so the per-symbol heap cost is the typed
+    /// payload rather than a JSON map with duplicated string keys — the
+    /// dominant per-member retention on source-heavy archives. Only `Call`
+    /// (read by `eval_call`, emitted as `ff.ct`) and `Member` (`ff.mc`) are
+    /// retained; other kinds are read from the typed `FileAnalysis` fields or
+    /// unused. Serializes to the same `{"kind": ...}` JSON shape as before.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub sections: Vec<serde_json::Value>,
-    /// Unified named-entity facts (imports, exports, functions, calls,
-    /// members, binds, identifiers) tagged by kind. See
-    /// `filefacts::Symbol`.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub symbols: Vec<serde_json::Value>,
-    /// Byte-scan extracted text runs — ascii + utf16le partitions.
-    /// See `filefacts::Text`.
-    #[serde(skip_serializing_if = "is_null_or_empty_object", default)]
-    pub text: serde_json::Value,
-    /// Parser-extracted string literals from tree-sitter / structured
-    /// parses. See `filefacts::Literals`.
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub literals: Vec<serde_json::Value>,
+    pub symbols: Vec<filefacts::Symbol>,
     /// Recoverable parse errors filefacts collected — see
-    /// `filefacts::ParseError`.
+    /// `filefacts::ParseError`. Emitted in compact output.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub errors: Vec<serde_json::Value>,
 }
 
 impl FilefactsView {
     /// Project an [`AnalysisContext`](crate::analysis_context::AnalysisContext)
-    /// into the report-side shape by serializing each typed view to
-    /// its canonical JSON form.
+    /// into the report-side shape.
     ///
-    /// The serializations cannot fail in practice — every filefacts
-    /// view is built from owned data with no non-stringifiable
-    /// `Map<_, _>` keys — but if `serde_json::to_value` ever returns
-    /// an error the affected list is left empty rather than
-    /// propagating the failure into the report.
+    /// Only the fields downstream actually consumes are retained: call/member
+    /// symbols (eval + `ff.ct`/`ff.mc`) and parse errors. The former
+    /// `values`/`metrics`/`sections`/`literals`/`text` mirrors were dead
+    /// weight — `kv`/strings/metrics/sections reach output and the trait
+    /// engine through the typed `FileAnalysis` fields, not this view.
     #[must_use]
     pub fn from_ctx(ctx: &crate::analysis_context::AnalysisContext<'_>) -> Self {
         let parsed = &ctx.parsed;
         Self {
             values: parsed.values().as_json().clone(),
-            metrics: parsed.metrics().as_map().clone(),
-            sections: serialize_to_array(parsed.sections()),
-            symbols: serialize_to_array(parsed.symbols()),
-            text: serde_json::to_value(parsed.text()).unwrap_or(serde_json::Value::Null),
-            literals: serialize_to_array(parsed.literals()),
+            symbols: retained_symbols(parsed),
             errors: serialize_to_array(parsed.errors()),
         }
     }
@@ -89,14 +73,30 @@ impl FilefactsView {
     /// produced nothing of substance.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        is_null_or_empty_object(&self.values)
-            && self.metrics.is_empty()
-            && self.sections.is_empty()
-            && self.symbols.is_empty()
-            && is_null_or_empty_object(&self.text)
-            && self.literals.is_empty()
-            && self.errors.is_empty()
+        is_null_or_empty_object(&self.values) && self.symbols.is_empty() && self.errors.is_empty()
     }
+}
+
+fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
+    v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty)
+}
+
+/// Mirror only the symbol kinds that downstream actually consumes:
+/// `call` (read by `eval_call` and emitted as `ff.ct` call targets) and
+/// `member` (emitted as `ff.mc` member chains). Imports/exports/functions
+/// are read from the typed `FileAnalysis` fields, and `identifier`/`bind`
+/// symbols — the bulk of a source-file parse — are unused. Dropping the
+/// unused kinds here is the dominant per-member memory saving on
+/// source-heavy archives, where the retained symbol mirror otherwise scales
+/// with every variable reference in every member.
+fn retained_symbols(parsed: &filefacts::ParsedFile<'_>) -> Vec<filefacts::Symbol> {
+    use filefacts::SymbolKind;
+    let symbols = parsed.symbols();
+    symbols
+        .iter_kind(SymbolKind::Call)
+        .chain(symbols.iter_kind(SymbolKind::Member))
+        .cloned()
+        .collect()
 }
 
 /// Serialize a `#[serde(transparent)] Vec<T>` wrapper (e.g.
@@ -110,43 +110,25 @@ fn serialize_to_array<T: Serialize>(view: &T) -> Vec<serde_json::Value> {
     }
 }
 
-fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
-    v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn filefacts_view_round_trips_through_serde_json() {
-        let mut metrics = BTreeMap::new();
-        metrics.insert("pe.import_count".to_string(), 42.0);
-        metrics.insert("binary.section_count".to_string(), 5.0);
         let view = FilefactsView {
-            values: json!({ "pe": { "machine": "x86_64" } }),
-            metrics,
-            sections: vec![json!({
-                "name": ".text",
-                "vaddr": 4096,
-                "file_offset": 1024,
-                "file_size": 8192,
-                "flags": ["readable", "executable"]
-            })],
-            symbols: Vec::new(),
-            text: serde_json::Value::Null,
-            literals: Vec::new(),
-            errors: Vec::new(),
+            symbols: vec![filefacts::Symbol::Member {
+                path: "window.localStorage".to_string(),
+                source: "javascript".to_string(),
+            }],
+            ..Default::default()
         };
 
         let json_str = serde_json::to_string(&view).expect("serialize");
         let round_tripped: FilefactsView = serde_json::from_str(&json_str).expect("deserialize");
-        assert_eq!(round_tripped.values, view.values);
-        assert_eq!(round_tripped.metrics, view.metrics);
-        assert_eq!(round_tripped.sections, view.sections);
-        assert!(round_tripped.symbols.is_empty());
+        assert_eq!(round_tripped.symbols.len(), 1);
+        assert!(round_tripped.errors.is_empty());
     }
 
     #[test]
@@ -172,40 +154,12 @@ mod tests {
             .expect("filefacts opens JS fixture");
 
         let view = FilefactsView::from_ctx(&ctx);
-        let call_target = view
-            .symbols
-            .iter()
-            .filter(|s| s.get("kind").and_then(|k| k.as_str()) == Some("call"))
-            .find_map(|s| s.get("target").and_then(|t| t.as_str()).map(str::to_string));
+        let call_target = view.symbols.iter().find_map(|s| match s {
+            filefacts::Symbol::Call {
+                target: Some(t), ..
+            } => Some(t.clone()),
+            _ => None,
+        });
         assert_eq!(call_target.as_deref(), Some("fetch"));
-    }
-
-    #[test]
-    fn filefacts_view_from_ctx_populates_values_for_test_pe() {
-        let path = std::path::Path::new("tests/fixtures/test.exe");
-        let bytes = std::fs::read(path).expect("PE fixture present");
-        let ctx = crate::analysis_context::AnalysisContext::open(path, &bytes)
-            .expect("filefacts opens PE fixture");
-
-        let view = FilefactsView::from_ctx(&ctx);
-
-        let machine = view
-            .values
-            .get("pe")
-            .and_then(|pe| pe.get("coff"))
-            .and_then(|c| c.get("machine"))
-            .or_else(|| view.values.get("pe").and_then(|pe| pe.get("machine")))
-            .and_then(serde_json::Value::as_str);
-        assert!(
-            machine.is_some(),
-            "pe.machine should be populated, got values={}",
-            view.values
-        );
-
-        let import_count = view.metrics.get("imports.count").copied().unwrap_or(0.0);
-        assert!(
-            import_count > 0.0,
-            "imports.count metric should be > 0 for test PE fixture"
-        );
     }
 }

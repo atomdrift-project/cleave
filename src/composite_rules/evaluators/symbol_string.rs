@@ -733,11 +733,16 @@ pub(crate) fn eval_call<'a>(
     let compiled_regex = regex.and_then(|r| regex::Regex::new(r).ok());
 
     for sym in &view.symbols {
-        let Some(obj) = sym.as_object() else { continue };
-        if obj.get("kind").and_then(|v| v.as_str()) != Some("call") {
+        let filefacts::Symbol::Call {
+            target,
+            args,
+            offset,
+            ..
+        } = sym
+        else {
             continue;
-        }
-        let target = obj.get("target").and_then(|v| v.as_str()).unwrap_or("");
+        };
+        let target = target.as_deref().unwrap_or("");
 
         // Match the target name against any name predicate.
         let name_matches = match (exact, substr, compiled_regex.as_ref()) {
@@ -750,12 +755,8 @@ pub(crate) fn eval_call<'a>(
             continue;
         }
 
-        // If an arg filter is set, require at least one arg in args[]
-        // to match it.
+        // If an arg filter is set, require at least one arg to match it.
         if let Some(filter) = arg_filter {
-            let Some(args) = obj.get("args").and_then(|v| v.as_array()) else {
-                continue;
-            };
             if !args.iter().any(|a| arg_matches(a, filter)) {
                 continue;
             }
@@ -767,10 +768,7 @@ pub(crate) fn eval_call<'a>(
                 method: "symbol".to_string(),
                 source: "call".to_string(),
                 value: target.to_string(),
-                location: obj
-                    .get("offset")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|o| format!("{:#x}", o)),
+                location: offset.map(|o| format!("{:#x}", o)),
                 ..Default::default()
             });
         }
@@ -789,37 +787,29 @@ pub(crate) fn eval_call<'a>(
 /// Match one arg JSON value against an [`ArgFilter`]. Argstring/number/
 /// identifier are tagged `{"shape": ...}` in filefacts's serialization.
 fn arg_matches(
-    arg: &serde_json::Value,
+    arg: &filefacts::Arg,
     filter: &crate::composite_rules::condition::ArgFilter,
 ) -> bool {
-    let Some(obj) = arg.as_object() else {
-        return false;
-    };
-    let shape = obj.get("shape").and_then(|v| v.as_str()).unwrap_or("");
+    use filefacts::Arg;
     if let Some(want_kind) = filter.kind.as_deref()
-        && shape != want_kind
+        && arg_shape(arg) != want_kind
     {
         return false;
     }
-    match shape {
-        "number" => {
+    match arg {
+        Arg::Number { value, radix, .. } => {
             if let Some(want_value) = filter.value
-                && obj.get("value").and_then(serde_json::Value::as_i64) != Some(want_value)
+                && *value != want_value
             {
                 return false;
             }
             if let Some(want_radix) = filter.radix
-                && obj
-                    .get("radix")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|r| r as u32)
-                    != Some(want_radix)
+                && *radix != want_radix
             {
                 return false;
             }
         }
-        "string" | "template" => {
-            let value = obj.get("value").and_then(|v| v.as_str()).unwrap_or("");
+        Arg::String { value } | Arg::Template { value } => {
             if let Some(want_exact) = filter.exact.as_deref()
                 && value != want_exact
             {
@@ -831,22 +821,40 @@ fn arg_matches(
                 return false;
             }
         }
-        "identifier" => {
-            let name = obj.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        Arg::Identifier { name } => {
             if let Some(want_name) = filter.name.as_deref()
                 && name != want_name
             {
                 return false;
             }
         }
-        _ => {
-            // Other shapes (null, object, array, function, call,
-            // expression) carry no matchable value — passing the
-            // filter just by shape match (already checked above) is
-            // sufficient.
-        }
+        // Other shapes (null, object, array, function, call, expression)
+        // carry no matchable value — a shape match alone (checked above) is
+        // sufficient.
+        _ => {}
     }
     true
+}
+
+/// Lowercase shape tag for an [`filefacts::Arg`], matching the `shape:` /
+/// `kind:` values rule authors write (mirrors filefacts's `#[serde(tag =
+/// "shape", rename_all = "lowercase")]`).
+fn arg_shape(arg: &filefacts::Arg) -> &'static str {
+    use filefacts::Arg;
+    match arg {
+        Arg::String { .. } => "string",
+        Arg::Number { .. } => "number",
+        Arg::Bool { .. } => "bool",
+        Arg::Null => "null",
+        Arg::Identifier { .. } => "identifier",
+        Arg::Object => "object",
+        Arg::Array => "array",
+        Arg::Function => "function",
+        Arg::Template { .. } => "template",
+        Arg::Call => "call",
+        Arg::Expression => "expression",
+        _ => "",
+    }
 }
 
 /// Evaluate `type: literal, kind: number` — match against numeric

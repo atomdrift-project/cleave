@@ -57,10 +57,13 @@ pub(crate) struct UPXDecompressor;
 
 impl UPXDecompressor {
     /// Check if data appears to be UPX-packed by looking for "UPX!" or similar
-    /// tampered magic strings ([A-Z]PX!) in the first 512 bytes of the file.
+    /// tampered magic strings ([A-Z]PX!) near the executable headers.
     pub(crate) fn is_upx_packed(data: &[u8]) -> bool {
-        // Search slightly past 512 to catch UPX! placed right at the boundary.
-        let search_range = data.len().min(520);
+        // UPX PE section tables often place the "UPX!" marker after the DOS,
+        // PE, and section headers. 512 bytes misses valid small PE samples with
+        // three sections; 4 KiB keeps detection header-scoped while covering the
+        // normal UPX header area.
+        let search_range = data.len().min(4096);
         let search_data = &data[..search_range];
 
         // Look for "[A-Z]PX!" pattern
@@ -226,33 +229,35 @@ mod tests {
 
     #[test]
     fn test_is_upx_packed_magic_at_end_of_search_range() {
-        // Magic at byte 508 (just within 512 byte search range)
-        let mut data = vec![0u8; 520];
-        data[508..512].copy_from_slice(b"UPX!");
+        // Magic at byte 4088 (just within 4 KiB search range)
+        let mut data = vec![0u8; 4096];
+        data[4088..4092].copy_from_slice(b"UPX!");
         assert!(UPXDecompressor::is_upx_packed(&data));
     }
 
     #[test]
-    fn test_is_upx_packed_magic_beyond_512() {
-        // Magic string beyond 512 bytes should not be detected
-        let mut data = vec![0u8; 600];
-        data[520..524].copy_from_slice(b"UPX!");
-        assert!(!UPXDecompressor::is_upx_packed(&data));
+    fn test_is_upx_packed_pe_magic_after_section_table() {
+        // Valid PE UPX samples can carry UPX! around byte 992, after the
+        // section table, while still being unpackable by upx -d.
+        let mut data = vec![0u8; 1200];
+        data[0..2].copy_from_slice(b"MZ");
+        data[992..996].copy_from_slice(b"UPX!");
+        assert!(UPXDecompressor::is_upx_packed(&data));
     }
 
     #[test]
     fn test_is_upx_packed_magic_at_exactly_512_boundary() {
-        // Magic starting at byte 512 IS detected (search range is 520 to catch boundary cases)
+        // Magic starting at byte 512 IS detected.
         let mut data = vec![0u8; 520];
         data[512..516].copy_from_slice(b"UPX!");
         assert!(UPXDecompressor::is_upx_packed(&data));
     }
 
     #[test]
-    fn test_is_upx_packed_magic_beyond_520() {
-        // Magic starting at byte 521 should NOT be detected (outside search range)
-        let mut data = vec![0u8; 530];
-        data[521..525].copy_from_slice(b"UPX!");
+    fn test_is_upx_packed_magic_beyond_header_search() {
+        // Magic starting beyond 4 KiB should not drive UPX unpacking.
+        let mut data = vec![0u8; 4200];
+        data[4097..4101].copy_from_slice(b"UPX!");
         assert!(!UPXDecompressor::is_upx_packed(&data));
     }
 

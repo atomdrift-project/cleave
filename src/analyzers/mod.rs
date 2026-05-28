@@ -439,7 +439,7 @@ pub trait Analyzer {
 #[must_use]
 #[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
-    fileid::detect_path(file_path)
+    filefacts::fileid::detect_path(file_path)
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| known_manifest_type_from_basename(file_path))
@@ -449,7 +449,7 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
-    fileid::detect(file_path, file_data)
+    filefacts::fileid::detect(file_path, file_data)
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| known_manifest_type_from_basename(file_path))
@@ -476,7 +476,7 @@ pub fn detect_file_type(file_path: &Path) -> Result<FileType> {
 
 /// Returns true if cleave can analyze this file.
 ///
-/// Delegates to `fileid::FileType::is_program()` which is the single source of
+/// Delegates to `filefacts::FileType::is_program()` which is the single source of
 /// truth for whether a file type is supported for analysis.
 #[must_use]
 pub(crate) fn is_analyzable(_path: &Path, file_type: &FileType) -> bool {
@@ -500,7 +500,7 @@ pub fn check_extension_content_mismatch(
     if file_data.len() < 4 {
         return None;
     }
-    let det = fileid::detect(file_path, file_data)?;
+    let det = filefacts::fileid::detect(file_path, file_data)?;
     // Only flag when the extension explicitly maps to a *different* known type.
     // Unknown/unrecognized extensions (e.g. .elf, .so, .ko, .bin) are not mismatches.
     let ext_type = det.extension_type()?;
@@ -582,16 +582,12 @@ fn path_ends_with_ci(path: &Path, suffix: &str) -> bool {
         })
 }
 
-/// Re-export the canonical file type from the fileid crate.
-///
-/// Previously cleave maintained a parallel `FileType` enum that had to be kept
-/// in sync with fileid via a tedious `From` conversion.  Now there is a single
-/// source of truth: `fileid::FileType`.
-pub type FileType = fileid::FileType;
+/// Re-export the canonical file type from filefacts.
+pub type FileType = filefacts::FileType;
 
 /// Cleave-specific extensions on `FileType` (report labels, YARA tags).
 ///
-/// These don't belong in the fileid crate because they encode cleave's analysis
+/// These don't belong in filefacts because they encode cleave's analysis
 /// policy rather than generic file identification.
 pub(crate) trait FileTypeExt {
     /// Canonical file type string used in analysis reports.
@@ -685,6 +681,7 @@ impl FileTypeExt for FileType {
             FileType::Deb => vec!["deb", "archive"],
             FileType::Rpm => vec!["rpm", "archive"],
             FileType::Crx => vec!["crx", "archive"],
+            FileType::Asar => vec!["asar", "archive"],
             FileType::AppleScript => vec!["scpt", "applescript"],
             FileType::Plist => vec!["plist", "xml", "apple"],
             FileType::Rtf => vec!["rtf", "doc"],
@@ -913,15 +910,6 @@ mod tests {
     fn bridge_android_apk_zip_is_not_mismatch() {
         let zip = b"PK\x03\x04android package";
         assert!(check_extension_content_mismatch(Path::new("package.apk"), zip).is_none());
-    }
-
-    #[test]
-    fn bridge_from_roundtrip() {
-        assert_eq!(FileType::from(fileid::FileType::MachO), FileType::MachO);
-        assert_eq!(
-            FileType::from(fileid::FileType::Markdown),
-            FileType::Markdown
-        );
     }
 
     #[test]

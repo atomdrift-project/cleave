@@ -519,21 +519,20 @@ fn find_embedded_executables<R: OoxmlEntryReader>(
                 continue;
             }
             // Check for embedded executables (ELF, PE) or OLE2 containers with PE
-            if let Some(det) = fileid::detect_content(&data) {
-                match det.file_type {
-                    fileid::FileType::Elf | fileid::FileType::Pe | fileid::FileType::MachO => {
-                        found.push(entry_path.clone());
-                        continue;
-                    }
-                    fileid::FileType::OleDoc => {
-                        // OLE2 container — scan for embedded PE
-                        let scan_len = data.len().min(64 * 1024);
-                        if memchr::memmem::find(&data[..scan_len], b"MZ").is_some() {
-                            found.push(entry_path.clone());
-                        }
-                    }
-                    _ => {}
+            let file_type = filefacts::FileId::from_bytes(&data).file_type();
+            match file_type {
+                filefacts::FileType::Elf | filefacts::FileType::Pe | filefacts::FileType::MachO => {
+                    found.push(entry_path.clone());
+                    continue;
                 }
+                filefacts::FileType::OleDoc => {
+                    // OLE2 container — scan for embedded PE
+                    let scan_len = data.len().min(64 * 1024);
+                    if memchr::memmem::find(&data[..scan_len], b"MZ").is_some() {
+                        found.push(entry_path.clone());
+                    }
+                }
+                _ => {}
             }
         }
     }

@@ -1,6 +1,7 @@
 //! Archive analyzer for various archive formats.
 
 pub(crate) mod analyzers;
+mod asar;
 mod guards;
 #[cfg(test)]
 mod guards_test;
@@ -789,6 +790,41 @@ impl ArchiveAnalyzer {
 
         if matches!(file_type, FileType::Chm) {
             self.analyze_chm_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            let hostile_reasons = guard.take_reasons();
+            let suppress_path_traversal =
+                should_suppress_path_traversal_findings(archive_path, &hostile_reasons);
+            push_archive_hostile_findings(
+                &mut report,
+                hostile_reasons,
+                "archive_analyzer",
+                suppress_path_traversal,
+            );
+            report.structure.push(StructuralFeature {
+                id: format!("archive/{}", archive_type_str),
+                desc: format!("{} archive", archive_type_str),
+                evidence: vec![Evidence {
+                    method: "extension".to_string(),
+                    source: "archive_analyzer".to_string(),
+                    value: archive_path
+                        .extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("unknown")
+                        .to_string(),
+                    location: None,
+                    ..Default::default()
+                }],
+            });
+            report.seal_archive_metadata_kv();
+            self.evaluate_container_findings(&mut report);
+            return Ok(report);
+        }
+
+        if matches!(file_type, FileType::Asar) {
+            self.analyze_asar_archive_in_memory(data, archive_path, &mut report, start, &guard)?;
+            let member_metadata = guard.take_member_metadata();
+            if !member_metadata.is_empty() {
+                merge_archive_member_metadata(&mut report, member_metadata);
+            }
             let hostile_reasons = guard.take_reasons();
             let suppress_path_traversal =
                 should_suppress_path_traversal_findings(archive_path, &hostile_reasons);

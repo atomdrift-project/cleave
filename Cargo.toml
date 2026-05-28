@@ -11,7 +11,7 @@ default-run = "cleave"
 workspace = true
 
 [workspace]
-members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/fileid", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
+members = [".", "crates/scpt", "crates/malecule", "crates/sysmem", "crates/yara-classify", "crates/pyinstx", "crates/lzx", "cleave-macros"]
 
 # Strict but pragmatic lints - similar to the Rust project itself
 [workspace.lints.rust]
@@ -93,9 +93,6 @@ filefacts = { git = "https://codeberg.org/atomdrift/filefacts.git" }
 iced-x86 = { version = "1.21", default-features = false, features = ["decoder", "std"] }
 cfb = "0.10"  # Microsoft OLE2/CFBF compound document parsing
 lnk = "0.6"  # Windows Shell Link (.lnk) parsing
-
-# File format identification
-fileid = { path = "crates/fileid", features = ["serde"] }
 
 # AppleScript parsing
 scpt = { path = "crates/scpt" }
@@ -321,4 +318,3 @@ opt-level = 3
 
 [profile.dev.package.aho-corasick]
 opt-level = 3
-

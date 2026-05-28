@@ -779,7 +779,6 @@ dependencies = [
  "dirs",
  "encoding_rs",
  "filefacts",
- "fileid",
  "filetime",
  "flate2",
  "hex",
@@ -1591,7 +1590,6 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.7.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#0052022a8b713968c7ae3b5766b51ee952f3746f"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -1654,16 +1652,6 @@ dependencies = [
  "x509-cert",
  "zip 2.4.2",
  "zstd",
-]
-
-[[package]]
-name = "fileid"
-version = "0.1.0"
-dependencies = [
- "aho-corasick",
- "criterion",
- "memchr",
- "serde",
 ]
 
 [[package]]

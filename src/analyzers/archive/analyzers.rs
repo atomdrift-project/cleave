@@ -1204,6 +1204,138 @@ impl ArchiveAnalyzer {
         Ok(())
     }
 
+    /// Analyze an Electron ASAR container in memory. ASAR member data is
+    /// stored uncompressed after the header, so each addressable member can be
+    /// sliced directly and routed through normal file-type detection.
+    pub(super) fn analyze_asar_archive_in_memory(
+        &self,
+        data: &[u8],
+        archive_path: &Path,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        guard: &ExtractionGuard,
+    ) -> Result<()> {
+        let entries = super::asar::collect_entries(data)?;
+        let fake_root = Path::new("/__cleave_archive__");
+        let stream_members = rayon::current_thread_index().is_some();
+        let mut members = if stream_members {
+            Vec::new()
+        } else {
+            Vec::with_capacity(entries.len().min(10_000))
+        };
+        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
+            Vec::with_capacity(entries.len().min(10_000))
+        } else {
+            Vec::new()
+        };
+        let mut total_streamed = 0usize;
+
+        for entry in entries {
+            if self.is_cancelled() {
+                anyhow::bail!("Analysis cancelled during ASAR member read");
+            }
+            if !guard.check_file_count() {
+                anyhow::bail!(
+                    "Exceeded maximum file count ({})",
+                    super::guards::MAX_FILE_COUNT
+                );
+            }
+            if entry.path.len() > MAX_PATH_COMPONENT_LEN {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveEntryName {
+                    len: entry.path.len(),
+                    preview: entry.path.chars().take(80).collect(),
+                });
+            }
+
+            let Some(outpath) = sanitize_entry_path(&entry.path, fake_root) else {
+                guard.add_hostile_reason(HostileArchiveReason::PathTraversal(entry.path));
+                continue;
+            };
+            let relative_path = outpath
+                .strip_prefix(fake_root)
+                .unwrap_or(&outpath)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            if entry.size > MAX_FILE_SIZE {
+                guard.add_hostile_reason(HostileArchiveReason::ExcessiveFileSize {
+                    file: entry.path,
+                    size: entry.size,
+                });
+                continue;
+            }
+
+            let start_offset = usize::try_from(entry.data_offset)
+                .map_err(|_| anyhow::anyhow!("ASAR member offset exceeds addressable memory"))?;
+            let member_size = usize::try_from(entry.size)
+                .map_err(|_| anyhow::anyhow!("ASAR member size exceeds addressable memory"))?;
+            let end_offset = start_offset
+                .checked_add(member_size)
+                .ok_or_else(|| anyhow::anyhow!("ASAR member range overflow"))?;
+            let Some(file_data) = data.get(start_offset..end_offset) else {
+                anyhow::bail!("ASAR member extends past end of file: {}", relative_path);
+            };
+            if !guard.check_bytes(file_data.len() as u64, &relative_path) {
+                anyhow::bail!("Exceeded maximum total extraction size");
+            }
+
+            guard.record_member_metadata(super::guards::ExtractedMemberMetadata {
+                archive_path: relative_path.clone(),
+                compressed_size: Some(entry.size),
+                compression_method: Some("stored".to_string()),
+                mtime_unix: None,
+                mode_octal: None,
+                uid: None,
+                gid: None,
+                uname: None,
+                gname: None,
+                entry_type: Some("regular".to_string()),
+                linkname: None,
+                host_os: None,
+            });
+
+            let logical_path = Path::new(&relative_path);
+            let file_type = crate::analyzers::detect_file_type_from_data(logical_path, file_data);
+            let sha256 = calculate_sha256(file_data);
+            let member = MemoryArchiveMember {
+                relative_path,
+                data: file_data.to_vec(),
+                file_type,
+                sha256,
+            };
+            if stream_members {
+                if let Some(result) = self.analyze_one_member(&member, "memory ASAR") {
+                    streamed_results.push(result);
+                }
+                total_streamed += 1;
+            } else {
+                members.push(member);
+            }
+        }
+
+        if stream_members {
+            self.aggregate_member_results(
+                streamed_results,
+                report,
+                start,
+                "ASAR archive",
+                vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
+                total_streamed,
+            );
+        } else {
+            self.analyze_in_memory_members(
+                &members,
+                archive_path,
+                report,
+                start,
+                "ASAR archive",
+                "memory ASAR",
+                vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
+            );
+        }
+        Ok(())
+    }
+
     /// Run the par_iter analysis + aggregation over a prebuilt
     /// `Vec<MemoryArchiveMember>`. Used by both the ZIP and PyInstaller
     /// in-memory paths.

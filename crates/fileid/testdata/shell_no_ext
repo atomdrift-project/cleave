@@ -1,5 +1,0 @@
-#!/bin/bash
-echo "hello world"
-if [ -f /tmp/test ]; then
-    echo "exists"
-fi

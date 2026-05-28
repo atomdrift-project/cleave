@@ -335,7 +335,7 @@ pub(crate) fn detect_format(path: &Path, content: &[u8]) -> StructuredFormat {
     }
 
     // Content-sniffed XML for extensionless files that start with a well-known
-    // root element. Matches the narrow set in fileid::magic::detect_xml, so the
+    // root element. Matches the narrow set in filefacts::fileid XML detection, so the
     // value evaluator sees the same files fileid classifies as Xml.
     if content.starts_with(b"<Project ") || content.starts_with(b"<Project\t") {
         let head = &content[..content.len().min(512)];

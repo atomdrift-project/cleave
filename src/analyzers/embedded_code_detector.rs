@@ -1459,17 +1459,20 @@ mod tests {
         let (_encoded, plain_findings) =
             process_all_strings("Dockerfile", &strings, &mapper, 0, None, None);
 
-        let any_parent_relative = plain_findings.iter().flat_map(|f| f.evidence.iter()).any(
-            |ev| match (ev.location.as_deref(), ev.offsets.first().copied()) {
-                (Some(loc), Some(off)) => {
-                    loc.starts_with(&format!("embedded@{:#x}:", parent_offset_a))
-                        && off >= parent_offset_a
-                        || loc.starts_with(&format!("embedded@{:#x}:", parent_offset_b))
-                            && off >= parent_offset_b
-                }
-                _ => false,
-            },
-        );
+        let any_parent_relative = plain_findings
+            .iter()
+            .flat_map(|f| f.evidence.iter())
+            .any(
+                |ev| match (ev.location.as_deref(), ev.offsets.first().copied()) {
+                    (Some(loc), Some(off)) => {
+                        loc.starts_with(&format!("embedded@{:#x}:", parent_offset_a))
+                            && off >= parent_offset_a
+                            || loc.starts_with(&format!("embedded@{:#x}:", parent_offset_b))
+                                && off >= parent_offset_b
+                    }
+                    _ => false,
+                },
+            );
         assert!(
             any_parent_relative,
             "expected at least one `embedded@<offset>:` finding with a parent-relative offset; \

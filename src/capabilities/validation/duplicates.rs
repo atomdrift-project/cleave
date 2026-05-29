@@ -22,6 +22,15 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
 
+const RELAXED_DATA_TEXT_ALTERNATION_LIMIT: usize = 6;
+
+fn is_micro_behavior_data_text_path(path: &str) -> bool {
+    path.split(['/', '\\'])
+        .collect::<Vec<_>>()
+        .windows(3)
+        .any(|parts| parts == ["micro-behaviors", "data", "text"])
+}
+
 /// Get or compile a regex pattern using the shared evaluator cache.
 /// Returns None if the pattern is invalid.
 fn get_cached_regex(pattern: &str) -> Option<regex::Regex> {
@@ -2556,6 +2565,18 @@ pub(crate) fn check_regex_alternative_subsets(
         case_insensitive: bool,
     }
 
+    let relaxed_data_text_superset = |pattern: &RegexWithAlternatives| -> bool {
+        if !is_micro_behavior_data_text_path(&pattern.file_path) {
+            return false;
+        }
+        let alternation_count = if let Some((_, alts, _)) = &pattern.grouped_alternatives {
+            alts.len().saturating_sub(1)
+        } else {
+            pattern.alternatives.len().saturating_sub(1)
+        };
+        alternation_count <= RELAXED_DATA_TEXT_ALTERNATION_LIMIT
+    };
+
     let mut regex_patterns: Vec<RegexWithAlternatives> = Vec::new();
 
     for trait_def in trait_definitions {
@@ -2681,6 +2702,12 @@ pub(crate) fn check_regex_alternative_subsets(
                 let set2: HashSet<&String> = alts2.iter().collect();
                 p1_subset_of_p2 = set1.is_subset(&set2) && set1.len() < set2.len();
                 p2_subset_of_p1 = set2.is_subset(&set1) && set2.len() < set1.len();
+            }
+
+            if (p1_subset_of_p2 && relaxed_data_text_superset(p2))
+                || (p2_subset_of_p1 && relaxed_data_text_superset(p1))
+            {
+                continue;
             }
 
             if p1_subset_of_p2 {

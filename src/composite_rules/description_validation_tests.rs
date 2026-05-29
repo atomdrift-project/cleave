@@ -35,8 +35,6 @@ mod description_validation_tests {
                 section_offset_range: None,
                 not: None,
                 platforms: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
             size_max: None,
             count_min: None,

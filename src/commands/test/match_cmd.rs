@@ -309,27 +309,6 @@ pub fn run(
         || section_offset.is_some()
         || section_offset_range.is_some();
 
-    let build_compiled_regex = |pattern: &str| match method {
-        cli::MatchMethod::Regex => {
-            let pat = if case_insensitive {
-                format!("(?i){}", pattern)
-            } else {
-                pattern.to_string()
-            };
-            regex::Regex::new(&pat).ok()
-        }
-        cli::MatchMethod::Word => {
-            let word_pat = format!(r"\b{}\b", regex::escape(pattern));
-            let pat = if case_insensitive {
-                format!("(?i){}", word_pat)
-            } else {
-                word_pat
-            };
-            regex::Regex::new(&pat).ok()
-        }
-        _ => None,
-    };
-
     // Perform the requested search
     let (matched, _match_count, mut output): (bool, usize, String) = match search_type {
         cli::SearchType::StringValue => {
@@ -547,15 +526,12 @@ pub fn run(
 
             let pattern_value = pattern.to_string();
             let section_value = section.map(str::to_owned);
-            let compiled_regex = build_compiled_regex(pattern);
             let params = StringParams {
                 exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
                 substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
                 word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
                 case_insensitive,
-                compiled_regex: compiled_regex.as_ref(),
-                compiled_finder: None,
                 is_check,
                 section: section_value.as_ref(),
                 offset,
@@ -666,15 +642,12 @@ pub fn run(
 
             let pattern_value = pattern.to_string();
             let section_value = section.map(str::to_owned);
-            let compiled_regex = build_compiled_regex(pattern);
             let params = StringParams {
                 exact: (method == cli::MatchMethod::Exact).then_some(&pattern_value),
                 substr: (method == cli::MatchMethod::Contains).then_some(&pattern_value),
                 regex: (method == cli::MatchMethod::Regex).then_some(&pattern_value),
                 word: (method == cli::MatchMethod::Word).then_some(&pattern_value),
                 case_insensitive,
-                compiled_regex: compiled_regex.as_ref(),
-                compiled_finder: None,
                 is_check,
                 section: section_value.as_ref(),
                 offset,
@@ -1018,8 +991,6 @@ pub fn run(
             } else {
                 None
             };
-            let compiled_regex = regex_str.as_ref().and_then(|r| regex::Regex::new(r).ok());
-
             let condition = composite_rules::Condition::Kv {
                 path: kv_path_str.to_string(),
                 exact: exact.clone(),
@@ -1031,7 +1002,6 @@ pub fn run(
                 exists: kv_exists,
                 size_min: kv_size_min,
                 size_max: kv_size_max,
-                compiled_regex,
             };
 
             // Create minimal context for kv evaluation

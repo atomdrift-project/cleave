@@ -4,7 +4,7 @@
 //! that composite rules only contain trait references (not inline primitives),
 //! auto-prefixing trait references, and detecting redundant patterns.
 
-use crate::composite_rules::{CompositeTrait, Condition, TraitDefinition};
+use crate::composite_rules::{CompositeTrait, Condition, FileType, Scope, TraitDefinition};
 use std::collections::{HashMap, HashSet};
 
 /// Find atomic traits whose `if:` clause references themselves
@@ -407,6 +407,30 @@ pub(crate) fn find_single_item_clauses(
     }
 
     violations
+}
+
+/// Find composite rules that declare `scope: archive` but whose `for:` cannot
+/// match an archive container.
+///
+/// `scope: archive` pools evidence across the members of a single archive, so
+/// the composite is evaluated *on the archive itself* — which only happens when
+/// its `for:` includes an archive/container type (e.g. the `archives` group).
+/// With a leaf-only `for:` such as `[javascript, package.json]` the composite is
+/// only ever evaluated on individual members, where cross-member pooling is
+/// impossible, so it silently never fires even though every sub-trait matches.
+/// That failure is invisible — the rule looks correct — so surface it at load
+/// time with a fix hint.
+///
+/// Returns the offending rule id, or `None` when the rule is fine.
+#[must_use]
+pub(crate) fn find_archive_scope_without_archive_for(rule: &CompositeTrait) -> Option<String> {
+    if rule.scope != Some(Scope::Archive) {
+        return None;
+    }
+    if rule.r#for.iter().any(FileType::is_archive) {
+        return None;
+    }
+    Some(rule.id.clone())
 }
 
 /// Find composite rules where an `all:` or `any:` clause contains overlapping IDs.

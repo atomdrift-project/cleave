@@ -439,6 +439,10 @@ pub trait Analyzer {
 #[must_use]
 #[inline]
 pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
+    if is_arch_package_metadata_name(file_path) {
+        return FileType::Text;
+    }
+
     filefacts::fileid::detect_path(file_path)
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Unknown)
@@ -449,6 +453,10 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 /// Detect file type from already-loaded data (content first, extension fallback).
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
+    if is_arch_package_metadata_name(file_path) {
+        return FileType::Text;
+    }
+
     filefacts::fileid::detect(file_path, file_data)
         .map(|d| d.file_type)
         .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
@@ -473,6 +481,16 @@ fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
         "pyproject.toml" => Some(FileType::PyProjectToml),
         _ => None,
     }
+}
+
+fn is_arch_package_metadata_name(file_path: &Path) -> bool {
+    let Some(name) = file_path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    matches!(
+        name.to_ascii_lowercase().as_str(),
+        ".pkginfo" | ".buildinfo" | ".mtree"
+    )
 }
 
 /// Detect file type by reading the first 1KB from disk.
@@ -523,6 +541,9 @@ pub fn check_extension_content_mismatch(
         ));
     }
     if is_linux_apk_archive(file_path, det.file_type, ext_type) {
+        return None;
+    }
+    if is_freebsd_pkg_zstd(file_path, file_data, det.file_type, ext_type) {
         return None;
     }
     if is_xhtml_html_document(file_data, det.file_type, ext_type) {
@@ -581,6 +602,28 @@ fn is_linux_apk_archive(file_path: &Path, content_type: FileType, ext_type: File
             content_type,
             FileType::Tar | FileType::TarGz | FileType::TarBz2 | FileType::TarXz | FileType::TarZst
         )
+}
+
+fn is_freebsd_pkg_zstd(
+    file_path: &Path,
+    file_data: &[u8],
+    content_type: FileType,
+    ext_type: FileType,
+) -> bool {
+    if ext_type != FileType::Pkg || !matches!(content_type, FileType::TarZst | FileType::Zst) {
+        return false;
+    }
+    if !path_ends_with_ci(file_path, ".pkg") {
+        return false;
+    }
+    let Ok(mut decoder) = zstd::stream::read::Decoder::new(file_data) else {
+        return false;
+    };
+    let mut prefix = [0u8; 32];
+    let Ok(n) = std::io::Read::read(&mut decoder, &mut prefix) else {
+        return false;
+    };
+    prefix[..n].starts_with(b"+COMPACT_MANIFEST") || prefix[..n].starts_with(b"+MANIFEST")
 }
 
 fn path_ends_with_ci(path: &Path, suffix: &str) -> bool {
@@ -907,6 +950,29 @@ mod tests {
     }
 
     #[test]
+    fn bridge_arch_package_metadata_stays_text() {
+        assert_eq!(
+            detect_file_type_from_path(Path::new(".PKGINFO")),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_data(
+                Path::new(".PKGINFO"),
+                b"pkgdesc = Tools to package up Wasm Components\n"
+            ),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new(".BUILDINFO"), b"format = 2\n"),
+            FileType::Text
+        );
+        assert_eq!(
+            detect_file_type_from_data(Path::new(".MTREE"), b"#mtree\n"),
+            FileType::Text
+        );
+    }
+
+    #[test]
     fn bridge_mismatch() {
         let elf = b"\x7fELF\x02\x01\x01\x00";
         assert!(check_extension_content_mismatch(Path::new("image.jpg"), elf).is_some());
@@ -923,6 +989,14 @@ mod tests {
     fn bridge_linux_apk_targz_is_not_mismatch() {
         let gzip = [0x1f, 0x8b, 0x08, 0x00];
         assert!(check_extension_content_mismatch(Path::new("package.apk"), &gzip).is_none());
+    }
+
+    #[test]
+    fn bridge_freebsd_pkg_zstd_is_not_mismatch() {
+        let data = zstd::encode_all(&b"+COMPACT_MANIFEST\0payload"[..], 3).unwrap();
+        assert!(
+            check_extension_content_mismatch(Path::new("BerkeleyGW-4.0_2.pkg"), &data).is_none()
+        );
     }
 
     #[test]

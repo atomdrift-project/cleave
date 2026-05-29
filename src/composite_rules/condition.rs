@@ -24,18 +24,22 @@ fn compile_regex_logged(
 /// across every condition that uses it, so only patterns that actually fire
 /// cost anything, and identical patterns cost once.
 pub(crate) fn cached_regex(pattern: &str) -> Option<&'static regex::Regex> {
-    use std::sync::{LazyLock, Mutex};
-    static CACHE: LazyLock<Mutex<std::collections::HashMap<String, &'static regex::Regex>>> =
-        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-    if let Ok(cache) = CACHE.lock()
+    use std::sync::{LazyLock, RwLock};
+    static CACHE: LazyLock<RwLock<std::collections::HashMap<String, &'static regex::Regex>>> =
+        LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+    // Hot path is a concurrent read lock — only the first compile of each unique
+    // pattern takes the write lock, so warmed-up evals never serialize.
+    if let Ok(cache) = CACHE.read()
         && let Some(&re) = cache.get(pattern)
     {
         return Some(re);
     }
     let re = regex::Regex::new(pattern).ok()?;
     let leaked: &'static regex::Regex = Box::leak(Box::new(re));
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(pattern.to_string(), leaked);
+    if let Ok(mut cache) = CACHE.write() {
+        // `or_insert` makes the first writer win under a benign build race, so
+        // every caller converges on the same shared instance.
+        return Some(*cache.entry(pattern.to_string()).or_insert(leaked));
     }
     Some(leaked)
 }
@@ -57,10 +61,13 @@ pub(crate) fn lazy_regex(
 }
 
 /// Raw-content matcher's lazy regex source. Like [`lazy_regex`] but also serves
-/// `word:` by building `\bword\b` on demand (cached/shared). TODO: make
-/// `word:` a literal byte-boundary scan here too so raw content never touches
-/// the regex engine for literals; for now it's lazy + deduplicated (no longer
-/// the eager per-condition compilation that cost ~1.5 GB).
+/// `word:` by building `\bword\b` on demand (cached/shared), and enables
+/// multi-line mode (`(?m)`) so `^`/`$` anchor per line — matching the byte-regex
+/// path's `multi_line(true)` (see `compile_bytes_regex`) so non-ASCII raw
+/// patterns honor per-line anchors identically. TODO: make `word:` a literal
+/// byte-boundary scan here too so raw content never touches the regex engine for
+/// literals; for now it's lazy + deduplicated (no longer the eager per-condition
+/// compilation that cost ~1.5 GB).
 pub(crate) fn lazy_raw_regex(
     word: Option<&str>,
     regex: Option<&str>,
@@ -72,9 +79,9 @@ pub(crate) fn lazy_raw_regex(
         (None, None) => return None,
     };
     if case_insensitive {
-        cached_regex(&format!("(?i){base}"))
+        cached_regex(&format!("(?im){base}"))
     } else {
-        cached_regex(&base)
+        cached_regex(&format!("(?m){base}"))
     }
 }
 
@@ -83,20 +90,19 @@ pub(crate) fn lazy_raw_regex(
 /// a single needle; caching it means we build the searcher once and reuse it
 /// across evals instead of rebuilding per call, with no per-condition storage.
 pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'static> {
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{LazyLock, RwLock};
     static CACHE: LazyLock<
-        Mutex<std::collections::HashMap<String, &'static memchr::memmem::Finder<'static>>>,
-    > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-    // Lock-poisoning can't happen (no panics under the guard); fall back to a
-    // leaked one-off if it somehow does, so matching never breaks.
-    if let Ok(cache) = CACHE.lock()
+        RwLock<std::collections::HashMap<String, &'static memchr::memmem::Finder<'static>>>,
+    > = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+    // Hot path is a concurrent read lock; only first build of each needle writes.
+    if let Ok(cache) = CACHE.read()
         && let Some(&f) = cache.get(needle)
     {
         return f;
     }
     let finder: &'static _ = Box::leak(Box::new(memchr::memmem::Finder::new(needle).into_owned()));
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(needle.to_string(), finder);
+    if let Ok(mut cache) = CACHE.write() {
+        return cache.entry(needle.to_string()).or_insert(finder);
     }
     finder
 }
@@ -105,11 +111,12 @@ pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'st
 /// searcher per unique needle. For CI single-needle matching, AC's built-in
 /// case folding beats lowercasing the haystack on every eval.
 pub(crate) fn cached_ci_searcher(needle: &str) -> Option<&'static aho_corasick::AhoCorasick> {
-    use std::sync::{LazyLock, Mutex};
+    use std::sync::{LazyLock, RwLock};
     static CACHE: LazyLock<
-        Mutex<std::collections::HashMap<String, &'static aho_corasick::AhoCorasick>>,
-    > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
-    if let Ok(cache) = CACHE.lock()
+        RwLock<std::collections::HashMap<String, &'static aho_corasick::AhoCorasick>>,
+    > = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+    // Hot path is a concurrent read lock; only first build of each needle writes.
+    if let Ok(cache) = CACHE.read()
         && let Some(&ac) = cache.get(needle)
     {
         return Some(ac);
@@ -119,8 +126,8 @@ pub(crate) fn cached_ci_searcher(needle: &str) -> Option<&'static aho_corasick::
         .build([needle])
         .ok()?;
     let ac: &'static _ = Box::leak(Box::new(ac));
-    if let Ok(mut cache) = CACHE.lock() {
-        cache.insert(needle.to_string(), ac);
+    if let Ok(mut cache) = CACHE.write() {
+        return Some(*cache.entry(needle.to_string()).or_insert(ac));
     }
     Some(ac)
 }
@@ -134,53 +141,85 @@ fn is_word_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
 }
 
-/// Literal word-boundary match — the `word:` matcher, **no regex engine**.
-/// Returns the byte offset of the first occurrence of `needle` whose
-/// neighbours satisfy `\bneedle\b` semantics: a `\b` exists where word-ness
-/// *transitions*, which depends on whether the needle's own first/last byte is
-/// a word char (so punctuation-edged patterns behave like the regex did), and
-/// at text start/end `\b` holds iff the adjacent needle byte is a word char.
-/// The caller slices `haystack[start..start + needle.len()]` for the matched
-/// text (preserving case under case-insensitive matching). Case-sensitive uses
-/// a cached SIMD `Finder`; case-insensitive a cached AC searcher (no per-eval
-/// haystack allocation).
-#[must_use]
-pub(crate) fn word_match_start(haystack: &str, needle: &str, case_insensitive: bool) -> Option<usize> {
-    let nb = needle.as_bytes();
-    let (&first, &last) = (nb.first()?, nb.last()?);
+/// `\bneedle\b` boundary test at `[start, end)` in `haystack`. A `\b` exists
+/// where word-ness *transitions*, which depends on whether the needle's own
+/// first/last byte is a word char (so punctuation-edged patterns behave like
+/// the regex did), and at text start/end `\b` holds iff the adjacent needle
+/// byte is a word char.
+#[inline]
+fn word_boundary_ok(hb: &[u8], nb: &[u8], start: usize, end: usize) -> bool {
+    let (Some(&first), Some(&last)) = (nb.first(), nb.last()) else {
+        return false;
+    };
     let first_word = is_word_byte(first);
     let last_word = is_word_byte(last);
-    let hb = haystack.as_bytes();
-    let nlen = nb.len();
-    let boundary_ok = |start: usize, end: usize| {
-        let left = if start == 0 {
-            first_word
-        } else {
-            is_word_byte(hb[start - 1]) != first_word
-        };
-        let right = if end == hb.len() {
-            last_word
-        } else {
-            is_word_byte(hb[end]) != last_word
-        };
-        left && right
-    };
-    if case_insensitive {
-        cached_ci_searcher(needle)?
-            .find_iter(haystack)
-            .find(|m| boundary_ok(m.start(), m.end()))
-            .map(|m| m.start())
+    let left = if start == 0 {
+        first_word
     } else {
-        let finder = cached_finder(needle);
-        let mut from = 0;
-        while let Some(rel) = finder.find(&hb[from..]) {
-            let start = from + rel;
-            if boundary_ok(start, start + nlen) {
-                return Some(start);
-            }
-            from = start + 1;
+        is_word_byte(hb[start - 1]) != first_word
+    };
+    let right = if end == hb.len() {
+        last_word
+    } else {
+        is_word_byte(hb[end]) != last_word
+    };
+    left && right
+}
+
+/// Case-sensitive `word:` match using a pre-resolved `Finder`. Returns the byte
+/// offset of the first occurrence whose neighbours satisfy `\bneedle\b`.
+#[must_use]
+pub(crate) fn word_match_cs(
+    haystack: &str,
+    needle: &str,
+    finder: &memchr::memmem::Finder<'static>,
+) -> Option<usize> {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    let mut from = 0;
+    while let Some(rel) = finder.find(&hb[from..]) {
+        let start = from + rel;
+        if word_boundary_ok(hb, nb, start, start + nb.len()) {
+            return Some(start);
         }
-        None
+        from = start + 1;
+    }
+    None
+}
+
+/// Case-insensitive `word:` match using a pre-resolved Aho-Corasick searcher.
+#[must_use]
+pub(crate) fn word_match_ci(
+    haystack: &str,
+    needle: &str,
+    ac: &aho_corasick::AhoCorasick,
+) -> Option<usize> {
+    let hb = haystack.as_bytes();
+    let nb = needle.as_bytes();
+    ac.find_iter(haystack)
+        .find(|m| word_boundary_ok(hb, nb, m.start(), m.end()))
+        .map(|m| m.start())
+}
+
+/// Literal word-boundary match — the `word:` matcher, **no regex engine**.
+/// Resolves the shared searcher then delegates to [`word_match_cs`] /
+/// [`word_match_ci`]. Production resolves the searcher once per condition (see
+/// `StringMatcher`) and calls those directly; this single-shot convenience is
+/// used only by the boundary-semantics unit tests.
+#[cfg(test)]
+#[must_use]
+pub(crate) fn word_match_start(
+    haystack: &str,
+    needle: &str,
+    case_insensitive: bool,
+) -> Option<usize> {
+    if needle.is_empty() {
+        return None;
+    }
+    if case_insensitive {
+        word_match_ci(haystack, needle, cached_ci_searcher(needle)?)
+    } else {
+        word_match_cs(haystack, needle, cached_finder(needle))
     }
 }
 
@@ -290,9 +329,6 @@ pub(crate) struct NotExceptionStructured {
     /// Require the value to match this regex to trigger the exception
     #[serde(skip_serializing_if = "Option::is_none")]
     pub regex: Option<String>,
-    /// Pre-compiled regex (populated by precompile)
-    #[serde(skip)]
-    pub compiled_regex: Option<regex::Regex>,
     /// Pre-lowered substr for case-insensitive matching
     #[serde(skip)]
     pub lowered_substr: Option<String>,
@@ -321,16 +357,16 @@ impl NotException {
             NotException::Structured(s) => {
                 if let Some(exact_str) = &s.exact {
                     value.eq_ignore_ascii_case(exact_str)
-                } else if let Some(re) = &s.compiled_regex {
-                    re.is_match(value)
+                } else if let Some(regex_str) = &s.regex {
+                    // Case-sensitive, resolved via the shared lazy cache rather
+                    // than a per-exception precompiled regex.
+                    cached_regex(regex_str)
+                        .map(|re| re.is_match(value))
+                        .unwrap_or(false)
                 } else if let Some(lowered) = &s.lowered_substr {
                     value.to_lowercase().contains(lowered.as_str())
                 } else if let Some(substr_str) = &s.substr {
                     value.to_lowercase().contains(&substr_str.to_lowercase())
-                } else if let Some(regex_str) = &s.regex {
-                    super::evaluators::build_regex(regex_str, false)
-                        .map(|re| re.is_match(value))
-                        .unwrap_or(false)
                 } else {
                     false
                 }
@@ -349,11 +385,6 @@ impl NotException {
                 }
             }
             NotException::Structured(s) => {
-                if let Some(regex_str) = &s.regex
-                    && s.compiled_regex.is_none()
-                {
-                    s.compiled_regex = regex::Regex::new(regex_str).ok();
-                }
                 if let Some(substr_str) = &s.substr
                     && s.lowered_substr.is_none()
                 {
@@ -895,9 +926,6 @@ enum ConditionTagged {
         /// Optional high-fidelity validation check
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
-        /// Pre-compiled regex (populated by precompile_regexes)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
     },
 
     /// Query structural values using path expressions.
@@ -973,8 +1001,6 @@ impl From<ConditionDeser> for Condition {
                     kind,
                     arg,
                     not,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Import {
                     exact,
@@ -992,8 +1018,6 @@ impl From<ConditionDeser> for Condition {
                     kind: Some(SymbolKind::Import),
                     arg: None,
                     not,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Export {
                     exact,
@@ -1011,8 +1035,6 @@ impl From<ConditionDeser> for Condition {
                     kind: Some(SymbolKind::Export),
                     arg: None,
                     not,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Function {
                     exact,
@@ -1030,8 +1052,6 @@ impl From<ConditionDeser> for Condition {
                     kind: Some(SymbolKind::Function),
                     arg: None,
                     not,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Text {
                     exact,
@@ -1061,8 +1081,6 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Literal {
                     kind,
@@ -1098,8 +1116,6 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Trait { id } => Condition::Trait { id },
                 ConditionTagged::TreeSitter {
@@ -1185,8 +1201,6 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                    compiled_regex: None,
-                    compiled_finder: None,
                 },
                 ConditionTagged::Section {
                     exact,
@@ -1253,7 +1267,6 @@ impl From<ConditionDeser> for Condition {
                     offset_range,
                     section_offset,
                     section_offset_range,
-                    compiled_regex: None,
                 },
                 ConditionTagged::Basename {
                     exact,
@@ -1261,14 +1274,12 @@ impl From<ConditionDeser> for Condition {
                     regex,
                     case_insensitive,
                     is_check,
-                    compiled_regex,
                 } => Condition::Basename {
                     exact,
                     substr,
                     regex,
                     case_insensitive,
                     is_check,
-                    compiled_regex,
                 },
                 ConditionTagged::Kv {
                     path,
@@ -1292,7 +1303,6 @@ impl From<ConditionDeser> for Condition {
                     exists,
                     size_min,
                     size_max,
-                    compiled_regex: None,
                 },
             },
         }
@@ -1311,8 +1321,6 @@ impl From<Condition> for ConditionTagged {
                 kind,
                 arg,
                 not,
-                compiled_regex: _,
-                compiled_finder: _,
             } => ConditionTagged::Symbol {
                 exact,
                 substr,
@@ -1337,8 +1345,6 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex: _,
-                compiled_finder: _,
             } => ConditionTagged::Text {
                 exact,
                 substr,
@@ -1371,8 +1377,6 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex: _,
-                compiled_finder: _,
             } => ConditionTagged::Literal {
                 kind,
                 exact,
@@ -1462,8 +1466,6 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex: _,
-                compiled_finder: _,
             } => ConditionTagged::Raw {
                 exact,
                 substr,
@@ -1529,7 +1531,6 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex: _,
             } => ConditionTagged::Encoded {
                 encoding,
                 exact,
@@ -1551,14 +1552,12 @@ impl From<Condition> for ConditionTagged {
                 regex,
                 case_insensitive,
                 is_check,
-                compiled_regex,
             } => ConditionTagged::Basename {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 is_check,
-                compiled_regex,
             },
             Condition::Kv {
                 path,
@@ -1571,7 +1570,6 @@ impl From<Condition> for ConditionTagged {
                 exists,
                 size_min,
                 size_max,
-                compiled_regex: _,
             } => ConditionTagged::Kv {
                 path,
                 exact,
@@ -1628,12 +1626,6 @@ pub(crate) enum Condition {
         /// these patterns. Combined (OR) with the trait-level `not:` filter.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         not: Option<Vec<NotException>>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match human-readable text.
@@ -1686,12 +1678,6 @@ pub(crate) enum Condition {
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match a language-level literal recovered by the AST walker.
@@ -1762,12 +1748,6 @@ pub(crate) enum Condition {
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
-        /// Pre-compiled regex (populated after deserialization, not serialized).
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized).
-        #[serde(skip)]
-        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Reference a previously-defined trait by ID
@@ -1960,12 +1940,6 @@ pub(crate) enum Condition {
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
-        /// Pre-compiled substring finder (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_finder: Option<memchr::memmem::Finder<'static>>,
     },
 
     /// Match section names in binary files (PE, ELF, Mach-O)
@@ -2079,9 +2053,6 @@ pub(crate) enum Condition {
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
-        /// Pre-compiled regex (populated after deserialization, not serialized)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
     },
 
     /// Match the basename (final path component, not the full path)
@@ -2104,9 +2075,6 @@ pub(crate) enum Condition {
         /// Optional high-fidelity validation check
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
-        /// Pre-compiled regex
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
     },
 
     /// Query structural values using path expressions.
@@ -2155,9 +2123,6 @@ pub(crate) enum Condition {
         /// Maximum collection size (array elements or object keys)
         #[serde(skip_serializing_if = "Option::is_none")]
         size_max: Option<usize>,
-        /// Pre-compiled regex (populated after deserialization)
-        #[serde(skip)]
-        compiled_regex: Option<regex::Regex>,
     },
 }
 
@@ -2928,20 +2893,16 @@ impl Condition {
         match self {
             Condition::Symbol {
                 regex: Some(regex_pattern),
-                compiled_regex,
                 ..
             } => {
-                // Compile symbol regex if present
-                *compiled_regex = Some(
-                    compile_regex_logged("symbol.regex", regex_pattern, regex_pattern, false)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile symbol regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?,
-                );
+                // Validate only — the compiled regex is resolved lazily and shared
+                // process-wide at eval time (see `cached_regex`), so it isn't stored
+                // per condition. Compile here purely to surface invalid patterns.
+                compile_regex_logged("symbol.regex", regex_pattern, regex_pattern, false).map_err(
+                    |e| {
+                        anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
+                    },
+                )?;
             }
             // Text/Literal `word:`/`substr:`/`exact:` are literal matches and
             // `regex:` compiles lazily (shared) on first eval — see
@@ -2953,161 +2914,39 @@ impl Condition {
             // catch-all below.
             #[allow(clippy::match_same_arms)]
             Condition::Text { .. } | Condition::Literal { .. } => {}
-            Condition::Raw {
-                regex,
-                word,
-                case_insensitive,
-                compiled_regex,
-                ..
-            } => {
-                // Compile main regex or word pattern for content searches
-                if let Some(word_pattern) = word {
-                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged("raw.word", word_pattern, &compile_pattern, true)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                "Failed to compile case-insensitive content word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                            })?
-                    } else {
-                        compile_regex_logged("raw.word", word_pattern, &regex_pattern, false)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile content word pattern '{}': {}",
-                                    word_pattern,
-                                    e
-                                )
-                            })?
-                    });
-                } else if let Some(regex_pattern) = regex {
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged("raw.regex", regex_pattern, &compile_pattern, true)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile case-insensitive content regex '{}': {}",
-                                    regex_pattern,
-                                    e
-                                )
-                            })?
-                    } else {
-                        compile_regex_logged("raw.regex", regex_pattern, regex_pattern, false)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile content regex '{}': {}",
-                                    regex_pattern,
-                                    e
-                                )
-                            })?
-                    });
-                }
-            }
+            // Validate only (see Symbol arm). `(?i)` doesn't affect parse
+            // validity, so the raw pattern is sufficient to catch errors; eval
+            // applies case-insensitivity via `lazy_regex`.
             Condition::Kv {
                 regex: Some(regex_pattern),
-                case_insensitive,
-                compiled_regex,
                 ..
             } => {
-                // Compile regex pattern for kv searches
-                *compiled_regex = Some(if *case_insensitive {
-                    let compile_pattern = format!("(?i){}", regex_pattern);
-                    compile_regex_logged("value.regex", regex_pattern, &compile_pattern, true)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive value regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                } else {
-                    compile_regex_logged("value.regex", regex_pattern, regex_pattern, false)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile value regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                });
+                compile_regex_logged("value.regex", regex_pattern, regex_pattern, false).map_err(
+                    |e| anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e),
+                )?;
             }
             Condition::Basename {
                 regex: Some(regex_pattern),
-                case_insensitive,
-                compiled_regex,
                 ..
             } => {
-                // Compile basename regex if present
-                *compiled_regex = Some(if *case_insensitive {
-                    let compile_pattern = format!("(?i){}", regex_pattern);
-                    compile_regex_logged("basename.regex", regex_pattern, &compile_pattern, true)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive basename regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                } else {
-                    compile_regex_logged("basename.regex", regex_pattern, regex_pattern, false)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile basename regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                });
+                compile_regex_logged("basename.regex", regex_pattern, regex_pattern, false)
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to compile basename regex '{}': {}",
+                            regex_pattern,
+                            e
+                        )
+                    })?;
             }
             _ => {}
         }
 
-        // Compile substring finders for all conditions that have `substr`.
-        // This is a one-time cost at trait load time that eliminates Boyer-Moore
-        // preprocessing (StrSearcher::new) from the hot per-string evaluation path.
-        match self {
-            Condition::Symbol {
-                substr: Some(s),
-                compiled_finder,
-                ..
-            } => {
-                // Normalize the same way symbols are at load time (strip leading underscores)
-                let normalized = s.trim_start_matches('_');
-                *compiled_finder =
-                    Some(memchr::memmem::Finder::new(normalized.as_bytes()).into_owned());
-            }
-            Condition::Text {
-                substr: Some(s),
-                case_insensitive,
-                compiled_finder,
-                ..
-            }
-            | Condition::Literal {
-                substr: Some(s),
-                case_insensitive,
-                compiled_finder,
-                ..
-            }
-            | Condition::Raw {
-                substr: Some(s),
-                case_insensitive,
-                compiled_finder,
-                ..
-            } => {
-                let needle = if *case_insensitive {
-                    s.to_ascii_lowercase()
-                } else {
-                    s.clone()
-                };
-                *compiled_finder =
-                    Some(memchr::memmem::Finder::new(needle.as_bytes()).into_owned());
-            }
-            _ => {}
-        }
-
+        // Substring (`substr:`) matching no longer precompiles a per-condition
+        // `Finder`. Boyer-Moore preprocessing is shared process-wide and keyed by
+        // needle via `condition::cached_finder` (case-sensitive) /
+        // `cached_ci_searcher` (case-insensitive), built once on first eval and
+        // reused — so identical needles cost once and only needles that fire cost
+        // anything, instead of an owned `Finder` per condition (tens of thousands).
         Ok(())
     }
 }
@@ -3459,8 +3298,6 @@ mod location_constraint_tests {
             section_offset: None,
             section_offset_range: None,
             platforms: None,
-            compiled_regex: None,
-            compiled_finder: None,
         };
         assert!(condition.validate(true).is_err());
     }
@@ -3481,8 +3318,6 @@ mod location_constraint_tests {
             offset_range: Some((0, Some(0x1000))),
             section_offset: None,
             section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
         };
         assert!(condition.validate(true).is_ok());
     }
@@ -3712,7 +3547,6 @@ mod backtrack_tests {
             exists: None,
             size_min: None,
             size_max: None,
-            compiled_regex: None,
         };
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -3920,8 +3754,6 @@ exact: curl
             offset_range: None,
             section_offset: None,
             section_offset_range: None,
-            compiled_regex: None,
-            compiled_finder: None,
         };
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -3937,8 +3769,6 @@ exact: curl
             kind: None,
             arg: None,
             not: None,
-            compiled_regex: None,
-            compiled_finder: None,
         };
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -3951,7 +3781,6 @@ exact: curl
             regex: Some(r"^ssh(d|-.+)?$".to_string()),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         assert!(cond.check_greedy_patterns().is_none());
     }
@@ -4082,13 +3911,13 @@ exact: curl
     fn word_match_agrees_with_regex_word_boundary() {
         for (h, n) in [
             ("run eval here", "eval"),
-            ("evaluate", "eval"),       // suffix → no boundary
-            ("preeval", "eval"),        // prefix → no boundary
-            ("eval", "eval"),           // whole string
-            ("(eval)", "eval"),         // punctuation neighbours
-            ("a.eval.b", "eval"),       // dotted
-            ("ñeval", "eval"),          // leading non-ASCII letter → no boundary
-            ("evalé done", "eval"),     // trailing non-ASCII letter → no boundary
+            ("evaluate", "eval"),   // suffix → no boundary
+            ("preeval", "eval"),    // prefix → no boundary
+            ("eval", "eval"),       // whole string
+            ("(eval)", "eval"),     // punctuation neighbours
+            ("a.eval.b", "eval"),   // dotted
+            ("ñeval", "eval"),      // leading non-ASCII letter → no boundary
+            ("evalé done", "eval"), // trailing non-ASCII letter → no boundary
             ("no match", "eval"),
         ] {
             assert_word_matches_regex(h, n);

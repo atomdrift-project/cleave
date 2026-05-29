@@ -357,7 +357,6 @@ fn test_evaluate_kv_package_json_permissions() {
         exact: Some("debugger".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -386,7 +385,6 @@ fn test_evaluate_kv_manifest_all_urls() {
         exact: Some("<all_urls>".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -409,7 +407,6 @@ fn test_evaluate_kv_package_json_postinstall() {
         exact: None,
         substr: Some("curl".to_string()),
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -427,7 +424,6 @@ fn test_evaluate_kv_yaml_format() {
         exact: Some("self-hosted".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -445,7 +441,6 @@ fn test_evaluate_kv_toml_format() {
         exact: None,
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -463,7 +458,6 @@ fn test_evaluate_kv_nonexistent_path() {
         exact: Some("value".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -481,7 +475,6 @@ fn test_evaluate_kv_invalid_json() {
         exact: Some("test".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 
@@ -522,7 +515,6 @@ fn test_evaluate_kv_case_insensitive() {
         exact: None,
         substr: Some("test".to_string()),
         regex: None,
-        compiled_regex: None,
         case_insensitive: true,
     };
 
@@ -546,7 +538,6 @@ fn test_evaluate_kv_multiple_wildcards() {
         exact: Some("root".to_string()),
         substr: None,
         regex: None,
-        compiled_regex: None,
         case_insensitive: false,
     };
 

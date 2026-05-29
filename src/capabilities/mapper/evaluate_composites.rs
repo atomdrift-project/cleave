@@ -518,14 +518,19 @@ impl super::CapabilityMapper {
             let Condition::Basename {
                 ref exact,
                 ref substr,
-                regex: _,
+                ref regex,
                 case_insensitive,
                 is_check: _,
-                ref compiled_regex,
             } = trait_def.r#if
             else {
                 continue;
             };
+
+            // Resolve the basename regex lazily + shared via `lazy_regex` (applies
+            // `(?i)` when case-insensitive) rather than storing it per condition.
+            let resolved_regex: Option<&regex::Regex> = regex.as_deref().and_then(|r| {
+                crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
+            });
 
             for entry_name in entry_names {
                 let basename = std::path::Path::new(entry_name)
@@ -556,7 +561,7 @@ impl super::CapabilityMapper {
                     cmp_base == *e || cmp_entry == *e
                 } else if let Some(ref s) = cmp_substr {
                     cmp_base.contains(s.as_str()) || cmp_entry.contains(s.as_str())
-                } else if let Some(re) = compiled_regex {
+                } else if let Some(re) = resolved_regex {
                     re.is_match(basename) || re.is_match(entry_name)
                 } else {
                     false

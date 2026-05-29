@@ -246,7 +246,6 @@ pub(crate) fn apply_trait_defaults(
                 regex: Some(".".to_string()),
                 case_insensitive: false,
                 is_check: None,
-                compiled_regex: None,
             });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance
@@ -255,13 +254,13 @@ pub(crate) fn apply_trait_defaults(
 
     // Validation: regex patterns must not exceed 80 bytes.
     let warn_start = warnings.len();
-    check_regex_length(&raw.id, &condition, warnings);
+    check_regex_length(&raw.id, &condition, Some(path), warnings);
 
     // Also check regex patterns in unless: conditions
     if let Some(ref unless_conditions) = raw.unless {
         for (idx, cond) in unless_conditions.iter().enumerate() {
             let ctx = format!("{} unless[{}]", raw.id, idx);
-            check_regex_length(&ctx, cond, warnings);
+            check_regex_length(&ctx, cond, Some(path), warnings);
         }
     }
 
@@ -270,19 +269,19 @@ pub(crate) fn apply_trait_defaults(
         if let Some(ref any) = downgrade.any {
             for (idx, cond) in any.iter().enumerate() {
                 let ctx = format!("{} downgrade.any[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
         if let Some(ref all) = downgrade.all {
             for (idx, cond) in all.iter().enumerate() {
                 let ctx = format!("{} downgrade.all[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
         if let Some(ref none) = downgrade.none {
             for (idx, cond) in none.iter().enumerate() {
                 let ctx = format!("{} downgrade.none[{}]", raw.id, idx);
-                check_regex_length(&ctx, cond, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
     }
@@ -955,7 +954,7 @@ pub(crate) fn apply_composite_defaults(
         if let Some(conds) = conditions {
             for (idx, cond) in conds.iter().enumerate() {
                 let ctx = format!("{} {}[{}]", raw.id, clause_name, idx);
-                check_regex_length(&ctx, cond, warnings);
+                check_regex_length(&ctx, cond, Some(path), warnings);
             }
         }
     };
@@ -1078,6 +1077,24 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
 /// Check that the regex pattern in a condition does not exceed 80 bytes.
 const MAX_REGEX_LENGTH_BYTES: usize = 90;
 const MAX_REGEX_OR_SYMBOLS: usize = 3;
+const MAX_REGEX_OR_SYMBOLS_DATA_TEXT: usize = MAX_REGEX_OR_SYMBOLS * 2;
+
+fn is_data_text_trait_path(path: &std::path::Path) -> bool {
+    let mut saw_micro_behaviors = false;
+    let mut saw_data = false;
+    for component in path.components() {
+        let Some(part) = component.as_os_str().to_str() else {
+            continue;
+        };
+        match (saw_micro_behaviors, saw_data, part) {
+            (false, _, "micro-behaviors") => saw_micro_behaviors = true,
+            (true, false, "data") => saw_data = true,
+            (true, true, "text") => return true,
+            _ => {}
+        }
+    }
+    false
+}
 
 /// Count regex alternation symbols (`|`) outside character classes.
 fn count_regex_or_symbols(pattern: &str) -> usize {
@@ -1133,6 +1150,7 @@ fn is_simple_alphanumeric_or_chain(pattern: &str) -> bool {
 fn check_regex_length(
     trait_id: &str,
     condition: &crate::composite_rules::Condition,
+    source_path: Option<&std::path::Path>,
     warnings: &mut Vec<String>,
 ) {
     use crate::composite_rules::Condition;
@@ -1157,13 +1175,18 @@ fn check_regex_length(
             warnings.push(regex_length_warning(trait_id, pattern));
         }
 
+        let max_or_symbols = if source_path.is_some_and(is_data_text_trait_path) {
+            MAX_REGEX_OR_SYMBOLS_DATA_TEXT
+        } else {
+            MAX_REGEX_OR_SYMBOLS
+        };
         let or_symbol_count = count_regex_or_symbols(pattern);
-        if or_symbol_count > MAX_REGEX_OR_SYMBOLS
+        if or_symbol_count > max_or_symbols
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             warnings.push(format!(
                 "Trait '{}': regex uses too many '|' symbols ({} > {}). Decompose into multiple traits for better ML analysis: {:?}",
-                trait_id, or_symbol_count, MAX_REGEX_OR_SYMBOLS, pattern
+                trait_id, or_symbol_count, max_or_symbols, pattern
             ));
         }
 
@@ -2135,10 +2158,9 @@ mod tests {
             regex: Some(pattern),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2151,10 +2173,9 @@ mod tests {
             regex: Some(pattern),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("regex pattern exceeds 90 bytes"));
         assert!(warnings[0].contains("91 bytes"));
@@ -2176,10 +2197,9 @@ mod tests {
             regex: None,
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2189,7 +2209,7 @@ mod tests {
             id: "some-trait-id".to_string(),
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.is_empty());
     }
 
@@ -2201,10 +2221,9 @@ mod tests {
             regex: Some("a|b|c|d|e".to_string()),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
@@ -2216,11 +2235,52 @@ mod tests {
             regex: Some(r"a\|b|[|]|c|d".to_string()),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
+    }
+
+    #[test]
+    fn test_regex_or_symbol_limit_relaxed_for_data_text_traits() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some("a|b|c|d|e|f|g".to_string()),
+            case_insensitive: false,
+            is_check: None,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length(
+            "test-trait",
+            &condition,
+            Some(std::path::Path::new(
+                "micro-behaviors/data/text/llm/action/traits.yaml",
+            )),
+            &mut warnings,
+        );
+        assert!(!warnings.iter().any(|w| w.contains("too many '|' symbols")));
+    }
+
+    #[test]
+    fn test_regex_or_symbol_limit_still_caps_data_text_traits() {
+        let condition = crate::composite_rules::Condition::Basename {
+            exact: None,
+            substr: None,
+            regex: Some("a|b|c|d|e|f|g|h".to_string()),
+            case_insensitive: false,
+            is_check: None,
+        };
+        let mut warnings = Vec::new();
+        super::check_regex_length(
+            "test-trait",
+            &condition,
+            Some(std::path::Path::new(
+                "micro-behaviors/data/text/llm/action/traits.yaml",
+            )),
+            &mut warnings,
+        );
+        assert!(warnings.iter().any(|w| w.contains("too many '|' symbols")));
     }
 
     #[test]
@@ -2231,10 +2291,9 @@ mod tests {
             regex: Some("word1|word2|word3".to_string()),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
             warnings
                 .iter()
@@ -2250,10 +2309,9 @@ mod tests {
             regex: Some(r"word1|word-2|\d+".to_string()),
             case_insensitive: false,
             is_check: None,
-            compiled_regex: None,
         };
         let mut warnings = Vec::new();
-        super::check_regex_length("test-trait", &condition, &mut warnings);
+        super::check_regex_length("test-trait", &condition, None, &mut warnings);
         assert!(
             !warnings
                 .iter()

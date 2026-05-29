@@ -52,8 +52,6 @@ mod proximity_scripting_symbols_tests {
                 kind: Some(SymbolKind::Import),
                 arg: None,
                 not: None,
-                compiled_regex: None,
-                compiled_finder: None,
             })
             .collect();
 
@@ -355,8 +353,6 @@ def decoder(payload):
             None,
             None,
             Some(SymbolKind::Import),
-            None,
-            None,
             None,
             &ctx,
         );

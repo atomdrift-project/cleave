@@ -358,11 +358,13 @@ impl SymbolMatchIndex {
                     exact: None,
                     substr: None,
                     regex: Some(regex_str),
-                    compiled_regex: Some(compiled),
                     ..
                 } => {
                     symbol_trait_indices.insert(trait_idx);
-                    trait_regex[trait_idx] = Some(compiled.clone());
+                    // Symbol regex is no longer precompiled per condition; resolve
+                    // it from the shared lazy cache (Arc-backed clone is cheap).
+                    trait_regex[trait_idx] =
+                        crate::composite_rules::condition::cached_regex(regex_str).cloned();
                     match StringMatchIndex::extract_regex_literal(regex_str) {
                         Some(literal) => {
                             let normalized = normalize_symbol(&literal);
@@ -2217,8 +2219,6 @@ mod tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
             size_max: None,
             count_min: None,
@@ -2270,8 +2270,6 @@ mod tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
             size_max: None,
             count_min: None,
@@ -2331,8 +2329,6 @@ mod tests {
                 offset_range: None,
                 section_offset: None,
                 section_offset_range: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
             size_max: None,
             count_min: None,

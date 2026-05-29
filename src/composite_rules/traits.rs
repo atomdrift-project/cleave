@@ -1211,8 +1211,6 @@ impl TraitDefinition {
                 kind,
                 arg,
                 not,
-                compiled_regex,
-                compiled_finder,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 // kind=call with arg filter dispatches to the
@@ -1245,8 +1243,6 @@ impl TraitDefinition {
                             platforms.as_ref(),
                             *is_check,
                             *kind,
-                            compiled_regex.as_ref(),
-                            compiled_finder.as_ref(),
                             merged_not.as_ref(),
                             ctx,
                         )
@@ -1267,8 +1263,6 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -1277,8 +1271,6 @@ impl TraitDefinition {
                     word: word.as_ref(),
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
-                    compiled_regex: compiled_regex.as_ref(),
-                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -1308,8 +1300,6 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder,
             } => {
                 // kind=number dispatches to numeric matching against
                 // literals extracted into report.strings with
@@ -1333,8 +1323,6 @@ impl TraitDefinition {
                         word: word.as_ref(),
                         case_insensitive: *case_insensitive,
                         is_check: *is_check,
-                        compiled_regex: compiled_regex.as_ref(),
-                        compiled_finder: compiled_finder.as_ref(),
                         section: section.as_ref(),
                         offset: *offset,
                         offset_range: *offset_range,
@@ -1434,8 +1422,6 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder: _,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -1455,7 +1441,6 @@ impl TraitDefinition {
                         word.as_ref(),
                         *case_insensitive,
                         *is_check,
-                        compiled_regex.as_ref(),
                         self.not.as_ref(),
                         &location,
                         ctx,
@@ -1520,7 +1505,6 @@ impl TraitDefinition {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -1540,7 +1524,6 @@ impl TraitDefinition {
                         regex.as_ref(),
                         word.as_ref(),
                         *case_insensitive,
-                        compiled_regex.as_ref(),
                         &location,
                         *is_check,
                         not.as_ref(),
@@ -1554,7 +1537,6 @@ impl TraitDefinition {
                 regex,
                 case_insensitive,
                 is_check,
-                compiled_regex,
             } => timed_eval!(
                 "basename",
                 eval_basename(
@@ -1563,7 +1545,6 @@ impl TraitDefinition {
                     regex.as_ref(),
                     *case_insensitive,
                     *is_check,
-                    compiled_regex.as_ref(),
                     ctx,
                 )
             ),
@@ -2538,8 +2519,6 @@ impl CompositeTrait {
                 kind,
                 arg,
                 not,
-                compiled_regex,
-                compiled_finder,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 if matches!(
@@ -2561,8 +2540,6 @@ impl CompositeTrait {
                         platforms.as_ref(),
                         *is_check,
                         *kind,
-                        compiled_regex.as_ref(),
-                        compiled_finder.as_ref(),
                         merged_not.as_ref(),
                         ctx,
                     )
@@ -2582,8 +2559,6 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -2592,8 +2567,6 @@ impl CompositeTrait {
                     word: word.as_ref(),
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
-                    compiled_regex: compiled_regex.as_ref(),
-                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -2620,8 +2593,6 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder,
             } => {
                 let params = StringParams {
                     exact: exact.as_ref(),
@@ -2630,8 +2601,6 @@ impl CompositeTrait {
                     word: word.as_ref(),
                     case_insensitive: *case_insensitive,
                     is_check: *is_check,
-                    compiled_regex: compiled_regex.as_ref(),
-                    compiled_finder: compiled_finder.as_ref(),
                     section: section.as_ref(),
                     offset: *offset,
                     offset_range: *offset_range,
@@ -2727,8 +2696,6 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
-                compiled_finder: _,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -2748,7 +2715,6 @@ impl CompositeTrait {
                         word.as_ref(),
                         *case_insensitive,
                         *is_check,
-                        compiled_regex.as_ref(),
                         self.not.as_ref(),
                         &location,
                         ctx,
@@ -2813,7 +2779,6 @@ impl CompositeTrait {
                 offset_range,
                 section_offset,
                 section_offset_range,
-                compiled_regex,
             } => {
                 use super::evaluators::ContentLocationParams;
                 let location = ContentLocationParams {
@@ -2833,7 +2798,6 @@ impl CompositeTrait {
                         regex.as_ref(),
                         word.as_ref(),
                         *case_insensitive,
-                        compiled_regex.as_ref(),
                         &location,
                         *is_check,
                         not.as_ref(),
@@ -2847,7 +2811,6 @@ impl CompositeTrait {
                 regex,
                 case_insensitive,
                 is_check,
-                compiled_regex,
             } => timed_eval!(
                 "basename",
                 eval_basename(
@@ -2856,7 +2819,6 @@ impl CompositeTrait {
                     regex.as_ref(),
                     *case_insensitive,
                     *is_check,
-                    compiled_regex.as_ref(),
                     ctx,
                 )
             ),
@@ -2883,8 +2845,6 @@ impl CompositeTrait {
         platforms: Option<&Vec<Platform>>,
         is_check: Option<StringValidator>,
         kind: Option<SymbolKind>,
-        compiled_regex: Option<&regex::Regex>,
-        compiled_finder: Option<&memchr::memmem::Finder<'static>>,
         not: Option<&Vec<NotException>>,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
@@ -2900,18 +2860,7 @@ impl CompositeTrait {
             }
         }
 
-        eval_symbol(
-            exact,
-            substr,
-            pattern,
-            None,
-            is_check,
-            kind,
-            compiled_regex,
-            compiled_finder,
-            not,
-            ctx,
-        )
+        eval_symbol(exact, substr, pattern, None, is_check, kind, not, ctx)
     }
 
     /// Number of distinct conditions a co-occurrence check (scope, proximity)
@@ -3438,8 +3387,6 @@ mod scope_tests {
                 kind: None,
                 arg: None,
                 not: None,
-                compiled_regex: None,
-                compiled_finder: None,
             })
             .collect();
         CompositeTrait {

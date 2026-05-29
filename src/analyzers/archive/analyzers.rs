@@ -1273,8 +1273,9 @@ impl ArchiveAnalyzer {
                 continue;
             }
 
-            let start_offset = usize::try_from(entry.data_offset)
-                .map_err(|e| anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}"))?;
+            let start_offset = usize::try_from(entry.data_offset).map_err(|e| {
+                anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}")
+            })?;
             let member_size = usize::try_from(entry.size)
                 .map_err(|e| anyhow::anyhow!("ASAR member size exceeds addressable memory: {e}"))?;
             let end_offset = start_offset

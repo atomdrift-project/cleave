@@ -16,7 +16,7 @@ fn eval_basename<'a>(
     is_check: Option<crate::composite_rules::condition::StringValidator>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    super::eval_basename(exact, substr, regex, case_insensitive, is_check, None, ctx)
+    super::eval_basename(exact, substr, regex, case_insensitive, is_check, ctx)
 }
 
 fn create_test_report(path: &str) -> AnalysisReport {

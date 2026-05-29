@@ -141,7 +141,6 @@ pub(crate) fn eval_basename<'a>(
     regex: Option<&String>,
     case_insensitive: bool,
     is_check: Option<StringValidator>,
-    compiled_regex: Option<&regex::Regex>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     // Extract basename from path
@@ -166,24 +165,12 @@ pub(crate) fn eval_basename<'a>(
         compare_basename == *exact_str
     } else if let Some(substr_str) = &compare_substr {
         compare_basename.contains(substr_str.as_str())
-    } else if compiled_regex.is_some() || regex.is_some() {
-        if let Some(re) = compiled_regex {
-            re.is_match(basename)
-        } else if let Some(regex_str) = regex {
-            let pattern = if case_insensitive {
-                format!("(?i){}", regex_str)
-            } else {
-                regex_str.clone()
-            };
-            super::build_regex(&pattern, false)
-                .map(|re| re.is_match(basename))
-                .unwrap_or_else(|e| {
-                    eprintln!("WARNING: invalid basename regex '{}': {}", regex_str, e);
-                    false
-                })
-        } else {
-            false
-        }
+    } else if let Some(r) = regex {
+        // Resolve lazily + shared via `lazy_regex` (applies `(?i)` when
+        // case-insensitive) instead of compiling a fresh regex per evaluation.
+        crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
+            .map(|re| re.is_match(basename))
+            .unwrap_or(false)
     } else {
         false
     };
@@ -257,7 +244,7 @@ mod tests {
 
         // Invalid regex should not panic, should return no match
         let bad_regex = "[invalid(".to_string();
-        let result = eval_basename(None, None, Some(&bad_regex), false, None, None, &ctx);
+        let result = eval_basename(None, None, Some(&bad_regex), false, None, &ctx);
         assert!(!result.matched, "Invalid regex should not match");
     }
 }

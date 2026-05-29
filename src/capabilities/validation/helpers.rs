@@ -151,8 +151,6 @@ pub(crate) fn simple_rule_to_composite_rule(
             kind: None,
             arg: None,
             not: None,
-            compiled_regex: None,
-            compiled_finder: None,
         }]),
         any: None,
         needs: None,

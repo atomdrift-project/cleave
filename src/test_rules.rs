@@ -1324,7 +1324,6 @@ impl<'a> RuleDebugger<'a> {
             exists,
             size_min,
             size_max,
-            compiled_regex: regex.as_ref().and_then(|r| regex::Regex::new(r).ok()),
         };
 
         // Create evaluation context
@@ -1938,14 +1937,12 @@ fn evaluate_condition_simple(
             regex,
             case_insensitive,
             is_check,
-            compiled_regex,
         } => eval_basename(
             exact.as_ref(),
             substr.as_ref(),
             regex.as_ref(),
             *case_insensitive,
             *is_check,
-            compiled_regex.as_ref(),
             ctx,
         ),
         _ => crate::composite_rules::context::ConditionResult::no_match(),

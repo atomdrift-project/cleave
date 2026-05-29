@@ -70,8 +70,6 @@ mod python_aes_import_tests {
                 section_offset: None,
                 section_offset_range: None,
                 not: None,
-                compiled_regex: None,
-                compiled_finder: None,
             },
             size_max: None,
             count_min: None,

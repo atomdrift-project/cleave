@@ -79,8 +79,6 @@ pub(crate) fn eval_symbol<'a>(
     platforms: Option<&Vec<Platform>>,
     is_check: Option<StringValidator>,
     kind: Option<SymbolKind>,
-    compiled_regex: Option<&regex::Regex>,
-    compiled_finder: Option<&memchr::memmem::Finder<'static>>,
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
@@ -126,19 +124,17 @@ pub(crate) fn eval_symbol<'a>(
     let norm_substr = substr.map(|s| normalize_symbol(s));
     let norm_substr_ref = norm_substr.as_ref();
 
-    // Use the pre-compiled Finder from the Condition when available (built from the
-    // normalized pattern at trait load time).  Fall back to building a local one from
-    // norm_substr so we still avoid per-symbol StrSearcher::new when the Condition
-    // wasn't precompiled (e.g. in tests).
-    let local_finder;
-    let effective_finder: Option<&memchr::memmem::Finder<'static>> = if compiled_finder.is_some() {
-        compiled_finder
-    } else if let Some(s) = norm_substr_ref {
-        local_finder = memchr::memmem::Finder::new(s.as_bytes()).into_owned();
-        Some(&local_finder)
-    } else {
-        None
-    };
+    // Resolve the substring searcher once (before the symbol loops) from the
+    // process-wide shared, leaked Finder cache — built once per unique normalized
+    // needle, avoiding both per-symbol `StrSearcher::new` and per-condition storage.
+    let effective_finder: Option<&memchr::memmem::Finder<'static>> =
+        norm_substr_ref.map(|s| crate::composite_rules::condition::cached_finder(s.as_str()));
+
+    // Resolve the symbol regex once. Symbol regex is case-sensitive (no `(?i)`);
+    // it's compiled lazily + shared via `cached_regex` rather than stored per
+    // condition.
+    let effective_regex: Option<&regex::Regex> =
+        pattern.and_then(|p| crate::composite_rules::condition::cached_regex(p.as_str()));
 
     // Decide which symbol categories to walk.  `None` preserves the historical
     // behaviour of matching across all of imports/exports/functions.
@@ -158,7 +154,7 @@ pub(crate) fn eval_symbol<'a>(
                 norm_exact_ref,
                 norm_substr_ref,
                 pattern,
-                compiled_regex,
+                effective_regex,
                 effective_finder,
             ) {
                 // Check if this symbol should be excluded by not: or is: filters
@@ -213,7 +209,7 @@ pub(crate) fn eval_symbol<'a>(
                     norm_exact_ref,
                     norm_substr_ref,
                     pattern,
-                    compiled_regex,
+                    effective_regex,
                     effective_finder,
                 ) {
                     hit_value = Some(candidate);
@@ -259,7 +255,7 @@ pub(crate) fn eval_symbol<'a>(
                 norm_exact_ref,
                 norm_substr_ref,
                 pattern,
-                compiled_regex,
+                effective_regex,
                 effective_finder,
             ) {
                 // Check if this symbol should be excluded by not: filters
@@ -404,53 +400,99 @@ fn string_match_precision(params: &StringParams<'_>) -> f32 {
     precision
 }
 
-fn match_value_against_params(
-    value: &str,
-    params: &StringParams<'_>,
-    _substr_lower: Option<&String>,
-) -> Option<String> {
-    use crate::composite_rules::condition::{
-        cached_ci_searcher, cached_finder, lazy_regex, word_match_start,
-    };
+/// A `Text`/`Literal` value matcher resolved **once per condition**, holding
+/// process-wide shared (`&'static`) searchers so the per-string inner loop does
+/// zero cache lookups and takes no locks — preserving the old precompiled
+/// path's hot-loop cost while keeping the matchers out of per-condition storage.
+enum StringMatcher<'p> {
+    Exact {
+        needle: &'p str,
+        ci: bool,
+    },
+    SubstrCs(&'static memchr::memmem::Finder<'static>),
+    SubstrCi(&'static aho_corasick::AhoCorasick),
+    WordCs {
+        needle: &'p str,
+        finder: &'static memchr::memmem::Finder<'static>,
+    },
+    WordCi {
+        needle: &'p str,
+        ac: &'static aho_corasick::AhoCorasick,
+    },
+    Regex(&'static regex::Regex),
+    /// Pattern couldn't be resolved (e.g. AC/regex build failed) — never matches.
+    Never,
+}
 
-    if let Some(exact_str) = params.exact {
-        let matched = if params.case_insensitive {
-            value.eq_ignore_ascii_case(exact_str)
-        } else {
-            value == exact_str
-        };
-        return matched.then(|| exact_str.clone());
+impl<'p> StringMatcher<'p> {
+    /// Resolve the shared searcher for this condition's pattern. Takes the cache
+    /// lock at most once per condition (the only `substr`/`word`/`regex` field
+    /// set wins, in the historical precedence order).
+    fn resolve(params: &StringParams<'p>) -> Self {
+        use crate::composite_rules::condition::{cached_ci_searcher, cached_finder, lazy_regex};
+
+        if let Some(e) = params.exact {
+            return Self::Exact {
+                needle: e.as_str(),
+                ci: params.case_insensitive,
+            };
+        }
+        if let Some(s) = params.substr {
+            return if params.case_insensitive {
+                cached_ci_searcher(s).map_or(Self::Never, Self::SubstrCi)
+            } else {
+                Self::SubstrCs(cached_finder(s))
+            };
+        }
+        if let Some(w) = params.word {
+            if w.is_empty() {
+                return Self::Never;
+            }
+            return if params.case_insensitive {
+                cached_ci_searcher(w).map_or(Self::Never, |ac| Self::WordCi {
+                    needle: w.as_str(),
+                    ac,
+                })
+            } else {
+                Self::WordCs {
+                    needle: w.as_str(),
+                    finder: cached_finder(w),
+                }
+            };
+        }
+        lazy_regex(params.regex.map(String::as_str), params.case_insensitive)
+            .map_or(Self::Never, Self::Regex)
     }
 
-    // `substr:` is literal — cached SIMD `Finder` (case-sensitive) or cached
-    // case-folding AC searcher (case-insensitive). No regex, no per-eval alloc.
-    if let Some(contains_str) = params.substr {
-        let matched = if params.case_insensitive {
-            cached_ci_searcher(contains_str).is_some_and(|ac| ac.is_match(value))
-        } else if let Some(finder) = params.compiled_finder {
-            // Honor a precompiled finder when one was supplied; otherwise use
-            // the process-wide shared cache (Text/Literal aren't precompiled).
-            finder.find(value.as_bytes()).is_some()
-        } else {
-            cached_finder(contains_str).find(value.as_bytes()).is_some()
-        };
-        return matched.then(|| value.to_string());
+    /// Match `value`, returning the matched text for evidence. `word:`/`regex:`
+    /// return the matched span (preserving case); `substr:` returns the whole
+    /// value; `exact:` returns the pattern.
+    fn match_value(&self, value: &str) -> Option<String> {
+        use crate::composite_rules::condition::{word_match_ci, word_match_cs};
+        match self {
+            Self::Exact { needle, ci } => {
+                let matched = if *ci {
+                    value.eq_ignore_ascii_case(needle)
+                } else {
+                    value == *needle
+                };
+                matched.then(|| (*needle).to_string())
+            }
+            Self::SubstrCs(finder) => finder
+                .find(value.as_bytes())
+                .is_some()
+                .then(|| value.to_string()),
+            Self::SubstrCi(ac) => ac.is_match(value).then(|| value.to_string()),
+            Self::WordCs { needle, finder } => {
+                word_match_cs(value, needle, finder).map(|s| value[s..s + needle.len()].to_string())
+            }
+            Self::WordCi { needle, ac } => {
+                word_match_ci(value, needle, ac).map(|s| value[s..s + needle.len()].to_string())
+            }
+            Self::Regex(re) => re.find(value).map(|mat| mat.as_str().to_string()),
+            Self::Never => None,
+        }
     }
-
-    // `word:` is literal + word-boundary — never a regex. Evidence is the
-    // matched word (preserving its case in `value`), matching the old
-    // `\bword\b` regex's `mat.as_str()` rather than the whole string.
-    if let Some(word) = params.word {
-        return word_match_start(value, word, params.case_insensitive)
-            .map(|start| value[start..start + word.len()].to_string());
-    }
-
-    // `regex:` is the only field that compiles a regex (lazy + shared).
-    if let Some(re) = lazy_regex(params.regex.map(String::as_str), params.case_insensitive) {
-        return re.find(value).map(|mat| mat.as_str().to_string());
-    }
-
-    None
 }
 
 fn cached_text_evidence(cached: &[Evidence]) -> Vec<Evidence> {
@@ -496,7 +538,6 @@ pub(crate) fn eval_text<'a, 'b>(
             params.word,
             params.case_insensitive,
             params.is_check,
-            params.compiled_regex,
             trait_not,
             &location,
             ctx,
@@ -588,11 +629,9 @@ pub(crate) fn eval_text<'a, 'b>(
         };
     }
 
-    let substr_lower = if params.case_insensitive {
-        params.substr.map(|s| s.to_lowercase())
-    } else {
-        None
-    };
+    // Resolve the shared matcher once, then match every string with no further
+    // cache lookups or locks in the hot loop.
+    let matcher = StringMatcher::resolve(params);
 
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
@@ -602,9 +641,7 @@ pub(crate) fn eval_text<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) =
-            match_value_against_params(&string_info.value, params, substr_lower.as_ref())
-        {
+        if let Some(match_value) = matcher.match_value(&string_info.value) {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
                 .unwrap_or(false);
@@ -647,11 +684,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
     }
 
     let effective_range = resolve_string_effective_range(params, ctx);
-    let substr_lower = if params.case_insensitive {
-        params.substr.map(|s| s.to_lowercase())
-    } else {
-        None
-    };
+    let matcher = StringMatcher::resolve(params);
 
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
@@ -664,9 +697,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) =
-            match_value_against_params(&string_info.value, params, substr_lower.as_ref())
-        {
+        if let Some(match_value) = matcher.match_value(&string_info.value) {
             let excluded_by_not = trait_not
                 .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
                 .unwrap_or(false);
@@ -931,24 +962,18 @@ pub(crate) fn eval_raw<'a>(
     word: Option<&String>,
     case_insensitive: bool,
     is_check: Option<StringValidator>,
-    compiled_regex: Option<&regex::Regex>,
     not: Option<&Vec<NotException>>,
     location: &ContentLocationParams,
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
-    // Regexes are no longer precompiled per condition; resolve `word:`/`regex:`
-    // through the shared lazy cache when no precompiled regex was supplied.
-    let lazy_re = if compiled_regex.is_none() {
-        crate::composite_rules::condition::lazy_raw_regex(
-            word.map(String::as_str),
-            regex.map(String::as_str),
-            case_insensitive,
-        )
-    } else {
-        None
-    };
-    let compiled_regex = compiled_regex.or(lazy_re);
+    // Regexes are not precompiled per condition; resolve `word:`/`regex:` through
+    // the shared lazy cache.
+    let compiled_regex = crate::composite_rules::condition::lazy_raw_regex(
+        word.map(String::as_str),
+        regex.map(String::as_str),
+        case_insensitive,
+    );
     // Reject short raw patterns unless search space is bounded (~1KB).
     // Acceptable: offset/offset_range, or section + section_offset*.
     // Density constraints (count_min, per_kb_min) are checked at trait level, not here.
@@ -1580,7 +1605,6 @@ pub(crate) fn eval_encoded<'a>(
     regex: Option<&String>,
     word: Option<&String>,
     case_insensitive: bool,
-    compiled_regex: Option<&regex::Regex>,
     location: &ContentLocationParams,
     is_check: Option<StringValidator>,
     not: Option<&Vec<crate::composite_rules::condition::NotException>>,
@@ -1594,10 +1618,8 @@ pub(crate) fn eval_encoded<'a>(
     let mut evidence = Vec::new();
     let mut match_count = 0;
 
-    // Build regex if needed (prefer compiled_regex if available)
-    let regex_matcher = if let Some(compiled) = compiled_regex {
-        Some(compiled.clone())
-    } else if let Some(pattern) = regex {
+    // Build regex if needed
+    let regex_matcher = if let Some(pattern) = regex {
         match super::build_regex(pattern, case_insensitive) {
             Ok(re) => Some(re),
             Err(_) => return ConditionResult::no_match(),

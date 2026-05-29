@@ -16,29 +16,29 @@ use crate::capabilities::validation::{
     check_exact_contained_by_substr, check_overlapping_regex_patterns,
     check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
-    find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
-    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
-    find_condition_scope_violations, find_depth_violations, find_duplicate_atomic_traits,
-    find_duplicate_composite_rules, find_duplicate_second_level_directories,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
-    find_malware_subcategory_violations, find_many_directory_refs,
-    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
-    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
-    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
-    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates,
-    find_structural_regex_duplicates, find_too_short_patterns,
+    find_alternation_merge_candidates, find_archive_scope_without_archive_for,
+    find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
+    find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
+    find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
+    find_composite_only_wellknown_files, find_condition_scope_violations, find_depth_violations,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules,
+    find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_excessive_file_types, find_excessive_skip_conditions, find_for_only_duplicates,
+    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
+    find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
+    find_many_directory_refs, find_meta_missing_section_filter, find_metadata_cross_tier_refs,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
+    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
+    find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
+    find_regex_literal_overlap_issues, find_self_referencing_traits, find_short_pattern_warnings,
+    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -984,7 +984,6 @@ impl super::CapabilityMapper {
                         substr: _,
                         regex,
                         platforms: _,
-                        compiled_regex: _,
                         ..
                     } = &trait_def.r#if
                 {
@@ -2819,6 +2818,54 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} composite rules have single-item any:/all: clauses",
                     single_item_clauses.len()
+                ));
+            }
+
+            // Validate that `scope: archive` composites can actually evaluate on an
+            // archive. Without an archive/container type in `for:` they only run on
+            // individual members, never pool cross-member evidence, and silently
+            // never fire — an invisible failure since the rule looks correct.
+            let mut archive_scope_no_for = Vec::new();
+            for rule in &composite_rules {
+                if let Some(rule_id) = find_archive_scope_without_archive_for(rule) {
+                    let source_file = rule_source_files
+                        .get(&rule_id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("unknown");
+                    archive_scope_no_for.push((rule_id, source_file.to_string()));
+                }
+            }
+
+            if !archive_scope_no_for.is_empty() {
+                eprintln!(
+                    "\n❌ ERROR: {} composite rules use 'scope: archive' but cannot match an archive",
+                    archive_scope_no_for.len()
+                );
+                eprintln!(
+                    "   'scope: archive' pools evidence across an archive's members, so the rule\n   \
+                     must be evaluated on the archive itself — add an archive/container type to\n   \
+                     'for:' (the 'archives' group covers zip/tar/npm/whl/crx/xpi/…). Without it the\n   \
+                     rule only runs on individual members, never pools cross-member evidence, and\n   \
+                     silently never fires:\n"
+                );
+                for (rule_id, source_file) in &archive_scope_no_for {
+                    let line_hint = find_line_number(source_file, rule_id);
+                    if let Some(line) = line_hint {
+                        eprintln!(
+                            "   {}:{}: Rule '{}' has 'scope: archive' without an archive type in 'for:' (add 'archives')",
+                            source_file, line, rule_id
+                        );
+                    } else {
+                        eprintln!(
+                            "   {}: Rule '{}' has 'scope: archive' without an archive type in 'for:' (add 'archives')",
+                            source_file, rule_id
+                        );
+                    }
+                }
+                eprintln!();
+                warnings.push(format!(
+                    "{} composite rules use 'scope: archive' but cannot match an archive (add 'archives' to for:)",
+                    archive_scope_no_for.len()
                 ));
             }
 

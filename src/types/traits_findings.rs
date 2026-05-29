@@ -254,6 +254,19 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
     &s[..end]
 }
 
+/// Max bytes of a matched value retained **in memory** as evidence. The full
+/// value is only needed during matching; the stored copy is for context/display,
+/// so we cap it at storage time (not just at serialization) to bound per-worker
+/// RSS — long binary strings stored verbatim were a peak driver.
+pub(crate) const MAX_EVIDENCE_VALUE_STORED: usize = 128;
+
+/// Truncate a matched value to [`MAX_EVIDENCE_VALUE_STORED`] at a char boundary,
+/// for storage in an [`Evidence`]. Allocates the (bounded) owned string.
+#[must_use]
+pub(crate) fn truncate_evidence_value(value: &str) -> String {
+    truncate_str(value, MAX_EVIDENCE_VALUE_STORED).to_string()
+}
+
 /// Maximum number of byte offsets to include in JSON output
 const MAX_OFFSETS_IN_JSON: usize = 8;
 

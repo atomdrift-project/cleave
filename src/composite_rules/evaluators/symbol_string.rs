@@ -31,7 +31,7 @@ pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> boo
     }
 }
 use crate::types::binary::normalize_symbol;
-use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
+use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, truncate_evidence_value};
 
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
 const MAX_MATCHES_TO_PROCESS: usize = 10_000;
@@ -465,10 +465,12 @@ impl<'p> StringMatcher<'p> {
             .map_or(Self::Never, Self::Regex)
     }
 
-    /// Match `value`, returning the matched text for evidence. `word:`/`regex:`
-    /// return the matched span (preserving case); `substr:` returns the whole
-    /// value; `exact:` returns the pattern.
-    fn match_value(&self, value: &str) -> Option<String> {
+    /// Match `value`, returning the matched text as a **borrow into `value`** for
+    /// evidence — no allocation. `word:`/`regex:` return the matched span; `substr:`
+    /// and `exact:` return the whole value. Callers clone only when actually storing
+    /// evidence (≤ `MAX_EVIDENCE_PER_TRAIT`), so match-counting and `not:`/`is:`
+    /// filtering on non-stored matches cost zero allocations.
+    fn match_value_ref<'v>(&self, value: &'v str) -> Option<&'v str> {
         use crate::composite_rules::condition::{word_match_ci, word_match_cs};
         match self {
             Self::Exact { needle, ci } => {
@@ -477,20 +479,17 @@ impl<'p> StringMatcher<'p> {
                 } else {
                     value == *needle
                 };
-                matched.then(|| (*needle).to_string())
+                matched.then_some(value)
             }
-            Self::SubstrCs(finder) => finder
-                .find(value.as_bytes())
-                .is_some()
-                .then(|| value.to_string()),
-            Self::SubstrCi(ac) => ac.is_match(value).then(|| value.to_string()),
+            Self::SubstrCs(finder) => finder.find(value.as_bytes()).is_some().then_some(value),
+            Self::SubstrCi(ac) => ac.is_match(value).then_some(value),
             Self::WordCs { needle, finder } => {
-                word_match_cs(value, needle, finder).map(|s| value[s..s + needle.len()].to_string())
+                word_match_cs(value, needle, finder).map(|s| &value[s..s + needle.len()])
             }
             Self::WordCi { needle, ac } => {
-                word_match_ci(value, needle, ac).map(|s| value[s..s + needle.len()].to_string())
+                word_match_ci(value, needle, ac).map(|s| &value[s..s + needle.len()])
             }
-            Self::Regex(re) => re.find(value).map(|mat| mat.as_str().to_string()),
+            Self::Regex(re) => re.find(value).map(|mat| mat.as_str()),
             Self::Never => None,
         }
     }
@@ -579,10 +578,9 @@ pub(crate) fn eval_text<'a, 'b>(
                 .get_string_exact_index_ci()
                 .get(&exact_str.to_lowercase())
             {
-                for (i, (original_value, source, offset)) in match_list.iter().enumerate() {
-                    if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
-                        continue;
-                    }
+                for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
+                    let s = &ctx.report.strings[idx as usize];
+                    let original_value = s.value.as_str();
                     let excluded_by_not = trait_not
                         .map(|exceptions| exceptions.iter().any(|exc| exc.matches(original_value)))
                         .unwrap_or(false);
@@ -591,19 +589,17 @@ pub(crate) fn eval_text<'a, 'b>(
                     if !excluded_by_not && !excluded_by_is {
                         evidence.push(Evidence {
                             method: "text".to_string(),
-                            source: source.to_string(),
-                            value: original_value.to_string(),
-                            location: offset.map(|o| format!("{:#x}", o)),
+                            source: "string_extractor".to_string(),
+                            value: truncate_evidence_value(original_value),
+                            location: s.offset.map(|o| format!("{:#x}", o)),
                             ..Default::default()
                         });
                     }
                 }
             }
         } else if let Some(match_list) = ctx.get_string_exact_index().get(exact_str.as_str()) {
-            for (i, (source, offset)) in match_list.iter().enumerate() {
-                if *source != "string_extractor" || i >= MAX_EVIDENCE_PER_TRAIT {
-                    continue;
-                }
+            for &idx in match_list.iter().take(MAX_EVIDENCE_PER_TRAIT) {
+                let s = &ctx.report.strings[idx as usize];
                 let excluded_by_not = trait_not
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(exact_str)))
                     .unwrap_or(false);
@@ -612,9 +608,9 @@ pub(crate) fn eval_text<'a, 'b>(
                 if !excluded_by_not && !excluded_by_is {
                     evidence.push(Evidence {
                         method: "text".to_string(),
-                        source: source.to_string(),
-                        value: exact_str.to_string(),
-                        location: offset.map(|o| format!("{:#x}", o)),
+                        source: "string_extractor".to_string(),
+                        value: truncate_evidence_value(exact_str),
+                        location: s.offset.map(|o| format!("{:#x}", o)),
                         ..Default::default()
                     });
                 }
@@ -643,19 +639,20 @@ pub(crate) fn eval_text<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value(&string_info.value) {
+        if let Some(match_value) = matcher.match_value_ref(&string_info.value) {
             let excluded_by_not = trait_not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
-            let excluded_by_is = !validate_match(&match_value, params.is_check);
+            let excluded_by_is = !validate_match(match_value, params.is_check);
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
+                // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
-                        value: match_value,
+                        value: truncate_evidence_value(match_value),
                         location: string_info.offset.map(|o| format!("{:#x}", o)),
                         ..Default::default()
                     });
@@ -699,19 +696,20 @@ pub(crate) fn eval_string_literal<'a, 'b>(
             continue;
         }
 
-        if let Some(match_value) = matcher.match_value(&string_info.value) {
+        if let Some(match_value) = matcher.match_value_ref(&string_info.value) {
             let excluded_by_not = trait_not
-                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&match_value)))
+                .map(|exceptions| exceptions.iter().any(|exc| exc.matches(match_value)))
                 .unwrap_or(false);
-            let excluded_by_is = !validate_match(&match_value, params.is_check);
+            let excluded_by_is = !validate_match(match_value, params.is_check);
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
+                // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "string_literal".to_string(),
                         source: "ast".to_string(),
-                        value: match_value,
+                        value: truncate_evidence_value(match_value),
                         location: string_info.offset.map(|o| format!("{:#x}", o)),
                         ..Default::default()
                     });

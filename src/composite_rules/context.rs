@@ -45,10 +45,14 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_kv_parsed: Arc<OnceLock<Box<Value>>>,
     /// Cached AST nodes by kind (for batch evaluation)
     pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
-    /// Index for O(1) exact string lookups
-    pub string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<(String, Option<u64>)>>>>,
-    /// Index for O(1) case-insensitive exact lookups
-    pub string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<(String, String, Option<u64>)>>>>,
+    /// Index for O(1) exact string lookups. Values are indices into
+    /// `report.strings` (not cloned strings) — the source is always
+    /// `string_extractor` and the value/offset are looked up from the entry, so
+    /// we don't duplicate every extracted string into the index.
+    pub string_exact_index: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
+    /// Index for O(1) case-insensitive exact lookups (key = lowercased value,
+    /// values = `report.strings` indices).
+    pub string_exact_index_ci: Arc<OnceLock<FxHashMap<String, Vec<u32>>>>,
     /// Hard deadline for rule evaluation.
     pub deadline: Option<Instant>,
     /// Cooperative cancellation flag (set by litmus timeout).
@@ -243,65 +247,29 @@ impl<'a> EvaluationContext<'a> {
         }
     }
 
-    /// Get or build the exact string index for O(1) lookups
-    pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<(String, Option<u64>)>> {
+    /// Get or build the exact string index for O(1) lookups. Only `report.strings`
+    /// is indexed (the only consumer, `eval_text` exact, ignores import/export
+    /// entries); values are `report.strings` indices, not cloned strings.
+    pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index.get_or_init(|| {
-            let mut index: FxHashMap<String, Vec<(String, Option<u64>)>> = FxHashMap::default();
-            for s in &self.report.strings {
-                index
-                    .entry(s.value.clone())
-                    .or_default()
-                    .push(("string_extractor".to_string(), s.offset));
-            }
-            for import in &self.report.imports {
-                index
-                    .entry(import.symbol.clone())
-                    .or_default()
-                    .push((import.source.clone(), None));
-            }
-            for export in &self.report.exports {
-                let offset = export.offset.as_ref().and_then(|s| {
-                    s.strip_prefix("0x")
-                        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
-                });
-                index
-                    .entry(export.symbol.clone())
-                    .or_default()
-                    .push((export.source.clone(), offset));
+            let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
+            for (i, s) in self.report.strings.iter().enumerate() {
+                index.entry(s.value.clone()).or_default().push(i as u32);
             }
             index
         })
     }
 
-    /// Get or build the case-insensitive exact string index for O(1) lookups
-    pub(crate) fn get_string_exact_index_ci(
-        &self,
-    ) -> &FxHashMap<String, Vec<(String, String, Option<u64>)>> {
+    /// Get or build the case-insensitive exact string index (key = lowercased
+    /// value, values = `report.strings` indices).
+    pub(crate) fn get_string_exact_index_ci(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index_ci.get_or_init(|| {
-            let mut index: FxHashMap<String, Vec<(String, String, Option<u64>)>> =
-                FxHashMap::default();
-            for s in &self.report.strings {
-                index.entry(s.value.to_lowercase()).or_default().push((
-                    s.value.clone(),
-                    "string_extractor".to_string(),
-                    s.offset,
-                ));
-            }
-            for import in &self.report.imports {
+            let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
+            for (i, s) in self.report.strings.iter().enumerate() {
                 index
-                    .entry(import.symbol.to_lowercase())
+                    .entry(s.value.to_lowercase())
                     .or_default()
-                    .push((import.symbol.clone(), import.source.clone(), None));
-            }
-            for export in &self.report.exports {
-                let offset = export.offset.as_ref().and_then(|s| {
-                    s.strip_prefix("0x")
-                        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
-                });
-                index
-                    .entry(export.symbol.to_lowercase())
-                    .or_default()
-                    .push((export.symbol.clone(), export.source.clone(), offset));
+                    .push(i as u32);
             }
             index
         })

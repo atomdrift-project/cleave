@@ -69,7 +69,7 @@ impl AsRef<[u8]> for FileData {
 /// # Returns
 ///
 /// UTF-8 encoded data (either converted or original if already UTF-8)
-fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
+pub fn normalize_text_encoding(data: &[u8]) -> Cow<'_, [u8]> {
     // Check for UTF-16 LE BOM (FF FE)
     if data.len() >= 2 && data[0] == 0xFF && data[1] == 0xFE {
         tracing::debug!("Detected UTF-16 LE encoding, converting to UTF-8");

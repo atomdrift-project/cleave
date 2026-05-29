@@ -239,7 +239,17 @@ pub(crate) fn yara_engine(enable_third_party: bool) -> Arc<YaraEngine> {
     lock.get_or_init(|| {
         let mut engine = YaraEngine::new();
         engine.load_all_rules(enable_third_party);
-        Arc::new(engine)
+        let engine = Arc::new(engine);
+        // Tiers now materialize lazily (per file type) on first scan. Warm the
+        // always-scanned CrossFormat tier off the hot path so the first scan
+        // doesn't pay its deserialize; every other tier stays lazy and is built
+        // only if a matching file type is encountered.
+        let warm = engine.clone();
+        std::thread::Builder::new()
+            .name("yara-warm-xfmt".into())
+            .spawn(move || warm.prewarm_cross_format())
+            .ok();
+        engine
     })
     .clone()
 }

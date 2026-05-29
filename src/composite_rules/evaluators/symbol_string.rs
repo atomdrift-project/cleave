@@ -407,8 +407,12 @@ fn string_match_precision(params: &StringParams<'_>) -> f32 {
 fn match_value_against_params(
     value: &str,
     params: &StringParams<'_>,
-    substr_lower: Option<&String>,
+    _substr_lower: Option<&String>,
 ) -> Option<String> {
+    use crate::composite_rules::condition::{
+        cached_ci_searcher, cached_finder, lazy_regex, word_match_start,
+    };
+
     if let Some(exact_str) = params.exact {
         let matched = if params.case_insensitive {
             value.eq_ignore_ascii_case(exact_str)
@@ -418,33 +422,31 @@ fn match_value_against_params(
         return matched.then(|| exact_str.clone());
     }
 
+    // `substr:` is literal — cached SIMD `Finder` (case-sensitive) or cached
+    // case-folding AC searcher (case-insensitive). No regex, no per-eval alloc.
     if let Some(contains_str) = params.substr {
         let matched = if params.case_insensitive {
-            // For CI: lowercase the value and search with the pre-lowercased finder/pattern.
-            // Use to_ascii_lowercase (faster, correct for ASCII patterns used in traits).
-            let value_lower = value.to_ascii_lowercase();
-            if let Some(finder) = params.compiled_finder {
-                finder.find(value_lower.as_bytes()).is_some()
-            } else if let Some(pattern_lower) = substr_lower {
-                value_lower.contains(pattern_lower.as_str())
-            } else {
-                value_lower.contains(contains_str.to_ascii_lowercase().as_str())
-            }
+            cached_ci_searcher(contains_str).is_some_and(|ac| ac.is_match(value))
         } else if let Some(finder) = params.compiled_finder {
+            // Honor a precompiled finder when one was supplied; otherwise use
+            // the process-wide shared cache (Text/Literal aren't precompiled).
             finder.find(value.as_bytes()).is_some()
         } else {
-            memchr::memmem::find(value.as_bytes(), contains_str.as_bytes()).is_some()
+            cached_finder(contains_str).find(value.as_bytes()).is_some()
         };
         return matched.then(|| value.to_string());
     }
 
-    if let Some(re) = params.compiled_regex {
-        return re.find(value).map(|mat| mat.as_str().to_string());
+    // `word:` is literal + word-boundary — never a regex. Evidence is the
+    // matched word (preserving its case in `value`), matching the old
+    // `\bword\b` regex's `mat.as_str()` rather than the whole string.
+    if let Some(word) = params.word {
+        return word_match_start(value, word, params.case_insensitive)
+            .map(|start| value[start..start + word.len()].to_string());
     }
 
-    if let Some(regex_pattern) = params.regex
-        && let Ok(re) = super::build_regex(regex_pattern, params.case_insensitive)
-    {
+    // `regex:` is the only field that compiles a regex (lazy + shared).
+    if let Some(re) = lazy_regex(params.regex.map(String::as_str), params.case_insensitive) {
         return re.find(value).map(|mat| mat.as_str().to_string());
     }
 
@@ -756,10 +758,10 @@ pub(crate) fn eval_call<'a>(
         }
 
         // If an arg filter is set, require at least one arg to match it.
-        if let Some(filter) = arg_filter {
-            if !args.iter().any(|a| arg_matches(a, filter)) {
-                continue;
-            }
+        if let Some(filter) = arg_filter
+            && !args.iter().any(|a| arg_matches(a, filter))
+        {
+            continue;
         }
 
         match_count += 1;
@@ -925,8 +927,8 @@ pub(crate) fn eval_numeric_literal<'a>(
 pub(crate) fn eval_raw<'a>(
     exact: Option<&String>,
     substr: Option<&String>,
-    _regex: Option<&String>,
-    _word: Option<&String>,
+    regex: Option<&String>,
+    word: Option<&String>,
     case_insensitive: bool,
     is_check: Option<StringValidator>,
     compiled_regex: Option<&regex::Regex>,
@@ -935,6 +937,18 @@ pub(crate) fn eval_raw<'a>(
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
+    // Regexes are no longer precompiled per condition; resolve `word:`/`regex:`
+    // through the shared lazy cache when no precompiled regex was supplied.
+    let lazy_re = if compiled_regex.is_none() {
+        crate::composite_rules::condition::lazy_raw_regex(
+            word.map(String::as_str),
+            regex.map(String::as_str),
+            case_insensitive,
+        )
+    } else {
+        None
+    };
+    let compiled_regex = compiled_regex.or(lazy_re);
     // Reject short raw patterns unless search space is bounded (~1KB).
     // Acceptable: offset/offset_range, or section + section_offset*.
     // Density constraints (count_min, per_kb_min) are checked at trait level, not here.

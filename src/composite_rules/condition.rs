@@ -13,6 +13,177 @@ fn compile_regex_logged(
     regex::Regex::new(compile_pattern)
 }
 
+/// Process-global, deduplicated, lazily-compiled regex cache.
+///
+/// Replaces eager per-condition precompilation. Previously every `word:` /
+/// `regex:` condition compiled its own `regex::Regex` at load — a heavyweight
+/// meta-engine object (~tens of KB) built for all ~100k conditions, ~1.5 GB
+/// total, even though top-level traits match via the capability indexes and
+/// most composite sub-conditions never evaluate. Here a pattern is compiled on
+/// first evaluation and shared (and leaked — rules live for the whole process)
+/// across every condition that uses it, so only patterns that actually fire
+/// cost anything, and identical patterns cost once.
+pub(crate) fn cached_regex(pattern: &str) -> Option<&'static regex::Regex> {
+    use std::sync::{LazyLock, Mutex};
+    static CACHE: LazyLock<Mutex<std::collections::HashMap<String, &'static regex::Regex>>> =
+        LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+    if let Ok(cache) = CACHE.lock()
+        && let Some(&re) = cache.get(pattern)
+    {
+        return Some(re);
+    }
+    let re = regex::Regex::new(pattern).ok()?;
+    let leaked: &'static regex::Regex = Box::leak(Box::new(re));
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(pattern.to_string(), leaked);
+    }
+    Some(leaked)
+}
+
+/// Resolve a `regex:` pattern through [`cached_regex`], applying the `(?i)`
+/// prefix for case-insensitivity. This is the **only** place the extracted-
+/// string path builds a `regex::Regex`: `word:`/`substr:`/`exact:` are literal
+/// matches (see [`word_match_start`]) and never touch the regex engine.
+pub(crate) fn lazy_regex(
+    regex: Option<&str>,
+    case_insensitive: bool,
+) -> Option<&'static regex::Regex> {
+    let raw = regex?;
+    if case_insensitive {
+        cached_regex(&format!("(?i){raw}"))
+    } else {
+        cached_regex(raw)
+    }
+}
+
+/// Raw-content matcher's lazy regex source. Like [`lazy_regex`] but also serves
+/// `word:` by building `\bword\b` on demand (cached/shared). TODO: make
+/// `word:` a literal byte-boundary scan here too so raw content never touches
+/// the regex engine for literals; for now it's lazy + deduplicated (no longer
+/// the eager per-condition compilation that cost ~1.5 GB).
+pub(crate) fn lazy_raw_regex(
+    word: Option<&str>,
+    regex: Option<&str>,
+    case_insensitive: bool,
+) -> Option<&'static regex::Regex> {
+    let base = match (word, regex) {
+        (Some(w), _) => format!(r"\b{}\b", regex::escape(w)),
+        (None, Some(r)) => r.to_string(),
+        (None, None) => return None,
+    };
+    if case_insensitive {
+        cached_regex(&format!("(?i){base}"))
+    } else {
+        cached_regex(&base)
+    }
+}
+
+/// Shared, lazy, leaked case-sensitive substring searcher per unique needle.
+/// `memchr::memmem::Finder` (SIMD + Two-Way + prefilter) is the right tool for
+/// a single needle; caching it means we build the searcher once and reuse it
+/// across evals instead of rebuilding per call, with no per-condition storage.
+pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'static> {
+    use std::sync::{LazyLock, Mutex};
+    static CACHE: LazyLock<
+        Mutex<std::collections::HashMap<String, &'static memchr::memmem::Finder<'static>>>,
+    > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+    // Lock-poisoning can't happen (no panics under the guard); fall back to a
+    // leaked one-off if it somehow does, so matching never breaks.
+    if let Ok(cache) = CACHE.lock()
+        && let Some(&f) = cache.get(needle)
+    {
+        return f;
+    }
+    let finder: &'static _ = Box::leak(Box::new(memchr::memmem::Finder::new(needle).into_owned()));
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(needle.to_string(), finder);
+    }
+    finder
+}
+
+/// Shared, lazy, leaked single-pattern ASCII-case-insensitive Aho-Corasick
+/// searcher per unique needle. For CI single-needle matching, AC's built-in
+/// case folding beats lowercasing the haystack on every eval.
+pub(crate) fn cached_ci_searcher(needle: &str) -> Option<&'static aho_corasick::AhoCorasick> {
+    use std::sync::{LazyLock, Mutex};
+    static CACHE: LazyLock<
+        Mutex<std::collections::HashMap<String, &'static aho_corasick::AhoCorasick>>,
+    > = LazyLock::new(|| Mutex::new(std::collections::HashMap::new()));
+    if let Ok(cache) = CACHE.lock()
+        && let Some(&ac) = cache.get(needle)
+    {
+        return Some(ac);
+    }
+    let ac = aho_corasick::AhoCorasick::builder()
+        .ascii_case_insensitive(true)
+        .build([needle])
+        .ok()?;
+    let ac: &'static _ = Box::leak(Box::new(ac));
+    if let Ok(mut cache) = CACHE.lock() {
+        cache.insert(needle.to_string(), ac);
+    }
+    Some(ac)
+}
+
+#[inline]
+fn is_word_byte(b: u8) -> bool {
+    // ASCII word chars plus any non-ASCII byte (UTF-8 lead/continuation bytes
+    // of multi-byte chars, ~all of which are Unicode word/letter chars). This
+    // approximates the regex crate's Unicode-aware `\b` so a `word:` keyword
+    // sitting against a non-ASCII letter (`ñeval`) doesn't spuriously match.
+    b.is_ascii_alphanumeric() || b == b'_' || b >= 0x80
+}
+
+/// Literal word-boundary match — the `word:` matcher, **no regex engine**.
+/// Returns the byte offset of the first occurrence of `needle` whose
+/// neighbours satisfy `\bneedle\b` semantics: a `\b` exists where word-ness
+/// *transitions*, which depends on whether the needle's own first/last byte is
+/// a word char (so punctuation-edged patterns behave like the regex did), and
+/// at text start/end `\b` holds iff the adjacent needle byte is a word char.
+/// The caller slices `haystack[start..start + needle.len()]` for the matched
+/// text (preserving case under case-insensitive matching). Case-sensitive uses
+/// a cached SIMD `Finder`; case-insensitive a cached AC searcher (no per-eval
+/// haystack allocation).
+#[must_use]
+pub(crate) fn word_match_start(haystack: &str, needle: &str, case_insensitive: bool) -> Option<usize> {
+    let nb = needle.as_bytes();
+    let (&first, &last) = (nb.first()?, nb.last()?);
+    let first_word = is_word_byte(first);
+    let last_word = is_word_byte(last);
+    let hb = haystack.as_bytes();
+    let nlen = nb.len();
+    let boundary_ok = |start: usize, end: usize| {
+        let left = if start == 0 {
+            first_word
+        } else {
+            is_word_byte(hb[start - 1]) != first_word
+        };
+        let right = if end == hb.len() {
+            last_word
+        } else {
+            is_word_byte(hb[end]) != last_word
+        };
+        left && right
+    };
+    if case_insensitive {
+        cached_ci_searcher(needle)?
+            .find_iter(haystack)
+            .find(|m| boundary_ok(m.start(), m.end()))
+            .map(|m| m.start())
+    } else {
+        let finder = cached_finder(needle);
+        let mut from = 0;
+        while let Some(rel) = finder.find(&hb[from..]) {
+            let start = from + rel;
+            if boundary_ok(start, start + nlen) {
+                return Some(start);
+            }
+            from = start + 1;
+        }
+        None
+    }
+}
+
 /// Custom serde for offset ranges that accepts/produces ergonomic formats:
 /// - `[start, end]` - closed range from start to end
 /// - `[start,]` or `[start, null]` or `[start, ~]` - from start to end of file (open-ended end)
@@ -2772,130 +2943,16 @@ impl Condition {
                         })?,
                 );
             }
-            Condition::Text {
-                regex,
-                word,
-                case_insensitive,
-                compiled_regex,
-                ..
-            } => {
-                if let Some(word_pattern) = word {
-                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged("text.word", word_pattern, &compile_pattern, true)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile case-insensitive text word pattern '{}': {}",
-                                    word_pattern,
-                                    e
-                                )
-                            })?
-                    } else {
-                        compile_regex_logged("text.word", word_pattern, &regex_pattern, false)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile text word pattern '{}': {}",
-                                    word_pattern,
-                                    e
-                                )
-                            })?
-                    });
-                } else if let Some(regex_pattern) = regex {
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged("text.regex", regex_pattern, &compile_pattern, true)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile case-insensitive text regex '{}': {}",
-                                    regex_pattern,
-                                    e
-                                )
-                            })?
-                    } else {
-                        compile_regex_logged("text.regex", regex_pattern, regex_pattern, false)
-                            .map_err(|e| {
-                                anyhow::anyhow!(
-                                    "Failed to compile text regex '{}': {}",
-                                    regex_pattern,
-                                    e
-                                )
-                            })?
-                    });
-                }
-            }
-            Condition::Literal {
-                regex,
-                word,
-                case_insensitive,
-                compiled_regex,
-                ..
-            } => {
-                if let Some(word_pattern) = word {
-                    let regex_pattern = format!(r"\b{}\b", regex::escape(word_pattern));
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged(
-                            "string_literal.word",
-                            word_pattern,
-                            &compile_pattern,
-                            true,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive string_literal word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                        })?
-                    } else {
-                        compile_regex_logged(
-                            "string_literal.word",
-                            word_pattern,
-                            &regex_pattern,
-                            false,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile string_literal word pattern '{}': {}",
-                                word_pattern,
-                                e
-                            )
-                        })?
-                    });
-                } else if let Some(regex_pattern) = regex {
-                    *compiled_regex = Some(if *case_insensitive {
-                        let compile_pattern = format!("(?i){}", regex_pattern);
-                        compile_regex_logged(
-                            "string_literal.regex",
-                            regex_pattern,
-                            &compile_pattern,
-                            true,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile case-insensitive string_literal regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                    } else {
-                        compile_regex_logged(
-                            "string_literal.regex",
-                            regex_pattern,
-                            regex_pattern,
-                            false,
-                        )
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Failed to compile string_literal regex '{}': {}",
-                                regex_pattern,
-                                e
-                            )
-                        })?
-                    });
-                }
-            }
+            // Text/Literal `word:`/`substr:`/`exact:` are literal matches and
+            // `regex:` compiles lazily (shared) on first eval — see
+            // `match_value_against_params` + `lazy_regex`/`word_match_start`. So
+            // there is nothing to precompile here; eagerly building a
+            // `regex::Regex` per condition (the old `\bword\b` etc.) was ~1.5 GB
+            // of redundant meta-engine objects, mostly for literal `word:`.
+            // Kept as an explicit, documented arm rather than folded into the
+            // catch-all below.
+            #[allow(clippy::match_same_arms)]
+            Condition::Text { .. } | Condition::Literal { .. } => {}
             Condition::Raw {
                 regex,
                 word,
@@ -4003,5 +4060,52 @@ exact: curl
     fn nested_quantifier_message_mentions_nested() {
         let msg = find_backtrack_issue(r"(\w+)+").unwrap();
         assert!(msg.contains("nested"), "got: {msg}");
+    }
+
+    // ── word_match_start: literal `word:` matcher equivalence ────────────────
+
+    /// `word_match_start` must agree with the regex `\bneedle\b` it replaced,
+    /// including at non-ASCII (Unicode word-char) neighbours.
+    #[allow(clippy::expect_used)]
+    fn assert_word_matches_regex(haystack: &str, needle: &str) {
+        let pat = format!(r"\b{}\b", regex::escape(needle));
+        let re = regex::Regex::new(&pat).expect("valid regex");
+        let want = re.find(haystack).map(|m| m.start());
+        let got = super::word_match_start(haystack, needle, false);
+        assert_eq!(
+            want, got,
+            "needle={needle:?} haystack={haystack:?}: regex={want:?} literal={got:?}"
+        );
+    }
+
+    #[test]
+    fn word_match_agrees_with_regex_word_boundary() {
+        for (h, n) in [
+            ("run eval here", "eval"),
+            ("evaluate", "eval"),       // suffix → no boundary
+            ("preeval", "eval"),        // prefix → no boundary
+            ("eval", "eval"),           // whole string
+            ("(eval)", "eval"),         // punctuation neighbours
+            ("a.eval.b", "eval"),       // dotted
+            ("ñeval", "eval"),          // leading non-ASCII letter → no boundary
+            ("evalé done", "eval"),     // trailing non-ASCII letter → no boundary
+            ("no match", "eval"),
+        ] {
+            assert_word_matches_regex(h, n);
+        }
+    }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn word_match_returns_matched_slice_preserving_case() {
+        // Case-insensitive match still reports the text as it appears in the
+        // haystack (not the lowercased needle) — mirrors the old `mat.as_str()`.
+        let start = super::word_match_start("call EVAL now", "eval", true).expect("match");
+        assert_eq!(&"call EVAL now"[start..start + "eval".len()], "EVAL");
+    }
+
+    #[test]
+    fn word_match_empty_needle_never_matches() {
+        assert_eq!(super::word_match_start("anything", "", false), None);
     }
 }

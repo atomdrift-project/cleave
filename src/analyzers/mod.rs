@@ -451,9 +451,19 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
     filefacts::fileid::detect(file_path, file_data)
         .map(|d| d.file_type)
+        .filter(|ft| *ft != FileType::Pe || looks_like_pe_image(file_data))
         .filter(|ft| *ft != FileType::Unknown)
         .or_else(|| known_manifest_type_from_basename(file_path))
         .unwrap_or(FileType::Unknown)
+}
+
+fn looks_like_pe_image(data: &[u8]) -> bool {
+    if data.len() < 0x40 || &data[0..2] != b"MZ" {
+        return false;
+    }
+
+    let e_lfanew = u32::from_le_bytes([data[60], data[61], data[62], data[63]]) as usize;
+    data.get(e_lfanew..e_lfanew.saturating_add(4)) == Some(b"PE\0\0")
 }
 
 fn known_manifest_type_from_basename(file_path: &Path) -> Option<FileType> {
@@ -763,13 +773,30 @@ mod tests {
         let pe = [b'M', b'Z', 0x90, 0x00, 0x03, 0x00, 0x00, 0x00];
         assert_eq!(
             detect_file_type_from_data(Path::new("a.exe"), &pe),
-            FileType::Pe
+            FileType::Unknown
         );
 
         let pyc = [0x55, 0x0d, 0x0d, 0x0a, 0x00, 0x00, 0x00, 0x00];
         assert_eq!(
             detect_file_type_from_data(Path::new("c/s.dat"), &pyc),
             FileType::PythonBytecode
+        );
+    }
+
+    #[test]
+    fn bridge_pe_magic_requires_valid_nt_header() {
+        let mut pe = vec![0u8; 0x84];
+        pe[0..2].copy_from_slice(b"MZ");
+        pe[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        pe[0x80..0x84].copy_from_slice(b"PE\0\0");
+        assert_eq!(
+            detect_file_type_from_data(Path::new("a.exe"), &pe),
+            FileType::Pe
+        );
+
+        assert_eq!(
+            detect_file_type_from_data(Path::new("BOUT.inp"), b"MZ = 8    # Z size\n"),
+            FileType::Unknown
         );
     }
 

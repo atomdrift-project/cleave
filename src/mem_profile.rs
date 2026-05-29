@@ -33,6 +33,7 @@ pub enum Phase {
     Aggregate,
 }
 
+#[cfg_attr(not(feature = "memprofile"), allow(dead_code))]
 impl Phase {
     const COUNT: usize = 4;
     const NAMES: [&'static str; Self::COUNT] = ["other", "extract", "analyze", "aggregate"];

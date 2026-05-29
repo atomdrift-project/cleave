@@ -410,6 +410,14 @@ impl ArchiveAnalyzer {
             crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
             let stng_opts =
                 crate::analyzers::attach_stng_cancellation(stng_opts, self.cancelled.as_ref());
+            // Normalize UTF-16 (LE/BE BOM) member content to UTF-8 before string
+            // extraction and trait matching, mirroring the standalone path in
+            // `lib.rs`. Without this a UTF-16 script inside an archive is
+            // null-interleaved at the byte level (`E\0x\0e\0c\0...`) and no
+            // `type: text` trait matches. The member SHA is computed separately
+            // from the original bytes, so identity is unchanged.
+            let normalized_member = crate::file_io::normalize_text_encoding(data);
+            let data: &[u8] = normalized_member.as_ref();
             let stng_strings = stng::extract_strings_with_options(data, &stng_opts);
             crate::memory_tracker::clear_current_phase();
             let payloads = if extract_payloads {
@@ -1266,9 +1274,9 @@ impl ArchiveAnalyzer {
             }
 
             let start_offset = usize::try_from(entry.data_offset)
-                .map_err(|_| anyhow::anyhow!("ASAR member offset exceeds addressable memory"))?;
+                .map_err(|e| anyhow::anyhow!("ASAR member offset exceeds addressable memory: {e}"))?;
             let member_size = usize::try_from(entry.size)
-                .map_err(|_| anyhow::anyhow!("ASAR member size exceeds addressable memory"))?;
+                .map_err(|e| anyhow::anyhow!("ASAR member size exceeds addressable memory: {e}"))?;
             let end_offset = start_offset
                 .checked_add(member_size)
                 .ok_or_else(|| anyhow::anyhow!("ASAR member range overflow"))?;

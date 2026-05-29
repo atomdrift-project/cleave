@@ -215,10 +215,41 @@ struct SplitSource {
 /// additionally include the `Raw` and residual `Unknown` tiers.
 ///
 /// Scanners are cached per-thread to avoid expensive re-creation.
+/// Backing source for lazily materializing a tier's compiled `Rules`.
+///
+/// On a cache hit (the common path) tiers are deserialized from the mmap'd
+/// cache on first access, so tiers a session never scans (e.g. PE/ELF rules
+/// during an all-source scan) are never deserialized and never allocate. On a
+/// cache miss the rules are compiled eagerly (once) and the cache is written;
+/// that run pre-fills the tier cells, so `Compiled` carries no backing source.
+#[derive(Debug)]
+enum TierSource {
+    /// No rules available.
+    Empty,
+    /// Tiers already compiled and stored in the cells (cache-miss path).
+    Compiled,
+    /// Deserialize each tier from the mmap'd cache slice on demand.
+    Cached {
+        mmap: memmap2::Mmap,
+        offsets: HashMap<YaraTier, (usize, usize)>,
+    },
+}
+
 #[derive(Debug)]
 pub(crate) struct YaraEngine {
-    /// Per-tier compiled rule sets. `CrossFormat` is always present when loaded.
-    tiers: HashMap<YaraTier, yara_x::Rules>,
+    /// Per-tier compiled rule sets, materialized lazily. The map is pre-keyed
+    /// with every [`YaraTier`]; each cell is built on first access via
+    /// [`YaraEngine::tier_rules`] from [`Self::source`]. `None` = tier has no
+    /// rules.
+    tiers: HashMap<YaraTier, OnceLock<Option<yara_x::Rules>>>,
+    /// Backing source for lazy tier construction.
+    source: TierSource,
+    /// Tiers that actually carry rules — lets scans skip empty tiers and
+    /// `is_empty`/scan-gating work without forcing every cell to build.
+    populated_tiers: std::collections::HashSet<YaraTier>,
+    /// (builtin, third_party) rule counts recorded at load, so `total_rules`
+    /// doesn't have to materialize every tier.
+    rule_counts: (usize, usize),
     /// Full-rule-derived sidecar metadata keyed by `(namespace, rule_name)`.
     rule_contexts: HashMap<String, RuleContext>,
     /// Namespaces compiled into the combined engine from inline trait YARA conditions.
@@ -228,17 +259,66 @@ pub(crate) struct YaraEngine {
 }
 
 impl YaraEngine {
-    /// Total number of compiled YARA rules across all tiers.
+    /// An empty, pre-keyed tier map (one `OnceLock` per [`YaraTier`]).
+    fn empty_tier_cells() -> HashMap<YaraTier, OnceLock<Option<yara_x::Rules>>> {
+        YaraTier::ALL
+            .iter()
+            .map(|&t| (t, OnceLock::new()))
+            .collect()
+    }
+
+    /// Lazily materialize the compiled rules for `tier`, building from
+    /// [`Self::source`] on first access. Thread-safe: concurrent first-touch
+    /// callers block on the cell until the winner finishes.
+    fn tier_rules(&self, tier: YaraTier) -> Option<&yara_x::Rules> {
+        self.tiers
+            .get(&tier)?
+            .get_or_init(|| self.build_tier(tier))
+            .as_ref()
+    }
+
+    /// Compile or deserialize one tier's rules. Single-tier work only (no inner
+    /// rayon), so it is safe to call from a rayon worker during a scan.
+    fn build_tier(&self, tier: YaraTier) -> Option<yara_x::Rules> {
+        match &self.source {
+            TierSource::Empty | TierSource::Compiled => None,
+            TierSource::Cached { mmap, offsets } => {
+                let &(offset, length) = offsets.get(&tier)?;
+                let end = offset.checked_add(length)?;
+                let slice = mmap.get(offset..end)?;
+                match yara_x::Rules::deserialize(slice) {
+                    Ok(rules) => Some(rules),
+                    Err(e) => {
+                        tracing::warn!(tier = %tier.label(), error = ?e, "lazy tier deserialize failed");
+                        None
+                    }
+                }
+            }
+        }
+    }
+
+    /// Total number of YARA rules loaded (recorded at load; does not force
+    /// lazy tiers to materialize).
     #[must_use]
     pub(crate) fn total_rules(&self) -> usize {
-        self.tiers.values().map(|r| r.iter().count()).sum()
+        self.rule_counts.0 + self.rule_counts.1
+    }
+
+    /// Eagerly materialize the `CrossFormat` tier (scanned for every file).
+    /// Call once off the hot path so the first scan doesn't pay its lazy
+    /// deserialize; all other tiers stay lazy.
+    pub(crate) fn prewarm_cross_format(&self) {
+        let _ = self.tier_rules(YaraTier::CrossFormat);
     }
 
     /// Create a new YARA engine without rules loaded
     #[must_use]
     pub(crate) fn new() -> Self {
         Self {
-            tiers: HashMap::new(),
+            tiers: Self::empty_tier_cells(),
+            source: TierSource::Empty,
+            populated_tiers: std::collections::HashSet::new(),
+            rule_counts: (0, 0),
             rule_contexts: HashMap::new(),
             compiled_inline_namespaces: Vec::new(),
         }
@@ -248,22 +328,14 @@ impl YaraEngine {
     #[must_use]
     #[allow(dead_code)] // Used by binary target (commands/analyze.rs) and tests
     pub(crate) fn new_with_mapper(_capability_mapper: CapabilityMapper) -> Self {
-        Self {
-            tiers: HashMap::new(),
-            rule_contexts: HashMap::new(),
-            compiled_inline_namespaces: Vec::new(),
-        }
+        Self::new()
     }
 
     /// Create a new YARA engine for testing (without validation)
     #[cfg(test)]
     #[must_use]
     pub(crate) fn new_for_test() -> Self {
-        Self {
-            tiers: HashMap::new(),
-            rule_contexts: HashMap::new(),
-            compiled_inline_namespaces: Vec::new(),
-        }
+        Self::new()
     }
 
     /// Load all YARA rules (built-in from traits/ + optionally third-party from third_party/)
@@ -295,7 +367,10 @@ impl YaraEngine {
         // via env var or `set_builtin_yara_only_override`.
         let enable_third_party = enable_third_party && !builtin_yara_only_active();
 
-        self.tiers.clear();
+        self.tiers = Self::empty_tier_cells();
+        self.populated_tiers.clear();
+        self.source = TierSource::Empty;
+        self.rule_counts = (0, 0);
         self.rule_contexts.clear();
         self.compiled_inline_namespaces.clear();
         YARA_SCANS_DISABLED_AFTER_PANIC.store(false, Ordering::Relaxed);
@@ -446,9 +521,16 @@ impl YaraEngine {
             if count > 0 {
                 tracing::info!("Tier {}: {} rules", tier.label(), count);
                 total_rules += count;
-                self.tiers.insert(tier, rules);
+                if let Some(cell) = self.tiers.get(&tier) {
+                    let _ = cell.set(Some(rules));
+                    self.populated_tiers.insert(tier);
+                }
             }
         }
+        // Cache-miss path: tiers are pre-filled above, so there is no backing
+        // source to materialize lazily.
+        self.source = TierSource::Compiled;
+        self.rule_counts = (builtin_count, third_party_count);
         tracing::info!(
             elapsed_ms = compile_elapsed_ms,
             rules = total_rules,
@@ -649,14 +731,14 @@ impl YaraEngine {
                 "YARA disabled after a prior panic; reload rules or restart to re-enable"
             );
         }
-        if self.tiers.is_empty() {
+        if self.populated_tiers.is_empty() {
             anyhow::bail!("No YARA rules loaded");
         }
 
         // Determine which tiers to scan
         let tiers_to_scan: Vec<YaraTier> = YaraTier::scan_order(file_type_filter)
             .into_iter()
-            .filter(|tier| self.tiers.contains_key(tier))
+            .filter(|tier| self.populated_tiers.contains(tier))
             .collect();
 
         let inline_ns_set: std::collections::HashSet<&str> = self
@@ -665,27 +747,17 @@ impl YaraEngine {
             .map(String::as_str)
             .collect();
 
-        // Report rule counts per tier (visible with --verbose)
-        let mut total_rules: usize = 0;
-        for tier in &tiers_to_scan {
-            if let Some(rules) = self.tiers.get(tier) {
-                let count = rules.iter().count();
-                total_rules += count;
-                tracing::debug!(tier = tier.label(), count, "YARA tier rule count");
-            }
-        }
-        tracing::debug!(
-            total = total_rules,
-            tiers = tiers_to_scan.len(),
-            "YARA scan starting"
-        );
+        tracing::debug!(tiers = tiers_to_scan.len(), "YARA scan starting");
 
         // Each tier has its own compiled Rules, and Scanner only borrows &Rules + &[u8],
         // so tiers can scan concurrently on the same data without contention.
+        // `tier_rules` materializes any not-yet-built tier on first touch (the
+        // common cache-hit path); the per-tier `OnceLock` makes that safe under
+        // this `par_iter` and across concurrent scans on other workers.
         let all_raw: Vec<(YaraTier, u64, Result<Vec<RawRule>>)> = tiers_to_scan
             .par_iter()
             .filter_map(|tier| {
-                self.tiers.get(tier).map(|rules| {
+                self.tier_rules(*tier).map(|rules| {
                     let started = std::time::Instant::now();
                     let result = Self::run_scanner(rules, data);
                     (*tier, started.elapsed().as_millis() as u64, result)
@@ -750,7 +822,7 @@ impl YaraEngine {
         // Log tier-level scan summary (rule count per tier, not individual rules)
         if tracing::enabled!(tracing::Level::DEBUG) {
             for tier in &tiers_to_scan {
-                if let Some(rules) = self.tiers.get(tier) {
+                if let Some(rules) = self.tier_rules(*tier) {
                     tracing::debug!(
                         tier = tier.label(),
                         rules = rules.iter().count(),
@@ -1656,7 +1728,7 @@ impl YaraEngine {
 
     /// Scan a file with loaded YARA rules
     pub(crate) fn scan_file(&self, file_path: &Path) -> Result<Vec<YaraMatch>> {
-        if self.tiers.is_empty() {
+        if self.populated_tiers.is_empty() {
             anyhow::bail!("No YARA rules loaded");
         }
 
@@ -1920,7 +1992,7 @@ impl YaraEngine {
     /// Check if rules are loaded
     #[must_use]
     pub(crate) fn is_loaded(&self) -> bool {
-        !self.tiers.is_empty()
+        !self.populated_tiers.is_empty()
     }
 
     /// Map YARA match to capability evidence
@@ -2053,14 +2125,16 @@ impl YaraEngine {
     ) -> Result<()> {
         use std::io::Write;
 
-        if self.tiers.is_empty() {
+        if self.populated_tiers.is_empty() {
             anyhow::bail!("No rules to cache");
         }
 
-        // Serialize each tier's rules
+        // Serialize each tier's rules. Only reached on the cache-miss compile
+        // path, where every populated tier's cell is already filled, so
+        // `tier_rules` returns without lazily building anything.
         let mut tier_data: Vec<(String, Vec<u8>)> = Vec::new();
         for tier in YaraTier::ALL {
-            if let Some(rules) = self.tiers.get(tier) {
+            if let Some(rules) = self.tier_rules(*tier) {
                 let data = rules
                     .serialize()
                     .context(format!("Failed to serialize tier {:?}", tier))?;
@@ -2256,41 +2330,36 @@ impl YaraEngine {
             serde_json::from_slice(&mmap[CACHE_HEADER_SIZE..manifest_end])
                 .context("Failed to parse cache manifest")?;
 
-        let t1 = std::time::Instant::now();
-
-        // Deserialize each tier
+        // Lazy: record each tier's (offset, length) and defer the actual
+        // `Rules::deserialize` to the first scan that needs that tier. Bounds
+        // are validated now so `build_tier` can trust the slice. A session that
+        // only scans, say, source files never deserializes the PE/ELF/Mach-O
+        // tiers — their rules are never allocated and their cache pages never
+        // fault in.
+        let mut offsets: HashMap<YaraTier, (usize, usize)> = HashMap::new();
         for entry in &manifest.tiers {
-            let end = entry.offset + entry.length;
-            if end > mmap.len() {
+            let end = entry.offset.checked_add(entry.length);
+            if end.is_none_or(|e| e > mmap.len()) {
                 anyhow::bail!("Cache tier '{}' data truncated", entry.label);
             }
-            let rules = yara_x::Rules::deserialize(&mmap[entry.offset..end])
-                .context(format!("Failed to deserialize tier '{}'", entry.label))?;
-
             let tier = YaraTier::ALL
                 .iter()
                 .find(|t| t.label() == entry.label)
                 .copied()
                 .unwrap_or(YaraTier::Unknown);
-
-            tracing::debug!(
-                "Loaded tier '{}': {} rules",
-                entry.label,
-                rules.iter().count()
-            );
-            self.tiers.insert(tier, rules);
+            offsets.insert(tier, (entry.offset, entry.length));
+            self.populated_tiers.insert(tier);
         }
-
-        let t2 = std::time::Instant::now();
 
         self.compiled_inline_namespaces = manifest.inline_namespaces;
         self.rule_contexts = manifest.rule_contexts;
+        self.rule_counts = (manifest.builtin_count, manifest.third_party_count);
+        self.source = TierSource::Cached { mmap, offsets };
 
         tracing::debug!(
-            "YARA cache load: manifest={:?}, tiers={:?} ({} tier(s))",
-            t1.duration_since(t0),
-            t2.duration_since(t1),
-            self.tiers.len(),
+            elapsed = ?t0.elapsed(),
+            tiers = self.populated_tiers.len(),
+            "YARA cache load (lazy): tiers mapped"
         );
 
         Ok((manifest.builtin_count, manifest.third_party_count))
@@ -2317,7 +2386,14 @@ impl YaraEngine {
         compiler
             .add_source(source.as_bytes())
             .map_err(|e| anyhow::anyhow!("{:?}", e))?;
-        self.tiers.insert(YaraTier::CrossFormat, compiler.build());
+        let rules = compiler.build();
+        let count = rules.iter().count();
+        if let Some(cell) = self.tiers.get(&YaraTier::CrossFormat) {
+            let _ = cell.set(Some(rules));
+        }
+        self.populated_tiers.insert(YaraTier::CrossFormat);
+        self.source = TierSource::Compiled;
+        self.rule_counts = (count, 0);
         Ok(())
     }
 }

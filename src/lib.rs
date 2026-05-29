@@ -1273,6 +1273,30 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Check for extension/content mismatch
     let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
 
+    // Normalize text encoding (UTF-16 LE/BE BOM -> UTF-8) before string
+    // extraction, metrics, and trait matching.
+    //
+    // Why: `type: text` on source/text file types is evaluated by `eval_raw()`
+    // against the file content (so cross-line regexes like `[\s\S]{0,N}` keep
+    // working — ~950 traits depend on that). A UTF-16 script is null-interleaved
+    // at the byte level (`E\0x\0e\0c\0...`), so without normalization no text
+    // pattern matches and the file looks empty (e.g. a UTF-16 VBS dropper). We
+    // normalize the content the matcher reads rather than reroute `type: text`
+    // to the per-line stng strings, which would lose those cross-line patterns.
+    //
+    // Gating on the BOM alone is safe and mirrors `file_io::read_file_normalized`:
+    // no real binary/archive format begins with FF FE / FE FF, and SHA +
+    // file-type detection above already ran on the original bytes, so file
+    // identity is unchanged.
+    let normalized_data: Option<file_io::FileData> =
+        match file_io::normalize_text_encoding(file_data) {
+            std::borrow::Cow::Owned(decoded) => Some(file_io::FileData::Owned(decoded)),
+            std::borrow::Cow::Borrowed(_) => None,
+        };
+    let file_data: &[u8] = normalized_data
+        .as_ref()
+        .map_or(file_data, file_io::FileData::as_slice);
+
     // For binary types (PE, ELF, MachO) run the YARA scan concurrently with stng extraction.
     // Both only need file_data and are independent of each other, so they can overlap.
     // On production runs where radare2 is cached, YARA (~270ms) otherwise sits between

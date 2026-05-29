@@ -725,6 +725,15 @@ const HOSTILE_EXPECTATIONS: &[HostileExpectation] = &[
         min_hostile: 2,
         min_suspicious: 2,
     },
+    // UTF-16LE obfuscated VBScript loader: Array() lookup-table + ChrW
+    // reassembly feeding ExecuteGlobal. Doubles as the regression guard for
+    // UTF-16 text normalization — pre-fix this produced zero findings.
+    HostileExpectation {
+        name: "utf16-vbs-loader.vbs.xz",
+        min_score: 143,
+        min_hostile: 3,
+        min_suspicious: 2,
+    },
 ];
 
 /// Per-file score caps for direct files in `testdata/benign/`.

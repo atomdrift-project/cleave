@@ -82,6 +82,7 @@ pub(crate) fn eval_symbol<'a>(
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
+    let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalSymbol);
     // Check platform constraint
     // Match if: trait allows All platforms, OR context includes All (no --platforms filter),
     // OR trait's platforms intersect with context's platforms
@@ -522,6 +523,7 @@ pub(crate) fn eval_text<'a, 'b>(
     ctx: &EvaluationContext<'b>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
+    let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalText);
     if ctx.file_type.uses_raw_text_search() {
         let location = ContentLocationParams {
             section: params.section.cloned(),
@@ -967,6 +969,7 @@ pub(crate) fn eval_raw<'a>(
     ctx: &EvaluationContext<'a>,
     trait_id: Option<&str>,
 ) -> ConditionResult {
+    let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
     // Regexes are not precompiled per condition; resolve `word:`/`regex:` through
     // the shared lazy cache.
     let compiled_regex = crate::composite_rules::condition::lazy_raw_regex(
@@ -1119,8 +1122,14 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // UNICODE PATH: Use cached UTF-8 conversion for Unicode regex
-            let content =
-                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
+            // Reuse the per-member UTF-8 view validated once at ctx construction
+            // (source types); only re-validate for sub-ranges or non-source members.
+            let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
+                Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
+                    std::borrow::Cow::Borrowed(s)
+                }
+                _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
+            };
             let mut first_match = None;
             let mut first_offset = None;
             for (idx, mat) in re.find_iter(&content).enumerate() {
@@ -1417,24 +1426,32 @@ pub(crate) fn eval_raw<'a>(
             }
         } else {
             // Unicode pattern - fall back to cached UTF-8 conversion
-            let content =
-                super::get_utf8_cached(ctx.binary_data, (search_start, search_end), ctx.file_id());
+            // Reuse the per-member UTF-8 view validated once at ctx construction
+            // (source types); only re-validate for sub-ranges or non-source members.
+            let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
+                Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
+                    std::borrow::Cow::Borrowed(s)
+                }
+                _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
+            };
 
             if is_check.is_some() {
                 // For validator validation, we need to find actual match positions
-                let search_content = if case_insensitive {
-                    content.to_lowercase()
+                // Case-sensitive borrows the cached UTF-8 view (no per-eval copy);
+                // case-insensitive still folds case into an owned buffer.
+                let search_content: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(content.to_lowercase())
                 } else {
-                    content.to_string()
+                    std::borrow::Cow::Borrowed(&content)
                 };
-                let search_pattern = if case_insensitive {
-                    substr_str.to_lowercase()
+                let search_pattern: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(substr_str.to_lowercase())
                 } else {
-                    substr_str.clone()
+                    std::borrow::Cow::Borrowed(substr_str)
                 };
                 let mut first_match_offset = None;
                 let mut start = 0;
-                while let Some(pos) = search_content[start..].find(&search_pattern) {
+                while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
                     let abs_pos = start + pos;
                     // Get some context around the match to check for validator
                     let context_start = abs_pos.saturating_sub(50);
@@ -1465,19 +1482,21 @@ pub(crate) fn eval_raw<'a>(
                 }
             } else if not.is_some() {
                 // Per-match not: filtering on Unicode content
-                let search_content = if case_insensitive {
-                    content.to_lowercase()
+                // Case-sensitive borrows the cached UTF-8 view (no per-eval copy);
+                // case-insensitive still folds case into an owned buffer.
+                let search_content: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(content.to_lowercase())
                 } else {
-                    content.to_string()
+                    std::borrow::Cow::Borrowed(&content)
                 };
-                let search_pattern = if case_insensitive {
-                    substr_str.to_lowercase()
+                let search_pattern: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(substr_str.to_lowercase())
                 } else {
-                    substr_str.clone()
+                    std::borrow::Cow::Borrowed(substr_str)
                 };
                 let mut first_match_offset = None;
                 let mut start = 0;
-                while let Some(pos) = search_content[start..].find(&search_pattern) {
+                while let Some(pos) = search_content[start..].find(search_pattern.as_ref()) {
                     let abs_pos = start + pos;
                     let context_start = abs_pos.saturating_sub(50);
                     let context_end = (abs_pos + search_pattern.len() + 50).min(content.len());
@@ -1505,20 +1524,22 @@ pub(crate) fn eval_raw<'a>(
                 }
             } else {
                 // Simple count - no not: filter (fastest path)
-                let search_content = if case_insensitive {
-                    content.to_lowercase()
+                // Case-sensitive borrows the cached UTF-8 view (no per-eval copy);
+                // case-insensitive still folds case into an owned buffer.
+                let search_content: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(content.to_lowercase())
                 } else {
-                    content.to_string()
+                    std::borrow::Cow::Borrowed(&content)
                 };
-                let search_pattern = if case_insensitive {
-                    substr_str.to_lowercase()
+                let search_pattern: std::borrow::Cow<'_, str> = if case_insensitive {
+                    std::borrow::Cow::Owned(substr_str.to_lowercase())
                 } else {
-                    substr_str.clone()
+                    std::borrow::Cow::Borrowed(substr_str)
                 };
                 let first_offset = search_content
-                    .find(&search_pattern)
+                    .find(search_pattern.as_ref())
                     .map(|o| (search_start + o) as u64);
-                match_count = search_content.matches(&search_pattern).count();
+                match_count = search_content.matches(search_pattern.as_ref()).count();
                 if match_count > 0 && evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
                         method: "raw".to_string(),

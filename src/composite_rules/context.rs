@@ -67,12 +67,6 @@ pub(crate) struct EvaluationContext<'a> {
 }
 
 impl<'a> EvaluationContext<'a> {
-    /// Get a unique ID for the file being analyzed, based on its SHA256 hash.
-    #[must_use]
-    pub(crate) fn file_id(&self) -> u64 {
-        hash_str(&self.report.target.sha256)
-    }
-
     /// Create a new evaluation context
     #[must_use]
     pub(crate) fn new(

@@ -58,10 +58,20 @@ pub mod theme;
 pub mod third_party_config;
 pub mod third_party_yara;
 pub mod types;
+pub mod update_check;
+pub mod update_manifest;
 pub mod yara_engine;
 
 // HTTP API server
 pub mod server;
+
+/// This crate's version, captured from `Cargo.toml` at compile time.
+///
+/// Exposed so an embedding binary (e.g. litmus, which links cleave as a
+/// library) can read the cleave version it was built against, rather than its
+/// own. `env!` resolves the version of the crate it is compiled in, so this
+/// constant always reflects cleave's `Cargo.toml`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 // Re-export commonly used types at crate root
 use analyzers::FileTypeExt;

@@ -192,6 +192,11 @@ tempfile = "3.27"
 filetime = "0.2"
 strsim = "0.11"
 dirs = "6.0"
+semver = "1"  # Version comparison for the update notifier
+# HTTPS client for the zero-telemetry update notice (plain GET of a static
+# manifest; blocking so it stays off the async path). rustls-tls avoids a
+# system OpenSSL dependency.
+reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
 parking_lot = { version = "0.12", features = ["deadlock_detection"] }  # For efficient mutexes in memory tracking
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files

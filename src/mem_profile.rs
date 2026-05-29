@@ -31,12 +31,29 @@ pub enum Phase {
     Analyze,
     /// Report aggregation / finalization across members.
     Aggregate,
+    /// `eval_text` extracted-string matching.
+    EvalText,
+    /// `eval_raw` raw-content matching.
+    EvalRaw,
+    /// `eval_symbol` import/export/function matching.
+    EvalSymbol,
+    /// `eval_kv` structured-value matching.
+    EvalKv,
 }
 
 #[cfg_attr(not(feature = "memprofile"), allow(dead_code))]
 impl Phase {
-    const COUNT: usize = 4;
-    const NAMES: [&'static str; Self::COUNT] = ["other", "extract", "analyze", "aggregate"];
+    const COUNT: usize = 8;
+    const NAMES: [&'static str; Self::COUNT] = [
+        "other",
+        "extract",
+        "analyze",
+        "aggregate",
+        "eval_text",
+        "eval_raw",
+        "eval_symbol",
+        "eval_kv",
+    ];
 }
 
 #[cfg(feature = "memprofile")]

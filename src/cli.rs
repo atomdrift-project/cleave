@@ -130,6 +130,10 @@ pub struct Args {
     #[arg(short, long)]
     pub verbose: bool,
 
+    /// Disable the periodic update notice (also: CLEAVE_NO_UPDATE_CHECK=1)
+    #[arg(long)]
+    pub no_update_check: bool,
+
     /// Write logs to file (in addition to stderr)
     #[arg(long, value_name = "FILE")]
     pub log_file: Option<String>,

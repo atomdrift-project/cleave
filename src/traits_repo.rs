@@ -182,7 +182,39 @@ pub fn update(force: bool) -> Result<(), String> {
 
     let before = short_head(&traits_dir).unwrap_or_default();
 
-    let output = if force {
+    // When `cleave.toml` pins a ref for this release line, track it explicitly:
+    // fetch that ref and hard-reset, so a release stays on its branch (e.g.
+    // `2.0`) instead of drifting onto the remote's default branch.
+    let manifest_ref = crate::update_check::traits_ref();
+    let output = if let Some(reference) = manifest_ref.as_deref().filter(|r| !r.is_empty()) {
+        eprintln!("Updating traits (ref={reference})...");
+        let fetch = Command::new("git")
+            .args([
+                "-C",
+                &traits_dir.to_string_lossy(),
+                "fetch",
+                "origin",
+                reference,
+            ])
+            .output()
+            .map_err(|e| format!("git fetch failed: {e}"))?;
+        if !fetch.status.success() {
+            return Err(format!(
+                "git fetch failed: {}",
+                String::from_utf8_lossy(&fetch.stderr)
+            ));
+        }
+        Command::new("git")
+            .args([
+                "-C",
+                &traits_dir.to_string_lossy(),
+                "reset",
+                "--hard",
+                "FETCH_HEAD",
+            ])
+            .output()
+            .map_err(|e| format!("git reset failed: {e}"))?
+    } else if force {
         eprintln!("Force-updating traits from upstream...");
         let fetch = Command::new("git")
             .args(["-C", &traits_dir.to_string_lossy(), "fetch", "origin"])

@@ -15,8 +15,6 @@
 
 use parking_lot::RwLock;
 use regex::Regex;
-use std::cell::RefCell;
-use std::hash::Hash;
 use std::num::NonZeroUsize;
 use std::sync::OnceLock;
 
@@ -69,19 +67,6 @@ const REGEX_CACHE_SIZE: NonZeroUsize = {
     NonZeroUsize::new(REGEX_CACHE_MAX_SIZE).expect("REGEX_CACHE_MAX_SIZE is non-zero")
 };
 
-const UTF8_CACHE_DEFAULT_SIZE: NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    NonZeroUsize::new(32).expect("Constant 32 is non-zero")
-};
-
-fn cache_size_from_env(var_name: &str, default: NonZeroUsize) -> NonZeroUsize {
-    std::env::var(var_name)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .and_then(NonZeroUsize::new)
-        .unwrap_or(default)
-}
-
 /// Access the global regex cache, initializing it on first call
 fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
     REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
@@ -90,6 +75,12 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
 /// Bounded LRU cache for ASCII `regex::bytes::Regex` — matches directly against
 /// raw file bytes, skipping UTF-8 validation. Only ASCII callers populate it;
 /// callers gate on `can_use_byte_matching` before asking for compilation.
+///
+/// Callers clone the `Regex` out (which starts a fresh, empty scratch pool) on
+/// purpose: the per-eval lazy-DFA scratch is then freed when the clone drops,
+/// keeping peak RSS bounded. Sharing the instance (Arc) instead *retains* a
+/// per-thread scratch cache per pattern — measured ~+60% peak on large-file
+/// datasets for no wall-clock gain, since matching is CPU-bound, not alloc-bound.
 static BYTES_REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>>> =
     OnceLock::new();
 
@@ -127,59 +118,22 @@ pub(crate) fn get_or_create_scanner(rules: &yara_x::Rules) -> yara_x::Scanner<'_
     yara_x::Scanner::new(rules)
 }
 
-// Thread-local cache for UTF-8 conversions to avoid repeated String::from_utf8_lossy calls.
-// This is the #1 performance bottleneck - eval_raw was spending 92% of time on UTF-8 validation.
-// Cache size: 32 entries provides good hit rate without excessive memory (max ~480MB for 15MB files).
-thread_local! {
-    /// Thread-local UTF-8 conversion cache with LRU eviction
-    static UTF8_CACHE: RefCell<lru::LruCache<Utf8CacheKey, std::sync::Arc<str>>> = {
-        let size = cache_size_from_env("CLEAVE_UTF8_CACHE_SIZE", UTF8_CACHE_DEFAULT_SIZE);
-        RefCell::new(lru::LruCache::new(size))
-    };
-}
-
-/// Cache key for UTF-8 conversion results.
-/// Uses file identity (SHA256 hash) and range to uniquely identify cached conversions.
-#[derive(Hash, Eq, PartialEq, Clone)]
-struct Utf8CacheKey {
-    /// Unique identifier for the file (u64 hash of SHA256)
-    file_id: u64,
-    /// Range within the file (start, end)
-    range: (usize, usize),
-}
-
-/// Get cached UTF-8 conversion or perform and cache it.
-/// This function is the key optimization for eval_raw performance.
+/// Borrow `binary_data[range]` as a UTF-8 `str` with **zero copy** when the
+/// bytes are valid UTF-8 (the common case for source/text), allocating only for
+/// genuinely invalid UTF-8 (lossy replacement, rare for raw-matched content).
 ///
-/// # Arguments
-/// * `binary_data` - The full binary data slice
-/// * `range` - The (start, end) range to convert
-/// * `file_id` - Unique ID for the file (hash of SHA256)
-///
-/// # Returns
-/// Arc<str> containing the UTF-8 lossy conversion (reference counted for cheap cloning)
+/// This keeps a **single copy of the file in memory** — the raw bytes — instead
+/// of also materializing an owned UTF-8 duplicate (and previously caching up to
+/// 32 such duplicates per thread). `std::str::from_utf8` validation is SIMD-fast
+/// and re-run per call; the borrow avoids the allocation that dominated peak RSS
+/// on large files.
 #[must_use]
-pub(crate) fn get_utf8_cached(
-    binary_data: &[u8],
-    range: (usize, usize),
-    file_id: u64,
-) -> std::sync::Arc<str> {
-    let key = Utf8CacheKey { file_id, range };
-
-    UTF8_CACHE.with(|cache| {
-        let mut cache = cache.borrow_mut();
-
-        // Check if already in cache
-        if let Some(cached) = cache.get(&key) {
-            return std::sync::Arc::clone(cached);
-        }
-
-        // Not in cache - perform conversion
-        let slice = &binary_data[range.0..range.1];
-        let converted: std::sync::Arc<str> = String::from_utf8_lossy(slice).to_string().into();
-        cache.put(key, std::sync::Arc::clone(&converted));
-        converted
-    })
+pub(crate) fn utf8_view(binary_data: &[u8], range: (usize, usize)) -> std::borrow::Cow<'_, str> {
+    let slice = &binary_data[range.0..range.1];
+    match std::str::from_utf8(slice) {
+        Ok(s) => std::borrow::Cow::Borrowed(s),
+        Err(_) => std::borrow::Cow::Owned(String::from_utf8_lossy(slice).into_owned()),
+    }
 }
 
 /// Clear thread-local caches to free memory.
@@ -205,9 +159,6 @@ pub(crate) fn get_utf8_cached(
 /// `clear_regex_caches()` from a single thread when memory pressure demands it.
 #[allow(dead_code)] // Exported via lib.rs, false positive from lib/bin split
 pub fn clear_thread_local_caches() {
-    UTF8_CACHE.with(|cache| {
-        cache.borrow_mut().clear();
-    });
     crate::ip_validator::clear_current_file_id();
     crate::yara_engine::clear_engine_scanner_cache();
 }

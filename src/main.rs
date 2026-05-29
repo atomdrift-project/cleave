@@ -164,6 +164,13 @@ fn main() -> Result<()> {
         print_version_banner(format);
     }
 
+    // Interactive runs get a once-a-day, zero-telemetry update notice. The
+    // long-running server is excluded — it refreshes on restart and shouldn't
+    // print transient notices into its logs.
+    if !is_server {
+        cleave::update_check::maybe_notify(args.no_update_check);
+    }
+
     let zip_passwords = default_zip_passwords();
     let sample_extraction = build_sample_extraction(args.extract_dir.as_deref());
     let platforms = args.platforms();

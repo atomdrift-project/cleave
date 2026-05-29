@@ -1419,6 +1419,7 @@ pub(crate) fn parse_structured_content(
 /// Returns Some(Evidence) if the condition matches, None otherwise.
 #[must_use]
 pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) -> Option<Evidence> {
+    let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalKv);
     let Condition::Kv {
         path,
         exact,

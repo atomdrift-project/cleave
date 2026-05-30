@@ -593,8 +593,17 @@ fn lang_name(file_type: &FileType) -> &'static str {
     }
 }
 
-/// Generate automatic plain embedded-language metadata.
-fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64) -> Finding {
+/// Collapse a code snippet to a single trimmed line for use as evidence.
+/// Downstream serialization truncates the value to the evidence cap, so the
+/// snippet stays the actual embedded code rather than a generic description.
+fn code_snippet(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Generate automatic plain embedded-language metadata. The evidence value is
+/// the embedded code itself (collapsed to a single line); the offset lives in
+/// `location`.
+fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value: &str) -> Finding {
     Finding {
         id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
         kind: crate::types::FindingKind::Capability,
@@ -607,11 +616,7 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64) -> Fi
         evidence: vec![Evidence {
             method: "embedded-code-detection".to_string(),
             source: "string-analysis".to_string(),
-            value: format!(
-                "Detected {} at offset {:#x}",
-                lang_name(detected_lang),
-                offset
-            ),
+            value: code_snippet(value),
             location: Some(format!("{:#x}", offset)),
             ..Default::default()
         }],
@@ -755,7 +760,11 @@ pub fn analyze_embedded_string(
     } else {
         // Plain embedded code - return findings for parent
         let mut findings = report.findings;
-        findings.push(generate_embedded_language_trait(&file_type, offset));
+        findings.push(generate_embedded_language_trait(
+            &file_type,
+            offset,
+            &string_info.value,
+        ));
 
         // Rewrite evidence to be parent-relative so the parent's
         // proximity checks (`near_bytes`/`near_lines`) measure real
@@ -1346,13 +1355,14 @@ mod tests {
 
     fn make_string_info(value: &str) -> StringInfo {
         StringInfo {
-            value: value.to_string(),
+            value: (value.to_string()).into(),
             offset: Some(0),
             string_type: None,
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1534,13 +1544,14 @@ mod tests {
     fn test_reject_xor_gibberish_misclassified_as_shell() {
         let gibberish = "`(1 89;5dy3;+$-j1=17q8m*`g^LE";
         let info = StringInfo {
-            value: gibberish.to_string(),
+            value: (gibberish.to_string()).into(),
             offset: Some(0x27f6),
             string_type: Some(crate::types::binary::StringType::ShellCmd),
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: vec!["xor".to_string()],
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(detect_language(&info, true), None);
     }
@@ -1559,13 +1570,14 @@ mod tests {
     fn test_reject_phpish_binary_noise() {
         let noise = "p`phpfpp`phpjp`phpp`phpfp`phpjp`phpfpp`phpjp`php";
         let info = StringInfo {
-            value: noise.to_string(),
+            value: (noise.to_string()).into(),
             offset: Some(0),
             string_type: Some(crate::types::binary::StringType::PhpCode),
             encoding: "utf-8".to_string(),
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(detect_language(&info, false), None);
     }

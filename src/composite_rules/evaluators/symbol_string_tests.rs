@@ -474,13 +474,14 @@ fn test_eval_symbol_in_functions() {
 fn test_eval_string_exact_match() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "/bin/sh".to_string(),
+        value: ("/bin/sh".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::Path),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -510,13 +511,14 @@ fn test_eval_string_exact_match() {
 fn test_eval_string_substr_match() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "http://evil.com/malware".to_string(),
+        value: ("http://evil.com/malware".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -545,13 +547,14 @@ fn test_eval_string_substr_match() {
 fn test_eval_string_regex_match() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "192.168.1.100".to_string(),
+        value: ("192.168.1.100".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::IP),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -581,13 +584,14 @@ fn test_eval_string_regex_match() {
 fn test_eval_string_case_insensitive() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "CreateRemoteThread".to_string(),
+        value: ("CreateRemoteThread".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -616,13 +620,14 @@ fn test_eval_string_case_insensitive() {
 fn test_eval_string_not_exception() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "/bin/sh".to_string(),
+        value: ("/bin/sh".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::Path),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -680,22 +685,24 @@ fn test_eval_text_uses_raw_search_for_source_files() {
 fn test_eval_string_literal_matches_only_ast_strings() {
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "not_a_literal".to_string(),
+        value: ("not_a_literal".to_string()).into(),
         offset: Some(0x100),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "literal_value".to_string(),
+        value: ("literal_value".to_string()).into(),
         offset: Some(0x200),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some("ast".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Python);
@@ -1064,77 +1071,84 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
 
     // Base64-encoded strings
     report.strings.push(StringInfo {
-        value: "password123".to_string(),
+        value: ("password123".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".data".to_string()),
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report.strings.push(StringInfo {
-        value: "https://evil.com/payload".to_string(),
+        value: ("https://evil.com/payload".to_string()).into(),
         offset: Some(0x1100),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::Url),
         section: Some(".data".to_string()),
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Hex-encoded strings
     report.strings.push(StringInfo {
-        value: "secret_key".to_string(),
+        value: ("secret_key".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".text".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report.strings.push(StringInfo {
-        value: "admin".to_string(),
+        value: ("admin".to_string()).into(),
         offset: Some(0x2100),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".text".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // XOR-encoded strings
     report.strings.push(StringInfo {
-        value: "malware".to_string(),
+        value: ("malware".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".data".to_string()),
         encoding_chain: vec!["xor".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // URL-encoded strings
     report.strings.push(StringInfo {
-        value: "command.exe arg1 arg2".to_string(),
+        value: ("command.exe arg1 arg2".to_string()).into(),
         offset: Some(0x4000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".data".to_string()),
         encoding_chain: vec!["url".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Plain string (no encoding)
     report.strings.push(StringInfo {
-        value: "plain_text".to_string(),
+        value: ("plain_text".to_string()).into(),
         offset: Some(0x5000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: Some(".data".to_string()),
         encoding_chain: vec![],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report
@@ -1505,13 +1519,14 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
     // Add 25 strings that all match a substr pattern
     for i in 0..25u64 {
         report.strings.push(StringInfo {
-            value: format!("token_match_{}", i),
+            value: (format!("token_match_{}", i)).into(),
             offset: Some(0x1000 + i * 0x100),
             encoding: "utf8".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1552,22 +1567,24 @@ fn test_eval_encoded_not_filter() {
 
     let mut report = create_test_report();
     report.strings.push(StringInfo {
-        value: "http://evil.com/payload".to_string(),
+        value: ("http://evil.com/payload".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "http://apple.com/safe".to_string(),
+        value: ("http://apple.com/safe".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![];
@@ -1604,23 +1621,25 @@ fn test_eval_encoded_external_ip_filter() {
     let mut report = create_test_report();
     // String with external IP
     report.strings.push(StringInfo {
-        value: "connect 8.8.8.8:443".to_string(),
+        value: ("connect 8.8.8.8:443".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // String with RFC1918 internal IP
     report.strings.push(StringInfo {
-        value: "connect 192.168.1.1:80".to_string(),
+        value: ("connect 192.168.1.1:80".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![];
@@ -1728,23 +1747,25 @@ fn test_eval_string_external_ip_filters_private() {
     let mut report = create_test_report();
     // Add string containing a private IP — should be filtered out
     report.strings.push(StringInfo {
-        value: "connect to 192.168.1.1:8080".to_string(),
+        value: ("connect to 192.168.1.1:8080".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // Add string containing an external IP — should be kept
     report.strings.push(StringInfo {
-        value: "connect to 8.8.8.8:53".to_string(),
+        value: ("connect to 8.8.8.8:53".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -1852,23 +1873,25 @@ fn test_eval_string_word_boundary() {
     let mut report = create_test_report();
     // "cat" as standalone word
     report.strings.push(StringInfo {
-        value: "the cat sat".to_string(),
+        value: ("the cat sat".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // "cat" inside another word — should NOT match word boundary
     report.strings.push(StringInfo {
-        value: "category list".to_string(),
+        value: ("category list".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -2049,23 +2072,25 @@ fn test_eval_string_section_offset_with_section_map() {
     let mut report = create_test_report();
     // String at absolute offset 0x1100 (= .text + 0x100)
     report.strings.push(StringInfo {
-        value: "MAGIC".to_string(),
+        value: ("MAGIC".to_string()).into(),
         offset: Some(0x1100),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // String at absolute offset 0x2050 (= .data + 0x50)
     report.strings.push(StringInfo {
-        value: "OTHER".to_string(),
+        value: ("OTHER".to_string()).into(),
         offset: Some(0x2050),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![0u8; 0x3000];
@@ -2234,23 +2259,25 @@ fn test_eval_string_offset_range_filters() {
     let mut report = create_test_report();
     // String at offset 100
     report.strings.push(StringInfo {
-        value: "target_string".to_string(),
+        value: ("target_string".to_string()).into(),
         offset: Some(100),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // Same string at offset 5000
     report.strings.push(StringInfo {
-        value: "target_string".to_string(),
+        value: ("target_string".to_string()).into(),
         offset: Some(5000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);

@@ -254,7 +254,7 @@ impl<'a> EvaluationContext<'a> {
         self.string_exact_index.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
             for (i, s) in self.report.strings.iter().enumerate() {
-                index.entry(s.value.clone()).or_default().push(i as u32);
+                index.entry(s.value.as_str().to_string()).or_default().push(i as u32);
             }
             index
         })

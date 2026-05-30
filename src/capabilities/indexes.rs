@@ -930,9 +930,10 @@ impl StringMatchIndex {
             // Experiment 1 + 3: O(1) HashSet lookup with length pre-filter
             // Case-sensitive exact matching
             if len >= self.min_pattern_length
-                && let Some(trait_indices) = self.exact_patterns.get(&string_info.value)
+                && let Some(trait_indices) = self.exact_patterns.get(string_info.value.as_str())
             {
                 for &trait_idx in trait_indices {
+                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                     matching_traits.insert(trait_idx);
                     let entry = trait_evidence.entry(trait_idx).or_default();
                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -955,6 +956,7 @@ impl StringMatchIndex {
                     self.ci_exact_patterns.get(lower_buf.as_str())
                 {
                     for &trait_idx in trait_indices {
+                        string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                         matching_traits.insert(trait_idx);
                         let entry = trait_evidence.entry(trait_idx).or_default();
                         if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -972,12 +974,13 @@ impl StringMatchIndex {
 
             // Experiment 4: Aho-Corasick substr matching (case-sensitive)
             if let Some(ref ac) = self.substr_automaton {
-                for mat in ac.find_overlapping_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                     let pattern_idx = mat.pattern().as_usize();
                     if let Some((_pattern_str, trait_indices)) =
                         self.substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
+                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1001,12 +1004,13 @@ impl StringMatchIndex {
 
             // Experiment 4: Aho-Corasick substr matching (case-insensitive)
             if let Some(ref ac) = self.ci_substr_automaton {
-                for mat in ac.find_overlapping_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                     let pattern_idx = mat.pattern().as_usize();
                     if let Some((_original_pattern, trait_indices)) =
                         self.ci_substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
+                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1059,9 +1063,10 @@ impl StringMatchIndex {
 
                     // Case-sensitive exact matching with length pre-filter
                     if len >= self.min_pattern_length
-                        && let Some(trait_indices) = self.exact_patterns.get(&string_info.value)
+                        && let Some(trait_indices) = self.exact_patterns.get(string_info.value.as_str())
                     {
                         for &trait_idx in trait_indices {
+                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1084,6 +1089,7 @@ impl StringMatchIndex {
                             self.ci_exact_patterns.get(lower_buf.as_str())
                         {
                             for &trait_idx in trait_indices {
+                                string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                                 matching_traits.insert(trait_idx);
                                 let entry = trait_evidence.entry(trait_idx).or_default();
                                 if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1101,12 +1107,13 @@ impl StringMatchIndex {
 
                     // Experiment 4: Aho-Corasick substr matching (case-sensitive)
                     if let Some(ref ac) = self.substr_automaton {
-                        for mat in ac.find_overlapping_iter(&string_info.value) {
+                        for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                             let pattern_idx = mat.pattern().as_usize();
                             if let Some((_pattern_str, trait_indices)) =
                                 self.substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
+                                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1132,12 +1139,13 @@ impl StringMatchIndex {
 
                     // Experiment 4: Aho-Corasick substr matching (case-insensitive)
                     if let Some(ref ac) = self.ci_substr_automaton {
-                        for mat in ac.find_overlapping_iter(&string_info.value) {
+                        for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                             let pattern_idx = mat.pattern().as_usize();
                             if let Some((_original_pattern, trait_indices)) =
                                 self.ci_substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
+                                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1203,7 +1211,7 @@ impl StringMatchIndex {
             let total_patterns = self.regex_literal_to_traits.len();
             let mut seen_patterns: FxHashSet<usize> = FxHashSet::default();
             'outer: for string_info in strings {
-                for mat in ac.find_overlapping_iter(&string_info.value) {
+                for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                     let pattern_idx = mat.pattern().as_usize();
                     if seen_patterns.insert(pattern_idx) {
                         if let Some(trait_indices) = self.regex_literal_to_traits.get(pattern_idx) {
@@ -2349,13 +2357,14 @@ mod tests {
     /// Helper: build a StringInfo with a value
     fn make_string(value: &str) -> StringInfo {
         StringInfo {
-            value: value.to_string(),
+            value: (value.to_string()).into(),
             offset: None,
             encoding: "utf-8".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

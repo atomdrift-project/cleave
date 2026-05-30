@@ -74,13 +74,14 @@ impl PickleAnalyzer {
         let strings = extract_pickle_strings(data);
         for s in &strings {
             report.strings.push(crate::types::StringInfo {
-                value: s.clone(),
+                value: s.clone().into(),
                 string_type: None,
                 offset: None,
                 encoding: String::new(),
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
+                matched: std::sync::atomic::AtomicBool::new(false),
             });
         }
 

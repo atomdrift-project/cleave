@@ -303,13 +303,14 @@ fn test_function_creation() {
 #[test]
 fn test_string_info_creation() {
     let string = StringInfo {
-        value: "http://example.com".to_string(),
+        value: ("http://example.com".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(StringType::Url),
         section: Some(".rodata".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     assert_eq!(string.value, "http://example.com");

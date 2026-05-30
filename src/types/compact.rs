@@ -961,6 +961,7 @@ mod formula_tests {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
         fa.imports.push(Import::new(
             "CreateFileW",

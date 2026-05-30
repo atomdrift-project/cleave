@@ -592,7 +592,7 @@ fn unique_strings(strings: &[StringInfo]) -> Vec<StringChange> {
     for s in strings {
         if seen.insert(s.value.as_str()) {
             out.push(StringChange {
-                value: s.value.clone(),
+                value: s.value.as_str().to_string(),
             });
         }
     }
@@ -845,13 +845,14 @@ mod tests {
 
     fn s(v: &str) -> StringInfo {
         StringInfo {
-            value: v.to_string(),
+            value: (v.to_string()).into(),
             offset: None,
             encoding: "utf8".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

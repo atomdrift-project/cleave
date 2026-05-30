@@ -477,31 +477,34 @@ mod tests {
     fn test_extract_paths_from_strings() {
         let strings = vec![
             StringInfo {
-                value: "/etc/passwd".to_string(),
+                value: ("/etc/passwd".to_string()).into(),
                 string_type: Some(StringType::Path),
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
+                matched: std::sync::atomic::AtomicBool::new(false),
             },
             StringInfo {
-                value: "/bin/sh".to_string(),
+                value: ("/bin/sh".to_string()).into(),
                 string_type: Some(StringType::Path),
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
+                matched: std::sync::atomic::AtomicBool::new(false),
             },
             StringInfo {
-                value: "not a path".to_string(),
+                value: ("not a path".to_string()).into(),
                 string_type: None,
                 offset: None,
                 encoding: "ascii".to_string(),
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
+                matched: std::sync::atomic::AtomicBool::new(false),
             },
         ];
 

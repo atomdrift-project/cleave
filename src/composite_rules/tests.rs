@@ -38,13 +38,14 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
 
     // Add some test strings
     report.strings.push(StringInfo {
-        value: "/bin/sh".to_string(),
+        value: ("/bin/sh".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Path),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     (report, vec![])
@@ -332,22 +333,24 @@ fn test_not_directive_shorthand() {
 
     // Add multiple domain strings
     report.strings.push(StringInfo {
-        value: "apple.com".to_string(),
+        value: ("apple.com".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "evil.com".to_string(),
+        value: ("evil.com".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -407,22 +410,24 @@ fn test_not_directive_exact() {
     let (mut report, data) = create_test_context();
 
     report.strings.push(StringInfo {
-        value: "github.com".to_string(),
+        value: ("github.com".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "bad.com".to_string(),
+        value: ("bad.com".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -487,22 +492,24 @@ fn test_not_directive_regex() {
 
     // Add IP addresses
     report.strings.push(StringInfo {
-        value: "192.168.1.1".to_string(),
+        value: ("192.168.1.1".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::IP),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "8.8.8.8".to_string(),
+        value: ("8.8.8.8".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::IP),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -962,22 +969,24 @@ fn test_all_three_directives_combined() {
 
     // Add strings
     report.strings.push(StringInfo {
-        value: "apple.com".to_string(),
+        value: ("apple.com".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "evil.com".to_string(),
+        value: ("evil.com".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::Url),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Add finding for downgrade
@@ -1065,22 +1074,24 @@ fn test_string_exact_match_requires_full_equality() {
 
     // Add test strings
     report.strings.push(StringInfo {
-        value: "hello".to_string(),
+        value: ("hello".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "hello world".to_string(),
+        value: ("hello world".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1141,22 +1152,24 @@ fn test_string_substr_matches_substrings() {
 
     // Add test strings
     report.strings.push(StringInfo {
-        value: "hello".to_string(),
+        value: ("hello".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "hello world".to_string(),
+        value: ("hello world".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1321,13 +1334,14 @@ fn test_string_case_insensitive_exact() {
     let (mut report, data) = create_test_context();
 
     report.strings.push(StringInfo {
-        value: "HELLO".to_string(),
+        value: ("HELLO".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1383,22 +1397,24 @@ fn test_string_word_boundary_match() {
     let (mut report, data) = create_test_context();
 
     report.strings.push(StringInfo {
-        value: "the cat sat".to_string(),
+        value: ("the cat sat".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "category".to_string(),
+        value: ("category".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1458,31 +1474,34 @@ fn test_string_regex_match() {
     let (mut report, data) = create_test_context();
 
     report.strings.push(StringInfo {
-        value: "192.168.1.1".to_string(),
+        value: ("192.168.1.1".to_string()).into(),
         offset: Some(0x1000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::IP),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "10.0.0.1".to_string(),
+        value: ("10.0.0.1".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: Some(crate::types::StringType::IP),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
-        value: "not an ip".to_string(),
+        value: ("not an ip".to_string()).into(),
         offset: Some(0x3000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -2005,13 +2024,14 @@ fn test_composite_unless_multiple_conditions_any_matches() {
 
     // Add a string that will match one of the unless conditions
     report.strings.push(StringInfo {
-        value: "X.Org Foundation".to_string(),
+        value: ("X.Org Foundation".to_string()).into(),
         offset: Some(0x4000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -3550,13 +3570,14 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
 
     // Add strings for all: condition
     report.strings.push(StringInfo {
-        value: "suspicious_call".to_string(),
+        value: ("suspicious_call".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Add finding for none: condition — this should BLOCK the downgrade
@@ -3653,13 +3674,14 @@ fn test_downgrade_combined_all_and_none_pass() {
     let (mut report, data) = create_test_context();
 
     report.strings.push(StringInfo {
-        value: "suspicious_call".to_string(),
+        value: ("suspicious_call".to_string()).into(),
         offset: Some(0x2000),
         encoding: "utf8".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // No findings that would match the none: condition

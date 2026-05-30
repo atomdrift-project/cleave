@@ -473,7 +473,7 @@ impl UnifiedSourceAnalyzer {
                 };
 
                 report.strings.push(crate::types::StringInfo {
-                    value: es.value.clone(),
+                    value: es.value.clone().into(),
                     offset: Some(es.data_offset),
                     string_type,
                     encoding: "utf-8".to_string(),
@@ -484,6 +484,7 @@ impl UnifiedSourceAnalyzer {
                         Vec::new()
                     },
                     fragments: None,
+                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
         }
@@ -739,13 +740,14 @@ impl UnifiedSourceAnalyzer {
             // Include the full file content as a synthetic string so that
             // PS -EncodedCommand arguments (bare, not quoted) are also checked.
             let content_as_string = crate::types::binary::StringInfo {
-                value: content.to_string(),
+                value: content.to_string().into(),
                 offset: Some(0),
                 string_type: None,
                 encoding: "utf-8".to_string(),
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
+                matched: std::sync::atomic::AtomicBool::new(false),
             };
             let mut all_strings = report.strings.clone();
             all_strings.push(content_as_string);
@@ -929,13 +931,14 @@ impl UnifiedSourceAnalyzer {
 
                     if !s.is_empty() && s.len() < 10000 {
                         report.strings.push(StringInfo {
-                            value: s.to_string(),
+                            value: s.to_string().into(),
                             offset: Some(node.start_byte() as u64),
                             string_type: None,
                             encoding: "utf-8".to_string(),
                             section: Some("ast".to_string()),
                             encoding_chain: Vec::new(),
                             fragments: None,
+                            matched: std::sync::atomic::AtomicBool::new(false),
                         });
                     }
                 }
@@ -959,13 +962,14 @@ impl UnifiedSourceAnalyzer {
                     && let Some((value, radix)) = parse_numeric_literal(text)
                 {
                     report.strings.push(StringInfo {
-                        value: value.to_string(),
+                        value: value.to_string().into(),
                         offset: Some(node.start_byte() as u64),
                         string_type: None,
                         encoding: radix.to_string(),
                         section: Some("ast-number".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
+                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }

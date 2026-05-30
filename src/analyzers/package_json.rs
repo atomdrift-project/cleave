@@ -1327,39 +1327,42 @@ impl PackageJsonAnalyzer {
             // Extract URLs
             for url in self.extract_urls(script) {
                 report.strings.push(StringInfo {
-                    value: url,
+                    value: url.into(),
                     offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::Url),
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
+                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
 
             // Extract IP addresses
             for ip in self.extract_ips(script) {
                 report.strings.push(StringInfo {
-                    value: ip,
+                    value: ip.into(),
                     offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::IP),
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
+                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
 
             // Extract paths
             for path in self.extract_paths(script) {
                 report.strings.push(StringInfo {
-                    value: path,
+                    value: path.into(),
                     offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::Path),
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
+                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
         }

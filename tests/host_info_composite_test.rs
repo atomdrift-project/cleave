@@ -20,40 +20,44 @@ fn test_host_info_composite_fires_with_4_atomics() {
     // Add strings that should match the host info atomic traits
     report.strings = vec![
         cleave::types::StringInfo {
-            value: "LanIP: 192.168.1.1".to_string(),
+            value: ("LanIP: 192.168.1.1".to_string()).into(),
             offset: Some(0x100),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
-            value: "GateWay: 192.168.1.254".to_string(),
+            value: ("GateWay: 192.168.1.254".to_string()).into(),
             offset: Some(0x200),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
-            value: "OSInfo: Linux".to_string(),
+            value: ("OSInfo: Linux".to_string()).into(),
             offset: Some(0x300),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
-            value: "Userame: root".to_string(),
+            value: ("Userame: root".to_string()).into(),
             offset: Some(0x400),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         },
     ];
 

@@ -253,13 +253,14 @@ traits:
 
     // Add the string to the report so it can be matched
     report.strings.push(crate::types::StringInfo {
-        value: "This contains malicious_pattern in the binary".to_string(),
+        value: ("This contains malicious_pattern in the binary".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -289,13 +290,14 @@ traits:
 
     let binary_data = b"code uses eval(malicious_code)";
     report.strings.push(crate::types::StringInfo {
-        value: "code uses eval(malicious_code)".to_string(),
+        value: ("code uses eval(malicious_code)".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -325,13 +327,14 @@ traits:
 
     let binary_data = b"import os\nprint('test')";
     report.strings.push(crate::types::StringInfo {
-        value: "import os\nprint('test')".to_string(),
+        value: ("import os\nprint('test')".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -460,13 +463,14 @@ traits:
 
     let binary_data = b"some binary with test_marker inside";
     report.strings.push(crate::types::StringInfo {
-        value: "some binary with test_marker inside".to_string(),
+        value: ("some binary with test_marker inside".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -617,22 +621,24 @@ traits:
     // Test with 2 separate strings containing keyword (should NOT match)
     let binary_data = b"keyword appears keyword here";
     report.strings.push(crate::types::StringInfo {
-        value: "keyword".to_string(),
+        value: ("keyword".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
-        value: "keyword".to_string(),
+        value: ("keyword".to_string()).into(),
         offset: Some(16),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let findings = mapper.evaluate_traits(&report, binary_data);
     assert_eq!(findings.len(), 0, "Should not match with only 2 strings");
@@ -641,31 +647,34 @@ traits:
     let binary_data = b"keyword appears keyword here and keyword again";
     report.strings.clear();
     report.strings.push(crate::types::StringInfo {
-        value: "keyword".to_string(),
+        value: ("keyword".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
-        value: "keyword".to_string(),
+        value: ("keyword".to_string()).into(),
         offset: Some(16),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
-        value: "keyword".to_string(),
+        value: ("keyword".to_string()).into(),
         offset: Some(33),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let findings = mapper.evaluate_traits(&report, binary_data);
     assert_eq!(findings.len(), 1, "Should match with 3 strings");
@@ -692,13 +701,14 @@ traits:
 
     let binary_data = b"Enter your PASSWORD here";
     report.strings.push(crate::types::StringInfo {
-        value: "Enter your PASSWORD here".to_string(),
+        value: ("Enter your PASSWORD here".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -778,13 +788,14 @@ traits:
 
     let binary_data = b"some code_pattern in text section";
     report.strings.push(crate::types::StringInfo {
-        value: "some code_pattern in text section".to_string(),
+        value: ("some code_pattern in text section".to_string()).into(),
         offset: Some(0x1000), // Offset in .text section
         encoding: "ascii".to_string(),
         string_type: None,
         section: Some(".text".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -834,13 +845,14 @@ traits:
 
     // Add the string to the report
     report.strings.push(crate::types::StringInfo {
-        value: "MARKER_STRING".to_string(),
+        value: ("MARKER_STRING".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Use evaluate_and_merge_findings which is the production code path
@@ -912,13 +924,14 @@ traits:
     let mut report = create_test_report_with_size(binary_data.len() as u64);
 
     report.strings.push(crate::types::StringInfo {
-        value: "CHAIN_START".to_string(),
+        value: ("CHAIN_START".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -995,13 +1008,14 @@ composite_rules:
     let mut report = create_test_report_with_size(binary_data.len() as u64);
     for s in ["SIGNAL_A", "SIGNAL_B", "GENERIC_API"] {
         report.strings.push(crate::types::StringInfo {
-            value: s.to_string(),
+            value: (s.to_string()).into(),
             offset: Some(0),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1087,13 +1101,14 @@ composite_rules:
     let binary_data = b"GENERIC_API";
     let mut report = create_test_report_with_size(binary_data.len() as u64);
     report.strings.push(crate::types::StringInfo {
-        value: "GENERIC_API".to_string(),
+        value: ("GENERIC_API".to_string()).into(),
         offset: Some(0),
         encoding: "ascii".to_string(),
         string_type: None,
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -1179,13 +1194,14 @@ composite_rules:
     let mut report = create_test_report_with_size(binary_data.len() as u64);
     for s in ["SIGNAL_A", "SIGNAL_B", "SIGNAL_C"] {
         report.strings.push(crate::types::StringInfo {
-            value: s.to_string(),
+            value: (s.to_string()).into(),
             offset: Some(0),
             encoding: "ascii".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1253,13 +1269,14 @@ composite_rules:
     // source patterns should still be evaluated against the full source content.
     for value in ["./prebuilt/addon.node", "./package.json"] {
         report.strings.push(crate::types::StringInfo {
-            value: value.to_string(),
+            value: (value.to_string()).into(),
             offset: Some(0),
             encoding: "utf-8".to_string(),
             string_type: None,
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 

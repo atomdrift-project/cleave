@@ -3664,13 +3664,14 @@ exact: curl
 
         let mut report = AnalysisReport::new(TargetInfo::default());
         report.strings.push(StringInfo {
-            value: "511".to_string(),
+            value: ("511".to_string()).into(),
             offset: Some(0x40),
             string_type: None,
             encoding: "8".to_string(),
             section: Some("ast-number".to_string()),
             encoding_chain: Vec::new(),
             fragments: None,
+            matched: std::sync::atomic::AtomicBool::new(false),
         });
         let platforms = vec![Platform::All];
         let ctx = crate::composite_rules::EvaluationContext::new(

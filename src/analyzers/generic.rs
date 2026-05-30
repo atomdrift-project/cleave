@@ -248,13 +248,14 @@ impl GenericAnalyzer {
                     };
 
                     report.strings.push(crate::types::binary::StringInfo {
-                        value: es.value.clone(),
+                        value: es.value.clone().into(),
                         offset: Some(es.data_offset),
                         string_type: es.kind,
                         encoding: "utf-8".to_string(),
                         section: es.section.clone(),
                         encoding_chain,
                         fragments,
+                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
                 tracing::debug!(
@@ -379,13 +380,14 @@ impl GenericAnalyzer {
                     .trim_end_matches('`');
                 if !s.is_empty() && s.len() < 10000 {
                     report.strings.push(StringInfo {
-                        value: s.to_string(),
+                        value: s.to_string().into(),
                         offset: Some(node.start_byte() as u64),
                         string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("ast".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
+                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }
@@ -421,13 +423,14 @@ impl GenericAnalyzer {
                 let s = cap.as_str().trim_start_matches('"').trim_end_matches('"');
                 if !s.is_empty() {
                     report.strings.push(StringInfo {
-                        value: s.to_string(),
+                        value: s.to_string().into(),
                         offset: Some(cap.start() as u64),
                         string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
+                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }
@@ -438,13 +441,14 @@ impl GenericAnalyzer {
                 let s = cap.as_str().trim_start_matches('\'').trim_end_matches('\'');
                 if !s.is_empty() {
                     report.strings.push(StringInfo {
-                        value: s.to_string(),
+                        value: s.to_string().into(),
                         offset: Some(cap.start() as u64),
                         string_type: None,
                         encoding: "utf-8".to_string(),
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
+                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }

@@ -67,13 +67,14 @@ fn test_trait_filter_size_min() {
     let binary_data = vec![0u8; 100];
     let mut report = create_report_with_size(100);
     report.strings.push(crate::types::StringInfo {
-        value: "test_symbol".to_string(),
+        value: ("test_symbol".to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // File size (100 B) < size_min (1 MB) → must NOT match
@@ -151,24 +152,26 @@ fn test_trait_filter_size_max() {
     let binary_data = vec![0u8; 100];
     let mut small_report = create_report_with_size(1024);
     small_report.strings.push(crate::types::StringInfo {
-        value: "test_symbol".to_string(),
+        value: ("test_symbol".to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let mut large_report = create_report_with_size(130 * 1024 * 1024);
     large_report.strings.push(crate::types::StringInfo {
-        value: "test_symbol".to_string(),
+        value: ("test_symbol".to_string()).into(),
         offset: Some(0),
         string_type: None,
         encoding: "utf-8".to_string(),
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
+        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Small file: size_max satisfied → should match

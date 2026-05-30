@@ -587,6 +587,8 @@ pub(crate) fn eval_text<'a, 'b>(
                     let excluded_by_is = !validate_match(original_value, params.is_check);
 
                     if !excluded_by_not && !excluded_by_is {
+                        s.matched
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         evidence.push(Evidence {
                             method: "text".to_string(),
                             source: "string_extractor".to_string(),
@@ -606,6 +608,8 @@ pub(crate) fn eval_text<'a, 'b>(
                 let excluded_by_is = !validate_match(exact_str, params.is_check);
 
                 if !excluded_by_not && !excluded_by_is {
+                    s.matched
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
@@ -647,6 +651,9 @@ pub(crate) fn eval_text<'a, 'b>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
+                string_info
+                    .matched
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -704,6 +711,9 @@ pub(crate) fn eval_string_literal<'a, 'b>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
+                string_info
+                    .matched
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -929,6 +939,9 @@ pub(crate) fn eval_numeric_literal<'a>(
             continue;
         }
         match_count += 1;
+        string_info
+            .matched
+            .store(true, std::sync::atomic::Ordering::Relaxed);
         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
             evidence.push(Evidence {
                 method: "literal".to_string(),
@@ -1722,6 +1735,9 @@ pub(crate) fn eval_encoded<'a>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
+                string_info
+                    .matched
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     let value_preview = if string_info.value.len() > 100 {
                         format!(
@@ -1729,7 +1745,7 @@ pub(crate) fn eval_encoded<'a>(
                             &string_info.value[..string_info.value.floor_char_boundary(100)]
                         )
                     } else {
-                        string_info.value.clone()
+                        string_info.value.as_str().to_string()
                     };
 
                     evidence.push(Evidence {

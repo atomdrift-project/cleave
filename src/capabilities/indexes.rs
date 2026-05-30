@@ -638,6 +638,11 @@ pub(crate) struct StringMatchIndex {
     regex_literal_to_traits: Vec<Vec<usize>>,
     /// Set of all trait indices with regex patterns (for lookup)
     regex_trait_indices: FxHashSet<usize>,
+    /// Regex traits with no extractable literal prefix, so they can't be
+    /// pre-filtered and are always candidates. Precomputed once at build time
+    /// — this set depends only on the index, not the input strings, and the
+    /// `find_regex_candidates` hot path runs once per analyzed file.
+    regex_traits_without_literals: Vec<usize>,
     /// Total number of traits with exact string patterns
     pub(crate) total_patterns: usize,
 }
@@ -860,6 +865,21 @@ impl StringMatchIndex {
             None
         };
 
+        // Precompute the regex traits that have no extractable literal and so
+        // can never be pre-filtered. `find_regex_candidates` always adds these,
+        // and it runs once per analyzed file — recomputing this O(traits ×
+        // buckets) scan per call was a dominant cost on archives with many
+        // members (e.g. a Go-source zip with thousands of files).
+        let traits_with_literal: FxHashSet<usize> = regex_literal_to_traits
+            .iter()
+            .flat_map(|traits| traits.iter().copied())
+            .collect();
+        let regex_traits_without_literals: Vec<usize> = regex_trait_indices
+            .iter()
+            .copied()
+            .filter(|idx| !traits_with_literal.contains(idx))
+            .collect();
+
         let index = Self {
             exact_patterns,
             ci_exact_patterns,
@@ -874,6 +894,7 @@ impl StringMatchIndex {
             regex_literal_automaton,
             regex_literal_to_traits,
             regex_trait_indices,
+            regex_traits_without_literals,
             total_patterns,
         };
         tracing::debug!(
@@ -1227,17 +1248,9 @@ impl StringMatchIndex {
             }
         }
 
-        // Traits without extractable literals can't be pre-filtered, so include them
-        for &trait_idx in &self.regex_trait_indices {
-            // If this trait isn't in any literal bucket, include it as candidate
-            let has_literal = self
-                .regex_literal_to_traits
-                .iter()
-                .any(|traits| traits.contains(&trait_idx));
-            if !has_literal {
-                candidates.insert(trait_idx);
-            }
-        }
+        // Traits without extractable literals can't be pre-filtered, so they
+        // are always candidates. Precomputed at build time (see constructor).
+        candidates.extend(self.regex_traits_without_literals.iter().copied());
 
         candidates
     }

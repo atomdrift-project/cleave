@@ -2161,6 +2161,29 @@ pub struct ScanSummary {
     pub errors: usize,
 }
 
+/// Load the CapabilityMapper and YARA engine once for a parallel scan.
+///
+/// Both are wrapped in `Arc` so every rayon worker shares a single instance via
+/// cheap clones rather than reloading per file. The two loads run concurrently
+/// on the rayon pool. Shared by [`scan_directory`] and [`scan_files`].
+fn load_scan_resources(
+    options: &AnalysisOptions,
+) -> Result<(Arc<CapabilityMapper>, Option<Arc<yara_engine::YaraEngine>>)> {
+    let (mapper_result, yara_engine) = rayon::join(
+        || shared_resources::capability_mapper_with_options(options),
+        || {
+            if options.disable_yara {
+                None
+            } else {
+                Some(shared_resources::yara_engine(
+                    options.enable_third_party_yara,
+                ))
+            }
+        },
+    );
+    Ok((mapper_result?, yara_engine))
+}
+
 /// Scan a directory, invoking `callback` for each file as its analysis completes.
 ///
 /// Results stream out of the parallel workers as they finish rather than being
@@ -2210,19 +2233,7 @@ where
     });
 
     // Load shared resources once; all rayon workers share them via cheap Arc clones.
-    let (mapper_result, yara_engine) = rayon::join(
-        || shared_resources::capability_mapper_with_options(options),
-        || {
-            if options.disable_yara {
-                None
-            } else {
-                Some(shared_resources::yara_engine(
-                    options.enable_third_party_yara,
-                ))
-            }
-        },
-    );
-    let mapper = mapper_result?;
+    let (mapper, yara_engine) = load_scan_resources(options)?;
 
     let all_files_flag = options.all_files;
 
@@ -2406,6 +2417,107 @@ where
 
     Ok(ScanSummary {
         total,
+        analyzed: final_analyzed,
+        errors: final_errors,
+    })
+}
+
+/// Analyze an explicit set of file paths in parallel, invoking `callback` for
+/// each as its analysis completes.
+///
+/// This is the multi-file analog of [`scan_directory`]: the CapabilityMapper and
+/// YARA engine are loaded once and shared across all rayon workers, and results
+/// stream out through the callback under the same [`ScanEvent`] contract — minus
+/// the directory walk. `ScanEvent::Start` carries the path count, which is known
+/// upfront here (unlike the streamed directory walk).
+///
+/// Unlike [`scan_directory`], paths are analyzed exactly as given: directories
+/// are not recursed (a directory path surfaces as a `ScanEvent::File` error),
+/// and the program-type and size filters are not applied — an explicitly named
+/// file is always analyzed. Use [`scan_directory`] to recurse a tree.
+///
+/// # Errors
+///
+/// Returns `Err` only for setup failures (resource load). Per-file errors,
+/// including caught panics, are delivered through the callback as a
+/// [`ScanEvent::File`] carrying an `Err` result.
+pub fn scan_files<F>(
+    paths: &[std::path::PathBuf],
+    options: &AnalysisOptions,
+    callback: F,
+) -> Result<ScanSummary>
+where
+    F: Fn(ScanEvent) + Sync,
+{
+    use rayon::prelude::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let _disable_guards = AnalysisDisableGuards::from_options(options);
+    let (mapper, yara_engine) = load_scan_resources(options)?;
+
+    let analyzed = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(0);
+    let errors = AtomicUsize::new(0);
+
+    callback(ScanEvent::Start {
+        total: Some(paths.len()),
+    });
+
+    paths.par_iter().for_each(|file_path| {
+        // Cancellation fast path: once SIGINT flips the flag, remaining slots
+        // return immediately so the scan drains in-flight work rather than
+        // starting new files. Mirrors scan_directory's par_bridge fast path.
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|c| c.load(Ordering::Relaxed))
+        {
+            skipped.fetch_add(1, Ordering::Relaxed);
+            return;
+        }
+
+        // Catch panics so one malformed file can't poison the rayon pool and
+        // kill the whole batch.
+        let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result =
+                analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
+            match &result {
+                Ok(_) => {
+                    analyzed.fetch_add(1, Ordering::Relaxed);
+                }
+                Err(_) => {
+                    errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+            callback(ScanEvent::File {
+                path: file_path.clone(),
+                result: Box::new(result),
+            });
+            // Release wasmtime Scanner VMs on this thread (see scan_directory).
+            composite_rules::evaluators::clear_thread_local_caches();
+        }));
+        if panic_result.is_err() {
+            tracing::error!(path = %file_path.display(), "panic during file analysis (caught)");
+            errors.fetch_add(1, Ordering::Relaxed);
+            callback(ScanEvent::File {
+                path: file_path.clone(),
+                result: Box::new(Err(anyhow::anyhow!("analysis panicked"))),
+            });
+        }
+    });
+
+    let final_analyzed = analyzed.load(Ordering::Relaxed);
+    let final_errors = errors.load(Ordering::Relaxed);
+    tracing::info!(
+        total = paths.len(),
+        analyzed = final_analyzed,
+        skipped = skipped.load(Ordering::Relaxed),
+        errors = final_errors,
+        "File list scan complete"
+    );
+
+    Ok(ScanSummary {
+        total: paths.len(),
         analyzed: final_analyzed,
         errors: final_errors,
     })

@@ -213,6 +213,7 @@ const ALLOWED_PERSISTENCE: &[&str] = &[
 /// These represent capability categories (what code can do).
 /// Must not use objective names (no c2, persist, evasion, etc.).
 const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
+    "browser-extension", // Browser-extension (WebExtension) platform APIs
     "communications",   // Network protocols and transport
     "crypto",           // Cryptographic operations
     "data",             // Data transformation, encoding, serialization
@@ -225,6 +226,19 @@ const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "revision-control", // Revision control interactions
     "time",             // Timing operations
     "ui",               // User interface operations
+];
+
+/// Allowed subdirectories in micro-behaviors/browser-extension/
+/// Irreducibly extension-specific WebExtension APIs (no generic non-extension
+/// analog). Generic extension capabilities map to their technique homes
+/// instead: messaging → communications/ipc/message/, storage → data/db/
+/// web-storage/, alarms → time/schedule/, scripting → process/inject/,
+/// webRequest → process/hook/, cookies → communications/http/cookies/, etc.
+const ALLOWED_MB_BROWSER_EXTENSION: &[&str] = &[
+    "action",     // toolbar action / popup surface
+    "lifecycle",  // runtime lifecycle / identity / browser.* namespace
+    "management", // enumerate / enable / uninstall other extensions
+    "tabs",       // tab create / query / update / navigate
 ];
 
 /// Allowed subdirectories in micro-behaviors/communications/
@@ -1103,6 +1117,7 @@ pub(crate) fn validate_directory_structure(traits_path: &Path) -> Result<(), Vec
 
     // Check micro-behaviors/ subdirectory whitelists
     let mb_checks: &[(&str, &[&str])] = &[
+        ("browser-extension", ALLOWED_MB_BROWSER_EXTENSION),
         ("communications", ALLOWED_MB_COMMUNICATIONS),
         ("crypto", ALLOWED_MB_CRYPTO),
         ("data", ALLOWED_MB_DATA),

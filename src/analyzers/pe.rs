@@ -1400,28 +1400,8 @@ impl PEAnalyzer {
             }
         }
 
-        // Detect .NET via BSJB signature
-        if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
-            findings.push(Finding {
-                id: "metadata/dotnet/bsjb-signature".to_string(),
-                kind: FindingKind::Structural,
-                desc: ".NET assembly detected via BSJB CLR metadata signature".to_string(),
-                conf: 1.0,
-                crit: Criticality::Baseline,
-                mbc: None,
-                attack: None,
-                trait_refs: vec![],
-                evidence: vec![Evidence {
-                    method: "signature".to_string(),
-                    source: "cleave".to_string(),
-                    value: format!("BSJB at offset {:#x}", bsjb_offset),
-                    location: Some(format!("{:#x}", base_offset + bsjb_offset)),
-                    ..Default::default()
-                }],
-                match_count: 1,
-                source_file: None,
-            });
-        }
+        // .NET BSJB CLR metadata signature is detected by the YAML trait
+        // metadata/binary/framework::dotnet-metadata (raw "BSJB" scan).
     }
 
     /// Find MZ header within first max_offset bytes

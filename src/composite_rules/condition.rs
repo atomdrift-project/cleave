@@ -449,6 +449,17 @@ pub(crate) enum SymbolKind {
     /// `Function` (which is the *declaration*) — `Call` is each
     /// *invocation* with target + arg values from `filefacts::Symbol::Call`.
     Call,
+    /// Dotted member-access chains (`window.localStorage`,
+    /// `chrome.cookies.getAll`) from `filefacts::Symbol::Member` — matched
+    /// against the chain path. Replaces tree-sitter `member_expression`
+    /// queries that only keyed off the dotted path.
+    Member,
+    /// Static assignment targets (`API_URL`, `exports.token`) from
+    /// `filefacts::Symbol::Bind` — matched against the bind target.
+    Bind,
+    /// Bare identifier appearances (variable/type/function names) from
+    /// `filefacts::Symbol::Identifier` — matched against the identifier text.
+    Identifier,
 }
 
 /// Filter for matching a single argument at a call site. Used by

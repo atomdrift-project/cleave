@@ -1213,17 +1213,14 @@ impl TraitDefinition {
                 not,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                // kind=call with arg filter dispatches to the
-                // call-site evaluator that consumes filefacts's
-                // unified Symbol::Call records (which carry per-arg
-                // shape+value via the Arg tagged enum). All other
-                // kinds (Import/Export/Function/Forward/None) go
-                // through the legacy declared-symbol path.
-                if matches!(
-                    kind,
-                    Some(crate::composite_rules::condition::SymbolKind::Call)
-                ) {
-                    timed_eval!(
+                // Source-AST projection kinds (call/member/bind/identifier)
+                // dispatch to the filefacts-fact evaluators — pre-extracted
+                // records matched without re-walking the AST per rule. All
+                // other kinds (Import/Export/Function/Forward/None) go through
+                // the legacy declared-symbol path.
+                use crate::composite_rules::condition::SymbolKind;
+                match kind {
+                    Some(SymbolKind::Call) => timed_eval!(
                         "symbol",
                         crate::composite_rules::evaluators::symbol_string::eval_call(
                             exact.as_ref(),
@@ -1232,9 +1229,20 @@ impl TraitDefinition {
                             arg.as_ref(),
                             ctx,
                         )
-                    )
-                } else {
-                    timed_eval!(
+                    ),
+                    Some(fact_kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {
+                        timed_eval!(
+                            "symbol",
+                            crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
+                                *fact_kind,
+                                exact.as_ref(),
+                                substr.as_ref(),
+                                regex.as_ref(),
+                                ctx,
+                            )
+                        )
+                    }
+                    _ => timed_eval!(
                         "symbol",
                         eval_symbol(
                             exact.as_ref(),
@@ -1246,7 +1254,7 @@ impl TraitDefinition {
                             merged_not.as_ref(),
                             ctx,
                         )
-                    )
+                    ),
                 }
             }
             Condition::Text {
@@ -2521,19 +2529,27 @@ impl CompositeTrait {
                 not,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
-                if matches!(
-                    kind,
-                    Some(crate::composite_rules::condition::SymbolKind::Call)
-                ) {
-                    crate::composite_rules::evaluators::symbol_string::eval_call(
-                        exact.as_ref(),
-                        substr.as_ref(),
-                        regex.as_ref(),
-                        arg.as_ref(),
-                        ctx,
-                    )
-                } else {
-                    self.eval_symbol(
+                use crate::composite_rules::condition::SymbolKind;
+                match kind {
+                    Some(SymbolKind::Call) => {
+                        crate::composite_rules::evaluators::symbol_string::eval_call(
+                            exact.as_ref(),
+                            substr.as_ref(),
+                            regex.as_ref(),
+                            arg.as_ref(),
+                            ctx,
+                        )
+                    }
+                    Some(fact_kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {
+                        crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
+                            *fact_kind,
+                            exact.as_ref(),
+                            substr.as_ref(),
+                            regex.as_ref(),
+                            ctx,
+                        )
+                    }
+                    _ => self.eval_symbol(
                         exact.as_ref(),
                         substr.as_ref(),
                         regex.as_ref(),
@@ -2542,7 +2558,7 @@ impl CompositeTrait {
                         *kind,
                         merged_not.as_ref(),
                         ctx,
-                    )
+                    ),
                 }
             }
             Condition::Text {

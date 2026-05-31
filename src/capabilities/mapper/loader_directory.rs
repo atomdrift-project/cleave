@@ -3787,6 +3787,7 @@ impl super::CapabilityMapper {
                 "functions.",
                 "dependencies.",
                 "parse.",
+                "consistency.",
             ];
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 

@@ -474,25 +474,12 @@ impl GenericAnalyzer {
                 .filefacts_metrics
                 .get_or_insert_with(Default::default);
             for (k, v) in parsed.metrics().iter() {
-                if k.starts_with("text.") {
+                // binary.overall_entropy is now emitted universally by filefacts
+                // (generic pass); carry it through this re-entry path too.
+                if k.starts_with("text.") || k == "binary.overall_entropy" {
                     flat.set_f(k.to_string(), v);
                 }
             }
-        }
-        if matches!(self.file_type, FileType::Data) {
-            // Data files are opaque blobs; populate byte-level entropy so rules
-            // can threshold on `binary.overall_entropy` to flag encrypted payloads.
-            // Use the raw bytes when available — a lossy UTF-8 round trip collapses
-            // non-printable bytes to U+FFFD and tanks the entropy score.
-            let bytes = original_bytes.unwrap_or(content.as_bytes());
-            use crate::types::core::MetricsExt;
-            let flat = report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            flat.set_f(
-                "binary.overall_entropy",
-                crate::entropy::calculate_entropy(bytes),
-            );
         }
     }
 }

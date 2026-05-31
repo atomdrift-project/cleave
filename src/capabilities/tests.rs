@@ -916,72 +916,10 @@ fn test_finding(id: &str) -> Finding {
     }
 }
 
-#[test]
-fn test_excessive_line_length_skips_binary_like_unknown_blob() {
-    let mapper = CapabilityMapper::empty();
-    let mut report = test_report_with_findings(vec![]);
-    report.target.file_type = "unknown".to_string();
-    {
-        use crate::types::core::MetricsExt;
-        let flat = report
-            .filefacts_metrics
-            .get_or_insert_with(Default::default);
-        flat.set_f("text.null_byte_count", 67_036_441.0);
-        flat.set_f("text.non_printable_ratio", 0.9985);
-        flat.set_f("text.max_line_length", 60_237_102.0);
-        flat.set_f("text.most_common_ratio", 0.9982);
-        flat.set_b("text.most_common_char_is_null", true);
-    }
-
-    let findings = mapper.evaluate_composite_rules(
-        &report,
-        &[0; 16],
-        None,
-        None,
-        &SectionMap::default(),
-        None,
-    );
-
-    assert!(
-        !findings
-            .iter()
-            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
-    );
-}
-
-#[test]
-fn test_excessive_line_length_skips_escaped_tensor_text_blob() {
-    let mapper = CapabilityMapper::empty();
-    let mut report = test_report_with_findings(vec![]);
-    report.target.file_type = "unknown".to_string();
-    {
-        use crate::types::core::MetricsExt;
-        let flat = report
-            .filefacts_metrics
-            .get_or_insert_with(Default::default);
-        flat.set_f("text.char_entropy", 1.37);
-        flat.set_f("text.max_line_length", 33_554_458.0);
-        flat.set_f("text.lines_over_1000", 4.0);
-        flat.set_f("text.octal_escape_count", 17_303_119.0);
-        flat.set_f("text.escape_density", 23.51);
-        flat.set_f("text.digit_ratio", 0.948);
-    }
-
-    let findings = mapper.evaluate_composite_rules(
-        &report,
-        b"tensor_content: \"\\000\\000\\000\\000\"",
-        None,
-        None,
-        &SectionMap::default(),
-        None,
-    );
-
-    assert!(
-        !findings
-            .iter()
-            .any(|f| f.id == "objectives/anti-static/excessive-line-length")
-    );
-}
+// Excessive-line-length detection moved from the engine to the YAML trait
+// objectives/anti-static/obfuscation/code-metrics/line-length::excessive-line-length
+// (input: text.max_line_length metric). The binary-blob/tensor skips that these
+// tests covered are now the trait's `for:` scoping + `unless:` carve-outs.
 
 #[test]
 fn test_iterative_eval_single_pass() {

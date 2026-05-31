@@ -825,6 +825,79 @@ pub(crate) fn eval_call<'a>(
     }
 }
 
+/// Evaluate `type: symbol, kind: member|bind|identifier` — match the
+/// pre-extracted member-access chains, static bindings, and bare
+/// identifiers from filefacts's `Symbol::{Member,Bind,Identifier}`
+/// records against the rule's name predicates.
+///
+/// These projections replace per-member tree-sitter cursor walks for
+/// `query:` traits that only keyed off a dotted path (`process.env`), an
+/// assignment target, or an identifier name — the fact is extracted once
+/// per file and matched here without re-walking the AST per rule.
+#[must_use]
+pub(crate) fn eval_symbol_fact<'a>(
+    kind: crate::composite_rules::condition::SymbolKind,
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    ctx: &EvaluationContext<'a>,
+) -> ConditionResult {
+    use crate::composite_rules::condition::SymbolKind;
+    let Some(view) = ctx.report.filefacts.as_ref() else {
+        return ConditionResult::no_match();
+    };
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+    let compiled_regex = regex.and_then(|r| regex::Regex::new(r).ok());
+
+    for sym in &view.symbols {
+        // Project each fact to its matchable name + evidence location,
+        // skipping symbols whose kind the rule didn't ask for.
+        let (name, source_tag, offset): (&str, &str, Option<u64>) = match (kind, sym) {
+            (SymbolKind::Member, filefacts::Symbol::Member { path, .. }) => {
+                (path.as_str(), "member", None)
+            }
+            (SymbolKind::Bind, filefacts::Symbol::Bind { target, offset, .. }) => {
+                (target.as_str(), "bind", Some(*offset))
+            }
+            (SymbolKind::Identifier, filefacts::Symbol::Identifier { name, offset, .. }) => {
+                (name.as_str(), "identifier", *offset)
+            }
+            _ => continue,
+        };
+
+        let name_matches = match (exact, substr, compiled_regex.as_ref()) {
+            (None, None, None) => true,
+            (Some(e), _, _) => name == e.as_str(),
+            (_, Some(s), _) => name.contains(s.as_str()),
+            (_, _, Some(re)) => re.is_match(name),
+        };
+        if !name_matches {
+            continue;
+        }
+
+        match_count += 1;
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "symbol".to_string(),
+                source: source_tag.to_string(),
+                value: name.to_string(),
+                location: offset.map(|o| format!("{:#x}", o)),
+                ..Default::default()
+            });
+        }
+    }
+
+    ConditionResult {
+        matched: match_count > 0,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: 2.0,
+        matched_trait_ids: Vec::new(),
+    }
+}
+
 /// Match one arg JSON value against an [`ArgFilter`]. Argstring/number/
 /// identifier are tagged `{"shape": ...}` in filefacts's serialization.
 fn arg_matches(

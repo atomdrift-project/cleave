@@ -795,22 +795,8 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Encryption
-        if doc.has_encryption {
-            findings.push(Finding {
-                id: "metadata/format/encrypted::ole2-encrypted".to_string(),
-                kind: FindingKind::Structural,
-                desc: "OLE2 document is encrypted".to_string(),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1027".to_string()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            });
-        }
+        // Encryption → emitted by the YAML trait
+        // metadata/document/office/container::office-encrypted (office.is_encrypted).
 
         // Embedded executables are structural evidence. MSI installers
         // legitimately contain embedded PE DLLs as custom-action components,
@@ -1348,22 +1334,8 @@ impl OfficeAnalyzer {
             });
         }
 
-        // Encryption
-        if doc.has_encryption {
-            findings.push(Finding {
-                id: "metadata/format/encrypted::ooxml-encrypted".to_string(),
-                kind: FindingKind::Structural,
-                desc: "OOXML document is encrypted".to_string(),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: Some("T1027".to_string()),
-                trait_refs: vec![],
-                evidence: vec![],
-                match_count: 0,
-                source_file: None,
-            });
-        }
+        // Encryption → emitted by the YAML trait
+        // metadata/document/office/container::office-encrypted (office.is_encrypted).
 
         // ZIP topology and content-type flag metric population.
         let suspicious_exts = ["exe", "dll", "hta", "lnk", "bat", "js", "scr", "vbs"];
@@ -1725,8 +1697,6 @@ mod tests {
         let ids = [
             "metadata/format/macro::ole2-has-vba",
             "metadata/format/macro::ooxml-has-vba",
-            "metadata/format/encrypted::ole2-encrypted",
-            "metadata/format/encrypted::ooxml-encrypted",
             "metadata/format/properties::doc-properties",
             "objectives/execution/interpreter::template-injection",
             "objectives/execution/interpreter::dde-execution",

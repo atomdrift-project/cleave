@@ -94,6 +94,8 @@ const BANNED_DIRECTORY_SEGMENTS: &[&str] = &[
     "derived",    // yes
     "generic",    // says nothing about what's inside
     "helpers",    // too vague
+    "heuristics", // vague
+    "heuristic",  // vague
     "hostile",    // dumping ground
     "impl",       // implementation detail
     "indicator",

@@ -182,6 +182,8 @@ pub(crate) enum FileType {
     Class,
     /// Python compiled bytecode (.pyc)
     Pyc,
+    /// Erlang/Elixir compiled BEAM bytecode (.beam) — binary, string-extracted
+    Beam,
     /// Unix shell script (bash, sh, zsh, etc.)
     Shell,
     /// Windows batch script (.bat, .cmd)
@@ -229,6 +231,8 @@ pub(crate) enum FileType {
     Zig,
     /// Elixir source file
     Elixir,
+    /// Clojure / ClojureScript / EDN source (.clj, .cljs, .cljc, .edn, .bb)
+    Clojure,
     /// AppleScript source file
     AppleScript,
     /// VBScript source file
@@ -352,6 +356,7 @@ impl FileType {
                 | FileType::Scala
                 | FileType::Zig
                 | FileType::Elixir
+                | FileType::Clojure
                 | FileType::AppleScript
                 | FileType::Vbs
                 | FileType::Html
@@ -609,7 +614,7 @@ impl FileType {
             "ipa" => FileType::Ipa,
             "pdf" => FileType::Pdf,
             "archive" | "rar" | "7z" => FileType::Archive,
-            "unknown" => FileType::Unknown,
+            // "unknown" falls through to the `_` wildcard arm below.
             "zip" => FileType::Zip,
             "apk" => FileType::Apk,
             "jar" | "war" | "ear" => FileType::Jar,
@@ -625,7 +630,13 @@ impl FileType {
             "chm" => FileType::Chm,
             "vsix" => FileType::VsixArchive,
             "xpi" => FileType::Xpi,
-            _ => FileType::All,
+            "beam" => FileType::Beam,
+            "clojure" | "clj" | "cljs" | "cljc" | "cljr" | "edn" | "bb" => FileType::Clojure,
+            // An UNRECOGNISED type string must NOT collapse to All: All is a
+            // wildcard that, via the archive-family clause in trait evaluation,
+            // lets archive-scoped rules (e.g. for: [apk]) fire on it. Unknown
+            // keeps universal rules working while honouring every rule's `for:`.
+            _ => FileType::Unknown,
         }
     }
 }

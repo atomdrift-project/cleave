@@ -53,6 +53,10 @@ impl StringValue {
     /// Inside the analysis frame use [`StringValue::resolve`] with the file's
     /// bytes.
     #[must_use]
+    // Intentional invariant guard: a `Slice` reaching `as_str()` (which has no
+    // `file_data`) is a programming error — fail loud rather than return wrong
+    // data. Post-finalize all variants are `Owned`, so this never fires there.
+    #[allow(clippy::panic)]
     pub fn as_str(&self) -> &str {
         match self {
             StringValue::Owned(s) => s.as_str(),
@@ -67,6 +71,9 @@ impl StringValue {
     /// Panics for `Slice` if `file_data` is missing — that means a consumer
     /// saw a Slice that should have been materialized.
     #[must_use]
+    // Intentional: a `Slice` resolved without `file_data` means a consumer kept
+    // a Slice past materialization — a bug we surface loudly, not silently.
+    #[allow(clippy::expect_used)]
     pub fn resolve<'a>(&'a self, file_data: Option<&'a [u8]>) -> &'a str {
         match self {
             StringValue::Slice { start, len } => {
@@ -105,6 +112,9 @@ impl StringValue {
 // instead. Post-analysis, all variants are Owned (invariant), so Deref is safe.
 impl std::ops::Deref for StringValue {
     type Target = str;
+    // Intentional invariant guard (see the impl doc above): Deref on a `Slice`
+    // is only reachable as a bug; post-analysis all variants are `Owned`.
+    #[allow(clippy::panic)]
     fn deref(&self) -> &str {
         match self {
             StringValue::Owned(s) => s.as_str(),

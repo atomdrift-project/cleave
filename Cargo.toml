@@ -328,3 +328,8 @@ opt-level = 3
 
 [profile.dev.package.aho-corasick]
 opt-level = 3
+
+# Local override (temporary): build against the in-tree filefacts so BEAM
+# detection (FileType::Beam) is available before it is published upstream.
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }

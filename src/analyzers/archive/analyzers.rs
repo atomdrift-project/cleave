@@ -47,24 +47,32 @@ use tracing::{debug, trace};
 // since scanners are thread-local and a separate pool doubled the thread count.
 // The global pool's work-stealing scheduler naturally balances archive and non-archive work.
 
-/// Filter-map `items` in parallel when we're the outermost rayon context,
-/// sequentially otherwise.
+/// Filter-map `items` in parallel for the top archive, sequentially for nested
+/// archives.
 ///
-/// Archive expansion is nearly always reached from an outer rayon context
-/// (`cleave scan` walks files with `par_bridge`, litmus worker installs each
-/// analysis on a dedicated thread budget), in which case nesting a second
-/// `par_iter` here just contends for the same threads. The outermost case
-/// (`cleave analyze single.jar` with no outer scope) still fans out.
-fn par_filter_map_if_outermost<T, U, F>(items: &[T], f: F) -> Vec<U>
+/// `parallel` is [`ArchiveAnalyzer::members_run_parallel`]. The top archive fans its
+/// members across the rayon pool so an idle worker can steal member work via
+/// rayon's work-stealing — that is "parallel when slots are free, serial when
+/// they're not", and it fills the long tail of a directory scan when only one
+/// big archive remains (the other scan threads would otherwise sit idle). It
+/// does *not* depend on being the outermost rayon context: under `cleave scan`'s
+/// `par_bridge` walk (or a litmus slot pool) the top archive is already inside a
+/// rayon thread, yet still benefits from fanning members out to drain the tail.
+///
+/// Nested archives (`depth >= 1`) stay serial: their members already run inside
+/// a parallel member task, so a second fan-out level only deepens rayon nesting
+/// — extra deadlock pressure on small pools (litmus runs 4-thread slots sized
+/// precisely for the recursion chain) — without exposing usable parallelism.
+fn par_filter_map_members<T, U, F>(items: &[T], parallel: bool, f: F) -> Vec<U>
 where
     T: Sync,
     U: Send,
     F: Fn(&T) -> Option<U> + Sync + Send,
 {
-    if rayon::current_thread_index().is_some() {
-        items.iter().filter_map(f).collect()
-    } else {
+    if parallel {
         items.par_iter().filter_map(f).collect()
+    } else {
+        items.iter().filter_map(f).collect()
     }
 }
 
@@ -284,6 +292,24 @@ impl ArchiveAnalyzer {
         }
 
         nested
+    }
+
+    /// Whether this archive's members should be analyzed in parallel.
+    ///
+    /// The top archive (`depth == 0`) fans its members across the rayon pool, so
+    /// an idle scan worker steals member work via work-stealing — parallel when
+    /// slots are free, effectively serial when they're not — which drains the
+    /// long tail of a directory scan when only one big archive remains. Memory
+    /// is not a reason to serialize here: a single top-level analysis has RAM to
+    /// spare, and litmus bounds the memory of *concurrent* top-level analyses
+    /// with its admission controller, not by streaming one member at a time.
+    ///
+    /// Nested archives (`depth >= 1`) run members serially: they already execute
+    /// inside a parallel member task, so a second fan-out level only deepens
+    /// rayon nesting (deadlock pressure on small pools) and inflates per-member
+    /// in-flight memory without exposing usable parallelism.
+    fn members_run_parallel(&self) -> bool {
+        self.current_depth == 0
     }
 
     fn analyze_extracted_member(
@@ -589,7 +615,7 @@ impl ArchiveAnalyzer {
         }
 
         let fake_root = Path::new("/__cleave_archive__");
-        let stream_members = rayon::current_thread_index().is_some();
+        let stream_members = !self.members_run_parallel();
         let mut members = if stream_members {
             Vec::new()
         } else {
@@ -800,7 +826,7 @@ impl ArchiveAnalyzer {
         // member, analyze it, drop the buffer, before reading the next.
         // Caps in-flight decompressed-bytes per worker to a single member
         // instead of the whole archive.
-        let stream_members = rayon::current_thread_index().is_some();
+        let stream_members = !self.members_run_parallel();
         let mut members = if stream_members {
             Vec::new()
         } else {
@@ -1038,21 +1064,22 @@ impl ArchiveAnalyzer {
             } else {
                 Some(yara_filetypes.as_slice())
             };
-            let yara_results = par_filter_map_if_outermost(&class_members, |member| {
-                if self.is_cancelled() {
-                    return None;
-                }
-                match yara_engine.scan_bytes_filtered(&member.data, yara_filter) {
-                    Ok(matches) if !matches.is_empty() => {
-                        Some((member.relative_path.clone(), matches))
+            let yara_results =
+                par_filter_map_members(&class_members, self.members_run_parallel(), |member| {
+                    if self.is_cancelled() {
+                        return None;
                     }
-                    Ok(_) => None,
-                    Err(e) => {
-                        debug!("YARA scan failed for {}: {}", member.relative_path, e);
-                        None
+                    match yara_engine.scan_bytes_filtered(&member.data, yara_filter) {
+                        Ok(matches) if !matches.is_empty() => {
+                            Some((member.relative_path.clone(), matches))
+                        }
+                        Ok(_) => None,
+                        Err(e) => {
+                            debug!("YARA scan failed for {}: {}", member.relative_path, e);
+                            None
+                        }
                     }
-                }
-            });
+                });
             for (path, matches) in yara_results {
                 flagged_classes.insert(path);
                 for ym in matches {
@@ -1225,7 +1252,7 @@ impl ArchiveAnalyzer {
     ) -> Result<()> {
         let entries = super::asar::collect_entries(data)?;
         let fake_root = Path::new("/__cleave_archive__");
-        let stream_members = rayon::current_thread_index().is_some();
+        let stream_members = !self.members_run_parallel();
         let mut members = if stream_members {
             Vec::new()
         } else {
@@ -1366,9 +1393,10 @@ impl ArchiveAnalyzer {
             "Starting in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {
-            self.analyze_one_member(member, slow_log_label)
-        });
+        let results: Vec<MemberAnalysisResult> =
+            par_filter_map_members(members, self.members_run_parallel(), |member| {
+                self.analyze_one_member(member, slow_log_label)
+            });
 
         self.aggregate_member_results(
             results,
@@ -1398,9 +1426,10 @@ impl ArchiveAnalyzer {
             "Starting borrowed in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> = par_filter_map_if_outermost(members, |member| {
-            self.analyze_one_member(member, slow_log_label)
-        });
+        let results: Vec<MemberAnalysisResult> =
+            par_filter_map_members(members, self.members_run_parallel(), |member| {
+                self.analyze_one_member(member, slow_log_label)
+            });
 
         self.aggregate_member_results(
             results,
@@ -1811,27 +1840,31 @@ impl ArchiveAnalyzer {
             // Running a second `par_iter` here when nested commits sibling
             // slot-pool workers to JAR YARA scans and can starve the outer
             // reaper on small pools.
-            let yara_results = par_filter_map_if_outermost(&class_files, |entry| {
-                if self.is_cancelled() {
-                    return None;
-                }
-                match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    yara_engine.scan_file(entry.path())
-                })) {
-                    Ok(Ok(matches)) if !matches.is_empty() => {
-                        Some((entry.path().to_path_buf(), matches))
+            let yara_results = par_filter_map_members(
+                &class_files,
+                self.members_run_parallel(),
+                |entry| {
+                    if self.is_cancelled() {
+                        return None;
                     }
-                    Ok(Err(e)) => {
-                        debug!("YARA scan failed for {}: {}", entry.path().display(), e);
-                        None
+                    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        yara_engine.scan_file(entry.path())
+                    })) {
+                        Ok(Ok(matches)) if !matches.is_empty() => {
+                            Some((entry.path().to_path_buf(), matches))
+                        }
+                        Ok(Err(e)) => {
+                            debug!("YARA scan failed for {}: {}", entry.path().display(), e);
+                            None
+                        }
+                        Err(_panic) => {
+                            tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
+                            None
+                        }
+                        _ => None,
                     }
-                    Err(_panic) => {
-                        tracing::error!(path = %entry.path().display(), "panic during YARA scan (caught)");
-                        None
-                    }
-                    _ => None,
-                }
-            });
+                },
+            );
             debug!(
                 "YARA scan completed in {:.2}s",
                 yara_start.elapsed().as_secs_f64()
@@ -1930,7 +1963,7 @@ impl ArchiveAnalyzer {
             .unwrap_or(report.target.path.as_str());
 
         let member_results: Vec<MemberAnalysisResult> =
-            par_filter_map_if_outermost(&classes_to_analyze, |entry| {
+            par_filter_map_members(&classes_to_analyze, self.members_run_parallel(), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2141,7 +2174,7 @@ impl ArchiveAnalyzer {
         );
 
         let non_class_results: Vec<MemberAnalysisResult> =
-            par_filter_map_if_outermost(&non_class_files, |entry| {
+            par_filter_map_members(&non_class_files, self.members_run_parallel(), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2421,7 +2454,7 @@ impl ArchiveAnalyzer {
             "Starting parallel archive member analysis"
         );
         let generic_results: Vec<MemberAnalysisResult> =
-            par_filter_map_if_outermost(&files, |entry| {
+            par_filter_map_members(&files, self.members_run_parallel(), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;

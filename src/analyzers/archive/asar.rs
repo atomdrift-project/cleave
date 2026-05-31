@@ -114,6 +114,7 @@ pub(super) fn collect_entries(bytes: &[u8]) -> Result<Vec<AsarEntry>> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)] // unwrap is fine in tests — failures are the assertion
     use super::*;
 
     fn fixture() -> Vec<u8> {

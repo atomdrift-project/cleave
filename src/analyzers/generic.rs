@@ -92,6 +92,7 @@ impl GenericAnalyzer {
             FileType::Data => "data",
             FileType::Pdf => "pdf",
             FileType::PythonBytecode => "python-bytecode",
+            FileType::Beam => "beam",
             FileType::Lnk => "lnk",
             _ => "unknown",
         }

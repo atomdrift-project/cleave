@@ -303,13 +303,13 @@ pub(crate) fn configure_rayon_thread_pool() {
     // reaper — a true nested-join deadlock that work-stealing cannot
     // escape.
     //
-    // Empirical: a 9-point sweep on Apple Silicon (12 P-cores, archive
-    // benchmark, 3 samples per N) put the low-memory plateau at N=8 with
-    // wall within ~3.4% of the fastest. Higher N grew RSS monotonically
-    // and showed wall instability (sample failures, +20-30% wall) around
-    // N=11-14 as workers crossed the P/E boundary. ~2/3 of performance
-    // cores reproduces N=8 on this machine and scales: 4 on a 6-P
-    // MacBook, 16 on a 24-P workstation.
+    // Empirical: a 9-point sweep (6..16) on Apple Silicon (12 P-cores,
+    // archive benchmark) puts the wall optimum at the full P-core count
+    // once archive members analyze in parallel (the depth-0 fan-out). Wall
+    // falls monotonically 6→12 (par 4.7x→7.5x); the 4 efficiency cores only
+    // regress (14/16 ~+7%, plus contention that can drop coverage). An
+    // earlier sweep favored ~2/3 P-cores, but that was the serial-member-tail
+    // world where the extra workers had no stealable work and just idled.
     //
     // This is tuned for Apple Silicon Pro/Max-class hardware running
     // cleave's archive workload. Other platforms — in particular x86-64
@@ -341,12 +341,20 @@ pub(crate) fn configure_rayon_thread_pool() {
             .map(std::num::NonZero::get)
             .unwrap_or(MIN_SAFE_THREADS);
 
-        let p_cores = preferred_default_thread_count();
-        let base_threads = p_cores.unwrap_or(total_parallelism);
-
-        // Cap at ~2/3 of performance cores to bound peak RSS while
-        // keeping wall within ~3.4% of the empirical sweep optimum.
-        let threads = (base_threads * 2 / 3).max(MIN_SAFE_THREADS);
+        let threads = match preferred_default_thread_count() {
+            // Asymmetric Apple Silicon: use *all* performance cores. A 9-point
+            // sweep (6..16) on the archive benchmark put the optimum squarely at
+            // the P-core count — wall fell monotonically 6→12 (par 4.7x→7.5x) and
+            // the 4 efficiency cores only ever regressed (14/16 ~+7%). The old
+            // 2/3 cap was tuned when archive members ran serially and the extra
+            // workers just idled at the tail; now the top archive fans its
+            // members across the pool, so every P-core stays fed.
+            Some(p) => p.max(MIN_SAFE_THREADS),
+            // Symmetric / unknown layouts (x86-64 Linux with SMT, etc.) were
+            // never swept; the logical-CPU count includes hyperthread siblings,
+            // so stay at the conservative 2/3 until they get their own pass.
+            None => (total_parallelism * 2 / 3).max(MIN_SAFE_THREADS),
+        };
         builder = builder.num_threads(threads);
     }
 

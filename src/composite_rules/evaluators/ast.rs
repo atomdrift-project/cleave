@@ -6,6 +6,7 @@
 //! - Safe AST traversal with depth limits
 
 use super::{build_regex, truncate_evidence};
+use crate::analyzers::ast_walker::{AST_QUERY_CPU_BUDGET, thread_cpu_time};
 use crate::composite_rules::ast_kinds::map_kind_to_node_types;
 use crate::composite_rules::context::{AnalysisWarning, ConditionResult, EvaluationContext};
 use crate::composite_rules::types::FileType;
@@ -27,24 +28,22 @@ use streaming_iterator::StreamingIterator;
 /// cache miss) is one-time per key.
 ///
 /// CORRECTNESS-CRITICAL — guards against nondeterministic finding loss during
-/// parallel archive analysis (`tests/archive_determinism_test.rs`). Two
-/// independent properties of this cache each prevent the bug; we keep both:
+/// parallel archive analysis (`tests/archive_determinism_test.rs`).
 ///
-/// 1. **Unbounded.** The keyspace is bounded by the trait set (~thousands of
-///    entries, ~10-50 KB each), so the cache never needs to evict. A bounded
-///    LRU here (formerly 256) thrashed under multi-language archives, and the
-///    resulting eviction+concurrent-recompilation churn intermittently produced
-///    a query that matched nothing.
-/// 2. **Compilation serialized under the write lock** (see `eval_ast_query`):
-///    a cache miss compiles while holding the write lock, double-checking first,
-///    so a query compiles exactly once with no overlapping `Query::new`.
+/// **Must stay unbounded.** The keyspace is bounded by the trait set (~thousands
+/// of entries, ~10-50 KB each), so the cache never needs to evict. A bounded LRU
+/// here (formerly 256) thrashed under multi-language archives, and the resulting
+/// eviction-driven concurrent recompilation churn intermittently produced a
+/// query that matched nothing — the nondeterminism bug. With no eviction each
+/// query compiles ~once and is never recompiled, which is what fixes it.
 ///
-/// Empirically (see the test): bounded+concurrent-compile FAILS;
-/// bounded+serialized PASSES; unbounded+concurrent-compile PASSES. So either
-/// lever fixes it. NOTE: bare concurrent `Query::new` is itself fine
-/// (`concurrent_query_new_is_deterministic` passes) — the fault is in the
-/// eviction/shared-`Arc` interaction, whose exact mechanism is not fully pinned;
-/// these two properties close it from both sides.
+/// Design: **unbounded** (eviction was the original drift trigger — a bounded LRU
+/// thrashed under multi-language archives and recompiled queries concurrently) +
+/// **serialized compile** (`eval_ast_query` compiles under the write lock,
+/// double-checked, so no two `Query::new` overlap). Per-key concurrent
+/// compilation was tried and measured *wall-neutral* (the one-time compile
+/// warmup is small and amortized), so it's not worth the extra concurrency on
+/// this correctness-sensitive path.
 static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(FileType, String), Arc<tree_sitter::Query>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
@@ -362,14 +361,15 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    // Compile the query, cached process-wide to avoid recompilation across
-    // files and threads. The frequent case is a hit on the read-lock fast
-    // path. On a miss we take the write lock and compile *while holding it*,
-    // double-checking first: this guarantees each (file_type, query) is
-    // compiled exactly once and that no two `tree_sitter::Query::new` calls
-    // ever run concurrently. Concurrent recompilation races in the grammar
-    // layer and can intermittently yield a query that matches nothing — a
-    // silent finding drop (see `tests/archive_determinism_test.rs`).
+    // Compile the query, cached process-wide to avoid recompilation across files
+    // and threads. The frequent case is a hit on the read-lock fast path. On a
+    // miss we take the write lock and compile *while holding it*, double-checking
+    // first: each (file_type, query) compiles exactly once with no overlapping
+    // `Query::new`. CORRECTNESS-CRITICAL (see the QUERY_CACHE doc): compiling
+    // outside the lock reintroduces finding drift; do not "optimize" it away.
+    // (Verified 2026-05-31: per-key `OnceLock` concurrent compilation dropped a
+    // trait 1/10 under contention — the separate pre-existing archive race must
+    // be fixed before any compile-parallelization can be validated.)
     let key = (ctx.file_type, query_str.to_string());
     let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
     let query = if let Some(q) = cached {
@@ -411,14 +411,17 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         }
     }
 
-    // Use matches_with_options to enforce deadline via progress callback.
-    // Without this, pathological inputs can cause queries to run for minutes.
+    // Bound the query by CPU time (not wall-clock) via the progress callback.
+    // Without a bound, pathological inputs can burn minutes of CPU; with a
+    // wall-clock bound, a thread descheduled under oversubscription gets cut off
+    // spuriously and silently drops detections. CPU time avoids both.
     let mut match_count: usize = 0;
-    let deadline = ctx.deadline;
+    let cpu_budget = ctx.deadline.map(|_| AST_QUERY_CPU_BUDGET);
+    let cpu_start = thread_cpu_time();
     let mut timed_out = false;
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
-        if let Some(dl) = deadline
-            && std::time::Instant::now() > dl
+        if let Some(budget) = cpu_budget
+            && thread_cpu_time().saturating_sub(cpu_start) > budget
         {
             return ControlFlow::Break(());
         }
@@ -430,9 +433,9 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let mut buffer1: Vec<u8> = Vec::new();
     let mut buffer2: Vec<u8> = Vec::new();
     while let Some(m) = matches.next() {
-        // Check deadline between matches too
-        if let Some(dl) = deadline
-            && std::time::Instant::now() > dl
+        // Check the CPU budget between matches too.
+        if let Some(budget) = cpu_budget
+            && thread_cpu_time().saturating_sub(cpu_start) > budget
         {
             timed_out = true;
             break;

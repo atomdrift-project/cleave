@@ -11,31 +11,42 @@ use crate::composite_rules::context::{AnalysisWarning, ConditionResult, Evaluati
 use crate::composite_rules::types::FileType;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT};
 use parking_lot::RwLock;
-use std::num::NonZeroUsize;
+use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::sync::{Arc, LazyLock};
 use streaming_iterator::StreamingIterator;
 
 /// Maximum number of compiled tree-sitter queries to cache.
-/// Queries are keyed by (FileType, query_string). The set of distinct queries
-/// is bounded by the number of trait definitions, so 256 is generous while
-/// keeping memory modest (~10-50 KB per compiled query).
-const QUERY_CACHE_MAX_SIZE: usize = 256;
-const QUERY_CACHE_SIZE: NonZeroUsize = {
-    #[allow(clippy::expect_used)]
-    NonZeroUsize::new(QUERY_CACHE_MAX_SIZE).expect("QUERY_CACHE_MAX_SIZE is non-zero")
-};
-
-/// Process-wide compiled-query cache.
+/// Process-wide compiled-query cache, keyed by (FileType, query_string).
 ///
 /// Was previously per-thread — but `tree_sitter::Query` is `Send + Sync` via
 /// `Arc`, and CPU profiles showed `ts_query_new` consuming thousands of
 /// samples because each rayon worker recompiled the same queries
-/// independently. Sharing across threads eliminates that redundancy. Writes
-/// are rare (cache miss on cold start), reads are frequent; `RwLock` keeps
-/// reads parallel.
-static QUERY_CACHE: LazyLock<RwLock<lru::LruCache<(FileType, String), Arc<tree_sitter::Query>>>> =
-    LazyLock::new(|| RwLock::new(lru::LruCache::new(QUERY_CACHE_SIZE)));
+/// independently. Sharing across threads eliminates that redundancy. Reads are
+/// frequent and run in parallel on the `RwLock` read path; compilation (a
+/// cache miss) is one-time per key.
+///
+/// CORRECTNESS-CRITICAL — guards against nondeterministic finding loss during
+/// parallel archive analysis (`tests/archive_determinism_test.rs`). Two
+/// independent properties of this cache each prevent the bug; we keep both:
+///
+/// 1. **Unbounded.** The keyspace is bounded by the trait set (~thousands of
+///    entries, ~10-50 KB each), so the cache never needs to evict. A bounded
+///    LRU here (formerly 256) thrashed under multi-language archives, and the
+///    resulting eviction+concurrent-recompilation churn intermittently produced
+///    a query that matched nothing.
+/// 2. **Compilation serialized under the write lock** (see `eval_ast_query`):
+///    a cache miss compiles while holding the write lock, double-checking first,
+///    so a query compiles exactly once with no overlapping `Query::new`.
+///
+/// Empirically (see the test): bounded+concurrent-compile FAILS;
+/// bounded+serialized PASSES; unbounded+concurrent-compile PASSES. So either
+/// lever fixes it. NOTE: bare concurrent `Query::new` is itself fine
+/// (`concurrent_query_new_is_deterministic` passes) — the fault is in the
+/// eviction/shared-`Arc` interaction, whose exact mechanism is not fully pinned;
+/// these two properties close it from both sides.
+static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(FileType, String), Arc<tree_sitter::Query>>>> =
+    LazyLock::new(|| RwLock::new(FxHashMap::default()));
 
 /// Clear the shared AST query cache.
 #[allow(dead_code)] // Called via clear_thread_local_caches
@@ -351,24 +362,31 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Track parse errors but continue — tree-sitter recovers from minor errors
     let has_parse_errors = tree.root_node().has_error();
 
-    // Compile the query (cached process-wide to avoid recompilation across
-    // files and threads). Uses Arc so the Query stays alive even if evicted
-    // from the LRU cache mid-use. Reads use `peek` to skip LRU promotion —
-    // with a 256-entry cache and a bounded trait set the LRU eviction order
-    // doesn't meaningfully help correctness, and avoiding the `get`-induced
-    // promotion keeps reads on the read-lock fast path.
+    // Compile the query, cached process-wide to avoid recompilation across
+    // files and threads. The frequent case is a hit on the read-lock fast
+    // path. On a miss we take the write lock and compile *while holding it*,
+    // double-checking first: this guarantees each (file_type, query) is
+    // compiled exactly once and that no two `tree_sitter::Query::new` calls
+    // ever run concurrently. Concurrent recompilation races in the grammar
+    // layer and can intermittently yield a query that matches nothing — a
+    // silent finding drop (see `tests/archive_determinism_test.rs`).
     let key = (ctx.file_type, query_str.to_string());
-    let cached = QUERY_CACHE.read().peek(&key).map(Arc::clone);
+    let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
     let query = if let Some(q) = cached {
         q
     } else {
-        match tree_sitter::Query::new(lang, query_str) {
-            Ok(q) => {
-                let arc = Arc::new(q);
-                QUERY_CACHE.write().put(key, Arc::clone(&arc));
-                arc
+        let mut cache = QUERY_CACHE.write();
+        if let Some(q) = cache.get(&key).map(Arc::clone) {
+            q
+        } else {
+            match tree_sitter::Query::new(lang, query_str) {
+                Ok(q) => {
+                    let arc = Arc::new(q);
+                    cache.insert(key, Arc::clone(&arc));
+                    arc
+                }
+                Err(_) => return ConditionResult::no_match(),
             }
-            Err(_) => return ConditionResult::no_match(),
         }
     };
 

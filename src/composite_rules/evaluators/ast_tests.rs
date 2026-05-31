@@ -52,6 +52,77 @@ fn create_test_context_with_ast<'a>(
     ctx
 }
 
+/// Count how many times `query_str` matches `tree`.
+fn run_query_count(
+    lang: &tree_sitter::Language,
+    query_str: &str,
+    tree: &tree_sitter::Tree,
+    src: &[u8],
+) -> Option<usize> {
+    use streaming_iterator::StreamingIterator;
+    let query = tree_sitter::Query::new(lang, query_str).ok()?;
+    let mut cursor = tree_sitter::QueryCursor::new();
+    let mut count = 0usize;
+    let mut matches = cursor.matches(&query, tree.root_node(), src);
+    while matches.next().is_some() {
+        count += 1;
+    }
+    Some(count)
+}
+
+/// Establishes a baseline: `tree_sitter::Query::new` compiled-and-run from many
+/// threads, each with its own query and tree, is deterministic. This PASSES —
+/// which RULES OUT bare concurrent compilation as the cause of the parallel
+/// archive-analysis finding drift. That bug only reproduces with the shared
+/// `QUERY_CACHE` under eviction (see `tests/archive_determinism_test.rs`), so it
+/// lives in the cache/eviction/shared-`Arc` interaction, not in `Query::new`
+/// itself. Kept as a guard against tree-sitter regressing this property.
+#[test]
+fn concurrent_query_new_is_deterministic() {
+    let source: &[u8] =
+        b"function f(){ const a = new Date(); const b = new Date(); const c = new Date(); return a; }";
+    let parsed = parsed_for_test("module.js", source);
+    let tree = parsed.source_ast().expect("source_ast").tree;
+    let lang = tree.language();
+    let query_str = "(new_expression) @x";
+
+    let expected = run_query_count(&lang, query_str, tree, source).expect("baseline compile");
+    assert!(
+        expected >= 3,
+        "fixture should yield >=3 new_expression matches, got {expected}"
+    );
+
+    const THREADS: usize = 16;
+    const ITERS: usize = 400;
+    let observed: std::sync::Mutex<std::collections::BTreeSet<Option<usize>>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS {
+            let observed = &observed;
+            let tree_clone = tree.clone();
+            scope.spawn(move || {
+                // `tree_sitter::Language` is `!Sync`; each thread derives its
+                // own from its tree clone. The shared state under test is the
+                // grammar the language points to, which `Query::new` reads.
+                let lang = tree_clone.language();
+                for _ in 0..ITERS {
+                    let n = run_query_count(&lang, query_str, &tree_clone, source);
+                    observed.lock().expect("mutex").insert(n);
+                }
+            });
+        }
+    });
+
+    let observed = observed.into_inner().expect("mutex");
+    assert_eq!(
+        observed,
+        std::collections::BTreeSet::from([Some(expected)]),
+        "concurrent Query::new produced inconsistent match counts: {observed:?} \
+         (expected every run to be Some({expected}))"
+    );
+}
+
 // =============================================================================
 // eval_ast tests - Simple mode (kind/node + pattern matching)
 // =============================================================================

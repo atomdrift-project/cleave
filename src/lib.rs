@@ -2479,8 +2479,13 @@ where
         // Catch panics so one malformed file can't poison the rayon pool and
         // kill the whole batch.
         let panic_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let result =
-                analyze_file_with_resources(file_path, options, &mapper, yara_engine.as_ref(), None);
+            let result = analyze_file_with_resources(
+                file_path,
+                options,
+                &mapper,
+                yara_engine.as_ref(),
+                None,
+            );
             match &result {
                 Ok(_) => {
                     analyzed.fetch_add(1, Ordering::Relaxed);

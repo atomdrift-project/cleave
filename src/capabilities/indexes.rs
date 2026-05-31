@@ -954,7 +954,9 @@ impl StringMatchIndex {
                 && let Some(trait_indices) = self.exact_patterns.get(string_info.value.as_str())
             {
                 for &trait_idx in trait_indices {
-                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                    string_info
+                        .matched
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     matching_traits.insert(trait_idx);
                     let entry = trait_evidence.entry(trait_idx).or_default();
                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -977,7 +979,9 @@ impl StringMatchIndex {
                     self.ci_exact_patterns.get(lower_buf.as_str())
                 {
                     for &trait_idx in trait_indices {
-                        string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                        string_info
+                            .matched
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         matching_traits.insert(trait_idx);
                         let entry = trait_evidence.entry(trait_idx).or_default();
                         if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1001,7 +1005,9 @@ impl StringMatchIndex {
                         self.substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
-                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                            string_info
+                                .matched
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1031,7 +1037,9 @@ impl StringMatchIndex {
                         self.ci_substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
-                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                            string_info
+                                .matched
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1084,10 +1092,13 @@ impl StringMatchIndex {
 
                     // Case-sensitive exact matching with length pre-filter
                     if len >= self.min_pattern_length
-                        && let Some(trait_indices) = self.exact_patterns.get(string_info.value.as_str())
+                        && let Some(trait_indices) =
+                            self.exact_patterns.get(string_info.value.as_str())
                     {
                         for &trait_idx in trait_indices {
-                            string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                            string_info
+                                .matched
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1110,7 +1121,9 @@ impl StringMatchIndex {
                             self.ci_exact_patterns.get(lower_buf.as_str())
                         {
                             for &trait_idx in trait_indices {
-                                string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                                string_info
+                                    .matched
+                                    .store(true, std::sync::atomic::Ordering::Relaxed);
                                 matching_traits.insert(trait_idx);
                                 let entry = trait_evidence.entry(trait_idx).or_default();
                                 if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1134,7 +1147,9 @@ impl StringMatchIndex {
                                 self.substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
-                                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    string_info
+                                        .matched
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1166,7 +1181,9 @@ impl StringMatchIndex {
                                 self.ci_substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
-                                    string_info.matched.store(true, std::sync::atomic::Ordering::Relaxed);
+                                    string_info
+                                        .matched
+                                        .store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -2379,6 +2396,96 @@ mod tests {
             fragments: None,
             matched: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    fn make_text_regex_trait(id: &str, regex: &str) -> TraitDefinition {
+        TraitDefinition {
+            id: id.to_string(),
+            desc: id.to_string(),
+            conf: 1.0,
+            crit: crate::types::Criticality::Notable,
+            mbc: None,
+            attack: None,
+            platforms: vec![Platform::All],
+            arch: vec![Arch::All],
+            r#for: vec![RuleFileType::All],
+            for_from_groups: false,
+            r#if: Condition::Text {
+                exact: None,
+                substr: None,
+                regex: Some(regex.to_string()),
+                word: None,
+                case_insensitive: false,
+                is_check: None,
+                not: None,
+                platforms: None,
+                section: None,
+                offset: None,
+                offset_range: None,
+                section_offset: None,
+                section_offset_range: None,
+            },
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            size_min: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::from("test.yaml"),
+            precision: None,
+        }
+    }
+
+    /// A regex trait whose literal prefix IS extractable (`\bfetch\s+...` →
+    /// "fetch") must still surface as a candidate via the literal prefilter.
+    /// Guards the precomputed `regex_traits_without_literals` hoist: the
+    /// candidate set must match the old per-call computation exactly.
+    #[test]
+    fn test_regex_candidate_with_extractable_literal() {
+        let pat = r"\bfetch\s+(-|https?://|ftp://)";
+        assert_eq!(
+            StringMatchIndex::extract_regex_literal(pat).as_deref(),
+            Some("fetch"),
+            "literal prefix should be extractable"
+        );
+        let traits = vec![make_text_regex_trait("fetch-cmd", pat)];
+        let index = StringMatchIndex::build(&traits);
+        // Trait has a literal, so it is NOT in the always-candidate set; it must
+        // be found by the literal prefilter when a matching string is present.
+        assert!(index.regex_traits_without_literals.is_empty());
+        let hit = index.find_regex_candidates(&[make_string("fetch http://evil.example/x")]);
+        assert!(
+            hit.contains(&0),
+            "fetch-cmd must be a candidate when 'fetch' is present"
+        );
+        let miss = index.find_regex_candidates(&[make_string("nothing relevant here")]);
+        assert!(
+            !miss.contains(&0),
+            "fetch-cmd must NOT be a candidate without its literal"
+        );
+    }
+
+    /// A regex trait with NO extractable literal must always be a candidate
+    /// (it can't be prefiltered). This is the case the precompute must never drop.
+    #[test]
+    fn test_regex_candidate_without_extractable_literal() {
+        let pat = r"\d{3}-\d{4}"; // no >=3-char literal prefix
+        assert_eq!(StringMatchIndex::extract_regex_literal(pat), None);
+        let traits = vec![make_text_regex_trait("no-literal", pat)];
+        let index = StringMatchIndex::build(&traits);
+        assert_eq!(index.regex_traits_without_literals, vec![0]);
+        // Always a candidate, regardless of input strings.
+        assert!(
+            index
+                .find_regex_candidates(&[make_string("xyz")])
+                .contains(&0)
+        );
+        assert!(index.find_regex_candidates(&[]).contains(&0));
     }
 
     /// Regression test: a longer substr pattern must match even when a shorter

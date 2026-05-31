@@ -81,12 +81,17 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
 /// keeping peak RSS bounded. Sharing the instance (Arc) instead *retains* a
 /// per-thread scratch cache per pattern — measured ~+60% peak on large-file
 /// datasets for no wall-clock gain, since matching is CPU-bound, not alloc-bound.
-static BYTES_REGEX_CACHE: OnceLock<RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>>> =
-    OnceLock::new();
+// Stores `Arc<Regex>`, not `Regex`: callers clone the `Arc` (cheap, shares the
+// one warm instance) rather than the `Regex` (which builds a fresh, COLD
+// lazy-DFA `Pool<Cache>` per clone — rebuilding all DFA states on the next
+// search dominated CPU in `eval_raw`, profiled as `Lazy::init_cache`).
+static BYTES_REGEX_CACHE: OnceLock<
+    RwLock<lru::LruCache<(String, bool), std::sync::Arc<regex::bytes::Regex>>>,
+> = OnceLock::new();
 
 /// Access the bytes regex cache.
 pub(crate) fn bytes_regex_cache()
--> &'static RwLock<lru::LruCache<(String, bool), regex::bytes::Regex>> {
+-> &'static RwLock<lru::LruCache<(String, bool), std::sync::Arc<regex::bytes::Regex>>> {
     BYTES_REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 

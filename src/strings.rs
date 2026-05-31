@@ -420,7 +420,10 @@ mod tests {
     fn test_string_extraction() {
         let data = b"Hello World http://example.com /usr/bin/ls";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         assert!(!strings.is_empty());
     }
@@ -433,7 +436,10 @@ mod tests {
         // sees the bare address and can label it as Email.
         let data = b"\0admin@example.com\0other string\0";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         let email_string = strings
             .iter()
@@ -452,7 +458,10 @@ mod tests {
     fn test_min_length_filter() {
         let data = b"ab  Hello World";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         // "ab" should be filtered (< 4 chars), "Hello World" should be kept
         assert!(!strings.iter().any(|s| s.value == "ab"));
@@ -463,7 +472,10 @@ mod tests {
     fn test_control_characters_filtered() {
         let data = b"Hello\x00\x01World";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         // Should extract "Hello" and "World" separately
         assert!(strings.len() >= 2);
@@ -473,7 +485,10 @@ mod tests {
     fn test_offset_recorded() {
         let data = b"start test string end";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         // Offset should be recorded for each string
         assert!(strings.iter().all(|s| s.offset.is_some()));
@@ -489,7 +504,10 @@ mod tests {
     fn test_trimmed_strings() {
         let data = b"  spaced  ";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         // Should trim whitespace
         if let Some(s) = strings.first() {
@@ -501,7 +519,10 @@ mod tests {
     fn test_empty_data() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         assert!(strings.is_empty());
     }
@@ -510,7 +531,10 @@ mod tests {
     fn test_binary_data_only() {
         let data = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(&data); for __s in &mut strings { __s.value.materialize(&data); }
+        let mut strings = extractor.extract_smart(&data);
+        for __s in &mut strings {
+            __s.value.materialize(&data);
+        }
 
         // No printable strings should be found
         assert!(strings.is_empty());
@@ -565,7 +589,10 @@ mod tests {
         // Basic test with null-terminated strings so stng can extract them individually
         let data = b"Hello World\0http://example.com\0/usr/bin/ls\0";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         assert!(!strings.is_empty());
 
@@ -593,7 +620,10 @@ mod tests {
     fn test_extract_smart_empty() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         assert!(strings.is_empty());
     }
@@ -603,7 +633,10 @@ mod tests {
         // Test that duplicate strings are removed
         let data = b"test string\0test string\0test string";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data); for __s in &mut strings { __s.value.materialize(data); }
+        let mut strings = extractor.extract_smart(data);
+        for __s in &mut strings {
+            __s.value.materialize(data);
+        }
 
         // Should not have duplicate values
         let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
@@ -621,7 +654,10 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let mut strings = extractor.extract_smart(&data); for __s in &mut strings { __s.value.materialize(&data); }
+        let mut strings = extractor.extract_smart(&data);
+        for __s in &mut strings {
+            __s.value.materialize(&data);
+        }
 
         // Should find strings from both lang_strings and basic extraction
         assert!(!strings.is_empty());
@@ -644,7 +680,10 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let mut strings = extractor.extract_smart(&data); for __s in &mut strings { __s.value.materialize(&data); }
+        let mut strings = extractor.extract_smart(&data);
+        for __s in &mut strings {
+            __s.value.materialize(&data);
+        }
 
         // Should find strings
         assert!(!strings.is_empty());

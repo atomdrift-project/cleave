@@ -587,8 +587,7 @@ pub(crate) fn eval_text<'a, 'b>(
                     let excluded_by_is = !validate_match(original_value, params.is_check);
 
                     if !excluded_by_not && !excluded_by_is {
-                        s.matched
-                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                        s.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                         evidence.push(Evidence {
                             method: "text".to_string(),
                             source: "string_extractor".to_string(),
@@ -608,8 +607,7 @@ pub(crate) fn eval_text<'a, 'b>(
                 let excluded_by_is = !validate_match(exact_str, params.is_check);
 
                 if !excluded_by_not && !excluded_by_is {
-                    s.matched
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    s.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
@@ -1053,7 +1051,10 @@ pub(crate) fn eval_raw<'a>(
             // CPU as `parking_lot::lock_exclusive_slow` wait time on the slow dataset.
             let key = (pattern_str.to_string(), case_insensitive);
             let cache = super::bytes_regex_cache();
-            let bytes_re: Option<regex::bytes::Regex> = {
+            // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold
+            // lazy-DFA cache and rebuilds every DFA state on first search; the
+            // shared `Arc` reuses the warm instance across members/threads.
+            let bytes_re: Option<std::sync::Arc<regex::bytes::Regex>> = {
                 let cached = cache.read().peek(&key).cloned();
                 if cached.is_some() {
                     cached
@@ -1061,8 +1062,9 @@ pub(crate) fn eval_raw<'a>(
                     // Compile outside the lock; write-lock only to insert.
                     match super::compile_bytes_regex(pattern_str, case_insensitive) {
                         Ok(re) => {
-                            cache.write().put(key, re.clone());
-                            Some(re)
+                            let arc = std::sync::Arc::new(re);
+                            cache.write().put(key, std::sync::Arc::clone(&arc));
+                            Some(arc)
                         }
                         Err(_) => None,
                     }

@@ -1116,6 +1116,7 @@ mod tests {
             filefacts_metrics: None,
             paths: vec![],
             directories: vec![],
+            comments: vec![],
             env_vars: vec![],
             archive_contents: vec![],
             scanned_path: None,

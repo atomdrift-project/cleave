@@ -3915,6 +3915,30 @@ mod constraint_tests {
     }
 
     #[test]
+    fn test_single_directory_ref_with_needs_not_flagged_as_alias() {
+        // A single `any:` entry that is a *directory* reference with `needs: 2`
+        // is a real k-of-N marker (>= 2 distinct member traits), not a pure
+        // alias, and must not be flagged by the single-item validator. (The
+        // engine weights the dir-ref by its matched-member count.)
+        use crate::capabilities::validation::find_single_item_clauses;
+        let mut rule = create_composite_any("well-known/lib/ffmpeg::marker", &["well-known/lib/ffmpeg"]);
+        rule.needs = Some(2);
+
+        assert!(
+            find_single_item_clauses(&rule).is_empty(),
+            "single directory-ref + needs must not be flagged as a single-item alias"
+        );
+
+        // Control: a single *specific* trait ref (with `::`) IS a pure alias.
+        let alias = create_composite_any("foo/bar::alias", &["foo/bar::a"]);
+        assert_eq!(
+            find_single_item_clauses(&alias).len(),
+            1,
+            "single specific trait ref is a pure alias and must be flagged"
+        );
+    }
+
+    #[test]
     fn test_kv_exists_with_exact_is_flagged() {
         use crate::capabilities::validation::constraints::find_kv_exists_with_matcher;
 

@@ -3038,8 +3038,15 @@ impl CompositeTrait {
     /// both [`Self::apply_scope_filter`] and proximity checks.
     fn min_distinct_conditions(&self) -> usize {
         let all_count = self.all.as_ref().map_or(0, Vec::len);
-        let any_required = if self.any.is_some() {
-            self.needs.unwrap_or(1)
+        let any_required = if let Some(any) = &self.any {
+            // Cap at the number of `any:` entries. A single entry (e.g. a
+            // directory-prefix reference) can satisfy a higher `needs:` through
+            // multiple matched member traits, but every one of those matches
+            // carries the *same* condition index. Scope/proximity filters count
+            // distinct condition indices, so requiring more distinct conditions
+            // than there are entries is unsatisfiable and would wrongly drop the
+            // finding (e.g. `any: [dir-ref]` + `needs: 2`).
+            self.needs.unwrap_or(1).min(any.len())
         } else {
             0
         };

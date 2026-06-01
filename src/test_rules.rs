@@ -487,7 +487,12 @@ impl<'a> RuleDebugger<'a> {
             for cond in any_conds {
                 let cond_result = self.debug_condition(cond);
                 if cond_result.matched {
-                    any_matched_count += 1;
+                    // Mirror the engine's `condition_count_weight`: a matched
+                    // directory-prefix trait reference contributes the number of
+                    // distinct member traits it matched, not 1. Otherwise `needs:`
+                    // over a single dir-ref displays a misleading "1/1 needed: 2"
+                    // next to an overall MATCHED verdict.
+                    any_matched_count += self.condition_match_weight(cond);
                 }
                 any_results.push(cond_result);
             }
@@ -564,6 +569,27 @@ impl<'a> RuleDebugger<'a> {
         }
 
         None
+    }
+
+    /// Display-side mirror of the engine's `condition_count_weight`: a matched
+    /// directory-prefix trait reference (`a/b/c`, no `::`) counts as the number
+    /// of distinct member findings it matched; every other condition counts as 1.
+    fn condition_match_weight(&self, condition: &Condition) -> usize {
+        if let Condition::Trait { id } = condition {
+            let id = id.trim_end_matches('/');
+            if !id.contains("::") && id.contains('/') {
+                let prefix_new = format!("{}::", id);
+                let prefix_legacy = format!("{}/", id);
+                let n = self
+                    .report
+                    .findings
+                    .iter()
+                    .filter(|f| f.id.starts_with(&prefix_new) || f.id.starts_with(&prefix_legacy))
+                    .count();
+                return n.max(1);
+            }
+        }
+        1
     }
 
     /// Debug a single condition

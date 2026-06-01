@@ -4539,3 +4539,133 @@ fn test_proximity_filters_evidence_to_window() {
             .collect::<Vec<_>>()
     );
 }
+
+/// Helper: build a Finding with the given id (component-style member trait).
+#[cfg(test)]
+fn member_finding(id: &str) -> Finding {
+    Finding {
+        id: id.to_string(),
+        kind: FindingKind::Capability,
+        desc: format!("member {id}"),
+        conf: 0.9,
+        crit: Criticality::Component,
+        mbc: None,
+        attack: None,
+        trait_refs: vec![],
+        // Evidence carries a `location` so the (default) `file` scope filter
+        // actually engages — empty evidence makes the scope filter a no-op and
+        // would hide this bug.
+        evidence: vec![crate::types::Evidence {
+            method: "symbol".to_string(),
+            source: "test".to_string(),
+            value: id.to_string(),
+            location: Some("libavformat.so".to_string()),
+            ..Default::default()
+        }],
+        match_count: 1,
+        source_file: None,
+    }
+}
+
+/// Regression: a composite whose `any:` is a single directory-prefix reference
+/// with `needs: 2` MUST fire when the directory matched >= 2 distinct member
+/// traits. The directory ref's matched-member count must be weighted toward
+/// `needs` (not collapsed to one condition). See bug: "needs over single
+/// dir-ref never fires".
+#[test]
+fn test_needs_counts_directory_ref_member_matches() {
+    let (mut report, data) = create_test_context();
+    report
+        .findings
+        .push(member_finding("well-known/lib/ffmpeg::av-malloc"));
+    report
+        .findings
+        .push(member_finding("well-known/lib/ffmpeg::av-free"));
+    report
+        .findings
+        .push(member_finding("well-known/lib/ffmpeg::av-log"));
+
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+
+    let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "well-known/lib/ffmpeg::ffmpeg-lib-marker".to_string(),
+        desc: "FFmpeg marker".to_string(),
+        conf: 0.95,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![FileType::All],
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![Condition::Trait {
+            id: "well-known/lib/ffmpeg".to_string(),
+        }]),
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: None,
+        near_bytes: None,
+        scope: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+        ..Default::default()
+    };
+
+    let result = rule.evaluate(&ctx);
+    assert!(
+        result.is_some(),
+        "dir-ref matched 3 members; needs:2 must be satisfied"
+    );
+}
+
+/// Control: needs:2 over a single dir-ref that matched only ONE member must NOT fire.
+#[test]
+fn test_needs_two_not_met_by_single_dir_ref_member() {
+    let (mut report, data) = create_test_context();
+    report
+        .findings
+        .push(member_finding("well-known/lib/ffmpeg::av-malloc"));
+
+    let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
+
+    let rule = CompositeTrait {
+        required_trait_indices: Vec::new(),
+        id: "well-known/lib/ffmpeg::ffmpeg-lib-marker".to_string(),
+        desc: "FFmpeg marker".to_string(),
+        conf: 0.95,
+        crit: Criticality::Baseline,
+        mbc: None,
+        attack: None,
+        platforms: vec![Platform::All],
+        arch: vec![Arch::All],
+        r#for: vec![FileType::All],
+        for_from_groups: false,
+        size_min: None,
+        size_max: None,
+        all: None,
+        any: Some(vec![Condition::Trait {
+            id: "well-known/lib/ffmpeg".to_string(),
+        }]),
+        unless: None,
+        not: None,
+        downgrade: None,
+        needs: Some(2),
+        near_lines: None,
+        near_bytes: None,
+        scope: None,
+        defined_in: std::path::PathBuf::from("test.yaml"),
+        precision: None,
+        ..Default::default()
+    };
+
+    assert!(
+        rule.evaluate(&ctx).is_none(),
+        "only one member matched; needs:2 must not be satisfied"
+    );
+}

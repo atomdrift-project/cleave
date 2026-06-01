@@ -529,7 +529,11 @@ pub(crate) fn eval_comment<'a, 'b>(
         .regex
         .and_then(|r| build_regex(r, params.case_insensitive).ok());
     let word_regex = params.word.and_then(|w| {
-        build_regex(&format!(r"\b{}\b", regex::escape(w)), params.case_insensitive).ok()
+        build_regex(
+            &format!(r"\b{}\b", regex::escape(w)),
+            params.case_insensitive,
+        )
+        .ok()
     });
     let mut evidence = Vec::new();
     let mut match_count = 0usize;

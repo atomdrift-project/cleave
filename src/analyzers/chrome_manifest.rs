@@ -725,7 +725,7 @@ mod tests {
             report
                 .findings
                 .iter()
-                .any(|f| f.id == "objectives/supply-chain/metadata-anomaly/update-url")
+                .any(|f| f.id == "objectives/supply-chain/metadata-anomaly/update-url::external")
         );
     }
 }

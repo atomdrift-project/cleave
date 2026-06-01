@@ -26,6 +26,7 @@
 //! substr: "curl"
 //! ```
 
+use crate::analyzers::utils::{MAX_XML_DEPTH, parse_xml_safe};
 use crate::composite_rules::condition::Condition;
 use crate::composite_rules::context::EvaluationContext;
 use crate::types::Evidence;
@@ -827,15 +828,22 @@ fn parse_desktop_entry(content: &[u8]) -> Option<Value> {
 /// embedded source.
 fn parse_xml_to_json(content: &[u8]) -> Option<Value> {
     let text = std::str::from_utf8(content).ok()?;
-    let doc = roxmltree::Document::parse(text).ok()?;
+    // `parse_xml_safe` refuses over-deep documents before roxmltree's recursive
+    // parser can overflow the stack; the per-node cap below is defense in depth
+    // for the conversion's own recursion and the `serde_json::Value` drop.
+    let doc = parse_xml_safe(text)?;
     let root = doc.root_element();
-    let root_value = xml_element_to_json(root);
+    let root_value = xml_element_to_json(root, 0);
     let mut map = serde_json::Map::new();
     map.insert(root.tag_name().name().to_string(), root_value);
     Some(Value::Object(map))
 }
 
-fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
+fn xml_element_to_json(node: roxmltree::Node<'_, '_>, depth: usize) -> Value {
+    if depth >= MAX_XML_DEPTH {
+        return Value::Null;
+    }
+
     let mut children: serde_json::Map<String, Value> = serde_json::Map::new();
 
     for attr in node.attributes() {
@@ -867,7 +875,7 @@ fn xml_element_to_json(node: roxmltree::Node<'_, '_>) -> Value {
     for child in node.children() {
         if child.is_element() {
             let name = child.tag_name().name().to_string();
-            let value = xml_element_to_json(child);
+            let value = xml_element_to_json(child, depth + 1);
             match children.get_mut(&name) {
                 Some(Value::Array(arr)) => arr.push(value),
                 Some(existing) => {
@@ -4699,5 +4707,47 @@ Author-Email: test@example.com
 
         let cond = kv_ne("whl.filename.name_prefix", "METADATA::Name");
         assert!(evaluate_kv(&cond, &ctx).is_none());
+    }
+
+    fn nested_xml(depth: usize) -> String {
+        let mut xml = String::with_capacity(depth * 8 + 16);
+        xml.push_str("<root>");
+        for _ in 0..depth {
+            xml.push_str("<g>");
+        }
+        for _ in 0..depth {
+            xml.push_str("</g>");
+        }
+        xml.push_str("</root>");
+        xml
+    }
+
+    /// A deeply nested XML document must be refused before parsing, not crash
+    /// the analyzer. roxmltree's recursive-descent parser overflows the native
+    /// stack on such input, so a malicious SVG/plist/manifest with thousands of
+    /// nested elements was a stack-overflow DoS (SIGSEGV) before the pre-scan
+    /// guard. Without the fix this test aborts the process with a stack overflow.
+    #[test]
+    fn test_xml_deeply_nested_is_refused_not_crash() {
+        // Far deeper than MAX_XML_DEPTH and deep enough to overflow a default
+        // test-thread stack if it ever reached roxmltree.
+        let xml = nested_xml(8000);
+        let path = Path::new("bomb.xml");
+        assert!(
+            parse_structured_content(path, xml.as_bytes()).is_none(),
+            "over-deep XML must be refused, not parsed",
+        );
+    }
+
+    /// Legitimately shallow XML must still parse — the guard must not reject
+    /// the everyday config documents trait authors query.
+    #[test]
+    fn test_xml_shallow_still_parses() {
+        let xml = nested_xml(MAX_XML_DEPTH / 4);
+        let path = Path::new("config.xml");
+        assert!(
+            parse_structured_content(path, xml.as_bytes()).is_some(),
+            "shallow XML within the depth bound must still parse",
+        );
     }
 }

@@ -229,9 +229,155 @@ pub(crate) fn create_language_feature(
     }
 }
 
+/// Maximum XML element-nesting depth we will parse.
+///
+/// `roxmltree`'s recursive-descent parser overflows the native stack on
+/// pathologically deep input (a billion-laughs-style nesting bomb), and any
+/// recursive tree-to-value conversion does the same. A malicious deeply-nested
+/// SVG/plist/manifest or OOXML part is therefore a stack-overflow DoS.
+/// Legitimate documents (OOXML, csproj, AndroidManifest, plist) are rarely more
+/// than a few dozen levels deep, so this bound is generous.
+pub(crate) const MAX_XML_DEPTH: usize = 256;
+
+/// Parse XML, refusing pathologically deep documents before handing them to
+/// roxmltree's recursive-descent parser (which would otherwise overflow the
+/// stack). Returns `None` for over-deep or malformed input.
+pub(crate) fn parse_xml_safe(text: &str) -> Option<roxmltree::Document<'_>> {
+    if xml_depth_reaches(text, MAX_XML_DEPTH) {
+        return None;
+    }
+    roxmltree::Document::parse(text).ok()
+}
+
+/// Conservatively scan XML markup for its maximum element-nesting depth without
+/// building a tree, returning `true` as soon as depth reaches `limit`.
+///
+/// This is the iterative pre-flight guard behind [`parse_xml_safe`]. It
+/// understands comments, CDATA, processing instructions and self-closing tags
+/// so that wide-but-shallow documents (e.g. an SVG with thousands of sibling
+/// elements) are not falsely rejected.
+fn xml_depth_reaches(text: &str, limit: usize) -> bool {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    let mut depth = 0usize;
+    while i < bytes.len() {
+        if bytes[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        match bytes.get(i + 1) {
+            Some(b'/') => {
+                // End tag.
+                depth = depth.saturating_sub(1);
+                i += 2;
+            }
+            Some(b'?') => {
+                // Processing instruction: skip to "?>".
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'?' && bytes[i + 1] == b'>') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            Some(b'!') if bytes[i + 1..].starts_with(b"!--") => {
+                // Comment: skip to "-->".
+                i += 4;
+                while i < bytes.len() && !bytes[i..].starts_with(b"-->") {
+                    i += 1;
+                }
+                i += 3;
+            }
+            Some(b'!') if bytes[i + 1..].starts_with(b"![CDATA[") => {
+                // CDATA section: skip to "]]>".
+                i += 9;
+                while i < bytes.len() && !bytes[i..].starts_with(b"]]>") {
+                    i += 1;
+                }
+                i += 3;
+            }
+            Some(b'!') => {
+                // Declaration (e.g. DOCTYPE): skip to '>'.
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'>' {
+                    i += 1;
+                }
+                i += 1;
+            }
+            _ => {
+                // Start tag: find the matching '>', tracking quoted attribute
+                // values, and note whether it self-closes ("/>").
+                i += 1;
+                let mut quote = 0u8;
+                let mut self_closing = false;
+                while i < bytes.len() {
+                    let c = bytes[i];
+                    if quote != 0 {
+                        if c == quote {
+                            quote = 0;
+                        }
+                    } else if c == b'"' || c == b'\'' {
+                        quote = c;
+                    } else if c == b'>' {
+                        self_closing = bytes[i - 1] == b'/';
+                        i += 1;
+                        break;
+                    }
+                    i += 1;
+                }
+                if !self_closing {
+                    depth += 1;
+                    if depth >= limit {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nested_xml(depth: usize) -> String {
+        let mut xml = String::with_capacity(depth * 8 + 16);
+        xml.push_str("<root>");
+        for _ in 0..depth {
+            xml.push_str("<g>");
+        }
+        for _ in 0..depth {
+            xml.push_str("</g>");
+        }
+        xml.push_str("</root>");
+        xml
+    }
+
+    #[test]
+    fn test_xml_depth_reaches_counts_nesting() {
+        assert!(xml_depth_reaches(&nested_xml(300), 256));
+        assert!(!xml_depth_reaches(&nested_xml(10), 256));
+        // Wide-but-shallow: many self-closing siblings must not count as depth.
+        let wide = format!("<root>{}</root>", "<leaf/>".repeat(5000));
+        assert!(!xml_depth_reaches(&wide, 256));
+        // Self-closing tag with a '>' inside a quoted attribute stays shallow.
+        let tricky = format!("<root>{}</root>", "<n a=\"x>y\"/>".repeat(5000));
+        assert!(!xml_depth_reaches(&tricky, 256));
+        // Comments and processing instructions do not add depth.
+        let noise = format!("<root>{}</root>", "<!-- c --><?pi ?>".repeat(5000));
+        assert!(!xml_depth_reaches(&noise, 256));
+    }
+
+    #[test]
+    fn test_parse_xml_safe_refuses_deep_bomb() {
+        // Deep enough to overflow roxmltree's recursive parser if it reached it.
+        assert!(parse_xml_safe(&nested_xml(8000)).is_none());
+    }
+
+    #[test]
+    fn test_parse_xml_safe_allows_shallow() {
+        assert!(parse_xml_safe(&nested_xml(MAX_XML_DEPTH / 4)).is_some());
+    }
 
     #[test]
     fn test_calculate_sha256() {

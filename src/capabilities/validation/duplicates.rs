@@ -620,16 +620,36 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             exact,
             substr,
             regex,
+            arg,
             ..
         } => {
+            // A call's `arg:` discriminator makes same-named calls distinct
+            // atoms — `require('fs')` ≠ `require('dns')`. Fold it into the
+            // pattern key so the dedup checker doesn't collapse them into one
+            // "reusable atom". (Same name AND same arg still collide.)
+            let disc = arg
+                .as_ref()
+                .map(|a| {
+                    let v = a
+                        .exact
+                        .as_deref()
+                        .or(a.substr.as_deref())
+                        .or(a.regex.as_deref())
+                        .or(a.name.as_deref())
+                        .map(str::to_string)
+                        .or_else(|| a.value.map(|n| n.to_string()))
+                        .unwrap_or_else(|| "*".to_string());
+                    format!("#arg:{v}")
+                })
+                .unwrap_or_default();
             if let Some(v) = exact {
-                add_pattern("symbol", "exact", v.clone(), None, None);
+                add_pattern("symbol", "exact", format!("{v}{disc}"), None, None);
             }
             if let Some(v) = substr {
-                add_pattern("symbol", "substr", v.clone(), None, None);
+                add_pattern("symbol", "substr", format!("{v}{disc}"), None, None);
             }
             if let Some(v) = regex {
-                add_pattern("symbol", "regex", v.clone(), None, None);
+                add_pattern("symbol", "regex", format!("{v}{disc}"), None, None);
             }
         }
         Condition::Raw {

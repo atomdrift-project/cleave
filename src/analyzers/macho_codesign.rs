@@ -5,8 +5,8 @@
 //! - Team identifier from CMS certificate
 //! - Entitlements from XML plist blob
 
+use crate::analyzers::utils::parse_xml_safe;
 use anyhow::{Result, anyhow};
-use roxmltree::Document;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -410,12 +410,11 @@ fn parse_entitlements_blob(data: &[u8]) -> Result<HashMap<String, EntitlementVal
         plist_str.to_string()
     };
 
-    let doc = match Document::parse(&plist_str_no_dtd) {
-        Ok(d) => d,
-        Err(e) => {
-            tracing::debug!("Failed to parse plist XML: {}", e);
-            return Err(anyhow!("Failed to parse plist XML: {}", e));
-        }
+    // `parse_xml_safe` also refuses pathologically deep documents, whose
+    // nesting would otherwise overflow roxmltree's recursive parser.
+    let Some(doc) = parse_xml_safe(&plist_str_no_dtd) else {
+        tracing::debug!("Failed to parse plist XML (malformed or too deeply nested)");
+        return Err(anyhow!("Failed to parse plist XML"));
     };
     let mut entitlements = HashMap::new();
 

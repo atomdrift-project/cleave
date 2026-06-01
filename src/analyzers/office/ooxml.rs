@@ -4,6 +4,7 @@
 //! These are ZIP archives containing XML files and optional VBA project binaries.
 
 use super::vba;
+use crate::analyzers::utils::parse_xml_safe;
 use crate::types::ArchiveEntry;
 use anyhow::Result;
 use std::io::{Cursor, Read};
@@ -425,7 +426,7 @@ fn find_external_refs<R: OoxmlEntryReader>(
         let text = String::from_utf8_lossy(&data);
 
         // Parse XML to find External TargetMode
-        if let Ok(doc) = roxmltree::Document::parse(&text) {
+        if let Some(doc) = parse_xml_safe(&text) {
             for node in doc.descendants() {
                 if node.tag_name().name() == "Relationship" {
                     let target_mode = node.attribute("TargetMode").unwrap_or("");
@@ -547,7 +548,7 @@ fn extract_metadata<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlMetadata {
     // Parse core.xml (Dublin Core metadata)
     if let Some(data) = read_zip_entry(reader, "docProps/core.xml") {
         let text = String::from_utf8_lossy(&data);
-        if let Ok(doc) = roxmltree::Document::parse(&text) {
+        if let Some(doc) = parse_xml_safe(&text) {
             for node in doc.descendants() {
                 match node.tag_name().name() {
                     "creator" => meta.creator = node.text().map(String::from),
@@ -568,7 +569,7 @@ fn extract_metadata<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlMetadata {
     // Parse app.xml (application metadata)
     if let Some(data) = read_zip_entry(reader, "docProps/app.xml") {
         let text = String::from_utf8_lossy(&data);
-        if let Ok(doc) = roxmltree::Document::parse(&text) {
+        if let Some(doc) = parse_xml_safe(&text) {
             for node in doc.descendants() {
                 match node.tag_name().name() {
                     "Application" => meta.application = node.text().map(String::from),

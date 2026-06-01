@@ -452,6 +452,7 @@ traits:
         library: Some("libc".to_string()),
         source: "static".to_string(),
         offset: None,
+        alias: None,
     });
 
     // Manually lookup and add symbol findings

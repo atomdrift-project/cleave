@@ -64,6 +64,7 @@ impl AppleScriptAnalyzer {
                     library: library.map(String::from),
                     source: source.to_string(),
                     offset: None,
+                    alias: None,
                 });
             }
 
@@ -75,6 +76,7 @@ impl AppleScriptAnalyzer {
                     library: Some("AppleEvents".to_string()),
                     source: "scpt_event".to_string(),
                     offset: None,
+                    alias: None,
                 });
 
                 // Also add the description for easier rule matching
@@ -84,6 +86,7 @@ impl AppleScriptAnalyzer {
                         library: Some("AppleScript".to_string()),
                         source: "scpt_command".to_string(),
                         offset: None,
+                        alias: None,
                     });
                 }
             }

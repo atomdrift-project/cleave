@@ -1268,6 +1268,7 @@ impl PackageJsonAnalyzer {
                 library: Some(version.to_string()),
                 source: "package.json".to_string(),
                 offset: None,
+                alias: None,
             });
         }
     }

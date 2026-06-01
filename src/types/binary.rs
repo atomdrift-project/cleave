@@ -516,6 +516,11 @@ pub struct Import {
     /// composite rules can apply `near_bytes`/`near_lines` proximity.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub offset: Option<String>,
+    /// Local alias of a source-language aliased import — the `sp` in
+    /// `import subprocess as sp`. `None` for plain and binary imports.
+    /// Lets `kind: import, alias: …` traits match the alias.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub alias: Option<String>,
 }
 
 impl Import {
@@ -530,6 +535,7 @@ impl Import {
             library,
             source: source.into(),
             offset: None,
+            alias: None,
         }
     }
 
@@ -546,7 +552,15 @@ impl Import {
             library,
             source: source.into(),
             offset: Some(format!("0x{byte_offset:x}")),
+            alias: None,
         }
+    }
+
+    /// Attach a source-language import alias (`import subprocess as sp`).
+    #[must_use]
+    pub fn with_alias(mut self, alias: Option<String>) -> Self {
+        self.alias = alias;
+        self
     }
 }
 

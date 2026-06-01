@@ -1210,6 +1210,7 @@ impl TraitDefinition {
                 is_check,
                 kind,
                 arg,
+                alias,
                 not,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
@@ -1255,6 +1256,7 @@ impl TraitDefinition {
                             *is_check,
                             *kind,
                             merged_not.as_ref(),
+                            alias.as_ref(),
                             ctx,
                         )
                     ),
@@ -2529,6 +2531,7 @@ impl CompositeTrait {
                 is_check,
                 kind,
                 arg,
+                alias,
                 not,
             } => {
                 let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
@@ -2561,6 +2564,7 @@ impl CompositeTrait {
                         *is_check,
                         *kind,
                         merged_not.as_ref(),
+                        alias.as_ref(),
                         ctx,
                     ),
                 }
@@ -2866,6 +2870,7 @@ impl CompositeTrait {
         is_check: Option<StringValidator>,
         kind: Option<SymbolKind>,
         not: Option<&Vec<NotException>>,
+        alias: Option<&crate::composite_rules::condition::AliasFilter>,
         ctx: &EvaluationContext<'a>,
     ) -> ConditionResult {
         // Check platform constraint
@@ -2880,7 +2885,9 @@ impl CompositeTrait {
             }
         }
 
-        eval_symbol(exact, substr, pattern, None, is_check, kind, not, ctx)
+        eval_symbol(
+            exact, substr, pattern, None, is_check, kind, not, alias, ctx,
+        )
     }
 
     /// Number of distinct conditions a co-occurrence check (scope, proximity)
@@ -3406,6 +3413,7 @@ mod scope_tests {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             })
             .collect();

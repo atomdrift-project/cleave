@@ -102,11 +102,17 @@ impl<'a> AnalysisContext<'a> {
                     library,
                     source,
                     offset,
+                    alias,
                     ..
-                } => Some(match offset {
-                    Some(off) => Import::with_offset(name, library.clone(), source.clone(), *off),
-                    None => Import::new(name, library.clone(), source.clone()),
-                }),
+                } => Some(
+                    match offset {
+                        Some(off) => {
+                            Import::with_offset(name, library.clone(), source.clone(), *off)
+                        }
+                        None => Import::new(name, library.clone(), source.clone()),
+                    }
+                    .with_alias(alias.clone()),
+                ),
                 _ => None,
             })
             .collect()

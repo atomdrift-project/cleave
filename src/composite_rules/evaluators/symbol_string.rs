@@ -80,6 +80,7 @@ pub(crate) fn eval_symbol<'a>(
     is_check: Option<StringValidator>,
     kind: Option<SymbolKind>,
     not: Option<&Vec<NotException>>,
+    alias: Option<&crate::composite_rules::condition::AliasFilter>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalSymbol);
@@ -163,8 +164,12 @@ pub(crate) fn eval_symbol<'a>(
                     .map(|exceptions| exceptions.iter().any(|exc| exc.matches(&import.symbol)))
                     .unwrap_or(false);
                 let excluded_by_is = !validate_match(&import.symbol, is_check);
+                // An `alias:` filter narrows to aliased imports (and, when it
+                // carries exact/substr/regex, to a specific alias). A plain
+                // import never matches when an alias filter is present.
+                let alias_ok = alias.is_none_or(|af| af.matches(import.alias.as_deref()));
 
-                if !excluded_by_not && !excluded_by_is {
+                if !excluded_by_not && !excluded_by_is && alias_ok {
                     match_count += 1;
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         // Call-site imports (tree-sitter extraction) carry a

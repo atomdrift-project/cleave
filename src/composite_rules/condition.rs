@@ -500,6 +500,47 @@ pub(crate) struct ArgFilter {
     pub name: Option<String>,
 }
 
+/// Filter for a source-language import's local alias — the `sp` in
+/// `import subprocess as sp`. Used by `Condition::Symbol { kind: import,
+/// alias: ... }`. An empty filter (`alias: {}`) matches any aliased import;
+/// `exact`/`substr`/`regex` narrow to a specific alias (e.g. a 1–2 char alias
+/// as an obfuscation signal). A plain (non-aliased) import never matches when
+/// an `alias` filter is present.
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AliasFilter {
+    #[serde(default)]
+    pub exact: Option<String>,
+    #[serde(default)]
+    pub substr: Option<String>,
+    #[serde(default)]
+    pub regex: Option<String>,
+}
+
+impl AliasFilter {
+    /// True when `alias` (the import's local alias) satisfies this filter.
+    /// A `None` alias (plain import) never matches.
+    pub(crate) fn matches(&self, alias: Option<&str>) -> bool {
+        let Some(a) = alias else { return false };
+        if let Some(e) = &self.exact
+            && a != e
+        {
+            return false;
+        }
+        if let Some(s) = &self.substr
+            && !a.contains(s.as_str())
+        {
+            return false;
+        }
+        if let Some(r) = &self.regex
+            && !regex::Regex::new(r).is_ok_and(|re| re.is_match(a))
+        {
+            return false;
+        }
+        true
+    }
+}
+
 /// Internal tagged enum for serializing/deserializing conditions with explicit `type` field
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
@@ -529,6 +570,11 @@ enum ConditionTagged {
         /// kind: number, value: 511, radix: 8 }`.
         #[serde(default)]
         arg: Option<ArgFilter>,
+        /// Import-alias filter (kind=import only). Matches the local alias of
+        /// an aliased import (`import subprocess as sp`). Present → only
+        /// aliased imports match.
+        #[serde(default)]
+        alias: Option<AliasFilter>,
         /// Exclude individual matches where the symbol name (or surrounding
         /// trait-level evidence) matches any of these patterns.
         #[serde(default)]
@@ -1008,6 +1054,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind,
                     arg,
+                    alias,
                     not,
                 } => Condition::Symbol {
                     exact,
@@ -1017,6 +1064,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind,
                     arg,
+                    alias,
                     not,
                 },
                 ConditionTagged::Import {
@@ -1034,6 +1082,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Import),
                     arg: None,
+                    alias: None,
                     not,
                 },
                 ConditionTagged::Export {
@@ -1051,6 +1100,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Export),
                     arg: None,
+                    alias: None,
                     not,
                 },
                 ConditionTagged::Function {
@@ -1068,6 +1118,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Function),
                     arg: None,
+                    alias: None,
                     not,
                 },
                 ConditionTagged::Text {
@@ -1337,6 +1388,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 kind,
                 arg,
+                alias,
                 not,
             } => ConditionTagged::Symbol {
                 exact,
@@ -1346,6 +1398,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 kind,
                 arg,
+                alias,
                 not,
             },
             Condition::Text {
@@ -1639,6 +1692,10 @@ pub(crate) enum Condition {
         /// radix: 8 }`.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         arg: Option<ArgFilter>,
+        /// Import-alias filter (kind=import only) — matches the local alias of
+        /// an aliased import. Present → only aliased imports match.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        alias: Option<AliasFilter>,
         /// Exclude individual matches where the symbol name matches any of
         /// these patterns. Combined (OR) with the trait-level `not:` filter.
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -3786,6 +3843,7 @@ exact: curl
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
         assert!(cond.check_greedy_patterns().is_none());

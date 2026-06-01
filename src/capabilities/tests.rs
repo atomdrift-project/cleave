@@ -2679,12 +2679,14 @@ fn test_generate_import_findings_basic() {
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "os.system".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2725,6 +2727,7 @@ fn test_generate_import_findings_with_library() {
         library: Some("libc.so.6".to_string()),
         source: "goblin".to_string(),
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2760,12 +2763,14 @@ fn test_generate_import_findings_dedup() {
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2796,6 +2801,7 @@ fn test_generate_import_findings_script_function_calls_dropped() {
         library: None,
         source: "import".to_string(),
         offset: None,
+        alias: None,
     });
 
     // Function calls — should NOT produce findings.
@@ -2804,12 +2810,14 @@ fn test_generate_import_findings_script_function_calls_dropped() {
         library: None,
         source: "ast".to_string(),
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "open".to_string(),
         library: None,
         source: "ast".to_string(),
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2836,6 +2844,7 @@ fn test_generate_import_findings_npm_package() {
         library: Some("^1.6.0".to_string()),
         source: "npm".to_string(),
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2862,6 +2871,7 @@ fn test_generate_import_findings_empty_symbol_skipped() {
         library: None,
         source: "ast".to_string(),
         offset: None,
+        alias: None,
     });
     // Symbol that normalizes to empty should also be skipped
     report.imports.push(Import {
@@ -2869,6 +2879,7 @@ fn test_generate_import_findings_empty_symbol_skipped() {
         library: None,
         source: "ast".to_string(),
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2908,6 +2919,7 @@ fn test_generate_import_findings_preserves_existing() {
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2960,6 +2972,7 @@ fn test_generate_import_findings_skips_existing_import_finding() {
         library: None,
         source: "import".to_string(), // Use "import" for actual module imports
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);
@@ -2985,6 +2998,7 @@ fn test_generate_import_findings_evidence_structure() {
         library: Some("Foundation".to_string()),
         source: "goblin".to_string(),
         offset: None,
+        alias: None,
     });
 
     CapabilityMapper::generate_import_findings(&mut report);

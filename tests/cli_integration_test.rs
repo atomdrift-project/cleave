@@ -82,7 +82,7 @@ fn test_analyze_json_output() {
         .args(["--json", "analyze", script_path.to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"5""#))
+        .stdout(predicate::str::contains(r#""v":"6""#))
         .stdout(predicate::str::contains(r#""fs":[{"#));
 }
 
@@ -131,9 +131,9 @@ fn test_analyze_output_to_file() {
     // Note: "Results written to" message is only printed for Terminal format, not JSON
     // The success assertion above confirms the command succeeded
 
-    // Verify output file was created and contains v5 compact format
+    // Verify output file was created and contains v6 compact format
     let content = fs::read_to_string(&output_path).unwrap();
-    assert!(content.contains(r#""v":"5""#));
+    assert!(content.contains(r#""v":"6""#));
     assert!(content.contains(r#""fs":["#));
 }
 
@@ -301,7 +301,7 @@ fn test_analyze_directory_json_output() {
         .args(["--json", "analyze", temp_dir.path().to_str().unwrap()])
         .assert()
         .success()
-        .stdout(predicate::str::contains(r#""v":"5""#));
+        .stdout(predicate::str::contains(r#""v":"6""#));
 }
 
 /// Test that --yara flag enables YARA (deprecated feature, disabled by default)

@@ -21,6 +21,7 @@ pub(crate) fn ingest_filefacts_imports(
             name,
             library,
             offset,
+            alias,
             ..
         } = sym
         else {
@@ -34,6 +35,7 @@ pub(crate) fn ingest_filefacts_imports(
             library: library.clone(),
             source: "import".to_string(),
             offset: offset.map(|o| format!("0x{o:x}")),
+            alias: alias.clone(),
         });
     }
 

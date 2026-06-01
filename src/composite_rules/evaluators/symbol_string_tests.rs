@@ -41,7 +41,9 @@ fn eval_symbol_with_kind<'a>(
     not: Option<&Vec<NotException>>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
-    super::eval_symbol(exact, substr, pattern, platforms, None, kind, not, ctx)
+    super::eval_symbol(
+        exact, substr, pattern, platforms, None, kind, not, None, ctx,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -127,6 +129,7 @@ fn test_eval_symbol_exact_match() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -216,6 +219,7 @@ fn test_eval_symbol_substr_match() {
         library: Some("kernel32.dll".to_string()),
         source: "pe".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -242,12 +246,14 @@ fn test_eval_symbol_regex_match() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "accept".to_string(),
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -268,6 +274,7 @@ fn test_eval_symbol_no_match() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -297,12 +304,14 @@ fn test_eval_symbol_not_filters_substr_match() {
         library: None,
         source: "builtin".to_string(),
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "safe_eval_template".to_string(),
         library: None,
         source: "builtin".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -327,6 +336,7 @@ fn test_eval_symbol_not_filters_all_matches() {
         library: None,
         source: "builtin".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -348,6 +358,7 @@ fn test_eval_symbol_platform_filtering() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let mut ctx = create_test_context(&report, &data);
@@ -388,6 +399,7 @@ fn test_eval_symbol_platform_all() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);

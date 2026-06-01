@@ -54,13 +54,17 @@ fn mss_grab_migration_preserves_positives_and_drops_noise() {
         ),
         "mss `sct.grab(monitor)` must still fire mss-grab",
     );
+    // PIL `ImageGrab.grab()` is screen capture too, but is covered by the
+    // dedicated `pil-imagegrab` trait — mss-grab was tightened to the
+    // remaining capture receivers (sct/mss/grabber) to stay under the
+    // alternation limit, so ImageGrab is correctly NOT an mss-grab hit.
     assert!(
         fires(
-            "::mss-grab",
+            "::pil-imagegrab",
             "cap_pil.py",
             "from PIL import ImageGrab\nImageGrab.grab()\n",
         ),
-        "PIL `ImageGrab.grab()` must still fire mss-grab",
+        "PIL `ImageGrab.grab()` must fire pil-imagegrab",
     );
 
     // Negatives — the tightened rule drops generic `.grab()` noise the old
@@ -76,5 +80,29 @@ fn mss_grab_migration_preserves_positives_and_drops_noise() {
             "x.grabber()\nresult = data.grab()\n"
         ),
         "near-misses (`.grabber()`, arbitrary `.grab()`) must NOT fire mss-grab",
+    );
+}
+
+/// `alias-*` traits migrated from `(aliased_import)` queries to
+/// `kind: import` + the structured `alias:` filter. They must fire on an
+/// aliased import (`import subprocess as sp`) but NOT on a plain import — the
+/// plain import is benign and was the false-positive the bare migration caused.
+#[test]
+fn alias_import_traits_fire_only_on_aliased_imports() {
+    assert!(
+        fires(
+            "::alias-subprocess",
+            "obf.py",
+            "import subprocess as sp\nsp.run(['ls'])\n",
+        ),
+        "`import subprocess as sp` must fire alias-subprocess",
+    );
+    assert!(
+        !fires(
+            "::alias-subprocess",
+            "plain.py",
+            "import subprocess\nsubprocess.run(['ls'])\n",
+        ),
+        "plain `import subprocess` (benign) must NOT fire alias-subprocess",
     );
 }

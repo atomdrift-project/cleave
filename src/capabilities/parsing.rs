@@ -450,11 +450,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // archive-family match (FileType::is_archive on a group member),
                 // so whole-file entropy/blob traits fired on any archive
                 // container (e.g. a .crx).
-                "data" => vec![
-                    RuleFileType::Text,
-                    RuleFileType::Data,
-                    RuleFileType::Json,
-                ],
+                "data" => vec![RuleFileType::Text, RuleFileType::Data, RuleFileType::Json],
                 "ipa" => vec![RuleFileType::Ipa],
                 "archives" => vec![
                     RuleFileType::Archive,

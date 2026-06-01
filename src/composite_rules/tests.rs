@@ -27,6 +27,7 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
 
     report.imports.push(Import {
@@ -34,6 +35,7 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
 
     // Add some test strings
@@ -78,6 +80,7 @@ fn test_symbol_condition() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -128,6 +131,7 @@ fn test_all() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -176,6 +180,7 @@ fn test_count() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -186,6 +191,7 @@ fn test_count() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -196,6 +202,7 @@ fn test_count() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -294,6 +301,7 @@ fn test_any() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -304,6 +312,7 @@ fn test_any() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -610,6 +619,7 @@ fn test_unless_directive_skips_trait() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -659,6 +669,7 @@ fn test_unless_directive_allows_trait() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -801,6 +812,7 @@ fn test_downgrade_one_level() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -858,6 +870,7 @@ fn test_downgrade_no_match_keeps_original() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -931,6 +944,7 @@ fn test_downgrade_from_hostile() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -1233,12 +1247,14 @@ fn test_symbol_exact_vs_substr() {
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "readlink".to_string(),
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1263,6 +1279,7 @@ fn test_symbol_exact_vs_substr() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -1306,6 +1323,7 @@ fn test_symbol_exact_vs_substr() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         },
         size_max: None,
@@ -1884,6 +1902,7 @@ fn test_composite_unless_skips_rule() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -1936,6 +1955,7 @@ fn test_composite_unless_allows_rule() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -1989,6 +2009,7 @@ fn test_composite_unless_with_basename() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         all: None,
@@ -2058,6 +2079,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -2139,6 +2161,7 @@ fn test_needs_with_any_only_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2149,6 +2172,7 @@ fn test_needs_with_any_only_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2159,6 +2183,7 @@ fn test_needs_with_any_only_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2169,6 +2194,7 @@ fn test_needs_with_any_only_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -2222,6 +2248,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2232,6 +2259,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2242,6 +2270,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -2461,6 +2490,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: Some(vec![
@@ -2472,6 +2502,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2482,6 +2513,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2492,6 +2524,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2502,6 +2535,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -2537,12 +2571,14 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
     report.imports.push(Import {
         symbol: "recv".to_string(),
         library: None,
         source: "test".to_string(),
         offset: None,
+        alias: None,
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -2573,6 +2609,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: Some(vec![
@@ -2584,6 +2621,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2594,6 +2632,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2604,6 +2643,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2614,6 +2654,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -2667,6 +2708,7 @@ fn test_needs_with_all_and_any_all_fails() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: Some(vec![
@@ -2678,6 +2720,7 @@ fn test_needs_with_all_and_any_all_fails() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2688,6 +2731,7 @@ fn test_needs_with_all_and_any_all_fails() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -2739,6 +2783,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: Some(vec![
@@ -2750,6 +2795,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2760,6 +2806,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
             Condition::Symbol {
@@ -2770,6 +2817,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
                 is_check: None,
                 kind: None,
                 arg: None,
+                alias: None,
                 not: None,
             },
         ]),
@@ -3957,6 +4005,7 @@ fn test_composite_downgrade_all_match() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
 
     // Provide findings that satisfy both the rule's `all` and the downgrade's `all`
@@ -4014,6 +4063,7 @@ fn test_composite_downgrade_all_match() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,
@@ -4055,6 +4105,7 @@ fn test_composite_downgrade_none_blocks() {
         library: None,
         source: "libc".to_string(),
         offset: None,
+        alias: None,
     });
 
     // Provide a finding that matches the downgrade.none condition — should block downgrade
@@ -4097,6 +4148,7 @@ fn test_composite_downgrade_none_blocks() {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         }]),
         any: None,

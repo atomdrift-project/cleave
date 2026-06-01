@@ -469,6 +469,7 @@ mod validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -492,6 +493,7 @@ mod validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -513,6 +515,7 @@ mod validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -537,6 +540,7 @@ mod validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -558,6 +562,7 @@ mod validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -1608,6 +1613,7 @@ mod llm_validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -1629,6 +1635,7 @@ mod llm_validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -1648,6 +1655,7 @@ mod llm_validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -1666,6 +1674,7 @@ mod llm_validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 
@@ -1684,6 +1693,7 @@ mod llm_validation_tests {
             is_check: None,
             kind: None,
             arg: None,
+            alias: None,
             not: None,
         };
 

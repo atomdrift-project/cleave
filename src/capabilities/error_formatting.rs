@@ -180,6 +180,7 @@ fn detect_invalid_field_in_context(context: &str) -> Option<String> {
             "per_kb_min",
             "per_kb_max",
             "external_ip",
+            "valid_ip",
             "section",
             "offset",
             "offset_range",

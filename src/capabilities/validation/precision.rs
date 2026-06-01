@@ -349,6 +349,31 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= STRING_VALUE_MATCH_MULTIPLIER;
         }
+        Condition::Comment {
+            exact,
+            substr,
+            regex,
+            word,
+            case_insensitive,
+            is_check,
+            ..
+        } => {
+            // Comment-scoped matching: same scoring as text, plus a section
+            // bonus (it is implicitly section-filtered to comments).
+            score += exact.as_deref().map(score_string_value).unwrap_or(0.0);
+            score += substr.as_deref().map(score_string_value).unwrap_or(0.0);
+            score += regex.as_deref().map(score_regex_value).unwrap_or(0.0);
+            score += word.as_deref().map(score_word_value).unwrap_or(0.0);
+            if is_check.is_some() {
+                score += IS_CHECK_BONUS;
+            }
+            score += regex.as_deref().map(regex_structural_bonus).unwrap_or(0.0);
+            score += SECTION_FILTER_BONUS;
+            if *case_insensitive {
+                score *= CASE_INSENSITIVE_MULTIPLIER;
+            }
+            score *= STRING_VALUE_MATCH_MULTIPLIER;
+        }
         Condition::Literal {
             exact,
             substr,

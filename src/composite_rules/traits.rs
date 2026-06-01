@@ -1337,6 +1337,39 @@ impl TraitDefinition {
                     eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
                 )
             }
+            Condition::Comment {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not: _,
+                platforms: _,
+            } => {
+                let params = StringParams {
+                    exact: exact.as_ref(),
+                    substr: substr.as_ref(),
+                    regex: regex.as_ref(),
+                    word: word.as_ref(),
+                    case_insensitive: *case_insensitive,
+                    is_check: *is_check,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    arch_clamp,
+                };
+                timed_eval!(
+                    "comment",
+                    crate::composite_rules::evaluators::symbol_string::eval_comment(
+                        &params,
+                        self.not.as_ref(),
+                        ctx,
+                    )
+                )
+            }
             Condition::Literal {
                 kind,
                 exact,
@@ -2679,6 +2712,36 @@ impl CompositeTrait {
                     arch_clamp,
                 };
                 eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
+            }
+            Condition::Comment {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not: _,
+                platforms: _,
+            } => {
+                let params = StringParams {
+                    exact: exact.as_ref(),
+                    substr: substr.as_ref(),
+                    regex: regex.as_ref(),
+                    word: word.as_ref(),
+                    case_insensitive: *case_insensitive,
+                    is_check: *is_check,
+                    section: None,
+                    offset: None,
+                    offset_range: None,
+                    section_offset: None,
+                    section_offset_range: None,
+                    arch_clamp,
+                };
+                crate::composite_rules::evaluators::symbol_string::eval_comment(
+                    &params,
+                    self.not.as_ref(),
+                    ctx,
+                )
             }
             Condition::Literal {
                 kind: _,

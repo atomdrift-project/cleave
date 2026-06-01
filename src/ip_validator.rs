@@ -216,6 +216,53 @@ pub(crate) fn validate_external_ip_string(ip_str: &str) -> Option<Ipv4Addr> {
     if is_external_ip(&ip) { Some(ip) } else { None }
 }
 
+/// Validate an IP address string as a structurally valid IPv4 of any range.
+///
+/// Unlike [`validate_external_ip_string`], this accepts private, loopback,
+/// link-local, multicast, and reserved ranges. It enforces only structural
+/// validity: exactly four octets, each 0–255, with no leading zeros. Use this
+/// to confirm an IP *literal* of any kind rather than a routable C2 host.
+///
+/// Returns `Some(Ipv4Addr)` if the string is a well-formed IPv4, `None`
+/// otherwise.
+#[must_use]
+pub(crate) fn validate_ipv4_string(ip_str: &str) -> Option<Ipv4Addr> {
+    let mut octets = [0u8; 4];
+    let mut parts = ip_str.split('.');
+    for octet in &mut octets {
+        *octet = parse_octet_fast(parts.next()?)?;
+    }
+    // Reject if there are extra parts (e.g. "1.2.3.4.5").
+    if parts.next().is_some() {
+        return None;
+    }
+    Some(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]))
+}
+
+/// Check if a text string contains at least one structurally valid IPv4
+/// literal of any range.
+///
+/// This is the entry point for the `is: valid_ip` condition modifier. It
+/// rejects malformed dotted-decimal runs (octets > 255, leading zeros, wrong
+/// part counts) that the bare `\d{1,3}` regex would otherwise accept — e.g.
+/// SVG path coordinates like `022.617.46.402`.
+#[must_use]
+pub(crate) fn contains_valid_ip(text: &str) -> bool {
+    // Fast reject: no dots means no IPs possible
+    if memchr::memchr(b'.', text.as_bytes()).is_none() {
+        return false;
+    }
+    let Some(pattern) = ip_pattern() else {
+        return false;
+    };
+    for m in pattern.find_iter(text) {
+        if validate_ipv4_string(m.as_str()).is_some() {
+            return true;
+        }
+    }
+    false
+}
+
 /// Optimized check for external IPs in text, with identity-based caching.
 ///
 /// Uses a thread-local LRU cache keyed by the input string's identity (pointer and length)
@@ -415,6 +462,52 @@ mod tests {
         assert!(validate_external_ip_string("not.an.ip.address").is_none());
         assert!(validate_external_ip_string("1.2.3").is_none());
         assert!(validate_external_ip_string("1.2.3.4.5").is_none());
+    }
+
+    #[test]
+    fn test_validate_ipv4_string_any_range() {
+        // Structurally valid IPs of any range are accepted (unlike external_ip).
+        assert!(validate_ipv4_string("8.8.8.8").is_some());
+        assert!(validate_ipv4_string("192.168.1.1").is_some());
+        assert!(validate_ipv4_string("10.0.0.1").is_some());
+        assert!(validate_ipv4_string("127.0.0.1").is_some());
+        assert!(validate_ipv4_string("1.2.3.4").is_some());
+
+        // Malformed dotted-decimal runs are rejected.
+        assert!(validate_ipv4_string("022.617.46.402").is_none()); // octets > 255, leading zero
+        assert!(validate_ipv4_string("256.1.1.1").is_none());
+        assert!(validate_ipv4_string("1.2.3").is_none());
+        assert!(validate_ipv4_string("1.2.3.4.5").is_none());
+    }
+
+    #[test]
+    fn test_validate_ipv4_string_leading_zeros_rejected() {
+        // Octets with a leading zero are rejected. They are technically
+        // parseable but vanishingly rare in real IP literals and a common
+        // source of misinterpreted byte/coordinate data.
+        assert!(validate_ipv4_string("010.001.001.001").is_none());
+        assert!(validate_ipv4_string("8.08.8.8").is_none()); // single leading-zero octet
+        assert!(validate_ipv4_string("192.168.01.1").is_none());
+        assert!(validate_ipv4_string("00.0.0.0").is_none());
+
+        // A bare zero octet (no leading zero) is still structurally valid.
+        assert!(validate_ipv4_string("0.0.0.0").is_some());
+        assert!(validate_ipv4_string("10.0.0.1").is_some());
+    }
+
+    #[test]
+    fn test_contains_valid_ip() {
+        // Private/loopback literals match (the external_ip path rejects these).
+        assert!(contains_valid_ip("connect to 192.168.1.1 now"));
+        assert!(contains_valid_ip("127.0.0.1"));
+        assert!(contains_valid_ip("http://45.33.32.156/x"));
+
+        // SVG path coordinates must NOT register as an IP.
+        assert!(!contains_valid_ip(
+            "M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803"
+        ));
+        // No IP present.
+        assert!(!contains_valid_ip("https://example.com/path"));
     }
 
     #[test]

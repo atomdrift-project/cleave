@@ -423,6 +423,11 @@ enum ConditionDeser {
 pub enum StringValidator {
     /// Require match to contain a valid external IPv4 address
     ExternalIp,
+    /// Require match to contain a structurally valid IPv4 address of any
+    /// range, including private/loopback/link-local. Use this to confirm an
+    /// IP literal of any kind without the external/C2-quality filtering that
+    /// `ExternalIp` applies.
+    ValidIp,
     /// Require match to contain a valid Bitcoin address (with checksum)
     #[serde(rename = "bitcoin_addr")]
     BitcoinAddr,
@@ -452,10 +457,16 @@ pub(crate) enum SymbolKind {
     /// Dotted member-access chains (`window.localStorage`,
     /// `chrome.cookies.getAll`) from `filefacts::Symbol::Member` — matched
     /// against the chain path. Replaces tree-sitter `member_expression`
-    /// queries that only keyed off the dotted path.
+    /// queries that only keyed off the dotted path. `attribute` is accepted
+    /// as an alias for migrated tree-sitter `kind: attribute` rules (Python
+    /// attribute access is the same dotted-chain fact).
+    #[serde(alias = "attribute")]
     Member,
     /// Static assignment targets (`API_URL`, `exports.token`) from
     /// `filefacts::Symbol::Bind` — matched against the bind target.
+    /// `assignment` is accepted as an alias for migrated tree-sitter
+    /// `kind: assignment` rules (the assignment's bound name).
+    #[serde(alias = "assignment")]
     Bind,
     /// Bare identifier appearances (variable/type/function names) from
     /// `filefacts::Symbol::Identifier` — matched against the identifier text.
@@ -657,6 +668,29 @@ enum ConditionTagged {
             serialize_with = "offset_range_serde::serialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
+    },
+    /// Match against source-code comment bodies only (the dedicated
+    /// `report.comments` corpus). Lowest false positives for "keyword
+    /// mentioned in a comment" rules — never fires on the same keyword
+    /// in code or a string literal. Replaces tree-sitter
+    /// `kind: comment` queries.
+    Comment {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        word: Option<String>,
+        #[serde(default)]
+        case_insensitive: bool,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        not: Option<Vec<NotException>>,
+        #[serde(default)]
+        platforms: Option<Vec<Platform>>,
     },
     #[serde(alias = "string_literal")]
     Literal {
@@ -1150,6 +1184,25 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                 },
+                ConditionTagged::Comment {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                } => Condition::Comment {
+                    exact,
+                    substr,
+                    regex,
+                    word,
+                    case_insensitive,
+                    is_check,
+                    not,
+                    platforms,
+                },
                 ConditionTagged::Literal {
                     kind,
                     exact,
@@ -1429,6 +1482,25 @@ impl From<Condition> for ConditionTagged {
                 offset_range,
                 section_offset,
                 section_offset_range,
+            },
+            Condition::Comment {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
+            } => ConditionTagged::Comment {
+                exact,
+                substr,
+                regex,
+                word,
+                case_insensitive,
+                is_check,
+                not,
+                platforms,
             },
             Condition::Literal {
                 kind,
@@ -1752,6 +1824,28 @@ pub(crate) enum Condition {
             deserialize_with = "offset_range_serde::deserialize"
         )]
         section_offset_range: Option<(i64, Option<i64>)>,
+    },
+
+    /// Match against source-code comment bodies only (`report.comments`).
+    /// The lowest-false-positive tier for "keyword mentioned in a comment"
+    /// rules — never fires on the same keyword in code or a string literal.
+    Comment {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        exact: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        substr: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        regex: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        word: Option<String>,
+        #[serde(default)]
+        case_insensitive: bool,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        not: Option<Vec<NotException>>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        platforms: Option<Vec<Platform>>,
     },
 
     /// Match a language-level literal recovered by the AST walker.
@@ -2237,6 +2331,7 @@ impl Condition {
         match self {
             Condition::Symbol { .. } => "symbol",
             Condition::Text { .. } => "text",
+            Condition::Comment { .. } => "comment",
             Condition::Literal { .. } => "string_literal",
             Condition::Trait { .. } => "trait",
             Condition::TreeSitter { .. } => "tree-sitter",

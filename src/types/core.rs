@@ -104,6 +104,12 @@ pub struct AnalysisReport {
     /// String literals extracted from the file
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub strings: Vec<StringInfo>,
+    /// Source-code comment bodies (separate from `strings` so comment text
+    /// never bleeds into string/byte matchers). Matched only by
+    /// `type: comment` — the lowest-false-positive tier for "keyword
+    /// mentioned in a comment" rules.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub comments: Vec<StringInfo>,
     /// Binary sections (ELF, Mach-O, or PE)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub sections: Vec<Section>,
@@ -335,6 +341,7 @@ impl AnalysisReport {
             structure: Vec::new(),
             functions: Vec::new(),
             strings: Vec::new(),
+            comments: Vec::new(),
             sections: Vec::new(),
             imports: Vec::new(),
             exports: Vec::new(),

@@ -622,6 +622,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             regex,
             arg,
             kind,
+            alias,
             ..
         } => {
             // The symbol `kind` discriminates the fact being matched: a call to
@@ -654,7 +655,23 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                         format!("#arg:{v}")
                     })
                     .unwrap_or_default();
-                format!("{kind_disc}{arg_disc}")
+                // An `alias:` filter narrows to *aliased* imports
+                // (`import base64 as x`) — a different atom from the plain
+                // import (`import base64`). Fold its presence/value in so the
+                // aliased and plain forms aren't collapsed.
+                let alias_disc = alias
+                    .as_ref()
+                    .map(|a| {
+                        let v = a
+                            .exact
+                            .as_deref()
+                            .or(a.substr.as_deref())
+                            .or(a.regex.as_deref())
+                            .unwrap_or("*");
+                        format!("#alias:{v}")
+                    })
+                    .unwrap_or_default();
+                format!("{kind_disc}{arg_disc}{alias_disc}")
             };
             if let Some(v) = exact {
                 add_pattern("symbol", "exact", format!("{v}{disc}"), None, None);

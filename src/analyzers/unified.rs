@@ -972,6 +972,29 @@ impl UnifiedSourceAnalyzer {
                         matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
+            } else if kind.contains("comment") {
+                // Comment-body extraction (rule `type: comment`). Tree-sitter
+                // tags comment nodes uniformly across grammars (`comment`,
+                // `line_comment`, `block_comment`, `multiline_comment`). Stored
+                // in the dedicated `report.comments` corpus — NOT `strings` —
+                // so comment text can never bleed into string/byte matchers;
+                // `eval_comment` is the only consumer, giving the
+                // lowest-false-positive home for "keyword in a comment" rules.
+                if let Ok(text) = node.utf8_text(source) {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() && trimmed.len() < 10000 {
+                        report.comments.push(StringInfo {
+                            value: trimmed.to_string().into(),
+                            offset: Some(node.start_byte() as u64),
+                            string_type: None,
+                            encoding: "utf-8".to_string(),
+                            section: Some("comment".to_string()),
+                            encoding_chain: Vec::new(),
+                            fragments: None,
+                            matched: std::sync::atomic::AtomicBool::new(false),
+                        });
+                    }
+                }
             }
 
             if cursor.goto_first_child() {

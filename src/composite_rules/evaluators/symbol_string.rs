@@ -7,12 +7,13 @@
 //! - String count analysis
 
 use super::{
-    ContentLocationParams, resolve_effective_range, resolve_effective_range_opt, symbol_matches,
+    ContentLocationParams, build_regex, resolve_effective_range, resolve_effective_range_opt,
+    symbol_matches, truncate_evidence,
 };
 use crate::composite_rules::condition::{NotException, StringValidator, SymbolKind};
 use crate::composite_rules::context::{ConditionResult, EvaluationContext, StringParams};
 use crate::composite_rules::types::Platform;
-use crate::ip_validator::contains_external_ip_cached;
+use crate::ip_validator::{contains_external_ip_cached, contains_valid_ip};
 use cleave::bitcoin_validator::contains_bitcoin_address;
 use std::sync::LazyLock;
 
@@ -27,6 +28,7 @@ pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> boo
     match validator {
         None => true,
         Some(StringValidator::ExternalIp) => contains_external_ip_cached(s),
+        Some(StringValidator::ValidIp) => contains_valid_ip(s),
         Some(StringValidator::BitcoinAddr) => contains_bitcoin_address(s),
     }
 }
@@ -510,6 +512,77 @@ fn cached_text_evidence(cached: &[Evidence]) -> Vec<Evidence> {
             ev
         })
         .collect()
+}
+
+/// Evaluate a `type: comment` condition against the dedicated comment
+/// corpus (`report.comments`). This is the lowest-false-positive string
+/// tier: comment bodies never contain code or string-literal content, so
+/// a keyword match here means the keyword genuinely appears in a comment
+/// — not in a variable name, a call, or a string. Replaces tree-sitter
+/// `kind: comment` queries without a per-rule parse.
+pub(crate) fn eval_comment<'a, 'b>(
+    params: &StringParams<'a>,
+    trait_not: Option<&Vec<NotException>>,
+    ctx: &EvaluationContext<'b>,
+) -> ConditionResult {
+    let regex = params
+        .regex
+        .and_then(|r| build_regex(r, params.case_insensitive).ok());
+    let word_regex = params.word.and_then(|w| {
+        build_regex(&format!(r"\b{}\b", regex::escape(w)), params.case_insensitive).ok()
+    });
+    let mut evidence = Vec::new();
+    let mut match_count = 0usize;
+    for c in &ctx.report.comments {
+        let v = c.value.as_str();
+        let hit = if let Some(e) = params.exact {
+            if params.case_insensitive {
+                v.eq_ignore_ascii_case(e)
+            } else {
+                v == e
+            }
+        } else if let Some(s) = params.substr {
+            if params.case_insensitive {
+                v.to_lowercase().contains(&s.to_lowercase())
+            } else {
+                v.contains(s)
+            }
+        } else if let Some(re) = &regex {
+            re.is_match(v)
+        } else if let Some(re) = &word_regex {
+            re.is_match(v)
+        } else {
+            false
+        };
+        if !hit || !validate_match(v, params.is_check) {
+            continue;
+        }
+        if trait_not.is_some_and(|ex| ex.iter().any(|e| e.matches(v))) {
+            continue;
+        }
+        match_count += 1;
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+            evidence.push(Evidence {
+                method: "comment".to_string(),
+                source: "comment".to_string(),
+                value: truncate_evidence(v, 100),
+                location: c.offset.map(|o| format!("@{o}")),
+                offsets: c.offset.map(|o| vec![o]).unwrap_or_default(),
+                ..Default::default()
+            });
+        }
+    }
+    if match_count == 0 {
+        return ConditionResult::no_match();
+    }
+    ConditionResult {
+        matched: true,
+        evidence,
+        match_count,
+        warnings: Vec::new(),
+        precision: 2.0,
+        matched_trait_ids: Vec::new(),
+    }
 }
 
 /// Evaluate string condition - searches in properly extracted/bounded strings,

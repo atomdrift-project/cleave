@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.8.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#71dc2ad460e47892ca6ab7f7edc8e81ddb9ab703"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#bdf57feac051e09e4608e8ea5659d92082d55188"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -5209,9 +5209,9 @@ dependencies = [
 
 [[package]]
 name = "tree-sitter-swift"
-version = "0.7.2"
+version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f3b98fb6bc8e6a6a10023f401aa6a1858115e849dfaf7de57dd8b8ea0f257bd9"
+checksum = "fe36052155b9dd69ca82b3b8f1b4ccfb2d867125ac1a4db1dd7331829242668c"
 dependencies = [
  "cc",
  "tree-sitter-language",

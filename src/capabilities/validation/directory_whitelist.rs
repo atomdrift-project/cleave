@@ -214,18 +214,18 @@ const ALLOWED_PERSISTENCE: &[&str] = &[
 /// Must not use objective names (no c2, persist, evasion, etc.).
 const ALLOWED_MICRO_BEHAVIORS: &[&str] = &[
     "browser-extension", // Browser-extension (WebExtension) platform APIs
-    "communications",   // Network protocols and transport
-    "crypto",           // Cryptographic operations
-    "data",             // Data transformation, encoding, serialization
-    "dylib",            // Dynamic library operations
-    "fs",               // Filesystem access
-    "hardware",         // Hardware interaction
-    "mem",              // Memory operations
-    "os",               // OS integration
-    "process",          // Process control
-    "revision-control", // Revision control interactions
-    "time",             // Timing operations
-    "ui",               // User interface operations
+    "communications",    // Network protocols and transport
+    "crypto",            // Cryptographic operations
+    "data",              // Data transformation, encoding, serialization
+    "dylib",             // Dynamic library operations
+    "fs",                // Filesystem access
+    "hardware",          // Hardware interaction
+    "mem",               // Memory operations
+    "os",                // OS integration
+    "process",           // Process control
+    "revision-control",  // Revision control interactions
+    "time",              // Timing operations
+    "ui",                // User interface operations
 ];
 
 /// Allowed subdirectories in micro-behaviors/browser-extension/

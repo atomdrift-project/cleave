@@ -1230,7 +1230,10 @@ impl TraitDefinition {
                             ctx,
                         )
                     ),
-                    Some(fact_kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {
+                    Some(
+                        fact_kind
+                        @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier),
+                    ) => {
                         timed_eval!(
                             "symbol",
                             crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
@@ -2540,15 +2543,16 @@ impl CompositeTrait {
                             ctx,
                         )
                     }
-                    Some(fact_kind @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier)) => {
-                        crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
-                            *fact_kind,
-                            exact.as_ref(),
-                            substr.as_ref(),
-                            regex.as_ref(),
-                            ctx,
-                        )
-                    }
+                    Some(
+                        fact_kind
+                        @ (SymbolKind::Member | SymbolKind::Bind | SymbolKind::Identifier),
+                    ) => crate::composite_rules::evaluators::symbol_string::eval_symbol_fact(
+                        *fact_kind,
+                        exact.as_ref(),
+                        substr.as_ref(),
+                        regex.as_ref(),
+                        ctx,
+                    ),
                     _ => self.eval_symbol(
                         exact.as_ref(),
                         substr.as_ref(),

@@ -145,13 +145,10 @@ impl super::CapabilityMapper {
 
         // Run symbol matching ONCE across exact, substr, and regex patterns.
         // Evidence flows into cached_evidence so eval_symbol's FAST PATH 0 can
-        // skip the per-symbol iteration on repeat trait evaluation.
-        let all_symbols: Vec<String> = report
-            .imports
-            .iter()
-            .map(|i| i.symbol.clone())
-            .chain(report.exports.iter().map(|e| e.symbol.clone()))
-            .collect();
+        // skip the per-symbol iteration on repeat trait evaluation. The
+        // haystack spans imports/exports plus filefacts call/member/bind/
+        // identifier names (see `build_all_symbols`).
+        let all_symbols = super::build_all_symbols(report);
         let (symbol_matched_traits, symbol_evidence) = self
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
@@ -290,12 +287,9 @@ impl super::CapabilityMapper {
             (FxHashSet::default(), FxHashMap::default())
         };
         // Run symbol matching ONCE across exact, substr, and regex patterns.
-        let all_symbols: Vec<String> = report
-            .imports
-            .iter()
-            .map(|i| i.symbol.clone())
-            .chain(report.exports.iter().map(|e| e.symbol.clone()))
-            .collect();
+        // Haystack spans imports/exports plus filefacts call/member/bind/
+        // identifier names (see `build_all_symbols`).
+        let all_symbols = super::build_all_symbols(report);
         let (symbol_matched_traits, symbol_evidence) = self
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
@@ -421,9 +415,17 @@ impl super::CapabilityMapper {
             || !cache.regex_candidates.is_empty();
 
         // For dependent traits, we can't skip based on string matches alone
-        // because the trait: condition might match even if strings don't
-        let has_strings =
-            !report.strings.is_empty() || !report.imports.is_empty() || !report.exports.is_empty();
+        // because the trait: condition might match even if strings don't.
+        // Source-AST facts (calls/members/binds/identifiers) also count: a
+        // tiny source file like `process.env` carries no extracted strings or
+        // imports but does carry member facts that `kind: member` traits match.
+        let has_strings = !report.strings.is_empty()
+            || !report.imports.is_empty()
+            || !report.exports.is_empty()
+            || report
+                .filefacts
+                .as_ref()
+                .is_some_and(|v| !v.symbols.is_empty());
         if !dependent_only && !has_any_matches && !has_strings && binary_data.len() < 100 {
             return vec![];
         }
@@ -537,13 +539,6 @@ impl super::CapabilityMapper {
                 // Skip indexed substr traits that weren't matched
                 if self.string_match_index.is_substr_trait(idx)
                     && !cache.string_matched_traits.contains(&idx)
-                {
-                    return None;
-                }
-
-                // Skip indexed symbol traits that weren't matched
-                if self.symbol_match_index.is_symbol_trait(idx)
-                    && !cache.symbol_matched_traits.contains(&idx)
                 {
                     return None;
                 }

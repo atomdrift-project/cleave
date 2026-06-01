@@ -374,20 +374,6 @@ fn should_skip_unknown_url_markup_payload(payload: &types::ExtractedPayload) -> 
     alpha_count >= 24 && space_count >= 4
 }
 
-fn extension_content_mismatch_criticality(expected: &str, actual: &str) -> types::Criticality {
-    let expected_is_image = expected.ends_with("image");
-    let actual_is_image = actual.ends_with("image");
-
-    let benign = (expected_is_image && actual_is_image)
-        || expected == "Data"
-        || actual == "TarGz"
-        || actual == "Zip";
-    if benign {
-        types::Criticality::Notable
-    } else {
-        types::Criticality::Suspicious
-    }
-}
 pub use composite_rules::evaluators::{clear_regex_caches, clear_thread_local_caches};
 
 use anyhow::Result;
@@ -1280,8 +1266,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         return Ok(report);
     }
 
-    // Check for extension/content mismatch
-    let mismatch = analyzers::check_extension_content_mismatch(path, file_data);
+    // Extension/content mismatch is emitted by YAML traits under
+    // objectives/evasion/masquerade/extension-mismatch/ (consuming the
+    // filefacts consistency.extension_content_mismatch metric).
 
     // Normalize text encoding (UTF-16 LE/BE BOM -> UTF-8) before string
     // extraction, metrics, and trait matching.
@@ -1660,46 +1647,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         }
     }?;
     let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
-
-    // Add finding for extension/content mismatch if detected
-    if let Some((expected, actual, is_juke)) = mismatch {
-        let (desc, evidence_value) = if is_juke {
-            (
-                format!(
-                    "Shebang claims {} but file is {} (extension juke)",
-                    actual, expected
-                ),
-                format!("file={}, shebang={}", expected, actual),
-            )
-        } else {
-            (
-                format!(
-                    "File extension claims {} but content is {}",
-                    expected, actual
-                ),
-                format!("expected={}, actual={}", expected, actual),
-            )
-        };
-        report.findings.push(types::Finding {
-            id: "metadata/file-extension-mismatch".to_string(),
-            kind: types::FindingKind::Indicator,
-            desc,
-            conf: 1.0,
-            crit: extension_content_mismatch_criticality(&expected, &actual),
-            mbc: None,
-            attack: Some("T1036.005".to_string()), // Masquerading: Match Legitimate Name or Location
-            trait_refs: vec![],
-            evidence: vec![types::Evidence {
-                method: "magic-byte".to_string(),
-                source: "cleave".to_string(),
-                value: evidence_value,
-                location: None,
-                ..Default::default()
-            }],
-            match_count: 0,
-            source_file: None,
-        });
-    }
 
     // Process encoded payloads and analyze them
     let payloads_start = std::time::Instant::now();
@@ -2804,21 +2751,5 @@ mod tests {
             original_offset: 0,
         };
         assert!(should_skip_unknown_url_markup_payload(&payload));
-    }
-
-    #[test]
-    fn test_extension_content_mismatch_images_are_notable() {
-        assert_eq!(
-            extension_content_mismatch_criticality("JPEG image", "PNG image"),
-            types::Criticality::Notable
-        );
-    }
-
-    #[test]
-    fn test_extension_content_mismatch_non_images_are_suspicious() {
-        assert_eq!(
-            extension_content_mismatch_criticality("WOFF2 font", "hex-encoded data"),
-            types::Criticality::Suspicious
-        );
     }
 }

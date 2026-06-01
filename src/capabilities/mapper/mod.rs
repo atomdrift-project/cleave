@@ -113,6 +113,31 @@ pub(super) fn build_all_strings(
     all_strings
 }
 
+/// Build the symbol-prefilter haystack the `SymbolMatchIndex` runs over to
+/// decide which `type: symbol` traits are candidates for evaluation.
+///
+/// Includes import/export symbol names (binary symbol tables) *and* every
+/// source-AST projection filefacts extracted — call targets, member-access
+/// chains, bind targets, and identifiers (`Symbol::name()` yields the
+/// matchable name for each kind). Without the filefacts names a
+/// `kind: member`/`bind`/`identifier` trait could never become a candidate
+/// (its literal would never appear in the haystack) and would be silently
+/// skipped — the prefilter must see the same facts the evaluators do.
+pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<String> {
+    let filefacts_len = report.filefacts.as_ref().map_or(0, |v| v.symbols.len());
+    let mut all = Vec::with_capacity(report.imports.len() + report.exports.len() + filefacts_len);
+    all.extend(report.imports.iter().map(|i| i.symbol.clone()));
+    all.extend(report.exports.iter().map(|e| e.symbol.clone()));
+    if let Some(view) = report.filefacts.as_ref() {
+        all.extend(
+            view.symbols
+                .iter()
+                .filter_map(|s| s.name().map(str::to_string)),
+        );
+    }
+    all
+}
+
 // Extracted modules
 pub(crate) mod builder;
 pub(crate) mod evaluate_composites;

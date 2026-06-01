@@ -1427,9 +1427,6 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
 /// that legitimately appear across compiled binaries, scripts, source code, and
 /// documents — so requiring narrow file type targeting would silently drop coverage.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
-    // Extension/content mismatch is inherently cross-type: any file format can
-    // be misnamed with any extension (the consistency.* metric is format-agnostic).
-    "metadata/file/extension/",
     // Text data patterns (encoding, obfuscation markers) appear in any file
     "micro-behaviors/data/text/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs

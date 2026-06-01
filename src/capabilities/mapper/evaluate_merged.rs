@@ -295,17 +295,15 @@ impl super::CapabilityMapper {
                 )
             };
 
-        // Run symbol matching ONCE
-        let symbol_matched_traits = if !report.imports.is_empty() || !report.exports.is_empty() {
-            let all_symbols: Vec<String> = report
-                .imports
-                .iter()
-                .map(|i| i.symbol.clone())
-                .chain(report.exports.iter().map(|e| e.symbol.clone()))
-                .collect();
-            self.symbol_match_index.find_matches(&all_symbols)
-        } else {
+        // Run symbol matching ONCE. The haystack spans import/export symbol
+        // tables and every source-AST projection (calls, members, binds,
+        // identifiers) so `kind: member`/`bind`/`identifier` traits become
+        // candidates on pure-source files that carry no imports/exports.
+        let all_symbols = super::build_all_symbols(report);
+        let symbol_matched_traits = if all_symbols.is_empty() {
             FxHashSet::default()
+        } else {
+            self.symbol_match_index.find_matches(&all_symbols)
         };
 
         let _d_strings = t_strings.elapsed();

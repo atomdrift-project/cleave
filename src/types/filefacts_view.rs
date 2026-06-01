@@ -81,22 +81,15 @@ fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
     v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
-/// Mirror only the symbol kinds that downstream actually consumes:
-/// `call` (read by `eval_call` and emitted as `ff.ct` call targets) and
-/// `member` (emitted as `ff.mc` member chains). Imports/exports/functions
-/// are read from the typed `FileAnalysis` fields, and `identifier`/`bind`
-/// symbols — the bulk of a source-file parse — are unused. Dropping the
-/// unused kinds here is the dominant per-member memory saving on
-/// source-heavy archives, where the retained symbol mirror otherwise scales
-/// with every variable reference in every member.
+/// Mirror every symbol kind filefacts extracted. Source-AST projections —
+/// `call`, `member`, `bind`, `identifier` — are all matchable by the
+/// `type: symbol, kind: …` trait evaluators (the targets `query:` rules
+/// migrate onto), so retaining them is what makes those migrations fire.
+/// Imports/exports/functions are also read from the typed `FileAnalysis`
+/// fields, but keeping them here too costs little and keeps the view a
+/// faithful mirror of `parsed.symbols()`.
 fn retained_symbols(parsed: &filefacts::ParsedFile<'_>) -> Vec<filefacts::Symbol> {
-    use filefacts::SymbolKind;
-    let symbols = parsed.symbols();
-    symbols
-        .iter_kind(SymbolKind::Call)
-        .chain(symbols.iter_kind(SymbolKind::Member))
-        .cloned()
-        .collect()
+    parsed.symbols().iter().cloned().collect()
 }
 
 /// Serialize a `#[serde(transparent)] Vec<T>` wrapper (e.g.

@@ -28,8 +28,10 @@ pub fn total_memory() -> Option<u64> {
 
 /// Current process RSS (Resident Set Size) in bytes when the platform exposes it.
 ///
-/// On FreeBSD, OpenBSD, and NetBSD this currently returns `ru_maxrss`, which is
-/// the process high-water mark rather than the instantaneous RSS.
+/// Reports the *instantaneous* RSS — a value that falls as the process frees
+/// memory — on Linux, macOS, FreeBSD, illumos/Solaris, and Windows. OpenBSD and
+/// NetBSD fall back to `ru_maxrss`, the lifetime high-water mark, which only
+/// ever increases.
 ///
 /// Returns `None` if the value cannot be determined.
 #[must_use]
@@ -299,10 +301,22 @@ fn total_memory_impl() -> Option<u64> {
     None
 }
 
-#[cfg(any(target_os = "freebsd", target_os = "openbsd", target_os = "netbsd"))]
-fn current_rss_impl() -> Option<u64> {
-    // getrusage(RUSAGE_SELF) is available on all BSDs.
-    // ru_maxrss is in kilobytes on FreeBSD/OpenBSD/NetBSD.
+/// `getrusage(RUSAGE_SELF).ru_maxrss` (lifetime high-water mark) in bytes.
+///
+/// Shared fallback for the BSDs and illumos/Solaris, where `ru_maxrss` is in
+/// kilobytes. This is monotonic — it never decreases — so it is only a
+/// last-resort backstop. The per-platform `current_rss_impl` below prefers a
+/// true *instantaneous* RSS where the kernel exposes one (FreeBSD, illumos),
+/// because the memory-admission throttle needs to see RSS fall as work
+/// completes; a high-water mark would pin the gate shut forever.
+#[cfg(any(
+    target_os = "freebsd",
+    target_os = "openbsd",
+    target_os = "netbsd",
+    target_os = "illumos",
+    target_os = "solaris"
+))]
+fn getrusage_maxrss() -> Option<u64> {
     extern "C" {
         fn getrusage(who: i32, usage: *mut Rusage) -> i32;
     }
@@ -313,8 +327,8 @@ fn current_rss_impl() -> Option<u64> {
         tv_usec: i64,
     }
 
-    // Minimal rusage — we only need ru_maxrss (3rd field).
-    // The full struct is much larger; we pad to be safe.
+    // Minimal rusage — we only need ru_maxrss (3rd field). The full struct is
+    // much larger; we pad to be safe.
     #[repr(C)]
     struct Rusage {
         ru_utime: Timeval,
@@ -333,6 +347,107 @@ fn current_rss_impl() -> Option<u64> {
     } else {
         None
     }
+}
+
+/// FreeBSD instantaneous RSS via `sysctl kern.proc.pid.<pid>`.
+///
+/// The kernel fills a `struct kinfo_proc` whose `ki_rssize` field is the live
+/// resident page count. On all 64-bit FreeBSD targets the struct layout is
+/// frozen: `ki_rssize` (a `segsz_t`, i.e. 8 bytes, in pages) sits at offset 264,
+/// immediately after `ki_size` (bytes) at 256. We read it defensively and
+/// validate against physical RAM, falling back to the `ru_maxrss` high-water
+/// mark if the value is implausible (guards against a layout change on a future
+/// release).
+#[cfg(target_os = "freebsd")]
+fn current_rss_impl() -> Option<u64> {
+    extern "C" {
+        fn sysctl(
+            name: *const i32,
+            namelen: u32,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *const std::ffi::c_void,
+            newlen: usize,
+        ) -> i32;
+        fn getpid() -> i32;
+        fn getpagesize() -> i32;
+    }
+
+    const CTL_KERN: i32 = 1;
+    const KERN_PROC: i32 = 14;
+    const KERN_PROC_PID: i32 = 1;
+    /// Byte offset of `ki_rssize` within `struct kinfo_proc` on 64-bit FreeBSD.
+    const KI_RSSIZE_OFFSET: usize = 264;
+
+    let instantaneous = || -> Option<u64> {
+        // SAFETY: getpid/getpagesize are pure libc calls with no arguments.
+        let pid = unsafe { getpid() };
+        let page_size = unsafe { getpagesize() };
+        if page_size <= 0 {
+            return None;
+        }
+        let mib = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid];
+
+        // First call: ask for the buffer size the kernel needs.
+        let mut len: usize = 0;
+        // SAFETY: oldp=null asks sysctl to report the required length in `len`.
+        let ret = unsafe {
+            sysctl(
+                mib.as_ptr(),
+                mib.len() as u32,
+                std::ptr::null_mut(),
+                &raw mut len,
+                std::ptr::null(),
+                0,
+            )
+        };
+        if ret != 0 || len <= KI_RSSIZE_OFFSET + std::mem::size_of::<u64>() {
+            return None;
+        }
+
+        // Second call: fill a byte buffer with the kinfo_proc record.
+        let mut buf = vec![0u8; len];
+        // SAFETY: buffer is `len` bytes; sysctl writes at most `len` and updates
+        // `len` with the bytes actually written.
+        let ret = unsafe {
+            sysctl(
+                mib.as_ptr(),
+                mib.len() as u32,
+                buf.as_mut_ptr().cast(),
+                &raw mut len,
+                std::ptr::null(),
+                0,
+            )
+        };
+        if ret != 0 || len <= KI_RSSIZE_OFFSET + std::mem::size_of::<u64>() {
+            return None;
+        }
+
+        // Read ki_rssize (pages) from its fixed offset via an unaligned load.
+        let mut rssize_pages = [0u8; 8];
+        rssize_pages.copy_from_slice(&buf[KI_RSSIZE_OFFSET..KI_RSSIZE_OFFSET + 8]);
+        let pages = u64::from_ne_bytes(rssize_pages);
+        let bytes = pages.checked_mul(page_size as u64)?;
+
+        // Validate: a live RSS must be positive and cannot exceed physical RAM.
+        // An implausible value means the struct layout drifted; reject it so the
+        // caller falls back to the (always-safe) high-water mark.
+        match total_memory() {
+            Some(total) if bytes > 0 && bytes <= total => Some(bytes),
+            None if bytes > 0 => Some(bytes),
+            _ => None,
+        }
+    };
+
+    instantaneous().or_else(getrusage_maxrss)
+}
+
+#[cfg(any(target_os = "openbsd", target_os = "netbsd"))]
+fn current_rss_impl() -> Option<u64> {
+    // OpenBSD/NetBSD expose ru_maxrss (high-water mark). Their kinfo_proc
+    // layouts differ from FreeBSD's, so we keep the conservative fallback until
+    // an instantaneous reader is needed there.
+    getrusage_maxrss()
 }
 
 // ── illumos / Solaris ───────────────────────────────────────────────────
@@ -360,42 +475,39 @@ fn total_memory_impl() -> Option<u64> {
     }
 }
 
+/// illumos/Solaris instantaneous RSS via `/proc/self/psinfo`.
+///
+/// `psinfo_t` is a stable binary struct mounted by the always-present procfs.
+/// Its `pr_rssize` field is the live resident size in *kilobytes* and sits at a
+/// fixed offset (56) on 64-bit targets, after `pr_size` (48). We read it
+/// defensively and validate against physical RAM, falling back to the
+/// `ru_maxrss` high-water mark if procfs is absent or the value is implausible.
+///
+/// `getrusage(RUSAGE_SELF).ru_maxrss` — the previous behaviour — is a lifetime
+/// high-water mark, which would pin the memory-admission throttle shut once the
+/// process peaked; the instantaneous reading is what lets the gate reopen.
 #[cfg(any(target_os = "illumos", target_os = "solaris"))]
 fn current_rss_impl() -> Option<u64> {
-    // getrusage(RUSAGE_SELF).ru_maxrss is in kilobytes on illumos/Solaris
-    // (high-water mark, not instantaneous — same caveat as the BSDs). True
-    // instantaneous RSS would require parsing /proc/self/psinfo as a binary
-    // struct; getrusage is enough for throttling-style monitoring.
-    extern "C" {
-        fn getrusage(who: i32, usage: *mut Rusage) -> i32;
-    }
+    /// Byte offset of `pr_rssize` within `psinfo_t` on 64-bit illumos/Solaris.
+    const PR_RSSIZE_OFFSET: usize = 56;
 
-    #[repr(C)]
-    struct Timeval {
-        tv_sec: i64,
-        tv_usec: i64,
-    }
+    let instantaneous = || -> Option<u64> {
+        let buf = std::fs::read("/proc/self/psinfo").ok()?;
+        if buf.len() < PR_RSSIZE_OFFSET + std::mem::size_of::<u64>() {
+            return None;
+        }
+        let mut rssize_kb = [0u8; 8];
+        rssize_kb.copy_from_slice(&buf[PR_RSSIZE_OFFSET..PR_RSSIZE_OFFSET + 8]);
+        let bytes = u64::from_ne_bytes(rssize_kb).checked_mul(1024)?;
 
-    // Minimal rusage — we only need ru_maxrss. The full struct is larger;
-    // we pad to be safe. On illumos ru_maxrss is `long` (i64 on amd64).
-    #[repr(C)]
-    struct Rusage {
-        ru_utime: Timeval,
-        ru_stime: Timeval,
-        ru_maxrss: i64,
-        _pad: [i64; 13],
-    }
+        match total_memory() {
+            Some(total) if bytes > 0 && bytes <= total => Some(bytes),
+            None if bytes > 0 => Some(bytes),
+            _ => None,
+        }
+    };
 
-    const RUSAGE_SELF: i32 = 0;
-
-    // SAFETY: getrusage fills the Rusage struct; we pass a zeroed buffer.
-    let mut usage: Rusage = unsafe { std::mem::zeroed() };
-    let ret = unsafe { getrusage(RUSAGE_SELF, &raw mut usage) };
-    if ret == 0 && usage.ru_maxrss > 0 {
-        Some(usage.ru_maxrss as u64 * 1024)
-    } else {
-        None
-    }
+    instantaneous().or_else(getrusage_maxrss)
 }
 
 // ── Windows ─────────────────────────────────────────────────────────────

@@ -18,7 +18,12 @@ pub(crate) const MAX_AST_DEPTH: usize = 10_000;
 pub(crate) const AST_QUERY_CPU_BUDGET: Duration = Duration::from_secs(30);
 
 /// CPU time consumed by the calling thread (immune to descheduling under load).
-#[cfg(unix)]
+///
+/// Gated to the unix targets where the libc crate exposes
+/// `CLOCK_THREAD_CPUTIME_ID`. The solarish family (illumos/OmniOS, Solaris) is
+/// excluded because that constant is absent from libc there; it falls through to
+/// the zero-returning fallback below.
+#[cfg(all(unix, not(target_os = "illumos"), not(target_os = "solaris")))]
 pub(crate) fn thread_cpu_time() -> Duration {
     let mut ts = libc::timespec {
         tv_sec: 0,
@@ -36,10 +41,11 @@ pub(crate) fn thread_cpu_time() -> Duration {
     }
 }
 
-/// Non-unix fallback: report zero, which disables the CPU budget. Acceptable
+/// Fallback for targets without a usable `CLOCK_THREAD_CPUTIME_ID` (non-unix, plus
+/// the solarish family): report zero, which disables the CPU budget. Acceptable
 /// because the starvation bug only manifests under server-class oversubscription
-/// (all unix); desktop/Windows runs aren't oversubscribed.
-#[cfg(not(unix))]
+/// (Linux/macOS server targets); these hosts aren't oversubscribed that way.
+#[cfg(not(all(unix, not(target_os = "illumos"), not(target_os = "solaris"))))]
 pub(crate) fn thread_cpu_time() -> Duration {
     Duration::ZERO
 }

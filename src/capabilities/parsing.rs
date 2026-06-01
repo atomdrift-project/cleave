@@ -443,8 +443,14 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
+                // `data` is generic, non-container content only. IPA is a
+                // ZIP-based app bundle (an archive — see FileType::is_archive),
+                // not generic data; it lives in `archives`/`ipa`. Keeping it
+                // here made every `for: [data]` trait spuriously satisfy the
+                // archive-family match (FileType::is_archive on a group member),
+                // so whole-file entropy/blob traits fired on any archive
+                // container (e.g. a .crx).
                 "data" => vec![
-                    RuleFileType::Ipa,
                     RuleFileType::Text,
                     RuleFileType::Data,
                     RuleFileType::Json,
@@ -465,6 +471,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Crx,
                     RuleFileType::VsixArchive,
                     RuleFileType::Xpi,
+                    RuleFileType::Ipa,
                 ],
                 "unknown" => vec![RuleFileType::Unknown],
                 // Binary formats

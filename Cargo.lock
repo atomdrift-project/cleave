@@ -1598,7 +1598,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.8.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#147af8506f78830d49eab51430e0557147b07783"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#459f049736b0e975065d1787553c36bc03a9310c"
 dependencies = [
  "aho-corasick",
  "bincode",

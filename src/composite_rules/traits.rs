@@ -188,6 +188,11 @@ pub(crate) struct TraitDefinition {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub attack: Option<String>,
 
+    /// Reference that inspired this trait: a source URL or "sha256:<hash>" of a
+    /// motivating sample. Provenance only; not used during matching.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub r#ref: Option<String>,
+
     /// Platforms this trait targets (defaults to all)
     #[serde(default = "default_platforms")]
     pub platforms: Vec<Platform>,
@@ -258,6 +263,42 @@ pub(crate) struct TraitDefinition {
     /// Precision score (calculated during loading, not from YAML)
     #[serde(skip)]
     pub precision: Option<f32>,
+}
+
+impl Default for TraitDefinition {
+    /// Mirrors the serde field defaults so `TraitDefinition { id, desc, r#if, ..Default::default() }`
+    /// construction (used widely in tests) yields the same values the YAML loader would.
+    /// `r#if` has no natural default, so it gets an inert trait reference to an
+    /// empty id (matches nothing); real constructions always override it.
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            desc: String::new(),
+            conf: default_confidence(),
+            crit: Criticality::default(),
+            mbc: None,
+            attack: None,
+            r#ref: None,
+            platforms: default_platforms(),
+            arch: default_architectures(),
+            r#for: default_file_types(),
+            for_from_groups: false,
+            r#if: Condition::Trait { id: String::new() },
+            size_min: None,
+            size_max: None,
+            count_min: None,
+            count_max: None,
+            per_kb_min: None,
+            per_kb_max: None,
+            entropy_min: None,
+            entropy_max: None,
+            not: None,
+            unless: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::new(),
+            precision: None,
+        }
+    }
 }
 
 impl TraitDefinition {
@@ -1789,6 +1830,11 @@ pub(crate) struct CompositeTrait {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub attack: Option<String>,
 
+    /// Reference that inspired this rule: a source URL or "sha256:<hash>".
+    /// Provenance only; not used during matching.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub r#ref: Option<String>,
+
     /// Platforms this rule targets (defaults to all)
     #[serde(default = "default_platforms")]
     pub platforms: Vec<Platform>,
@@ -1862,6 +1908,40 @@ pub(crate) struct CompositeTrait {
     /// Indices of atomic traits this composite rule depends on (for pruning)
     #[serde(skip)]
     pub required_trait_indices: Vec<usize>,
+}
+
+impl Default for CompositeTrait {
+    /// Mirrors the serde field defaults so `CompositeTrait { id, desc, conf, ..Default::default() }`
+    /// construction (used widely in tests) matches what the YAML loader produces.
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            desc: String::new(),
+            conf: default_confidence(),
+            crit: Criticality::default(),
+            mbc: None,
+            attack: None,
+            r#ref: None,
+            platforms: default_platforms(),
+            arch: default_architectures(),
+            r#for: default_file_types(),
+            for_from_groups: false,
+            size_min: None,
+            size_max: None,
+            all: None,
+            any: None,
+            needs: None,
+            near_lines: None,
+            near_bytes: None,
+            scope: None,
+            unless: None,
+            not: None,
+            downgrade: None,
+            defined_in: std::path::PathBuf::new(),
+            precision: None,
+            required_trait_indices: Vec::new(),
+        }
+    }
 }
 
 impl CompositeTrait {
@@ -3442,6 +3522,7 @@ mod scope_tests {
             defined_in: std::path::PathBuf::new(),
             precision: None,
             required_trait_indices: Vec::new(),
+            ..Default::default()
         }
     }
 

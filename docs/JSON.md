@@ -16,14 +16,27 @@ For the library that produces these reports, see
 Consumers should treat unknown versions as a hard error.
 
 
-## Compact JSON v5
+## Compact JSON v6
 
-The CLI `--format json` output uses compact schema v5. The top-level object is:
+The CLI `--json` output uses compact schema v6. The top-level object is:
 
 | JSON | Type | Meaning |
 | ---- | ---- | ------- |
-| `v` | string | Compact schema version, currently `"5"`. |
+| `v` | string | Compact schema version, currently `"6"`. |
 | `fs` | array | Per-file compact records. |
+
+Byte offsets in the compact report carry no `0x` prefix, and each context uses
+its slimmest valid-JSON encoding:
+
+- `ff` tuple offsets are **bare integers** (`["__text", 1816, …]`). A standalone
+  JSON integer is smaller than a quoted hex string — the two `"` cost more than
+  hex saves in digits — so numbers win here.
+- A trait's evidence locations (`el`) are **single strings** of the form
+  `"<fs-id>:<offset>"` (e.g. `"7:3718c0"`). The offset is already inside a
+  string, so hex is the compact choice there (fewer digits, no extra quotes).
+
+(The verbose `Trait`/`Function`/`Section` types further down still use
+`0x`-prefixed hex strings; that representation is unchanged.)
 
 Each `fs[]` entry keeps cleave verdict data at the file level and packs filefacts data under `ff`. The `ff` object is intentionally not a lossless mirror of the full report; it is the dense, ML/UI-oriented fact surface.
 

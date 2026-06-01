@@ -224,6 +224,7 @@ fn test_apply_trait_defaults_applies_all_defaults() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -298,6 +299,7 @@ fn test_apply_trait_defaults_trait_overrides_defaults() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -369,6 +371,7 @@ fn test_apply_trait_defaults_unset_mbc_with_none() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -435,6 +438,7 @@ fn test_apply_trait_defaults_unset_attack_with_none() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -501,6 +505,7 @@ fn test_apply_trait_defaults_unset_file_types_with_none() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -568,6 +573,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         per_kb_max: None,
         entropy_min: None,
         entropy_max: None,
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -619,6 +625,7 @@ fn test_apply_trait_defaults_size_and_entropy_from_defaults() {
         per_kb_max: None,
         entropy_min: Some(6.5),
         entropy_max: Some(8.0),
+        ..Default::default()
     };
 
     let result = parsing::apply_trait_defaults(
@@ -686,6 +693,7 @@ fn test_apply_composite_defaults_applies_all_defaults() {
             not: None,
             platforms: None,
         }),
+        ..Default::default()
     };
 
     let mut warnings = Vec::new();
@@ -758,6 +766,7 @@ fn test_apply_composite_defaults_unset_with_none() {
             not: None,
             platforms: None,
         }),
+        ..Default::default()
     };
 
     let mut warnings = Vec::new();
@@ -978,6 +987,7 @@ fn test_composite_referencing_atomic_trait() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let report = test_report_with_findings(vec![test_finding("test/atomic-trait")]);
@@ -1021,6 +1031,7 @@ fn test_composite_of_composites_two_levels() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composite_b = CompositeTrait {
@@ -1051,6 +1062,7 @@ fn test_composite_of_composites_two_levels() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let report = test_report_with_findings(vec![test_finding("test/atomic-trait")]);
@@ -1099,6 +1111,7 @@ fn test_composite_three_level_chain() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let report = test_report_with_findings(vec![test_finding("level/zero")]);
@@ -1154,6 +1167,7 @@ fn test_composite_circular_dependency_handled() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composite_b = CompositeTrait {
@@ -1184,6 +1198,7 @@ fn test_composite_circular_dependency_handled() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let report = test_report_with_findings(vec![]);
@@ -1231,6 +1246,7 @@ fn test_composite_prefix_matching_in_chain() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Report has specific trait under discovery/system/
@@ -1281,6 +1297,7 @@ fn test_composite_requires_count_in_chain() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let report = test_report_with_findings(vec![test_finding("feat/a"), test_finding("feat/c")]);
@@ -1327,6 +1344,7 @@ fn test_precision_direct_conditions() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -1381,6 +1399,7 @@ fn test_precision_file_type_filter() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -1448,6 +1467,7 @@ fn test_precision_recursive_expansion() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Composite A: has 2 direct conditions (precision 2)
@@ -1477,6 +1497,7 @@ fn test_precision_recursive_expansion() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Composite B: references composite A and atomic trait
@@ -1513,6 +1534,7 @@ fn test_precision_recursive_expansion() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -1571,6 +1593,7 @@ fn test_precision_cycle_detection() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Composite B references A (cycle!)
@@ -1602,6 +1625,7 @@ fn test_precision_cycle_detection() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -1656,6 +1680,7 @@ fn test_precision_caching() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -1721,6 +1746,7 @@ fn test_precision_threshold_validation() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Rule with precision >= 3.5 (meets threshold)
@@ -1752,6 +1778,7 @@ fn test_precision_threshold_validation() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut composites = vec![rule_low, rule_high];
@@ -1827,6 +1854,7 @@ fn test_suspicious_precision_threshold_validation() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Rule with precision >= 1.9 (meets suspicious threshold)
@@ -1855,6 +1883,7 @@ fn test_suspicious_precision_threshold_validation() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut composites = vec![rule_low, rule_ok];
@@ -1932,6 +1961,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: Some(1.0),
+        ..Default::default()
     };
 
     let ok_trait = TraitDefinition {
@@ -1973,6 +2003,7 @@ fn test_atomic_suspicious_precision_threshold_validation() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: Some(2.0),
+        ..Default::default()
     };
 
     let mut traits = vec![low_trait, ok_trait];
@@ -2055,6 +2086,7 @@ fn test_precision_mixed_conditions() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -2109,6 +2141,7 @@ fn test_precision_deep_nesting() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Level 2: references level1 + 1 direct condition
@@ -2140,6 +2173,7 @@ fn test_precision_deep_nesting() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Level 3: references level2 + 1 direct condition
@@ -2171,6 +2205,7 @@ fn test_precision_deep_nesting() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -2262,6 +2297,7 @@ fn test_precision_correct_algorithm() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -2334,6 +2370,7 @@ fn test_precision_traits_with_size_restrictions() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Trait 2: string pattern + size restriction
@@ -2376,6 +2413,7 @@ fn test_precision_traits_with_size_restrictions() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Composite rule referencing both traits
@@ -2411,6 +2449,7 @@ fn test_precision_traits_with_size_restrictions() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let mut cache = HashMap::new();
@@ -3080,6 +3119,7 @@ fn test_collect_trait_refs_finds_internal_paths() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let refs = validation::collect_trait_refs_from_rule(&composite);
@@ -3136,6 +3176,7 @@ fn test_meta_internal_paths_forbidden_in_composite_rules() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let refs = validation::collect_trait_refs_from_rule(&composite);
@@ -3369,6 +3410,7 @@ fn test_atomic_precision_calibration_spread() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let ast_trait = TraitDefinition {
@@ -3405,6 +3447,7 @@ fn test_atomic_precision_calibration_spread() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let raw_precision = validation::calculate_trait_precision(&raw_trait);
@@ -3477,6 +3520,7 @@ fn test_atomic_precision_long_regex_and_large_not_list_stays_calibrated() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let precision = validation::calculate_trait_precision(&trait_def);
@@ -3542,6 +3586,7 @@ fn test_scope_filters_do_not_dominate_atomic_precision() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let narrow_scope = TraitDefinition {
@@ -3609,6 +3654,7 @@ fn test_composite_precision_calibration_band() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let atomic_b = TraitDefinition {
         id: "test/atomic-b".to_string(),
@@ -3653,6 +3699,7 @@ fn test_composite_precision_calibration_band() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composites = [composite];
@@ -3718,6 +3765,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let precise = TraitDefinition {
         id: "family/member-precise".to_string(),
@@ -3753,6 +3801,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let family_ref = CompositeTrait {
@@ -3782,6 +3831,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let explicit_family_ref = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -3810,6 +3860,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let family_members = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -3843,6 +3894,7 @@ fn test_composite_prefix_reference_matches_explicit_expansion_precision() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composites = [family_ref, explicit_family_ref, family_members];
@@ -3917,6 +3969,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let medium = TraitDefinition {
         id: "test/medium".to_string(),
@@ -3957,6 +4010,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let strong = TraitDefinition {
         id: "test/strong".to_string(),
@@ -3992,6 +4046,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let loose_precision = validation::calculate_trait_precision(&loose);
@@ -4033,6 +4088,7 @@ fn test_composite_any_uses_weakest_average_with_breadth_penalty() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composites = [composite];
@@ -4098,6 +4154,7 @@ fn test_inherited_composite_scores_are_compressed() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let strong_b = TraitDefinition {
         id: "test/strong-b".to_string(),
@@ -4136,6 +4193,7 @@ fn test_inherited_composite_scores_are_compressed() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     let parent = CompositeTrait {
         required_trait_indices: Vec::new(),
@@ -4164,6 +4222,7 @@ fn test_inherited_composite_scores_are_compressed() {
         size_max: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let composites = [child, parent];

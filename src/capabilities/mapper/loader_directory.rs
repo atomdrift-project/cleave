@@ -3788,6 +3788,11 @@ impl super::CapabilityMapper {
                 "dependencies.",
                 "parse.",
                 "consistency.",
+                // Source-AST metrics filefacts emits inline during the single
+                // walk: counts (`ast.call_count`, `ast.sequence_count`,
+                // `ast.identity_function_count`) and per-operator density
+                // (`ast.op.^`, `ast.op.%`, …). Open key set, like `binary.*`.
+                "ast.",
             ];
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 

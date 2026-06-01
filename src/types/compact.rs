@@ -1,6 +1,6 @@
-//! Compact v5 output types for minimal JSON serialization
+//! Compact v6 output types for minimal JSON serialization
 //!
-//! These types represent the v5 schema designed for dense filefacts-backed output.
+//! These types represent the v6 schema designed for dense filefacts-backed output.
 //! Each file's JSON is fully self-contained (splittable for per-file DB storage).
 //! Conversion from internal types happens via `AnalysisReport::to_compact()`.
 
@@ -27,10 +27,10 @@ const MAX_EVIDENCE_CHARS: usize = 128;
 const DEFAULT_CONF: f32 = 0.5;
 
 // ========================================================================
-// Compact output types (v5 schema)
+// Compact output types (v6 schema)
 // ========================================================================
 
-/// Top-level v5 report
+/// Top-level v6 report
 #[derive(Debug, Serialize)]
 pub struct CompactReport {
     /// Schema version — always "6"
@@ -42,7 +42,7 @@ pub struct CompactReport {
     pub fs: Vec<CompactFile>,
 }
 
-/// Per-file analysis in v5 schema
+/// Per-file analysis in v6 schema
 #[derive(Debug, Serialize)]
 pub struct CompactFile {
     /// Sequential file ID
@@ -106,12 +106,14 @@ pub struct CompactTrait {
     /// As of report `v: "6"`, an archive-member location is compacted to
     /// `"<fs-id>[:<offset>]"` — `fs-id` indexes the report's `fs[]` array, so
     /// the (often long, repeated) member path is resolved once via `fs[id]`
-    /// rather than embedded in every entry. The trailing offset is preserved.
-    /// Entries that don't resolve to an `fs[]` file — plain `offset:` byte
-    /// locations, semantic labels, un-extracted nested archives — keep their
-    /// original `archive:<path>[:<offset>]` string, so a single `el` array may
-    /// mix both forms. Consumers distinguish them by prefix: a leading digit is
-    /// an id, a leading `archive:` is a legacy path.
+    /// rather than embedded in every entry. Byte offsets are emitted as bare
+    /// hex (no `0x` prefix) to keep the JSON slim; the `0x` is redundant in this
+    /// always-hex position. A member that can't be resolved to an `fs[]` file
+    /// (un-extracted nested archive) keeps its `archive:<path>` string, so a
+    /// single `el` array may mix both forms — consumers tell them apart by the
+    /// leading character: a digit is an id, `archive:` a path. (Cleave's own
+    /// internal `Evidence.location` strings keep the `0x` prefix; the slimming
+    /// happens only here, at the JSON boundary.)
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub el: Vec<String>,
 }
@@ -127,7 +129,7 @@ pub struct CompactString {
     pub value: String,
 }
 
-/// Dense filefacts-backed fact block for compact v5.
+/// Dense filefacts-backed fact block for compact v6.
 #[derive(Debug)]
 struct CompactFacts {
     /// File identity without source/provenance tags. Usually mirrors the
@@ -797,26 +799,42 @@ fn rewrite_evidence_locations(fs: &mut [CompactFile]) {
     for file in fs.iter_mut() {
         for trait_entry in &mut file.ts {
             for loc in &mut trait_entry.el {
-                if let Some(rewritten) = index_location(loc, &id_by_segment) {
-                    *loc = rewritten;
-                }
+                *loc = normalize_el_location(loc, &id_by_segment);
             }
         }
     }
 }
 
-/// Try to rewrite one `el` entry to `<id>[:<offset>]`. Returns `None` (leave as
-/// is) when the entry isn't an archive member location or doesn't resolve.
-fn index_location(loc: &str, id_by_segment: &HashMap<String, u32>) -> Option<String> {
-    let rest = loc.strip_prefix("archive:")?;
-    let (member, offset) = split_member_offset(rest);
-    let id = id_by_segment.get(member)?;
-    Some(format!("{id}{offset}"))
+/// Compact one `el` entry for slim JSON. Two transforms, both keep the entry
+/// usable while shrinking it:
+///   * resolve an `archive:<member>` location to its `fs[]` id, so the long
+///     (and repeated) member path becomes a one/two-digit index; and
+///   * drop the redundant `0x` prefix from the trailing byte offset, since
+///     offsets are unambiguously hex in this position.
+///
+/// The member path is preserved verbatim when it can't be resolved to a file
+/// (un-extracted nested archives, etc.). Non-`archive:` locations are returned
+/// unchanged apart from the `0x`-strip on a pure byte-offset; positional
+/// `row:col` locations carry no `0x` and pass through.
+fn normalize_el_location(loc: &str, id_by_segment: &HashMap<String, u32>) -> String {
+    if let Some(rest) = loc.strip_prefix("archive:") {
+        let (member, offset) = split_member_offset(rest);
+        let offset = strip_offset_0x(offset);
+        return match id_by_segment.get(member) {
+            Some(id) => format!("{id}{offset}"),
+            None => format!("archive:{member}{offset}"),
+        };
+    }
+    // Pure byte-offset locations (`offset:0x..`, `0x..`) also shed the prefix.
+    if loc.starts_with("offset:") || loc.starts_with("0x") || loc.starts_with("0X") {
+        return strip_offset_0x(loc);
+    }
+    loc.to_string()
 }
 
 /// Split an archive member location into `(member, offset_suffix)`, where
-/// `offset_suffix` keeps its leading `:` (`":0x1234"`, `":offset:1234"`) or is
-/// empty. The offset is always the trailing token; member paths don't contain
+/// `offset_suffix` keeps its leading `:` (`":0x3718c0"`, `":offset:0x10"`) or
+/// is empty. The offset is the trailing hex token; member paths don't contain
 /// `:`. Mirrors the offset shapes produced across the analyzers.
 fn split_member_offset(s: &str) -> (&str, &str) {
     if let Some(idx) = s.rfind(":offset:") {
@@ -824,19 +842,35 @@ fn split_member_offset(s: &str) -> (&str, &str) {
     }
     if let Some(idx) = s.rfind(':') {
         let suffix = &s[idx + 1..];
-        let is_offset = !suffix.is_empty()
-            && (suffix.starts_with("0x")
-                || suffix.starts_with("0X")
-                || suffix.bytes().all(|b| b.is_ascii_digit()));
-        if is_offset {
+        let hex = suffix
+            .strip_prefix("0x")
+            .or_else(|| suffix.strip_prefix("0X"))
+            .unwrap_or(suffix);
+        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
             return (&s[..idx], &s[idx..]);
         }
     }
     (s, "")
 }
 
+/// Drop a `0x`/`0X` prefix from the hex offset that follows the final `:` of a
+/// location (or the whole string when it has no `:`). Leaves an already-bare
+/// offset and the non-offset head untouched: `":0x3718c0"` → `":3718c0"`,
+/// `"offset:0x10"` → `"offset:10"`, `"0x10"` → `"10"`.
+fn strip_offset_0x(s: &str) -> String {
+    let (head, tail) = match s.rfind(':') {
+        Some(i) => s.split_at(i + 1),
+        None => ("", s),
+    };
+    let tail = tail
+        .strip_prefix("0x")
+        .or_else(|| tail.strip_prefix("0X"))
+        .unwrap_or(tail);
+    format!("{head}{tail}")
+}
+
 impl AnalysisReport {
-    /// Convert this pre-finalized report to compact v5 output format.
+    /// Convert this pre-finalized report to compact v6 output format.
     ///
     /// This is a non-mutating conversion — the internal report is unchanged.
     /// Builds the root file from top-level data and includes archive members.
@@ -1038,11 +1072,12 @@ mod formula_tests {
             .expect("trait survived compact conversion");
         assert_eq!(
             t.el,
-            vec!["1:0x3718c0".to_string(), "1:0x10025a5c4".to_string()],
-            "member path collapses to fs id; offset preserved"
+            vec!["1:3718c0".to_string(), "1:10025a5c4".to_string()],
+            "member path collapses to fs id; offset loses its 0x prefix"
         );
 
-        // An un-resolvable member (not an fs[] entry) keeps its legacy string.
+        // An un-resolvable member (not an fs[] entry) keeps its path, but the
+        // offset is still slimmed to bare hex.
         let mut lonely =
             FileAnalysis::new(0, "bundle.tar".into(), "archive".into(), "sha0".into(), 10);
         let mut g = finding("well-known/malware/rootkit/y", Criticality::Hostile, 0.9);
@@ -1062,7 +1097,7 @@ mod formula_tests {
             .flat_map(|cf| cf.ts.iter())
             .find(|t| t.i.ends_with("/y"))
             .expect("trait survived compact conversion");
-        assert_eq!(t.el, vec!["archive:not-in-fs.macho:0x10".to_string()]);
+        assert_eq!(t.el, vec!["archive:not-in-fs.macho:10".to_string()]);
     }
 
     /// Findings below the 0.65 confidence floor must not contribute, even
@@ -1098,7 +1133,7 @@ mod formula_tests {
     }
 
     #[test]
-    fn compact_v5_packs_filefacts_under_ff() {
+    fn compact_v6_packs_filefacts_under_ff() {
         let mut fa = FileAnalysis::new(0, "t.exe".into(), "pe".into(), "sha".into(), 7);
         fa.strings.push(StringInfo {
             value: "CreateFileW".into(),
@@ -1137,12 +1172,10 @@ mod formula_tests {
                     args: vec![filefacts::Arg::String {
                         value: "https://example.com".to_string(),
                     }],
-                    source: "javascript".to_string(),
                     offset: None,
                 },
                 filefacts::Symbol::Member {
                     path: "window.localStorage".to_string(),
-                    source: "javascript".to_string(),
                 },
             ],
             ..FilefactsView::default()

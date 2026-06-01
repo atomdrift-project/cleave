@@ -81,6 +81,7 @@ mod proximity_scripting_symbols_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 

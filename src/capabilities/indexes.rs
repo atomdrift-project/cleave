@@ -2271,6 +2271,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         };
 
         let index = RawContentRegexIndex::build(&[trait_def]).unwrap();
@@ -2322,6 +2323,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         };
 
         let index = RawContentRegexIndex::build(&[
@@ -2381,6 +2383,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -2438,6 +2441,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 

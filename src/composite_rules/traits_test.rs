@@ -46,6 +46,7 @@ fn create_test_trait(id: &str, condition: Condition) -> TraitDefinition {
         defined_in: PathBuf::from("test.yaml"),
         not: None,
         precision: None,
+        ..Default::default()
     }
 }
 

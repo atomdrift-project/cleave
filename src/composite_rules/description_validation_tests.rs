@@ -49,6 +49,7 @@ mod description_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         }
     }
 

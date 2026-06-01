@@ -621,27 +621,41 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
             substr,
             regex,
             arg,
+            kind,
             ..
         } => {
+            // The symbol `kind` discriminates the fact being matched: a call to
+            // `exec` (`kind: call`) is a different atom from a function *named*
+            // `exec` (`kind: function`) — they match distinct symbol facts. Fold
+            // it into the pattern key, alongside the `arg:` discriminator below,
+            // so the dedup checker doesn't collapse a call and a definition into
+            // one "reusable atom".
+            let kind_disc = kind
+                .as_ref()
+                .map(|k| format!("#kind:{k:?}"))
+                .unwrap_or_default();
             // A call's `arg:` discriminator makes same-named calls distinct
             // atoms — `require('fs')` ≠ `require('dns')`. Fold it into the
             // pattern key so the dedup checker doesn't collapse them into one
             // "reusable atom". (Same name AND same arg still collide.)
-            let disc = arg
-                .as_ref()
-                .map(|a| {
-                    let v = a
-                        .exact
-                        .as_deref()
-                        .or(a.substr.as_deref())
-                        .or(a.regex.as_deref())
-                        .or(a.name.as_deref())
-                        .map(str::to_string)
-                        .or_else(|| a.value.map(|n| n.to_string()))
-                        .unwrap_or_else(|| "*".to_string());
-                    format!("#arg:{v}")
-                })
-                .unwrap_or_default();
+            let disc = {
+                let arg_disc = arg
+                    .as_ref()
+                    .map(|a| {
+                        let v = a
+                            .exact
+                            .as_deref()
+                            .or(a.substr.as_deref())
+                            .or(a.regex.as_deref())
+                            .or(a.name.as_deref())
+                            .map(str::to_string)
+                            .or_else(|| a.value.map(|n| n.to_string()))
+                            .unwrap_or_else(|| "*".to_string());
+                        format!("#arg:{v}")
+                    })
+                    .unwrap_or_default();
+                format!("{kind_disc}{arg_disc}")
+            };
             if let Some(v) = exact {
                 add_pattern("symbol", "exact", format!("{v}{disc}"), None, None);
             }
@@ -2441,6 +2455,17 @@ pub(crate) fn find_regex_literal_overlap_issues(
 
                 // Skip if significantly different length, no alternation, AND not a trivial extension
                 if len_diff_pct > 0.33 && !has_alternation && !is_trivial_extension {
+                    continue;
+                }
+
+                // Arg-discriminated calls are distinct facts even when the
+                // symbol literal matches — `codecs.decode(base64)` vs a generic
+                // `codecs.decode`, or `require('fs')` vs `require('dns')`. The
+                // `#arg:` marker (added by `extract_patterns`) survives in the
+                // raw pattern but is normalized away, so guard on it explicitly.
+                let arg_a = regex_pat.pattern.contains("#arg:");
+                let arg_b = literal_pat.pattern.contains("#arg:");
+                if arg_a != arg_b || (arg_a && regex_pat.pattern != literal_pat.pattern) {
                     continue;
                 }
 

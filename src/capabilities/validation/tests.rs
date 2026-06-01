@@ -37,6 +37,7 @@ mod precision_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -169,6 +170,7 @@ mod duplicate_tests {
             downgrade: None,
             defined_in: PathBuf::from(file_path),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3047,6 +3049,7 @@ mod pattern_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3120,6 +3123,7 @@ mod taxonomy_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3154,6 +3158,7 @@ mod taxonomy_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3212,6 +3217,7 @@ mod taxonomy_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3525,6 +3531,7 @@ mod constraint_tests {
             },
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3568,6 +3575,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3597,6 +3605,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3866,6 +3875,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -3944,6 +3954,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
 
         let v = find_kv_exists_with_matcher(&traits, &[]);
@@ -3990,6 +4001,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
 
         let v = find_kv_exists_with_matcher(&traits, &[]);
@@ -4025,6 +4037,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
         let result = find_none_only_with_proximity(&rules);
         assert_eq!(result, vec!["test/none-prox"]);
@@ -4061,6 +4074,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
         let result = find_none_only_with_proximity(&rules);
         assert!(result.is_empty());
@@ -4096,6 +4110,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
         let result = find_empty_condition_clauses(&rules);
         assert_eq!(result.len(), 1);
@@ -4131,6 +4146,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
         let result = find_needs_zero(&rules);
         assert_eq!(result, vec!["test/needs-zero"]);
@@ -4165,6 +4181,7 @@ mod constraint_tests {
             scope: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }];
         let result = find_needs_zero(&rules);
         assert!(result.is_empty());
@@ -4208,6 +4225,7 @@ mod autoprefix_tests {
             downgrade,
             defined_in: std::path::PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -4338,6 +4356,7 @@ mod orphan_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -4371,6 +4390,7 @@ mod orphan_tests {
             downgrade,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -4453,6 +4473,7 @@ mod excessive_file_types_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -4720,6 +4741,7 @@ mod excessive_file_types_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yaml"),
             precision: None,
+            ..Default::default()
         };
         let result = find_excessive_file_types(&[], &[rule]);
         assert_eq!(result.len(), 1);
@@ -4839,6 +4861,7 @@ mod defaults_tests {
             not: None,
             unless: None,
             downgrade: None,
+            ..Default::default()
         }
     }
 
@@ -4871,6 +4894,7 @@ mod defaults_tests {
             unless: None,
             not: None,
             downgrade: None,
+            ..Default::default()
         }
     }
 
@@ -5160,6 +5184,7 @@ mod raw_should_use_string_value_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -5405,6 +5430,7 @@ mod section_filter_validation_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -5487,6 +5513,7 @@ mod string_literal_should_use_text_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -5553,6 +5580,7 @@ mod ast_function_call_should_use_symbol_tests {
             downgrade: None,
             defined_in: PathBuf::from("test.yml"),
             precision: None,
+            ..Default::default()
         }
     }
 

@@ -94,6 +94,7 @@ fn test_symbol_condition() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -145,6 +146,7 @@ fn test_all() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -215,6 +217,7 @@ fn test_count() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -266,6 +269,7 @@ fn test_string_exact_condition() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -326,6 +330,7 @@ fn test_any() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -403,6 +408,7 @@ fn test_not_directive_shorthand() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -485,6 +491,7 @@ fn test_not_directive_exact() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -567,6 +574,7 @@ fn test_not_directive_regex() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -637,6 +645,7 @@ fn test_unless_directive_skips_trait() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return None because unless condition matches
@@ -687,6 +696,7 @@ fn test_unless_directive_allows_trait() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return Some because unless condition doesn't match
@@ -762,6 +772,7 @@ fn test_downgrade_to_notable() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -835,6 +846,7 @@ fn test_downgrade_one_level() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -893,6 +905,7 @@ fn test_downgrade_no_match_keeps_original() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -967,6 +980,7 @@ fn test_downgrade_from_hostile() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1067,6 +1081,7 @@ fn test_all_three_directives_combined() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1150,6 +1165,7 @@ fn test_string_exact_match_requires_full_equality() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1228,6 +1244,7 @@ fn test_string_substr_matches_substrings() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1295,6 +1312,7 @@ fn test_symbol_exact_vs_substr() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_exact.evaluate(&ctx);
@@ -1339,6 +1357,7 @@ fn test_symbol_exact_vs_substr() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_substr.evaluate(&ctx);
@@ -1404,6 +1423,7 @@ fn test_string_case_insensitive_exact() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1477,6 +1497,7 @@ fn test_string_word_boundary_match() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1564,6 +1585,7 @@ fn test_string_regex_match() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1795,6 +1817,7 @@ fn test_basename_in_trait_definition() {
         downgrade: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -1847,6 +1870,7 @@ fn test_basename_in_composite_rule() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -1917,6 +1941,7 @@ fn test_composite_unless_skips_rule() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return None because unless condition matches
@@ -1970,6 +1995,7 @@ fn test_composite_unless_allows_rule() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return Some because unless condition doesn't match
@@ -2029,6 +2055,7 @@ fn test_composite_unless_with_basename() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return None because the basename matches libX11.so
@@ -2116,6 +2143,7 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should return None because the second unless condition (string regex) matches
@@ -2207,6 +2235,7 @@ fn test_needs_with_any_only_respects_threshold() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should NOT match because only 2 of 3 required conditions match
@@ -2283,6 +2312,7 @@ fn test_needs_with_any_only_matches_when_threshold_met() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should match because exactly 2 conditions are satisfied
@@ -2330,6 +2360,7 @@ fn test_needs_with_directory_ref_counts_child_matches() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     assert!(
@@ -2384,6 +2415,7 @@ fn test_required_trait_prefilter_for_any_needs_is_not_overconstrained() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let trait_id_map = std::collections::HashMap::from([
@@ -2442,6 +2474,7 @@ fn test_required_trait_prefilter_keeps_all_and_fully_required_any_refs() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let trait_id_map = std::collections::HashMap::from([
@@ -2548,6 +2581,7 @@ fn test_needs_with_all_and_any_respects_threshold() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // BUG FIX: This should NOT match because:
@@ -2667,6 +2701,7 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should match because:
@@ -2744,6 +2779,7 @@ fn test_needs_with_all_and_any_all_fails() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should NOT match because all fails (even though any would pass)
@@ -2830,6 +2866,7 @@ fn test_all_and_any_without_needs_requires_one_any() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     // Should match because:
@@ -2930,6 +2967,7 @@ fn proximity_rule(
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     }
 }
 
@@ -3180,6 +3218,7 @@ fn test_near_lines_any_with_needs() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     assert!(
@@ -3245,6 +3284,7 @@ fn test_near_lines_any_with_needs_too_spread() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     assert!(
@@ -3309,6 +3349,7 @@ fn test_near_lines_all_plus_any() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     assert!(
@@ -3708,6 +3749,7 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -3799,6 +3841,7 @@ fn test_downgrade_combined_all_and_none_pass() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -3884,6 +3927,7 @@ fn test_downgrade_needs_threshold_not_met() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -3984,6 +4028,7 @@ fn test_downgrade_needs_threshold_met() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = trait_def.evaluate(&ctx);
@@ -4088,6 +4133,7 @@ fn test_composite_downgrade_all_match() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -4170,6 +4216,7 @@ fn test_composite_downgrade_none_blocks() {
         }),
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let result = rule.evaluate(&ctx);
@@ -4339,6 +4386,7 @@ fn test_proximity_any_needs_cross_condition() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
     assert!(
         rule.evaluate(&ctx).is_some(),
@@ -4434,6 +4482,7 @@ fn test_proximity_does_not_boost_confidence() {
         scope: None,
         defined_in: std::path::PathBuf::from("test.yaml"),
         precision: None,
+        ..Default::default()
     };
 
     let finding = rule.evaluate(&ctx).expect("proximity rule should match");

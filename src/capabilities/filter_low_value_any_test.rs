@@ -47,6 +47,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -77,6 +78,7 @@ mod tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         }
     }
 

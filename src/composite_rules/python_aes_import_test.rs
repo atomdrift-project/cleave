@@ -84,6 +84,7 @@ mod python_aes_import_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         // The trait should have a good description

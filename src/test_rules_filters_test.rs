@@ -61,6 +61,7 @@ fn test_trait_filter_size_min() {
         defined_in: "test".into(),
         precision: None,
         arch: vec![Arch::All],
+        ..Default::default()
     };
     assert!(trait_def.precompile_regexes().is_ok());
 
@@ -146,6 +147,7 @@ fn test_trait_filter_size_max() {
         defined_in: "test".into(),
         precision: None,
         arch: vec![Arch::All],
+        ..Default::default()
     };
     assert!(trait_def.precompile_regexes().is_ok());
 

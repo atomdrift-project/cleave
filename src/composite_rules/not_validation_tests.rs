@@ -37,6 +37,7 @@ mod validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         }
     }
 
@@ -626,6 +627,7 @@ mod criticality_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_criticality();
@@ -688,6 +690,7 @@ mod criticality_tests {
                 downgrade: None,
                 defined_in: std::path::PathBuf::new(),
                 precision: None,
+                ..Default::default()
             };
 
             let warning = trait_def.check_criticality();
@@ -744,6 +747,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_confidence();
@@ -794,6 +798,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_confidence();
@@ -844,6 +849,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_size_constraints();
@@ -895,6 +901,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_count_constraints();
@@ -946,6 +953,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_density_constraints();
@@ -1026,6 +1034,7 @@ mod constraint_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         assert!(trait_def.check_confidence().is_none());
@@ -1268,6 +1277,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_count_min_value();
@@ -1343,6 +1353,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_description_quality();
@@ -1395,6 +1406,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_description_quality();
@@ -1447,6 +1459,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_description_quality();
@@ -1497,6 +1510,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_description_quality();
@@ -1546,6 +1560,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_empty_not_array();
@@ -1596,6 +1611,7 @@ mod llm_validation_tests {
             downgrade: None,
             defined_in: std::path::PathBuf::new(),
             precision: None,
+            ..Default::default()
         };
 
         let warning = trait_def.check_empty_unless_array();

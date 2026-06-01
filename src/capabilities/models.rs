@@ -49,7 +49,7 @@ pub(crate) struct TraitDefaults {
 }
 
 /// Raw trait definition for parsing (fields can be absent to inherit defaults)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawTraitDefinition {
     pub(crate) id: String,
@@ -63,6 +63,11 @@ pub(crate) struct RawTraitDefinition {
     pub(crate) mbc: Option<String>,
     #[serde(default)]
     pub(crate) attack: Option<String>,
+    /// Reference that inspired this trait: a source URL or "sha256:<hash>" of a
+    /// motivating sample. Provenance carried through to TraitDefinition; not
+    /// used during matching.
+    #[serde(default)]
+    pub(crate) r#ref: Option<String>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
     #[serde(default)]
@@ -96,7 +101,7 @@ pub(crate) struct RawTraitDefinition {
 }
 
 /// Raw composite rule for parsing (fields can be absent to inherit defaults)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct RawCompositeRule {
     #[serde(alias = "capability")]
@@ -111,6 +116,10 @@ pub(crate) struct RawCompositeRule {
     pub(crate) mbc: Option<String>,
     #[serde(default)]
     pub(crate) attack: Option<String>,
+    /// Reference that inspired this rule: a source URL or "sha256:<hash>".
+    /// Provenance carried through to CompositeTrait; not used during matching.
+    #[serde(default)]
+    pub(crate) r#ref: Option<String>,
     #[serde(default)]
     pub(crate) platforms: Option<Vec<String>>,
     #[serde(default)]

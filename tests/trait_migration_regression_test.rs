@@ -106,3 +106,39 @@ fn alias_import_traits_fire_only_on_aliased_imports() {
         "plain `import subprocess` (benign) must NOT fire alias-subprocess",
     );
 }
+
+/// Structural-density traits migrated from tree-sitter queries to filefacts
+/// `ast.*` metrics (counted inline in the single AST walk, matched O(1) via
+/// `type: metrics`): operator density (`ast.op.xor`), comma-sequence density
+/// (`ast.sequence_count`), and the identity-proxy backreference the walker
+/// checks (`ast.identity_function_count`).
+#[test]
+fn ast_density_metric_migrations_fire() {
+    assert!(
+        fires("::xor-bitwise-op", "x.py", "x = a ^ b\n"),
+        "a `^` operator must fire xor-bitwise-op via ast.op.xor",
+    );
+    assert!(
+        fires(
+            "::identity-function-proxy",
+            "obf.js",
+            &(0..6)
+                .map(|i| format!("function f{i}(x){{ return x; }}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        "6 identity-proxy functions must fire identity-function-proxy via ast.identity_function_count",
+    );
+    // A function that does NOT return its own parameter must not count.
+    assert!(
+        !fires(
+            "::identity-function-proxy",
+            "ok.js",
+            &(0..6)
+                .map(|i| format!("function f{i}(x){{ return x + 1; }}"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        "non-identity functions must NOT fire identity-function-proxy",
+    );
+}

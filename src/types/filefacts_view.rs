@@ -113,7 +113,6 @@ mod tests {
         let view = FilefactsView {
             symbols: vec![filefacts::Symbol::Member {
                 path: "window.localStorage".to_string(),
-                source: "javascript".to_string(),
             }],
             ..Default::default()
         };

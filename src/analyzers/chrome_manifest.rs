@@ -1,17 +1,27 @@
-//! Chrome extension manifest.json analyzer.
+//! Chrome/WebExtension manifest.json analyzer.
 //!
-//! Detects suspicious patterns in Chrome extension manifests including:
-//! - Dangerous permissions (debugger, webRequest, cookies, history)
-//! - Overly broad host permissions
-//! - Content scripts running on all URLs
-//! - External update URLs
+//! Emits neutral capability traits — one per declared API permission
+//! (`micro-behaviors/browser-extension/permission/<perm>::declared`) and one
+//! per granted origin
+//! (`micro-behaviors/browser-extension/host-access/<host>::granted`, dynamic
+//! and therefore not expressible in YAML) — plus the exposure surfaces
+//! (externally_connectable, web_accessible_resources, persistent background)
+//! and the one genuine anomaly, a non-Google `update_url`
+//! (`objectives/supply-chain/metadata-anomaly/update-url::external`). Manifest
+//! version, content-script timing/frames, and host breadth are covered by YAML.
+//!
+//! IDs use the canonical `<directory>::<local-id>` form so they fold and
+//! aggregate in the UI/ML exactly like YAML traits. The dynamic value (host,
+//! permission) is the last *directory* segment — not the local id — because
+//! the UI collapses a subdirectory to its top finding, so each host/permission
+//! needs its own subdirectory to stay individually visible and ML-keyed.
 
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, StructuralFeature, TargetInfo};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer};
-use std::collections::HashSet;
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -127,13 +137,24 @@ struct Background {
     persistent: Option<bool>,
 }
 
-/// Permission risk levels
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionRisk {
-    Low,
-    Medium,
-    High,
-    Critical,
+/// Convert a camelCase WebExtension permission name to a kebab-case trait-ID
+/// path component (`nativeMessaging` -> `native-messaging`,
+/// `declarativeNetRequest` -> `declarative-net-request`).
+fn camel_to_kebab(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 4);
+    for (i, c) in s.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i != 0 && !out.ends_with('-') {
+                out.push('-');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else if c.is_ascii_alphanumeric() {
+            out.push(c);
+        } else if !out.is_empty() && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_string()
 }
 
 impl ChromeManifestAnalyzer {
@@ -199,22 +220,27 @@ impl ChromeManifestAnalyzer {
             }],
         });
 
-        // Check manifest version
-        self.check_manifest_version(&manifest, &mut report);
-
-        // Analyze permissions
+        // Emit neutral capability traits, one per declared API permission.
+        // Manifest version, content-script timing/frames, and host breadth are
+        // covered by YAML (metadata/package/chrome-extension/ and
+        // objectives/supply-chain/metadata-anomaly/), so they are no longer
+        // hardcoded here.
         self.analyze_permissions(&manifest, &mut report);
 
-        // Analyze host permissions
-        self.analyze_host_permissions(&manifest, &mut report);
+        // Emit one neutral capability trait per distinct host the extension is
+        // granted access to (plus an `all-urls` token for broad grants). This
+        // is dynamic — the host set is data-dependent — so it cannot be
+        // expressed in YAML; the per-host directory feeds the ML pipeline a
+        // per-origin feature.
+        self.analyze_host_access(&manifest, &mut report);
 
-        // Analyze content scripts
-        self.analyze_content_scripts(&manifest, &mut report);
-
-        // Check for suspicious patterns
+        // Capability/exposure surfaces that aren't permissions or hosts
+        // (externally_connectable, web_accessible_resources, persistent
+        // background).
         self.check_suspicious_patterns(&manifest, &mut report);
 
-        // Check update URL
+        // Update source — a non-Google update_url is a genuine supply-chain
+        // anomaly (objectives/ tier).
         self.check_update_url(&manifest, &mut report);
 
         // Evaluate YAML-based rules
@@ -291,443 +317,162 @@ impl ChromeManifestAnalyzer {
             || self.is_electron_chrome_api_fixture(manifest, report)
     }
 
-    fn check_manifest_version(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
+    /// Normalize a match pattern / host permission / URL-pattern permission to
+    /// a bare host token suitable for a trait-ID path component.
+    ///
+    /// Broad/all-sites grants (`<all_urls>`, `*://*/*`, scheme-only globs, a
+    /// bare `*` host) collapse to the sentinel token `all-urls`. Otherwise the
+    /// scheme, path, port, and a leading wildcard label (`*.`) are stripped and
+    /// only ID-safe characters are kept. Returns `None` for entries that don't
+    /// denote a real dotted host.
+    fn normalize_host(pattern: &str) -> Option<String> {
+        let p = pattern.trim();
+        if p.is_empty() {
+            return None;
+        }
+        if p == "<all_urls>" || p == "*://*/*" || p == "*://*" {
+            return Some("all-urls".to_string());
+        }
+        // Drop the scheme (`https://`, `*://`, …).
+        let after_scheme = p.split_once("://").map_or(p, |(_, rest)| rest);
+        // Host is everything up to the first path separator, minus any port.
+        let host = after_scheme
+            .split('/')
+            .next()
+            .unwrap_or(after_scheme)
+            .split(':')
+            .next()
+            .unwrap_or(after_scheme);
+        // A leading wildcard label (`*.example.com`) denotes the registrable
+        // domain; a bare `*` host denotes all sites.
+        let host = host.strip_prefix("*.").unwrap_or(host);
+        if host.is_empty() || host == "*" {
+            return Some("all-urls".to_string());
+        }
+        let token: String = host
+            .to_ascii_lowercase()
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-')
+            .collect();
+        // Reject anything that didn't resolve to a real dotted host.
+        if token.contains('.') && !token.starts_with('.') {
+            Some(token)
+        } else {
+            None
+        }
+    }
+
+    /// Emit one neutral capability trait per distinct origin the extension is
+    /// granted authority over, gathered from `host_permissions`, URL-pattern
+    /// entries in `permissions` (MV2), and `content_scripts[].matches`.
+    ///
+    /// A host permission is not merely "communicate with this host": it grants
+    /// the extension authority over the origin — inject content scripts (DOM
+    /// read/write), read its cookies, issue privileged cross-origin requests,
+    /// and intercept/modify its traffic. That is an irreducibly
+    /// WebExtension-specific permission surface, so it lives under
+    /// `browser-extension/host-access/` (not `communications/`, which would
+    /// overclaim). The host lands in the trait-ID path so the ML pipeline gets
+    /// a per-origin feature; the per-host dynamic shape is reusable by any
+    /// analyzer that enumerates referenced hosts.
+    fn analyze_host_access(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         if self.is_known_benign_fixture(manifest, report) {
             return;
         }
-        match manifest.manifest_version {
-            Some(2) => {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/chrome-ext/manifest-v2".to_string(),
-                        "Uses deprecated Manifest V2 (end of life)".to_string(),
-                        0.95,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: "manifest_version: 2".to_string(),
-                        location: Some("manifest_version".to_string()),
-                        ..Default::default()
-                    }]),
-                );
+
+        let mut hosts: BTreeSet<String> = BTreeSet::new();
+        for host in &manifest.host_permissions {
+            if let Some(token) = Self::normalize_host(host) {
+                hosts.insert(token);
             }
-            Some(3) => {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/chrome-ext/manifest-v3".to_string(),
-                        "Uses Manifest V3".to_string(),
-                        0.95,
-                    )
-                    .with_criticality(Criticality::Baseline)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: "manifest_version: 3".to_string(),
-                        location: Some("manifest_version".to_string()),
-                        ..Default::default()
-                    }]),
-                );
+        }
+        for perm in &manifest.permissions {
+            if let serde_json::Value::String(s) = perm
+                && (s == "<all_urls>" || s.contains("://") || s.contains('*') || s.contains('.'))
+                && let Some(token) = Self::normalize_host(s)
+            {
+                hosts.insert(token);
             }
-            _ => {}
+        }
+        for cs in &manifest.content_scripts {
+            for pattern in &cs.matches {
+                if let Some(token) = Self::normalize_host(pattern) {
+                    hosts.insert(token);
+                }
+            }
+        }
+
+        for host in hosts {
+            report.add_finding(
+                Finding::indicator(
+                    format!("micro-behaviors/browser-extension/host-access/{host}::granted"),
+                    format!("Granted host access to {host}"),
+                    0.95,
+                )
+                .with_criticality(Criticality::Notable)
+                .with_evidence(vec![Evidence {
+                    method: "parser".to_string(),
+                    source: "manifest.json".to_string(),
+                    value: host.clone(),
+                    location: Some("host_permissions".to_string()),
+                    ..Default::default()
+                }]),
+            );
         }
     }
 
     fn analyze_permissions(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
-        let mut dangerous_perms: Vec<(String, PermissionRisk, &str)> = Vec::new();
-        let benign_fixture = self.is_known_benign_fixture(manifest, report);
+        if self.is_known_benign_fixture(manifest, report) {
+            return;
+        }
 
-        // Define permission risk levels
-        let permission_risks: &[(&str, PermissionRisk, &str)] = &[
-            // Critical permissions
-            (
-                "debugger",
-                PermissionRisk::Critical,
-                "Can debug and control other tabs",
-            ),
-            (
-                "nativeMessaging",
-                PermissionRisk::Critical,
-                "Can communicate with native applications",
-            ),
-            // High risk permissions
-            (
-                "webRequest",
-                PermissionRisk::High,
-                "Can intercept all web requests",
-            ),
-            (
-                "webRequestBlocking",
-                PermissionRisk::High,
-                "Can block/modify web requests",
-            ),
-            ("proxy", PermissionRisk::High, "Can modify proxy settings"),
-            (
-                "cookies",
-                PermissionRisk::High,
-                "Can read/write cookies for any site",
-            ),
-            ("history", PermissionRisk::High, "Can read browsing history"),
-            (
-                "browsingData",
-                PermissionRisk::High,
-                "Can clear browsing data",
-            ),
-            (
-                "clipboardRead",
-                PermissionRisk::High,
-                "Can read clipboard content",
-            ),
-            (
-                "management",
-                PermissionRisk::High,
-                "Can manage other extensions",
-            ),
-            (
-                "privacy",
-                PermissionRisk::High,
-                "Can modify privacy settings",
-            ),
-            (
-                "webNavigation",
-                PermissionRisk::High,
-                "Can observe navigation events",
-            ),
-            (
-                "declarativeNetRequestWithHostAccess",
-                PermissionRisk::High,
-                "Can modify network requests",
-            ),
-            // Medium risk permissions
-            (
-                "tabs",
-                PermissionRisk::Medium,
-                "Can access tab URLs and titles",
-            ),
-            (
-                "activeTab",
-                PermissionRisk::Medium,
-                "Can access current tab on user action",
-            ),
-            (
-                "bookmarks",
-                PermissionRisk::Medium,
-                "Can read/modify bookmarks",
-            ),
-            ("downloads", PermissionRisk::Medium, "Can manage downloads"),
-            (
-                "geolocation",
-                PermissionRisk::Medium,
-                "Can access user location",
-            ),
-            (
-                "topSites",
-                PermissionRisk::Medium,
-                "Can access most visited sites",
-            ),
-            (
-                "sessions",
-                PermissionRisk::Medium,
-                "Can access recently closed tabs",
-            ),
-            (
-                "clipboardWrite",
-                PermissionRisk::Medium,
-                "Can write to clipboard",
-            ),
-            // Low risk permissions
-            ("storage", PermissionRisk::Low, "Extension storage access"),
-            ("alarms", PermissionRisk::Low, "Can schedule tasks"),
-            (
-                "notifications",
-                PermissionRisk::Low,
-                "Can show notifications",
-            ),
-            (
-                "contextMenus",
-                PermissionRisk::Low,
-                "Can add context menu items",
-            ),
-            (
-                "identity",
-                PermissionRisk::Low,
-                "Can get user identity token",
-            ),
+        // Ubiquitous, low-signal permissions stay baseline; everything else is
+        // a capability that helps define the extension's purpose (notable). The
+        // risk/intent reading (overprivileged, dangerous combinations) belongs
+        // in YAML objective composites that reference these capability traits.
+        const LOW_RISK: &[&str] = &[
+            "storage",
+            "alarms",
+            "notifications",
+            "contextMenus",
+            "idle",
+            "unlimitedStorage",
         ];
 
-        // Check all permissions
+        let mut seen: BTreeSet<String> = BTreeSet::new();
         for perm in &manifest.permissions {
-            let perm_str = match perm {
-                serde_json::Value::String(s) => s.as_str(),
-                _ => continue,
+            let serde_json::Value::String(perm) = perm else {
+                continue;
             };
-
-            // Check for <all_urls>
-            if perm_str == "<all_urls>" && !benign_fixture {
-                dangerous_perms.push((
-                    perm_str.to_string(),
-                    PermissionRisk::Critical,
-                    "Access to ALL websites",
-                ));
+            // API permission names are pure alphanumeric; match-pattern / host
+            // / `<all_urls>` entries are routed to analyze_host_access instead.
+            if !perm.chars().all(|c| c.is_ascii_alphanumeric()) {
                 continue;
             }
-
-            // Check for wildcard patterns
-            if perm_str.contains("*://*/") || perm_str == "http://*/*" || perm_str == "https://*/*"
-            {
-                dangerous_perms.push((
-                    perm_str.to_string(),
-                    PermissionRisk::High,
-                    "Broad website access pattern",
-                ));
+            let token = camel_to_kebab(perm);
+            if token.is_empty() || !seen.insert(token.clone()) {
                 continue;
             }
-
-            // Check against known permissions
-            for (known_perm, risk, desc) in permission_risks {
-                if perm_str == *known_perm {
-                    dangerous_perms.push((perm_str.to_string(), *risk, desc));
-                    break;
-                }
-            }
-        }
-
-        // Report findings based on risk
-        let critical_count = dangerous_perms
-            .iter()
-            .filter(|(_, r, _)| *r == PermissionRisk::Critical)
-            .count();
-        let high_count = dangerous_perms
-            .iter()
-            .filter(|(_, r, _)| *r == PermissionRisk::High)
-            .count();
-
-        for (perm, risk, desc) in &dangerous_perms {
-            let (crit, finding_id) = match risk {
-                PermissionRisk::Critical => (
-                    Criticality::Notable,
-                    format!("supply-chain/chrome-ext/permission-critical/{}", perm),
-                ),
-                PermissionRisk::High => (
-                    Criticality::Notable,
-                    format!("supply-chain/chrome-ext/permission-high/{}", perm),
-                ),
-                PermissionRisk::Medium => (
-                    Criticality::Notable,
-                    format!("supply-chain/chrome-ext/permission-medium/{}", perm),
-                ),
-                PermissionRisk::Low => continue, // Don't report low risk individually
+            let crit = if LOW_RISK.contains(&perm.as_str()) {
+                Criticality::Baseline
+            } else {
+                Criticality::Notable
             };
-
-            report.add_finding(
-                Finding::indicator(finding_id, format!("Permission '{}': {}", perm, desc), 0.95)
-                    .with_criticality(crit)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: perm.clone(),
-                        location: Some("permissions".to_string()),
-                        ..Default::default()
-                    }]),
-            );
-        }
-
-        // Add composite finding for overprivileged extension
-        if critical_count >= 1 || high_count >= 3 {
             report.add_finding(
                 Finding::indicator(
-                    "supply-chain/chrome-ext/overprivileged".to_string(),
-                    format!(
-                        "Overprivileged extension ({} critical, {} high-risk permissions)",
-                        critical_count, high_count
-                    ),
-                    0.9,
+                    format!("micro-behaviors/browser-extension/permission/{token}::declared"),
+                    format!("Declares \"{perm}\" permission"),
+                    0.95,
                 )
-                .with_criticality(Criticality::Notable)
-                .with_attack("T1176".to_string())
+                .with_criticality(crit)
                 .with_evidence(vec![Evidence {
-                    method: "heuristic".to_string(),
+                    method: "parser".to_string(),
                     source: "manifest.json".to_string(),
-                    value: dangerous_perms
-                        .iter()
-                        .map(|(p, _, _)| p.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", "),
+                    value: perm.clone(),
                     location: Some("permissions".to_string()),
                     ..Default::default()
                 }]),
             );
-        }
-    }
-
-    fn analyze_host_permissions(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
-        if self.is_known_benign_fixture(manifest, report) {
-            return;
-        }
-
-        let mut all_hosts: HashSet<String> = HashSet::new();
-        let mut shopping_sites = 0;
-        let mut has_all_urls = false;
-
-        for host in &manifest.host_permissions {
-            all_hosts.insert(host.clone());
-
-            if host == "<all_urls>" || host.contains("*://*/*") {
-                has_all_urls = true;
-            }
-
-            // Count shopping site access
-            let shopping_domains = [
-                "amazon",
-                "ebay",
-                "walmart",
-                "target",
-                "bestbuy",
-                "aliexpress",
-                "etsy",
-            ];
-            for domain in shopping_domains {
-                if host.to_lowercase().contains(domain) {
-                    shopping_sites += 1;
-                    break;
-                }
-            }
-        }
-
-        // Also check content script matches for host access
-        for cs in &manifest.content_scripts {
-            for pattern in &cs.matches {
-                if pattern == "<all_urls>" || pattern.contains("*://*/*") {
-                    has_all_urls = true;
-                }
-            }
-        }
-
-        if has_all_urls {
-            report.add_finding(
-                Finding::indicator(
-                    "supply-chain/chrome-ext/host-all-urls".to_string(),
-                    "Extension has access to ALL websites".to_string(),
-                    0.95,
-                )
-                .with_criticality(Criticality::Notable)
-                .with_attack("T1185".to_string())
-                .with_evidence(vec![Evidence {
-                    method: "parser".to_string(),
-                    source: "manifest.json".to_string(),
-                    value: "<all_urls>".to_string(),
-                    location: Some("host_permissions".to_string()),
-                    ..Default::default()
-                }]),
-            );
-        }
-
-        // Check for broad TLD access (same domain, multiple TLDs)
-        let unique_base_domains: HashSet<String> = all_hosts
-            .iter()
-            .filter_map(|h| {
-                // Extract base domain (e.g., "amazon" from "*://*.amazon.com/*")
-                let parts: Vec<&str> = h.split('.').collect();
-                if parts.len() >= 2 {
-                    Some(parts[parts.len() - 2].replace("*://", "").replace("*", ""))
-                } else {
-                    None
-                }
-            })
-            .collect();
-
-        if shopping_sites >= 3 {
-            report.add_finding(
-                Finding::indicator(
-                    "supply-chain/chrome-ext/targets-shopping".to_string(),
-                    format!("Extension targets {} e-commerce sites", shopping_sites),
-                    0.9,
-                )
-                .with_criticality(Criticality::Notable)
-                .with_evidence(vec![Evidence {
-                    method: "heuristic".to_string(),
-                    source: "manifest.json".to_string(),
-                    value: format!("{} shopping sites", shopping_sites),
-                    location: Some("host_permissions".to_string()),
-                    ..Default::default()
-                }]),
-            );
-        }
-
-        // Check for global TLD coverage (suspicious for affiliate fraud)
-        let host_count = all_hosts.len();
-        if host_count >= 10 && unique_base_domains.len() <= 3 {
-            report.add_finding(
-                Finding::indicator(
-                    "supply-chain/chrome-ext/global-tld-access".to_string(),
-                    format!(
-                        "Extension targets {} TLDs for {} base domain(s) (global coverage)",
-                        host_count,
-                        unique_base_domains.len()
-                    ),
-                    0.85,
-                )
-                .with_criticality(Criticality::Notable)
-                .with_evidence(vec![Evidence {
-                    method: "heuristic".to_string(),
-                    source: "manifest.json".to_string(),
-                    value: all_hosts
-                        .iter()
-                        .take(5)
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", "),
-                    location: Some("host_permissions".to_string()),
-                    ..Default::default()
-                }]),
-            );
-        }
-    }
-
-    fn analyze_content_scripts(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
-        if self.is_known_benign_fixture(manifest, report) {
-            return;
-        }
-
-        for (idx, cs) in manifest.content_scripts.iter().enumerate() {
-            // Check for all_frames (can access iframes)
-            if cs.all_frames {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/chrome-ext/content-script-all-frames".to_string(),
-                        "Content script runs in all frames including iframes".to_string(),
-                        0.85,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: "all_frames: true".to_string(),
-                        location: Some(format!("content_scripts[{}]", idx)),
-                        ..Default::default()
-                    }]),
-                );
-            }
-
-            // Check run_at timing
-            if cs.run_at.as_deref() == Some("document_start") {
-                report.add_finding(
-                    Finding::indicator(
-                        "supply-chain/chrome-ext/content-script-early".to_string(),
-                        "Content script runs at document_start (before page loads)".to_string(),
-                        0.8,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "parser".to_string(),
-                        source: "manifest.json".to_string(),
-                        value: "run_at: document_start".to_string(),
-                        location: Some(format!("content_scripts[{}]", idx)),
-                        ..Default::default()
-                    }]),
-                );
-            }
         }
     }
 
@@ -736,7 +481,8 @@ impl ChromeManifestAnalyzer {
         if manifest.externally_connectable.is_some() {
             report.add_finding(
                 Finding::indicator(
-                    "supply-chain/chrome-ext/externally-connectable".to_string(),
+                    "micro-behaviors/browser-extension/messaging::externally-connectable"
+                        .to_string(),
                     "Extension allows external webpage connections".to_string(),
                     0.85,
                 )
@@ -755,7 +501,8 @@ impl ChromeManifestAnalyzer {
         if !manifest.web_accessible_resources.is_empty() {
             report.add_finding(
                 Finding::indicator(
-                    "supply-chain/chrome-ext/web-accessible-resources".to_string(),
+                    "micro-behaviors/browser-extension/web-accessible-resources::declared"
+                        .to_string(),
                     format!(
                         "Extension exposes {} resources to web pages",
                         manifest.web_accessible_resources.len()
@@ -779,7 +526,8 @@ impl ChromeManifestAnalyzer {
         {
             report.add_finding(
                 Finding::indicator(
-                    "supply-chain/chrome-ext/persistent-background".to_string(),
+                    "micro-behaviors/browser-extension/lifecycle::persistent-background"
+                        .to_string(),
                     "Extension uses persistent background page".to_string(),
                     0.8,
                 )
@@ -804,7 +552,7 @@ impl ChromeManifestAnalyzer {
 
             report.add_finding(
                 Finding::indicator(
-                    "supply-chain/chrome-ext/external-update-url".to_string(),
+                    "objectives/supply-chain/metadata-anomaly/update-url::external".to_string(),
                     format!("Extension updates from external URL: {}", url),
                     0.9,
                 )
@@ -894,19 +642,18 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
-        // Should have findings for dangerous permissions
+        // Each declared API permission becomes a neutral capability trait,
+        // kebab-cased into the trait-ID path.
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
         assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id.contains("permission-critical"))
+            ids.contains(&"micro-behaviors/browser-extension/permission/debugger::declared"),
+            "{ids:?}"
         );
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id.contains("overprivileged"))
-        );
+        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/cookies::declared"));
+        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/web-request::declared"));
+        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/history::declared"));
+        // The risk/intent verdict is no longer hardcoded here.
+        assert!(!report.findings.iter().any(|f| f.id.contains("overprivileged")));
     }
 
     #[test]
@@ -923,16 +670,19 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
+        // A broad grant collapses to the `all-urls` host-access token, not a
+        // bogus `permission/all-urls`.
         assert!(
             report
                 .findings
                 .iter()
-                .any(|f| f.desc.contains("ALL websites"))
+                .any(|f| f.id == "micro-behaviors/browser-extension/host-access/all-urls::granted")
         );
+        assert!(!report.findings.iter().any(|f| f.id.contains("permission/all-urls")));
     }
 
     #[test]
-    fn test_shopping_site_targeting() {
+    fn test_host_access_traits() {
         let content = r#"{
             "manifest_version": 3,
             "name": "Shopping Extension",
@@ -940,8 +690,7 @@ mod tests {
             "host_permissions": [
                 "*://*.amazon.com/*",
                 "*://*.amazon.co.uk/*",
-                "*://*.ebay.com/*",
-                "*://*.walmart.com/*"
+                "*://*.ebay.com/*"
             ]
         }"#;
 
@@ -950,12 +699,12 @@ mod tests {
             .analyze_manifest(Path::new("manifest.json"), content)
             .unwrap();
 
-        assert!(
-            report
-                .findings
-                .iter()
-                .any(|f| f.id.contains("targets-shopping"))
-        );
+        let ids: Vec<&str> = report.findings.iter().map(|f| f.id.as_str()).collect();
+        // One dynamic per-origin capability trait per host; the registrable
+        // domain is the ML-keyed leaf path component.
+        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.com::granted"));
+        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.co.uk::granted"));
+        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/ebay.com::granted"));
     }
 
     #[test]
@@ -976,7 +725,7 @@ mod tests {
             report
                 .findings
                 .iter()
-                .any(|f| f.id.contains("external-update-url"))
+                .any(|f| f.id == "objectives/supply-chain/metadata-anomaly/update-url")
         );
     }
 }

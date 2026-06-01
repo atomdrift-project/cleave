@@ -296,6 +296,7 @@ pub(crate) fn apply_trait_defaults(
         crit: criticality,
         mbc: apply_string_default(raw.mbc, &defaults.mbc),
         attack: apply_string_default(raw.attack, &defaults.attack),
+        r#ref: raw.r#ref,
         platforms,
         arch,
         r#for: file_types,
@@ -982,6 +983,7 @@ pub(crate) fn apply_composite_defaults(
         crit: criticality,
         mbc: apply_string_default(raw.mbc, &defaults.mbc),
         attack: apply_string_default(raw.attack, &defaults.attack),
+        r#ref: raw.r#ref,
         platforms,
         arch,
         r#for: file_types,
@@ -1967,6 +1969,7 @@ mod tests {
             not: None,
             unless: None,
             downgrade: None,
+            ..Default::default()
         }
     }
 

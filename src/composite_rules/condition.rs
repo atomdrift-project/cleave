@@ -489,6 +489,12 @@ pub(crate) struct ArgFilter {
     /// String / template value exact match.
     #[serde(default)]
     pub exact: Option<String>,
+    /// String / template value regex match. Lets a migrated `#match? @arg
+    /// "..."` predicate keep its exact discrimination (e.g. require's
+    /// `^(node:)?http$` to match `http` but not `https`), which `substr`
+    /// cannot express.
+    #[serde(default)]
+    pub regex: Option<String>,
     /// Identifier name exact match (kind=identifier).
     #[serde(default)]
     pub name: Option<String>,

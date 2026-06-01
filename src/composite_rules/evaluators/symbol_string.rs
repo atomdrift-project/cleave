@@ -934,6 +934,11 @@ fn arg_matches(
             {
                 return false;
             }
+            if let Some(want_regex) = filter.regex.as_deref()
+                && !regex::Regex::new(want_regex).is_ok_and(|re| re.is_match(value))
+            {
+                return false;
+            }
         }
         Arg::Identifier { name } => {
             if let Some(want_name) = filter.name.as_deref()

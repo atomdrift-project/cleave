@@ -1036,14 +1036,16 @@ pub(crate) fn find_none_only_with_proximity(composite_rules: &[CompositeTrait]) 
         .collect()
 }
 
-/// Find traits and composite rules with 7 or more explicit file types in their `for:` field.
+/// Find traits and composite rules with 9 or more explicit file types in their `for:` field.
 ///
-/// Listing 7+ individual file types defeats the purpose of specific targeting and is
+/// Listing many individual file types defeats the purpose of specific targeting and is
 /// equivalent to broad groupings like `binaries`, `scripts`, or `all`. Authors should
 /// use these aggregates instead of enumerating every covered type.
 ///
-/// The threshold of 7 was chosen because the `binaries` group contains exactly 7 members;
-/// any list that long almost certainly maps to an existing group.
+/// Up to 8 explicit types is accepted: real traits routinely need a hand-picked spread
+/// across two or three groups (e.g. a few scripts + a binary format + a manifest) that
+/// no single named group expresses, and forcing a group there over-broadens coverage.
+/// Nine or more almost always maps to an existing group and should use it.
 ///
 /// Traits with `for: [all]` are exempt — they already use the broadest specifier.
 ///
@@ -1053,7 +1055,7 @@ pub(crate) fn find_excessive_file_types(
     trait_definitions: &[TraitDefinition],
     composite_rules: &[CompositeTrait],
 ) -> Vec<(String, usize, &'static str, bool)> {
-    const MIN_FOR_WARNING: usize = 7;
+    const MIN_FOR_WARNING: usize = 9;
 
     let binaries: &[FileType] = &[
         FileType::Elf,

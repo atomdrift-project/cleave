@@ -3480,11 +3480,11 @@ impl super::CapabilityMapper {
                 );
             }
 
-            // Validate: traits/rules with 7+ explicit file types (suggest a named group instead)
+            // Validate: traits/rules with 9+ explicit file types (suggest a named group instead)
             let excessive_for = find_excessive_file_types(&trait_definitions, &composite_rules);
             if !excessive_for.is_empty() {
                 eprintln!(
-                    "\n⚠️  WARNING: {} traits/rules specify 7+ explicit file types",
+                    "\n⚠️  WARNING: {} traits/rules specify 9+ explicit file types",
                     excessive_for.len()
                 );
                 eprintln!(
@@ -3514,7 +3514,7 @@ impl super::CapabilityMapper {
                 }
                 eprintln!();
                 warnings.push(format!(
-                    "{} traits/rules specify 7+ explicit file types (use a named group)",
+                    "{} traits/rules specify 9+ explicit file types (use a named group)",
                     excessive_for.len()
                 ));
             }

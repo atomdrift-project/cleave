@@ -4518,10 +4518,31 @@ mod excessive_file_types_tests {
     }
 
     #[test]
-    fn test_exactly_threshold_flagged() {
-        // 7 types that don't form a canonical group — must be flagged
+    fn test_eight_types_accepted() {
+        // 8 hand-picked types that don't form a canonical group — accepted
+        // (a spread across groups that no single named group expresses).
         let traits = vec![trait_with_for(
-            "test::seven-types",
+            "test::eight-types",
+            vec![
+                FileType::Elf,
+                FileType::Macho,
+                FileType::Pe,
+                FileType::Class,
+                FileType::Pyc,
+                FileType::Python,
+                FileType::Shell,
+                FileType::Php,
+            ],
+        )];
+        let result = find_excessive_file_types(&traits, &[]);
+        assert!(result.is_empty(), "8 explicit types should be accepted");
+    }
+
+    #[test]
+    fn test_exactly_threshold_flagged() {
+        // 9 types that don't form a canonical group — must be flagged
+        let traits = vec![trait_with_for(
+            "test::nine-types",
             vec![
                 FileType::Elf,
                 FileType::Macho,
@@ -4530,12 +4551,14 @@ mod excessive_file_types_tests {
                 FileType::Pyc,
                 FileType::Python,
                 FileType::Shell, // not the canonical `binaries` set
+                FileType::Php,
+                FileType::JavaScript,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].0, "test::seven-types");
-        assert_eq!(result[0].1, 7);
+        assert_eq!(result[0].0, "test::nine-types");
+        assert_eq!(result[0].1, 9);
     }
 
     #[test]
@@ -4633,6 +4656,8 @@ mod excessive_file_types_tests {
                 FileType::Cpp,
                 FileType::Go,
                 FileType::CSharp,
+                FileType::Swift,
+                FileType::Kotlin,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -4653,6 +4678,8 @@ mod excessive_file_types_tests {
                 FileType::Shell,
                 FileType::Ruby,
                 FileType::Rust,
+                FileType::Php,
+                FileType::Java,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -4724,6 +4751,8 @@ mod excessive_file_types_tests {
                 FileType::Shell,
                 FileType::Ruby,
                 FileType::Rust,
+                FileType::Php,
+                FileType::Lua,
             ],
         )];
         let result = find_excessive_file_types(&traits, &[]);
@@ -4750,6 +4779,8 @@ mod excessive_file_types_tests {
                 FileType::Pyc,
                 FileType::Python,
                 FileType::Shell, // not the canonical `binaries` set
+                FileType::Php,
+                FileType::JavaScript,
             ],
             for_from_groups: false,
             size_min: None,

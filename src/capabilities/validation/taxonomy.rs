@@ -1449,6 +1449,18 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
     // plist ProgramArguments, systemd ExecStart, etc.
     "objectives/command-and-control/dropper/delivery/download-execute/",
+    // Hardcoded C2 URL string literals (IP-pinned URLs, .php panel endpoints)
+    // appear in any source language — same rationale as communications/url/.
+    // The directory's -encoded and -binary legs are already narrowly scoped.
+    "micro-behaviors/communications/http/url/",
+    // Cross-language text/format properties (license headers, human-language
+    // prose, generic source tokens) appear in any language's files.
+    "metadata/file/text/",
+    // "Code generated … DO NOT EDIT" markers appear in generated code of every language.
+    "metadata/lang/source/generated.yaml",
+    // The Racket language classifier matches `#lang racket` to identify the
+    // language of otherwise-unknown files, so it must scan broadly.
+    "metadata/lang/scripted/racket.yaml",
 ];
 
 /// Returns the effective platform count for a trait.

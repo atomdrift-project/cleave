@@ -846,6 +846,7 @@ pub(crate) fn eval_call<'a>(
     substr: Option<&String>,
     regex: Option<&String>,
     arg_filter: Option<&crate::composite_rules::condition::ArgFilter>,
+    args_filters: Option<&[crate::composite_rules::condition::ArgFilter]>,
     ctx: &EvaluationContext<'a>,
 ) -> ConditionResult {
     let Some(view) = ctx.report.filefacts.as_ref() else {
@@ -881,6 +882,15 @@ pub(crate) fn eval_call<'a>(
         // If an arg filter is set, require at least one arg to match it.
         if let Some(filter) = arg_filter
             && !args.iter().any(|a| arg_matches(a, filter))
+        {
+            continue;
+        }
+
+        // If a multi-arg filter is set, require every filter to be satisfied by
+        // a *distinct* arg (greedy assignment) — for matching a specific
+        // multi-positional shape like `File.rename("a.png", "b.exe")`.
+        if let Some(filters) = args_filters
+            && !all_filters_match_distinct(args, filters)
         {
             continue;
         }
@@ -978,6 +988,43 @@ pub(crate) fn eval_symbol_fact<'a>(
         precision: 2.0,
         matched_trait_ids: Vec::new(),
     }
+}
+
+/// True when every filter in `filters` can be matched to a **distinct** arg in
+/// `args` (a bipartite matching). Used by the multi-arg `args:` filter to match
+/// a specific multi-positional call shape like `File.rename("a.png", "b.exe")`
+/// without letting one arg satisfy two filters. Backtracks so a greedy
+/// mis-assignment can't produce a false negative; inputs are tiny (a handful of
+/// args and filters).
+fn all_filters_match_distinct(
+    args: &[filefacts::Arg],
+    filters: &[crate::composite_rules::condition::ArgFilter],
+) -> bool {
+    if filters.len() > args.len() {
+        return false;
+    }
+    fn assign(
+        fi: usize,
+        args: &[filefacts::Arg],
+        filters: &[crate::composite_rules::condition::ArgFilter],
+        used: &mut [bool],
+    ) -> bool {
+        if fi == filters.len() {
+            return true;
+        }
+        for (ai, a) in args.iter().enumerate() {
+            if !used[ai] && arg_matches(a, &filters[fi]) {
+                used[ai] = true;
+                if assign(fi + 1, args, filters, used) {
+                    return true;
+                }
+                used[ai] = false;
+            }
+        }
+        false
+    }
+    let mut used = vec![false; args.len()];
+    assign(0, args, filters, &mut used)
 }
 
 /// Match one arg JSON value against an [`ArgFilter`]. Argstring/number/
@@ -1960,5 +2007,62 @@ pub(crate) fn eval_encoded<'a>(
         warnings: Vec::new(),
         precision,
         matched_trait_ids: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod multi_arg_tests {
+    use super::all_filters_match_distinct;
+    use crate::composite_rules::condition::ArgFilter;
+
+    fn s(v: &str) -> filefacts::Arg {
+        filefacts::Arg::String {
+            value: v.to_string(),
+        }
+    }
+    fn rx(pat: &str) -> ArgFilter {
+        ArgFilter {
+            kind: Some("string".to_string()),
+            regex: Some(pat.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn matches_distinct_positions() {
+        // File.rename("a.png", "b.exe") — img arg + exe arg, distinct.
+        let args = [s("a.png"), s("b.exe")];
+        let filters = [rx(r"\.png$"), rx(r"\.exe$")];
+        assert!(all_filters_match_distinct(&args, &filters));
+    }
+
+    #[test]
+    fn order_independent_via_backtracking() {
+        // Args in the opposite order still match — and a greedy first-fit that
+        // grabbed the wrong arg would fail, so this exercises the backtracking.
+        let args = [s("b.exe"), s("a.png")];
+        let filters = [rx(r"\.png$"), rx(r"\.exe$")];
+        assert!(all_filters_match_distinct(&args, &filters));
+    }
+
+    #[test]
+    fn one_arg_cannot_satisfy_two_filters() {
+        // A single ".exe" arg must not satisfy both an img and an exe filter.
+        let args = [s("only.exe")];
+        let filters = [rx(r"\.png$"), rx(r"\.exe$")];
+        assert!(!all_filters_match_distinct(&args, &filters));
+    }
+
+    #[test]
+    fn distinct_required_for_same_filter_twice() {
+        // Two ".exe" filters need two distinct ".exe" args.
+        assert!(!all_filters_match_distinct(
+            &[s("a.exe")],
+            &[rx(r"\.exe$"), rx(r"\.exe$")]
+        ));
+        assert!(all_filters_match_distinct(
+            &[s("a.exe"), s("b.exe")],
+            &[rx(r"\.exe$"), rx(r"\.exe$")]
+        ));
     }
 }

@@ -1251,6 +1251,7 @@ impl TraitDefinition {
                 is_check,
                 kind,
                 arg,
+                args,
                 alias,
                 not,
             } => {
@@ -1269,6 +1270,7 @@ impl TraitDefinition {
                             substr.as_ref(),
                             regex.as_ref(),
                             arg.as_ref(),
+                            args.as_deref(),
                             ctx,
                         )
                     ),
@@ -2644,6 +2646,7 @@ impl CompositeTrait {
                 is_check,
                 kind,
                 arg,
+                args,
                 alias,
                 not,
             } => {
@@ -2656,6 +2659,7 @@ impl CompositeTrait {
                             substr.as_ref(),
                             regex.as_ref(),
                             arg.as_ref(),
+                            args.as_deref(),
                             ctx,
                         )
                     }
@@ -3563,6 +3567,7 @@ mod scope_tests {
                 is_check: None,
                 kind: None,
                 arg: None,
+                args: None,
                 alias: None,
                 not: None,
             })

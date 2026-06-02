@@ -371,6 +371,7 @@ mod duplicate_tests {
                 is_check: None,
                 kind: None,
                 arg: None,
+                args: None,
                 alias: None,
                 not: None,
             },
@@ -2000,6 +2001,7 @@ mod duplicate_tests {
                     is_check: None,
                     kind: None,
                     arg: None,
+                    args: None,
                     alias: None,
                     not: None,
                 },
@@ -3921,7 +3923,8 @@ mod constraint_tests {
         // alias, and must not be flagged by the single-item validator. (The
         // engine weights the dir-ref by its matched-member count.)
         use crate::capabilities::validation::find_single_item_clauses;
-        let mut rule = create_composite_any("well-known/lib/ffmpeg::marker", &["well-known/lib/ffmpeg"]);
+        let mut rule =
+            create_composite_any("well-known/lib/ffmpeg::marker", &["well-known/lib/ffmpeg"]);
         rule.needs = Some(2);
 
         assert!(

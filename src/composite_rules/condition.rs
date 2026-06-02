@@ -581,6 +581,13 @@ enum ConditionTagged {
         /// kind: number, value: 511, radix: 8 }`.
         #[serde(default)]
         arg: Option<ArgFilter>,
+        /// Multi-argument filter (kind=call only). Every filter must be
+        /// satisfied by a **distinct** arg of the call — for matching a
+        /// specific multi-positional shape like `File.rename("a.png",
+        /// "b.exe")` via `args: [{kind: string, regex: '\.png$'}, {kind:
+        /// string, regex: '\.exe$'}]`. Combined (AND) with `arg` if both set.
+        #[serde(default)]
+        args: Option<Vec<ArgFilter>>,
         /// Import-alias filter (kind=import only). Matches the local alias of
         /// an aliased import (`import subprocess as sp`). Present → only
         /// aliased imports match.
@@ -1088,6 +1095,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind,
                     arg,
+                    args,
                     alias,
                     not,
                 } => Condition::Symbol {
@@ -1098,6 +1106,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind,
                     arg,
+                    args,
                     alias,
                     not,
                 },
@@ -1116,6 +1125,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Import),
                     arg: None,
+                    args: None,
                     alias: None,
                     not,
                 },
@@ -1134,6 +1144,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Export),
                     arg: None,
+                    args: None,
                     alias: None,
                     not,
                 },
@@ -1152,6 +1163,7 @@ impl From<ConditionDeser> for Condition {
                     is_check,
                     kind: Some(SymbolKind::Function),
                     arg: None,
+                    args: None,
                     alias: None,
                     not,
                 },
@@ -1441,6 +1453,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 kind,
                 arg,
+                args,
                 alias,
                 not,
             } => ConditionTagged::Symbol {
@@ -1451,6 +1464,7 @@ impl From<Condition> for ConditionTagged {
                 is_check,
                 kind,
                 arg,
+                args,
                 alias,
                 not,
             },
@@ -1764,6 +1778,11 @@ pub(crate) enum Condition {
         /// radix: 8 }`.
         #[serde(skip_serializing_if = "Option::is_none", default)]
         arg: Option<ArgFilter>,
+        /// Multi-argument filter (kind=call only) — every filter must be
+        /// satisfied by a distinct arg of the call (`File.rename("a.png",
+        /// "b.exe")`). Combined (AND) with `arg` when both are present.
+        #[serde(skip_serializing_if = "Option::is_none", default)]
+        args: Option<Vec<ArgFilter>>,
         /// Import-alias filter (kind=import only) — matches the local alias of
         /// an aliased import. Present → only aliased imports match.
         #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -3938,6 +3957,7 @@ exact: curl
             is_check: None,
             kind: None,
             arg: None,
+            args: None,
             alias: None,
             not: None,
         };

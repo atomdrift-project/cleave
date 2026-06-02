@@ -150,6 +150,7 @@ pub(crate) fn simple_rule_to_composite_rule(
             is_check: None,
             kind: None,
             arg: None,
+            args: None,
             alias: None,
             not: None,
         }]),

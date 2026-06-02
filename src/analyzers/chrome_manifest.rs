@@ -650,10 +650,17 @@ mod tests {
             "{ids:?}"
         );
         assert!(ids.contains(&"micro-behaviors/browser-extension/permission/cookies::declared"));
-        assert!(ids.contains(&"micro-behaviors/browser-extension/permission/web-request::declared"));
+        assert!(
+            ids.contains(&"micro-behaviors/browser-extension/permission/web-request::declared")
+        );
         assert!(ids.contains(&"micro-behaviors/browser-extension/permission/history::declared"));
         // The risk/intent verdict is no longer hardcoded here.
-        assert!(!report.findings.iter().any(|f| f.id.contains("overprivileged")));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("overprivileged"))
+        );
     }
 
     #[test]
@@ -678,7 +685,12 @@ mod tests {
                 .iter()
                 .any(|f| f.id == "micro-behaviors/browser-extension/host-access/all-urls::granted")
         );
-        assert!(!report.findings.iter().any(|f| f.id.contains("permission/all-urls")));
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.id.contains("permission/all-urls"))
+        );
     }
 
     #[test]
@@ -703,7 +715,9 @@ mod tests {
         // One dynamic per-origin capability trait per host; the registrable
         // domain is the ML-keyed leaf path component.
         assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.com::granted"));
-        assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.co.uk::granted"));
+        assert!(
+            ids.contains(&"micro-behaviors/browser-extension/host-access/amazon.co.uk::granted")
+        );
         assert!(ids.contains(&"micro-behaviors/browser-extension/host-access/ebay.com::granted"));
     }
 

@@ -200,6 +200,18 @@ validate: ## Validate trait definitions (for: restrictions, taxonomy, precision,
 	CLEAVE_TRAITS_DIR=traits ./$(CARGO_TARGET)/debug/$(BINARY) validate
 	@echo "✓ Validation passed"
 
+TRAITS ?= ../cleave-traits
+COMMIT ?= HEAD
+CHANNEL ?= beta
+DIST ?= dist
+update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
+	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }
+	tools/update-manifest/build-manifest.sh \
+	  --traits "$(TRAITS)" --commit "$(COMMIT)" \
+	  --release "$(RELEASE)" --channel "$(CHANNEL)" \
+	  --engine ./$(CARGO_TARGET)/release/$(BINARY) --out "$(DIST)" \
+	  $(if $(SIGN),--sign --identity "$(IDENTITY)",)
+
 clean: ## Clean all build artifacts
 	@echo "Cleaning build artifacts..."
 	cargo clean

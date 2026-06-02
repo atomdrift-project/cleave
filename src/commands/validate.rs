@@ -685,7 +685,10 @@ const HOSTILE_EXPECTATIONS: &[HostileExpectation] = &[
     },
     HostileExpectation {
         name: "memdump.py.xz",
-        min_score: 153,
+        // 152 (was 153): generic open()/binary-rb atoms were de-duplicated out of
+        // objectives/.../dropper/builder into the canonical micro-behaviors/fs/file/open
+        // home; memdump still scores ••• hostile on its /proc memory-dump traits.
+        min_score: 152,
         min_hostile: 2,
         min_suspicious: 2,
     },

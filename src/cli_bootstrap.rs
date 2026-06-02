@@ -337,9 +337,18 @@ pub(crate) fn configure_rayon_thread_pool() {
         }
         builder = builder.num_threads(threads);
     } else {
-        let total_parallelism = std::thread::available_parallelism()
-            .map(std::num::NonZero::get)
-            .unwrap_or(MIN_SAFE_THREADS);
+        let total_parallelism = match crate::memory_tracker::cpu_count() {
+            Some(n) => n,
+            None => {
+                tracing::warn!(
+                    fallback = MIN_SAFE_THREADS,
+                    "CPU count detection failed; rayon pool DOWNGRADED to {MIN_SAFE_THREADS} \
+                     threads. On a many-core host this throttles throughput — set \
+                     CLEAVE_RAYON_THREADS to the core count.",
+                );
+                MIN_SAFE_THREADS
+            }
+        };
 
         let threads = match preferred_default_thread_count() {
             // Asymmetric Apple Silicon: use *all* performance cores. A 9-point
@@ -362,9 +371,22 @@ pub(crate) fn configure_rayon_thread_pool() {
     // binary like litmus). That's the desired behaviour — we only configure
     // the pool when cleave owns it.
     let installed = builder.build_global().is_ok();
+    let active = rayon::current_num_threads();
+    // A pool smaller than the detected core count is a resource downgrade —
+    // surface it at WARN so an under-provisioned host is diagnosable from one
+    // line (the illumos `available_parallelism` gap silently capped this at 4).
+    if let Some(cores) = crate::memory_tracker::cpu_count()
+        && active < cores
+    {
+        tracing::warn!(
+            rayon_threads = active,
+            detected_cores = cores,
+            "rayon pool smaller than detected cores; throughput limited",
+        );
+    }
     tracing::info!(
         installed_by_cleave = installed,
-        threads = rayon::current_num_threads(),
+        threads = active,
         "rayon pool ready"
     );
 }

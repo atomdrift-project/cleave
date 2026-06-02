@@ -416,6 +416,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Scala,
                     RuleFileType::Zig,
                     RuleFileType::Elixir,
+                    RuleFileType::Clojure,
                 ],
                 "manifests" => vec![
                     RuleFileType::PackageJson,

@@ -15,6 +15,7 @@ use parking_lot::RwLock;
 use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 use std::sync::{Arc, LazyLock};
+use std::time::Instant;
 use streaming_iterator::StreamingIterator;
 
 /// Maximum number of compiled tree-sitter queries to cache.
@@ -418,8 +419,22 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let mut match_count: usize = 0;
     let cpu_budget = ctx.deadline.map(|_| AST_QUERY_CPU_BUDGET);
     let cpu_start = thread_cpu_time();
+    let deadline = ctx.deadline;
     let mut timed_out = false;
+    // Break out of a runaway query on any of three signals: the per-rule CPU
+    // budget, the wall-clock deadline, or cooperative cancellation (SIGTERM).
+    // The progress callback fires mid-query, so a single pathological pattern
+    // can no longer pin a rayon thread for minutes — which is what let one stuck
+    // member hang an entire worker and block graceful shutdown.
     let mut progress_cb = |_state: &tree_sitter::QueryCursorState| -> ControlFlow<()> {
+        if ctx.is_cancelled() {
+            return ControlFlow::Break(());
+        }
+        if let Some(dl) = deadline
+            && Instant::now() > dl
+        {
+            return ControlFlow::Break(());
+        }
         if let Some(budget) = cpu_budget
             && thread_cpu_time().saturating_sub(cpu_start) > budget
         {
@@ -433,7 +448,12 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let mut buffer1: Vec<u8> = Vec::new();
     let mut buffer2: Vec<u8> = Vec::new();
     while let Some(m) = matches.next() {
-        // Check the CPU budget between matches too.
+        // Mirror the progress-callback guards between matches: cancellation and
+        // the wall-clock deadline stop work promptly; the CPU budget marks a
+        // genuine analysis-bomb timeout.
+        if ctx.is_cancelled() || deadline.is_some_and(|dl| Instant::now() > dl) {
+            break;
+        }
         if let Some(budget) = cpu_budget
             && thread_cpu_time().saturating_sub(cpu_start) > budget
         {

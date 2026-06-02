@@ -176,6 +176,16 @@ pub fn total_memory() -> Option<u64> {
     sysmem::total_memory()
 }
 
+/// Number of CPUs available to this process, or `None` if undetectable.
+///
+/// Delegates to the `sysmem` crate, which handles illumos/Solaris where
+/// `std::thread::available_parallelism` is unsupported and would otherwise
+/// drive a silent thread-pool downgrade on many-core hosts.
+#[must_use]
+pub fn cpu_count() -> Option<usize> {
+    sysmem::cpu_count()
+}
+
 /// Memory limit: `min(50% RAM, 32 GiB)`.
 ///
 /// Use this as the default `limit` argument to [`start_periodic_logging`] and

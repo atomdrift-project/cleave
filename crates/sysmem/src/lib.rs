@@ -61,6 +61,45 @@ pub fn warning_threshold() -> u64 {
     memory_limit().saturating_sub(512 * 1024 * 1024)
 }
 
+/// Number of CPUs available to the process, cached after the first call.
+///
+/// `std::thread::available_parallelism()` returns `Err(Unsupported)` on
+/// illumos/Solaris, where callers would otherwise silently collapse a thread
+/// pool to a small hardcoded fallback on a many-core host. There we probe
+/// `sysconf(_SC_NPROCESSORS_ONLN)` directly. Everywhere else we defer to the
+/// standard library.
+///
+/// Returns `None` only when no source is usable, so callers can log a resource
+/// downgrade instead of silently assuming a small default.
+#[must_use]
+pub fn cpu_count() -> Option<usize> {
+    static COUNT: OnceLock<Option<usize>> = OnceLock::new();
+    *COUNT.get_or_init(cpu_count_impl)
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn cpu_count_impl() -> Option<usize> {
+    extern "C" {
+        fn sysconf(name: i32) -> i64;
+    }
+    // From <sys/unistd.h> on illumos/Solaris: _SC_NPROCESSORS_ONLN = 15. This is
+    // the system-wide online-CPU count; a process bound to a smaller processor
+    // set would see more CPUs than it can use, but that matches the existing
+    // `total_memory` sysconf basis and is correct for the common case.
+    const SC_NPROCESSORS_ONLN: i32 = 15;
+    // SAFETY: sysconf is a pure C function; the selector is a well-defined POSIX
+    // value and a non-positive return is treated as failure.
+    let n = unsafe { sysconf(SC_NPROCESSORS_ONLN) };
+    (n > 0).then_some(n as usize)
+}
+
+#[cfg(not(any(target_os = "illumos", target_os = "solaris")))]
+fn cpu_count_impl() -> Option<usize> {
+    std::thread::available_parallelism()
+        .ok()
+        .map(std::num::NonZero::get)
+}
+
 // ── macOS ───────────────────────────────────────────────────────────────
 
 #[cfg(target_os = "macos")]
@@ -649,6 +688,14 @@ mod tests {
             let rss = current_rss().expect("should detect RSS");
             assert!(rss > 0);
         }
+    }
+
+    #[test]
+    fn cpu_count_returns_positive() {
+        // Every platform sysmem targets exposes a CPU count; a `None` here would
+        // drive the silent thread-pool downgrade this function exists to prevent.
+        let n = cpu_count().expect("should detect CPU count");
+        assert!(n > 0);
     }
 
     #[test]

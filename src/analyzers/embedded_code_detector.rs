@@ -67,16 +67,35 @@ pub fn detect_language_with_host(
 ) -> Option<FileType> {
     let result = detect_language_inner(string_info, is_encoded)?;
 
-    // Suppress false positives from syntactically similar languages
-    if let Some(host) = host_file_type
-        && is_sibling_language(host, &result)
-    {
-        tracing::debug!(
-            "Suppressing {:?} detection in {:?} host (syntactic sibling)",
-            result,
-            host
-        );
-        return None;
+    if let Some(host) = host_file_type {
+        // Suppress false positives from syntactically similar languages.
+        if is_sibling_language(host, &result) {
+            tracing::debug!(
+                "Suppressing {:?} detection in {:?} host (syntactic sibling)",
+                result,
+                host
+            );
+            return None;
+        }
+
+        // A curly-brace / C-family host (Go, Rust, C/C++, Java, …) shares heavy
+        // syntactic overlap with JavaScript/TypeScript — function bodies, braces,
+        // and `recv.Method("arg")` call sites. stng's heuristic classifier readily
+        // tags the host's *own* plain source as embedded JS, which then runs
+        // JavaScript-only traits against, e.g., Go's `db.Exec(`. Suppress that, but
+        // only for PLAIN content: an *encoded* JS payload (base64/hex/xor) inside a
+        // C-family host is a genuine hidden-payload signal and must still surface.
+        if !is_encoded
+            && is_curly_brace_family(host)
+            && matches!(result, FileType::JavaScript | FileType::TypeScript)
+        {
+            tracing::debug!(
+                "Suppressing plain {:?} detection in {:?} host (C-family self-match)",
+                result,
+                host
+            );
+            return None;
+        }
     }
 
     Some(result)
@@ -90,6 +109,27 @@ fn is_sibling_language(host: &FileType, detected: &FileType) -> bool {
             | (FileType::Python, FileType::Ruby)
             | (FileType::Ruby, FileType::Perl)
             | (FileType::Perl, FileType::Ruby)
+    )
+}
+
+/// Curly-brace / C-family source languages whose syntax overlaps JavaScript and
+/// TypeScript enough that the embedded-code detector cannot reliably distinguish the
+/// host's own plain source from a genuine embedded JS payload.
+fn is_curly_brace_family(file_type: &FileType) -> bool {
+    matches!(
+        file_type,
+        // `FileType::C` covers C, C++, headers, Pascal and asm (see filefacts ext map).
+        FileType::C
+            | FileType::Go
+            | FileType::Rust
+            | FileType::Java
+            | FileType::CSharp
+            | FileType::Swift
+            | FileType::Kotlin
+            | FileType::Scala
+            | FileType::Groovy
+            | FileType::Zig
+            | FileType::ObjectiveC
     )
 }
 
@@ -1389,6 +1429,56 @@ mod tests {
             "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
         let info = make_string_info(code);
         assert_eq!(detect_language(&info, false), Some(FileType::JavaScript));
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_suppress_plain_js_in_c_family_host() {
+        // Go (and other curly-brace languages) share C-style syntax with JavaScript,
+        // so the host's own plain source is readily misclassified as embedded JS. That
+        // leaked JS-only traits onto, e.g., Go's `db.Exec(` under a JavaScript-typed
+        // sub-report. Plain JS detection must be suppressed when the host is C-family.
+        let code =
+            "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
+        let info = make_string_info(code);
+
+        // No host context: still detected as JavaScript (unchanged behaviour).
+        assert_eq!(detect_language(&info, false), Some(FileType::JavaScript));
+
+        // C-family hosts suppress the plain self-match.
+        for host in [
+            FileType::Go,
+            FileType::Rust,
+            FileType::C,
+            FileType::Java,
+            FileType::CSharp,
+        ] {
+            assert_eq!(
+                detect_language_with_host(&info, false, Some(&host)),
+                None,
+                "plain JS should be suppressed in {host:?} host",
+            );
+        }
+
+        // A non-C-family host (e.g. Python) is unaffected.
+        assert_eq!(
+            detect_language_with_host(&info, false, Some(&FileType::Python)),
+            Some(FileType::JavaScript),
+        );
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn test_encoded_js_in_c_family_host_still_detected() {
+        // An *encoded* JS payload inside a C-family host is a genuine hidden-payload
+        // signal and must still surface — only PLAIN self-matches are suppressed.
+        let code =
+            "function test() {\n  const x = require('fs');\n  eval(x);\n  console.log('done');\n}";
+        let info = make_string_info(code);
+        assert_eq!(
+            detect_language_with_host(&info, true, Some(&FileType::Go)),
+            Some(FileType::JavaScript),
+        );
     }
 
     #[test]

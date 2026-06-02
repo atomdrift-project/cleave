@@ -131,6 +131,14 @@ impl SectionMap {
             return true;
         }
 
+        // Bare PE/ELF name → dotted form: `rsrc` matches `.rsrc`, `idata` matches
+        // `.idata`, etc. The enumerated table below only covers text/data/rdata
+        // (plus their Mach-O segment,section forms); this general rule lets any
+        // section be referenced without its leading dot.
+        if bare_matches_dotted(actual, required) {
+            return true;
+        }
+
         if is_fuzzy_name(required) {
             for pattern in fuzzy_section_patterns(required) {
                 if actual == *pattern {
@@ -171,6 +179,13 @@ impl SectionMap {
         // Try exact match first
         for section in &self.sections {
             if section.name == name {
+                return Some((section.start, section.end));
+            }
+        }
+
+        // Bare PE/ELF name → dotted form (e.g. `rsrc` -> `.rsrc`).
+        for section in &self.sections {
+            if bare_matches_dotted(&section.name, name) {
                 return Some((section.start, section.end));
             }
         }
@@ -302,6 +317,18 @@ fn resolve_offset_end(offset: i64, base_start: u64, base_end: u64) -> Option<u64
 /// Returns true if the section name looks like a generic name that should be fuzzy matched.
 /// Accepts both dotted (`.text`) and un-dotted (`text`) forms — the un-dotted form is
 /// common in hand-authored rules and maps to the same set of platform-specific sections.
+/// True when `required` is a bare section name (no leading `.`/`_`, no `,`) and
+/// `actual` is exactly its dotted PE/ELF form — e.g. `bare_matches_dotted(".rsrc",
+/// "rsrc")`. Lets authors write `section: rsrc` and match `.rsrc` without having
+/// to enumerate every section in the fuzzy table.
+fn bare_matches_dotted(actual: &str, required: &str) -> bool {
+    !required.is_empty()
+        && !required.starts_with('.')
+        && !required.starts_with('_')
+        && !required.contains(',')
+        && actual.strip_prefix('.') == Some(required)
+}
+
 fn is_fuzzy_name(name: &str) -> bool {
     matches!(
         name,
@@ -343,6 +370,24 @@ mod tests {
     fn test_bounds_fuzzy_macho() {
         let map = SectionMap::from_sections_and_size(vec![("__TEXT,__text", 0x100, 0x200)], 0x1000);
         assert_eq!(map.bounds(".text"), Some((0x100, 0x200)));
+    }
+
+    #[test]
+    fn test_bare_name_matches_dotted_pe_section() {
+        // A bare PE/ELF section name (no leading dot) must match its dotted form
+        // for any section, not just the enumerated text/data/rdata set.
+        let map = SectionMap::from_sections_and_size(
+            vec![(".rsrc", 0x5000, 0x6000), (".idata", 0x6000, 0x6100)],
+            0x8000,
+        );
+        assert_eq!(map.bounds("rsrc"), Some((0x5000, 0x6000)));
+        assert_eq!(map.bounds("idata"), Some((0x6000, 0x6100)));
+        assert!(SectionMap::section_matches(".rsrc", "rsrc"));
+        assert!(SectionMap::section_matches(".idata", "idata"));
+        // Negative: must be the exact dotted form, not a prefix or unrelated name.
+        assert!(!SectionMap::section_matches(".rsrc2", "rsrc"));
+        assert!(!SectionMap::section_matches(".text", "rsrc"));
+        assert_eq!(map.bounds("nope"), None);
     }
 
     #[test]

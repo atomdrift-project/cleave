@@ -4,10 +4,10 @@
 //! errors or quality issues found. Exits with a non-zero status if validation fails.
 
 use crate::cli::OutputFormat;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use cleave::{AnalysisReport, CapabilityMapper, Criticality, FileAnalysis, validation_controls};
 use rayon::prelude::*;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -29,7 +29,7 @@ enum Target {
     /// hostile findings — like the inverse of the does-nothing walk.
     WalkedHostile {
         path: PathBuf,
-        corpus: &'static str,
+        corpus: String,
         min_hostile: usize,
     },
     /// Does-nothing sample. Its (and any archive-member) score must stay
@@ -75,7 +75,7 @@ fn print_contributing_findings(file: &FileAnalysis, indent: &str) {
 /// On failure, prints only the failing files with their contributing findings.
 pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
     validation_controls::set_disabled_validators_override(exclude)?;
-    let targets = collect_targets()?;
+    let (targets, expectations) = collect_targets()?;
 
     // Skip the analysis cache so every run reflects the current trait set,
     // and route validation-issue rendering through the chosen output format.
@@ -113,7 +113,7 @@ pub fn run(format: &OutputFormat, exclude: Option<&str>) -> Result<String> {
         })
         .collect();
 
-    let stats = evaluate(results)?;
+    let stats = evaluate(results, &expectations.does_nothing)?;
 
     let traits_ver = cleave::traits_repo::version()
         .map(|v| format!(" (traits: {v})"))
@@ -260,42 +260,59 @@ fn format_validate_tiny(report: &ValidateOutput) -> String {
 }
 
 /// Build the full target list: hostile/benign fixtures + walked does-nothing corpus.
-fn collect_targets() -> Result<Vec<Target>> {
+///
+/// Returns the loaded [`Expectations`] alongside the targets so the evaluator can
+/// consult the does-nothing caps. Expectations live in the traits repo (not the
+/// engine), so any build validates the exact fixture set a traits commit defines.
+fn collect_targets() -> Result<(Vec<Target>, Expectations)> {
     let mut targets = Vec::new();
 
     let traits_dir = cleave::traits_repo::try_resolve().map_err(anyhow::Error::msg)?;
+    let exp = load_expectations(&traits_dir)?;
 
-    collect_hostile_fixtures(&traits_dir.join("testdata").join("hostile"), &mut targets)?;
-    collect_benign_fixtures(&traits_dir.join("testdata").join("benign"), &mut targets)?;
+    collect_hostile_fixtures(
+        &traits_dir.join("testdata").join("hostile"),
+        &exp.hostile,
+        &mut targets,
+    )?;
+    collect_benign_fixtures(
+        &traits_dir.join("testdata").join("benign"),
+        &exp.benign,
+        &mut targets,
+    )?;
 
     let dn_dir = traits_dir.join("testdata").join("does-nothing");
     if dn_dir.is_dir() {
         walk_does_nothing(&dn_dir, &mut targets)?;
     }
 
-    for (corpus, min_hostile) in WALKED_HOSTILE_CORPORA {
-        let dir = traits_dir.join("testdata").join(corpus);
+    for corpus in &exp.walked_hostile {
+        let dir = traits_dir.join("testdata").join(&corpus.corpus);
         if dir.is_dir() {
-            walk_hostile_corpus(&dir, corpus, *min_hostile, &mut targets)?;
+            walk_hostile_corpus(&dir, &corpus.corpus, corpus.min_hostile, &mut targets)?;
         }
     }
 
-    Ok(targets)
+    Ok((targets, exp))
 }
 
-/// Corpora whose every file must hit `min_hostile` hostile findings.
-///
-/// Each corpus is the inverse of does-nothing: instead of capping scores from
-/// above we floor them from below. Use this for idiom-per-language attack
-/// samples (one drop-exec implant per language, one reverse-shell per
-/// language) — regressions show up as a single file dropping below the floor.
-const WALKED_HOSTILE_CORPORA: &[(&str, usize)] = &[("drop-exec", 3), ("reverse-shell", 3)];
+/// Read fixture expectations from `<traits>/testdata/expectations.toml`.
+fn load_expectations(traits_dir: &Path) -> Result<Expectations> {
+    let path = traits_dir.join("testdata").join("expectations.toml");
+    let text = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading validation expectations: {}", path.display()))?;
+    toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+}
 
-/// Every direct file in `testdata/hostile/` must have a hardcoded threshold.
-fn collect_hostile_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
-    for expected in HOSTILE_EXPECTATIONS {
+/// Every direct file in `testdata/hostile/` must have an expectation entry.
+fn collect_hostile_fixtures(
+    dir: &Path,
+    expectations: &[HostileExpectation],
+    out: &mut Vec<Target>,
+) -> Result<()> {
+    for expected in expectations {
         out.push(Target::Hostile {
-            path: dir.join(expected.name),
+            path: dir.join(&expected.name),
             min_score: expected.min_score,
             min_hostile: expected.min_hostile,
             min_suspicious: expected.min_suspicious,
@@ -303,24 +320,20 @@ fn collect_hostile_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
     }
     validate_fixture_table(
         dir,
-        HOSTILE_EXPECTATIONS.iter().map(|expected| expected.name),
+        expectations.iter().map(|expected| expected.name.as_str()),
         "hostile",
     )
 }
 
-/// Every direct file in `testdata/benign/` must have a hardcoded cap.
-fn collect_benign_fixtures(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
-    for (name, cap) in BENIGN_SCORE_CAPS {
+/// Every direct file in `testdata/benign/` must have a cap entry.
+fn collect_benign_fixtures(dir: &Path, caps: &[BenignCap], out: &mut Vec<Target>) -> Result<()> {
+    for entry in caps {
         out.push(Target::Benign {
-            path: dir.join(name),
-            cap: *cap,
+            path: dir.join(&entry.name),
+            cap: entry.cap,
         });
     }
-    validate_fixture_table(
-        dir,
-        BENIGN_SCORE_CAPS.iter().map(|(name, _)| *name),
-        "benign",
-    )
+    validate_fixture_table(dir, caps.iter().map(|entry| entry.name.as_str()), "benign")
 }
 
 fn validate_fixture_table<'a>(
@@ -383,7 +396,7 @@ fn walk_does_nothing(dir: &Path, out: &mut Vec<Target>) -> Result<()> {
 /// Walk a hostile-floor corpus directory (e.g. `testdata/drop-exec/`).
 fn walk_hostile_corpus(
     dir: &Path,
-    corpus: &'static str,
+    corpus: &str,
     min_hostile: usize,
     out: &mut Vec<Target>,
 ) -> Result<()> {
@@ -398,7 +411,7 @@ fn walk_hostile_corpus(
         }
         out.push(Target::WalkedHostile {
             path: entry.path().to_path_buf(),
-            corpus,
+            corpus: corpus.to_string(),
             min_hostile,
         });
     }
@@ -413,7 +426,7 @@ struct ValidationStats {
     benign_total: usize,
     does_nothing_passed: usize,
     does_nothing_total: usize,
-    walked_hostile: std::collections::BTreeMap<&'static str, WalkedCorpusStats>,
+    walked_hostile: std::collections::BTreeMap<String, WalkedCorpusStats>,
 }
 
 #[derive(Default)]
@@ -423,7 +436,10 @@ struct WalkedCorpusStats {
 }
 
 /// Walk the collected analysis results, emitting failures inline and tallying totals.
-fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<ValidationStats> {
+fn evaluate(
+    results: Vec<(Target, Result<AnalysisReport>)>,
+    does_nothing: &DoesNothing,
+) -> Result<ValidationStats> {
     let disable_score_caps = validation_controls::is_validator_disabled("score-caps");
 
     let mut stats = ValidationStats {
@@ -485,7 +501,7 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
                         stats.does_nothing_passed += 1;
                         continue;
                     }
-                    let cap = does_nothing_cap(&file.path, &dir);
+                    let cap = does_nothing_cap(&file.path, &dir, does_nothing);
                     if file.score > cap {
                         eprintln!("❌ {}: score {} > cap {cap}", file.path, file.score);
                         print_contributing_findings(file, "     ");
@@ -500,9 +516,9 @@ fn evaluate(results: Vec<(Target, Result<AnalysisReport>)>) -> Result<Validation
                 corpus,
                 min_hostile,
             } => {
-                let entry = stats.walked_hostile.entry(corpus).or_default();
+                let entry = stats.walked_hostile.entry(corpus.clone()).or_default();
                 entry.total += 1;
-                if judge_walked_hostile(&path, corpus, min_hostile, &report) {
+                if judge_walked_hostile(&path, &corpus, min_hostile, &report) {
                     entry.passed += 1;
                 } else {
                     failed += 1;
@@ -634,214 +650,71 @@ fn misleading_benign_findings(
         .collect()
 }
 
+/// Fixture expectations, loaded from `<traits>/testdata/expectations.toml`.
+///
+/// These travel with the traits (not the engine) so any build validates the
+/// exact fixture set + thresholds a given traits commit defines — the basis for
+/// meaningful cross-version validation.
+#[derive(Debug, Deserialize)]
+struct Expectations {
+    /// Per-file floors for direct files in `testdata/hostile/`.
+    hostile: Vec<HostileExpectation>,
+    /// Per-file score ceilings for direct files in `testdata/benign/`.
+    benign: Vec<BenignCap>,
+    /// Corpora whose every file must hit `min_hostile` hostile findings — the
+    /// inverse of does-nothing: floor scores from below rather than cap them.
+    walked_hostile: Vec<WalkedCorpus>,
+    /// Score caps for `testdata/does-nothing/` samples.
+    does_nothing: DoesNothing,
+}
+
+#[derive(Debug, Deserialize)]
 struct HostileExpectation {
-    name: &'static str,
+    name: String,
     min_score: u32,
     min_hostile: usize,
     min_suspicious: usize,
 }
 
-/// Per-file minimums for direct files in `testdata/hostile/`.
-///
-/// Scores are the current observed root-file score floors for these stable
-/// fixtures. Finding-count floors are also explicit per fixture so samples that
-/// need a higher bar, such as the fake meeting-app dropper, stay reviewable.
-const HOSTILE_EXPECTATIONS: &[HostileExpectation] = &[
-    HostileExpectation {
-        name: "LInux_Perl_ClickFix.pl.xz",
-        min_score: 122,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "Spisok_na_Zakupivlyu_INIT.xlsx.lnk.xz",
-        min_score: 156,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "donutloader.bat.xz",
-        min_score: 415,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "dropper.sh.xz",
-        min_score: 120,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "fake-zoom.macho.xz",
-        min_score: 305,
-        min_hostile: 2,
-        min_suspicious: 4,
-    },
-    HostileExpectation {
-        name: "index.applescript.xz",
-        min_score: 554,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "memdump.py.xz",
-        // 152 (was 153): generic open()/binary-rb atoms were de-duplicated out of
-        // objectives/.../dropper/builder into the canonical micro-behaviors/fs/file/open
-        // home; memdump still scores ••• hostile on its /proc memory-dump traits.
-        min_score: 152,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "package.json.xz",
-        min_score: 193,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "pondrat.elf.xz",
-        min_score: 296,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "rand-user-agent.js.xz",
-        min_score: 309,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "reverse-shell.cpp.xz",
-        min_score: 121,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "shady.php.xz",
-        min_score: 116,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    HostileExpectation {
-        name: "terminal.go.xz",
-        min_score: 230,
-        min_hostile: 2,
-        min_suspicious: 2,
-    },
-    // UTF-16LE obfuscated VBScript loader: Array() lookup-table + ChrW
-    // reassembly feeding ExecuteGlobal. Doubles as the regression guard for
-    // UTF-16 text normalization — pre-fix this produced zero findings.
-    HostileExpectation {
-        name: "utf16-vbs-loader.vbs.xz",
-        min_score: 143,
-        min_hostile: 3,
-        min_suspicious: 2,
-    },
-];
+#[derive(Debug, Deserialize)]
+struct BenignCap {
+    name: String,
+    cap: u32,
+}
 
-/// Per-file score caps for direct files in `testdata/benign/`.
-///
-/// Each cap is roughly current observed score + 10%, but never reaches the
-/// score of one full-confidence Suspicious finding (40).
-const BENIGN_SCORE_CAPS: &[(&str, u32)] = &[
-    ("IddController.c.xz", 3),
-    ("find_git_conflicts.sh.xz", 3),
-    ("liblzma.so.5.4.5.xz", 5),
-    ("ls.macOS.xz", 9),
-    ("package.json.xz", 5),
-    ("php-wundii-flowcrafter.tar.xz", 14),
-    // pyaigis is the canonical "defensive scanner whose pattern database
-    // looks like its targets" test case. After the scanner-context audit
-    // landed it scores 35; cap is 38 (current + 3 headroom). A regression
-    // that takes pyaigis above 38 means a credential/jailbreak/exploit
-    // trait stopped honoring `unless: llm-scanner-context`.
-    ("pyaigis-top10.tar.xz", 38),
-    ("rand-user-agent.js.xz", 3),
-    ("run.bat.xz", 2),
-];
+#[derive(Debug, Deserialize)]
+struct WalkedCorpus {
+    corpus: String,
+    min_hostile: usize,
+}
 
-/// Default per-file score cap for `testdata/does-nothing/` samples.
-const DOES_NOTHING_DEFAULT_CAP: u32 = 1;
+#[derive(Debug, Deserialize)]
+struct DoesNothing {
+    /// Cap applied to any does-nothing sample without a specific override.
+    default_cap: u32,
+    /// Per-file caps, keyed by path relative to the does-nothing dir (may carry
+    /// an archive suffix, e.g. `"sample.ipa!!Payload/..."`).
+    #[serde(default)]
+    overrides: Vec<DoesNothingCap>,
+}
 
-/// Per-file score caps for does-nothing samples that can't hit the default cap.
-///
-/// Each entry is `(relative_path_from_does_nothing_dir, cap)`. `cap` is set to
-/// the current observed score — a regression fires if any trait change pushes
-/// the score past this ceiling. Update when trait improvements legitimately
-/// reduce a score, or when a new sample is added to the corpus.
-const DOES_NOTHING_CAPS: &[(&str, u32)] = &[
-    ("artifacts/sample.apk", 7),
-    ("artifacts/sample.apk!!lib/x86/libsample.so", 7),
-    ("artifacts/sample.ipa", 9),
-    ("artifacts/sample.ipa!!Payload/Sample.app/Sample", 9),
-    ("artifacts/sample.mk", 1),
-    // Shell/perl scripts: their shebang traits fire at notable since
-    // a shebang declares interpreter execution per TAXONOMY.md. The
-    // does-nothing samples are otherwise empty.
-    ("artifacts/sample.bash", 2),
-    ("artifacts/sample.sh", 2),
-    ("artifacts/sample.pl", 2),
-    ("artifacts/sample.zsh", 3),
-    ("main.go", 3),
-    ("out/does-nothing-darwin-arm64.xz", 9),
-    (
-        "out/does-nothing-darwin-arm64.xz!!does-nothing-darwin-arm64",
-        9,
-    ),
-    ("out/does-nothing-linux-386.xz", 7),
-    ("out/does-nothing-linux-386.xz!!does-nothing-linux-386", 7),
-    ("out/does-nothing-openbsd-arm64.xz", 8),
-    (
-        "out/does-nothing-openbsd-arm64.xz!!does-nothing-openbsd-arm64",
-        8,
-    ),
-    ("out/does-nothing-windows-amd64.exe.xz", 9),
-    (
-        "out/does-nothing-windows-amd64.exe.xz!!does-nothing-windows-amd64.exe",
-        9,
-    ),
-    ("scripts/make_crate.py", 3),
-    ("scripts/make_crx.py", 3),
-    ("scripts/make_docx.py", 2),
-    ("scripts/make_gem.py", 3),
-    ("scripts/make_jpg.py", 4),
-    ("scripts/make_lnk.py", 2),
-    ("scripts/make_odf.py", 2),
-    ("scripts/make_pdf.py", 3),
-    ("scripts/make_pickle.py", 3),
-    ("scripts/make_png.py", 3),
-    ("scripts/make_xlsx.py", 3),
-    // Build scripts under does-nothing/scripts/: these legitimately
-    // trigger `py-tiny-comment-ratio-small-file` (no docstrings) and
-    // `py-many-zero-param-helpers` (each is a no-arg artifact builder).
-    // Both atoms are weak `notable` signals; the hostile composite that
-    // combines them requires additional obfuscation primitives that
-    // these scripts don't carry, so bumping the cap to 3 is safe.
-    ("scripts/make_zip_bundle.py", 3),
-    ("scripts/make_pptx.py", 3),
-    ("scripts/make_deb.py", 3),
-    // Single-line "imports X / python code embedded in string" samples
-    // for various languages — same pair of new metric atoms as above.
-    ("artifacts/sample.swift", 3),
-    ("artifacts/sample.scala", 3),
-    ("artifacts/sample.java", 3),
-    // Empty PyPI metadata-only packages — `pkginfo-no-author-email` +
-    // `pkginfo-no-homepage` (or similar pair) total to 2; cap at 3 to
-    // leave one slot of headroom.
-    ("artifacts/sample.egg", 3),
-    ("artifacts/sample.whl", 3),
-];
+#[derive(Debug, Deserialize)]
+struct DoesNothingCap {
+    path: String,
+    cap: u32,
+}
 
 /// Look up the cap for a file whose `path` may be either absolute (root file)
 /// or include an archive suffix (e.g. `"...sample.ipa!!Payload/..."`).
-fn does_nothing_cap(file_path: &str, dir: &Path) -> u32 {
+fn does_nothing_cap(file_path: &str, dir: &Path, does_nothing: &DoesNothing) -> u32 {
     let dir_str = dir.to_string_lossy();
     let rel = file_path
         .strip_prefix(dir_str.as_ref())
         .and_then(|s| s.strip_prefix('/'))
         .unwrap_or(file_path);
-    DOES_NOTHING_CAPS
+    does_nothing
+        .overrides
         .iter()
-        .find_map(|(p, cap)| (*p == rel).then_some(*cap))
-        .unwrap_or(DOES_NOTHING_DEFAULT_CAP)
+        .find_map(|o| (o.path == rel).then_some(o.cap))
+        .unwrap_or(does_nothing.default_cap)
 }

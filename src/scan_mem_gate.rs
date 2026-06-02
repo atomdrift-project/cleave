@@ -83,7 +83,10 @@ impl ScanMemGate {
     pub(crate) fn acquire(&self, size: u64) -> ScanMemPermit<'_> {
         let est = self.estimate(size);
         let started = Instant::now();
-        let mut reserved = self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reserved = self
+            .reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         loop {
             if self.fits(*reserved, est, started.elapsed() >= FORCE_ADMIT_AFTER) {
                 *reserved += est;
@@ -123,7 +126,10 @@ impl ScanMemGate {
     }
 
     fn release(&self, est: usize) {
-        let mut reserved = self.reserved.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut reserved = self
+            .reserved
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         *reserved = reserved.saturating_sub(est);
         self.released.notify_all();
     }

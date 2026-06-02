@@ -62,6 +62,10 @@ pub mod update_check;
 pub mod update_manifest;
 pub mod yara_engine;
 
+// Memory-aware admission so parallel scans don't co-resident large archives and
+// OOM the host. See scan_files / scan_directory.
+mod scan_mem_gate;
+
 // HTTP API server
 pub mod server;
 
@@ -2243,6 +2247,7 @@ where
             })
             .map(|e| e.path().to_path_buf());
 
+        let mem_gate = scan_mem_gate::ScanMemGate::new();
         walk.par_bridge().for_each(|file_path| {
         // Cancellation fast path: once SIGINT has flipped the flag, every
         // remaining par_bridge slot returns instantly so the scan drains in
@@ -2257,6 +2262,11 @@ where
             skipped.fetch_add(1, Ordering::Relaxed);
             return;
         }
+
+        // Bound concurrent memory: a burst of large archives serialises instead
+        // of co-residing and OOM-killing the host. Held until this file is done.
+        let _mem_permit =
+            mem_gate.acquire(std::fs::metadata(&file_path).map(|m| m.len()).unwrap_or(0));
 
         // Catch panics from any analyzer so one malformed file doesn't
         // poison the rayon thread pool and kill the entire scan.
@@ -2410,6 +2420,7 @@ where
         total: Some(paths.len()),
     });
 
+    let mem_gate = scan_mem_gate::ScanMemGate::new();
     paths.par_iter().for_each(|file_path| {
         // Cancellation fast path: once SIGINT flips the flag, remaining slots
         // return immediately so the scan drains in-flight work rather than
@@ -2422,6 +2433,11 @@ where
             skipped.fetch_add(1, Ordering::Relaxed);
             return;
         }
+
+        // Bound concurrent memory: a burst of large archives serialises instead
+        // of co-residing and OOM-killing the host. Held until this file is done.
+        let _mem_permit =
+            mem_gate.acquire(std::fs::metadata(file_path).map(|m| m.len()).unwrap_or(0));
 
         // Catch panics so one malformed file can't poison the rayon pool and
         // kill the whole batch.

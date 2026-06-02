@@ -176,6 +176,16 @@ pub fn total_memory() -> Option<u64> {
     sysmem::total_memory()
 }
 
+/// Live available memory in bytes, or `None` where no live source is readable.
+///
+/// Delegates to the `sysmem` crate. Unlike [`total_memory`] this reflects
+/// current pressure (host `MemAvailable` and cgroup headroom), so callers can
+/// throttle concurrent work as other processes consume RAM.
+#[must_use]
+pub fn available_memory() -> Option<u64> {
+    sysmem::available_memory()
+}
+
 /// Number of CPUs available to this process, or `None` if undetectable.
 ///
 /// Delegates to the `sysmem` crate, which handles illumos/Solaris where

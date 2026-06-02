@@ -26,6 +26,21 @@ pub fn total_memory() -> Option<u64> {
     *TOTAL.get_or_init(total_memory_impl)
 }
 
+/// Effective *available* memory in bytes — memory allocatable now without
+/// reclaim/swap pressure. Unlike [`total_memory`], this is a **live** value (not
+/// cached): poll it to throttle concurrent work as other processes — including
+/// other instances of this program — consume RAM.
+///
+/// On Linux this is the smaller of `/proc/meminfo` `MemAvailable` and the cgroup
+/// v2 headroom (`memory.max − memory.current`) when a cgroup limit is visible,
+/// so it respects both host and container pressure. Returns `None` on platforms
+/// (or in sandboxes) where no live source is readable, so callers fall back to a
+/// total-memory budget rather than over- or under-committing.
+#[must_use]
+pub fn available_memory() -> Option<u64> {
+    available_memory_impl()
+}
+
 /// Current process RSS (Resident Set Size) in bytes when the platform exposes it.
 ///
 /// Reports the *instantaneous* RSS — a value that falls as the process frees
@@ -289,6 +304,45 @@ fn parse_cgroup_memory_value(value: &str) -> Option<u64> {
         return None;
     }
     value.parse().ok()
+}
+
+#[cfg(target_os = "linux")]
+fn available_memory_impl() -> Option<u64> {
+    // Min of host MemAvailable and cgroup headroom — mirrors total_memory's
+    // host-vs-cgroup reconciliation, so a container sees its own limit.
+    effective_linux_memory(meminfo_available_memory(), cgroup_memory_headroom())
+}
+
+#[cfg(target_os = "linux")]
+fn meminfo_available_memory() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    parse_meminfo_available_memory(&meminfo)
+}
+
+#[cfg(target_os = "linux")]
+fn parse_meminfo_available_memory(meminfo: &str) -> Option<u64> {
+    for line in meminfo.lines() {
+        if let Some(rest) = line.strip_prefix("MemAvailable:") {
+            let kb: u64 = rest.split_whitespace().next()?.parse().ok()?;
+            return Some(kb * 1024);
+        }
+    }
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn cgroup_memory_headroom() -> Option<u64> {
+    let path = cgroup_v2_path()?;
+    let limit = parse_cgroup_memory_value(&read_trimmed(path.join("memory.max"))?)?;
+    let current: u64 = read_trimmed(path.join("memory.current"))?.parse().ok()?;
+    Some(limit.saturating_sub(current))
+}
+
+/// Platforms without a live available-memory source: callers fall back to a
+/// total-memory budget.
+#[cfg(not(target_os = "linux"))]
+fn available_memory_impl() -> Option<u64> {
+    None
 }
 
 #[cfg(target_os = "linux")]
@@ -1006,6 +1060,18 @@ cpu_info:5:cpu_info5:state\ton-line
         let mem = parse_meminfo_total_memory("MemTotal:       131693424 kB\nMemFree: 1 kB\n")
             .expect("memtotal");
         assert_eq!(mem, 131_693_424 * 1024);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parse_meminfo_available_memory_reads_kib() {
+        let mem = parse_meminfo_available_memory(
+            "MemTotal:       131693424 kB\nMemFree: 1 kB\nMemAvailable:    76543210 kB\n",
+        )
+        .expect("memavailable");
+        assert_eq!(mem, 76_543_210 * 1024);
+        // Absent MemAvailable (very old kernels) → None, not a misparse.
+        assert_eq!(parse_meminfo_available_memory("MemTotal: 1 kB\n"), None);
     }
 
     #[cfg(target_os = "linux")]

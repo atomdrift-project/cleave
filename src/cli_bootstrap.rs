@@ -337,7 +337,7 @@ pub(crate) fn configure_rayon_thread_pool() {
         }
         builder = builder.num_threads(threads);
     } else {
-        let total_parallelism = match crate::memory_tracker::cpu_count() {
+        let total_parallelism = match cleave::memory_tracker::cpu_count() {
             Some(n) => n,
             None => {
                 tracing::warn!(
@@ -375,7 +375,7 @@ pub(crate) fn configure_rayon_thread_pool() {
     // A pool smaller than the detected core count is a resource downgrade —
     // surface it at WARN so an under-provisioned host is diagnosable from one
     // line (the illumos `available_parallelism` gap silently capped this at 4).
-    if let Some(cores) = crate::memory_tracker::cpu_count()
+    if let Some(cores) = cleave::memory_tracker::cpu_count()
         && active < cores
     {
         tracing::warn!(

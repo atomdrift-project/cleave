@@ -71,6 +71,7 @@ tools/trait-basher/trait-basher
 tools/trait-basher/trait-basher-debug
 tools/trait-basher/.gocache/
 tools/yara-update/yara-update
+tools/manifest-gen/manifest-gen
 
 **/dist/
 **/blob/

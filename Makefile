@@ -204,6 +204,17 @@ TRAITS ?= ../cleave-traits
 COMMIT ?= HEAD
 CHANNEL ?= beta
 DIST ?= dist
+RELEASES ?= 2
+COMMITS ?= 10
+SOAK_DAYS ?= 7
+gen-manifest: release ## Auto-generate versions.toml from recent release tags + traits commits ([RELEASES=2] [COMMITS=10] [SOAK_DAYS=7] [SIGN=1 IDENTITY=...])
+	cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
+	tools/manifest-gen/manifest-gen \
+	  --traits "$(TRAITS)" --repo . \
+	  --engine ./$(CARGO_TARGET)/release/$(BINARY) --out "$(DIST)" \
+	  --releases $(RELEASES) --commits $(COMMITS) --soak-days $(SOAK_DAYS) \
+	  $(if $(SIGN),--sign --identity "$(IDENTITY)",)
+
 update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
 	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }
 	tools/update-manifest/build-manifest.sh \

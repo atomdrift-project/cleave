@@ -329,3 +329,7 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
+
+# TEMPORARY (verification only — revert before commit): local filefacts w/ Clojure grammar
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }

@@ -262,40 +262,6 @@ pub(crate) fn log_startup(effective_log_file: Option<&str>, verbose: bool) {
     tracing::trace!("Logging initialized (verbose={})", verbose);
 }
 
-/// Preferred default rayon worker count when the user hasn't set
-/// `CLEAVE_RAYON_THREADS`. On Apple Silicon, returns the performance-core
-/// count from `sysctl hw.perflevel0.physicalcpu` so we don't spin up workers
-/// on the slower efficiency cores — each extra worker adds a per-thread
-/// jemalloc arena worth of dirty-page retention, which dominates peak RSS on
-/// archive-heavy workloads. Returns `None` to mean "let rayon's default
-/// (`num_cpus`) stand" everywhere else.
-#[cfg(target_os = "macos")]
-fn preferred_default_thread_count() -> Option<usize> {
-    use std::process::Command;
-    let out = Command::new("sysctl")
-        .args(["-n", "hw.perflevel0.physicalcpu"])
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let p = String::from_utf8(out.stdout)
-        .ok()?
-        .trim()
-        .parse::<usize>()
-        .ok()?;
-    // Only override when there's an asymmetric layout worth avoiding;
-    // a uniform-core Mac (Intel, or future symmetric Apple Silicon) gets
-    // rayon's default and we don't second-guess it.
-    let total = std::thread::available_parallelism().ok()?.get();
-    if p > 0 && p < total { Some(p) } else { None }
-}
-
-#[cfg(not(target_os = "macos"))]
-fn preferred_default_thread_count() -> Option<usize> {
-    None
-}
-
 pub(crate) fn configure_rayon_thread_pool() {
     // Archive analysis nests `par_iter` up to 2 levels deep (outer member
     // walk + JAR class-file YARA scan). With fewer than ~4 workers the
@@ -303,20 +269,20 @@ pub(crate) fn configure_rayon_thread_pool() {
     // reaper — a true nested-join deadlock that work-stealing cannot
     // escape.
     //
-    // Empirical: a 9-point sweep (6..16) on Apple Silicon (12 P-cores,
-    // archive benchmark) puts the wall optimum at the full P-core count
-    // once archive members analyze in parallel (the depth-0 fan-out). Wall
-    // falls monotonically 6→12 (par 4.7x→7.5x); the 4 efficiency cores only
-    // regress (14/16 ~+7%, plus contention that can drop coverage). An
-    // earlier sweep favored ~2/3 P-cores, but that was the serial-member-tail
-    // world where the extra workers had no stealable work and just idled.
-    //
-    // This is tuned for Apple Silicon Pro/Max-class hardware running
-    // cleave's archive workload. Other platforms — in particular x86-64
-    // Linux with SMT, where preferred_default_thread_count returns None
-    // and we fall back to available_parallelism() that includes
-    // hyperthread siblings — probably need their own tuning pass.
-    // Override via CLEAVE_RAYON_THREADS when in doubt.
+    // The default pool sizes to the *physical*-core count, which is where this
+    // CPU-bound, archive-heavy workload peaks. Evidence on two layouts:
+    //   • Apple Silicon (12 P-cores): a 9-point sweep (6..16) put the wall
+    //     optimum at the full P-core count once members analyze in parallel
+    //     (wall fell monotonically 6→12, par 4.7x→7.5x); the efficiency cores
+    //     only regressed (14/16 ~+7%).
+    //   • AMD Threadripper (64 cores / 128 threads, x86-64 Linux + SMT): a
+    //     ternary sweep on [32,128] over the realworld benchmark put the wall
+    //     optimum at 64 (= physical cores). 96 cost +13%, and the full-SMT end
+    //     was worse still — the hyperthread siblings only add scheduler
+    //     contention once every core is fed.
+    // So past the physical-core count the extra (SMT) workers don't help and
+    // can hurt; sysmem::physical_cpu_count() is the basis everywhere it can be
+    // detected. Override via CLEAVE_RAYON_THREADS when in doubt.
     const MIN_SAFE_THREADS: usize = 4;
 
     let mut builder = rayon::ThreadPoolBuilder::new().stack_size(8 * 1024 * 1024);
@@ -337,32 +303,38 @@ pub(crate) fn configure_rayon_thread_pool() {
         }
         builder = builder.num_threads(threads);
     } else {
-        let total_parallelism = match cleave::memory_tracker::cpu_count() {
-            Some(n) => n,
-            None => {
+        // `logical` is affinity-aware (respects cgroup quotas / processor
+        // sets); `physical` reflects host topology. Prefer physical, but never
+        // exceed logical — in a CPU-capped container sysfs still sees every
+        // host core, and oversubscribing the allotment would only thrash.
+        let logical = cleave::memory_tracker::cpu_count();
+        let physical = cleave::memory_tracker::physical_cpu_count();
+
+        let threads = match (physical, logical) {
+            (Some(p), Some(l)) => p.min(l).max(MIN_SAFE_THREADS),
+            (Some(p), None) => p.max(MIN_SAFE_THREADS),
+            // Physical undetectable but logical known: assume SMT and halve.
+            // A heuristic — it under-subscribes a non-SMT host — so warn and
+            // point at the override.
+            (None, Some(l)) => {
+                tracing::warn!(
+                    logical_cpus = l,
+                    "physical-core count undetectable on this platform; defaulting the \
+                     rayon pool to logical/2 (SMT heuristic). Set CLEAVE_RAYON_THREADS \
+                     to your physical-core count for best throughput.",
+                );
+                (l / 2).max(MIN_SAFE_THREADS)
+            }
+            // Nothing detectable at all — a genuinely undetermined host.
+            (None, None) => {
                 tracing::warn!(
                     fallback = MIN_SAFE_THREADS,
-                    "CPU count detection failed; rayon pool DOWNGRADED to {MIN_SAFE_THREADS} \
+                    "CPU count undetectable; rayon pool DOWNGRADED to {MIN_SAFE_THREADS} \
                      threads. On a many-core host this throttles throughput — set \
-                     CLEAVE_RAYON_THREADS to the core count.",
+                     CLEAVE_RAYON_THREADS to your physical-core count.",
                 );
                 MIN_SAFE_THREADS
             }
-        };
-
-        let threads = match preferred_default_thread_count() {
-            // Asymmetric Apple Silicon: use *all* performance cores. A 9-point
-            // sweep (6..16) on the archive benchmark put the optimum squarely at
-            // the P-core count — wall fell monotonically 6→12 (par 4.7x→7.5x) and
-            // the 4 efficiency cores only ever regressed (14/16 ~+7%). The old
-            // 2/3 cap was tuned when archive members ran serially and the extra
-            // workers just idled at the tail; now the top archive fans its
-            // members across the pool, so every P-core stays fed.
-            Some(p) => p.max(MIN_SAFE_THREADS),
-            // Symmetric / unknown layouts (x86-64 Linux with SMT, etc.) were
-            // never swept; the logical-CPU count includes hyperthread siblings,
-            // so stay at the conservative 2/3 until they get their own pass.
-            None => (total_parallelism * 2 / 3).max(MIN_SAFE_THREADS),
         };
         builder = builder.num_threads(threads);
     }
@@ -372,18 +344,6 @@ pub(crate) fn configure_rayon_thread_pool() {
     // the pool when cleave owns it.
     let installed = builder.build_global().is_ok();
     let active = rayon::current_num_threads();
-    // A pool smaller than the detected core count is a resource downgrade —
-    // surface it at WARN so an under-provisioned host is diagnosable from one
-    // line (the illumos `available_parallelism` gap silently capped this at 4).
-    if let Some(cores) = cleave::memory_tracker::cpu_count()
-        && active < cores
-    {
-        tracing::warn!(
-            rayon_threads = active,
-            detected_cores = cores,
-            "rayon pool smaller than detected cores; throughput limited",
-        );
-    }
     tracing::info!(
         installed_by_cleave = installed,
         threads = active,

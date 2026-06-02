@@ -186,6 +186,17 @@ pub fn cpu_count() -> Option<usize> {
     sysmem::cpu_count()
 }
 
+/// Number of *physical* CPU cores (excluding SMT/hyperthread siblings), or
+/// `None` where the platform exposes no reliable source.
+///
+/// Delegates to the `sysmem` crate. cleave's CPU-bound archive workload peaks
+/// at the physical-core count, so this is the basis for the default rayon pool
+/// size; see [`sysmem::physical_cpu_count`] for the per-platform detection.
+#[must_use]
+pub fn physical_cpu_count() -> Option<usize> {
+    sysmem::physical_cpu_count()
+}
+
 /// Memory limit: `min(50% RAM, 32 GiB)`.
 ///
 /// Use this as the default `limit` argument to [`start_periodic_logging`] and

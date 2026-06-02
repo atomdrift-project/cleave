@@ -77,6 +77,24 @@ pub fn cpu_count() -> Option<usize> {
     *COUNT.get_or_init(cpu_count_impl)
 }
 
+/// Number of *physical* CPU cores (excluding SMT/hyperthread siblings), cached
+/// after the first call, or `None` if the platform exposes no reliable source.
+///
+/// cleave's archive-heavy, CPU-bound workload peaks at the physical-core count:
+/// a ternary sweep on a 64-core / 128-thread AMD Threadripper put the wall
+/// optimum at 64 threads (96 cost +13%, full-SMT worse still), because the
+/// hyperthread siblings only add scheduler contention once every core is fed.
+///
+/// On asymmetric Apple Silicon this returns the *performance*-core count (the
+/// efficiency cores regress this workload). `None` here is not an error — the
+/// caller falls back to a logical/2 SMT heuristic and warns, so an
+/// unrecognised platform still gets a sane (if conservative) default.
+#[must_use]
+pub fn physical_cpu_count() -> Option<usize> {
+    static COUNT: OnceLock<Option<usize>> = OnceLock::new();
+    *COUNT.get_or_init(physical_cpu_count_impl)
+}
+
 #[cfg(any(target_os = "illumos", target_os = "solaris"))]
 fn cpu_count_impl() -> Option<usize> {
     extern "C" {
@@ -645,6 +663,214 @@ fn current_rss_impl() -> Option<u64> {
     None
 }
 
+// ── physical CPU cores ──────────────────────────────────────────────────
+//
+// One impl per platform, mirroring the cpu/mem sections above. Each returns
+// `None` rather than guessing when its source is unavailable, so the caller
+// can warn and apply its own heuristic.
+
+/// `sysctlbyname` returning a single C `int` as `usize`. Shared by the two
+/// platforms whose physical-core sysctls return an `int`: macOS and FreeBSD.
+#[cfg(any(target_os = "macos", target_os = "freebsd"))]
+fn sysctlbyname_int(name: &core::ffi::CStr) -> Option<usize> {
+    extern "C" {
+        fn sysctlbyname(
+            name: *const i8,
+            oldp: *mut std::ffi::c_void,
+            oldlenp: *mut usize,
+            newp: *const std::ffi::c_void,
+            newlen: usize,
+        ) -> i32;
+    }
+
+    let mut val: i32 = 0;
+    let mut len = std::mem::size_of::<i32>();
+    // SAFETY: the named sysctls (hw.*physicalcpu, kern.smp.cores) write a
+    // single C int; we provide a correctly-sized, -aligned i32 buffer and
+    // gate on the return code.
+    let ret = unsafe {
+        sysctlbyname(
+            name.as_ptr(),
+            (&raw mut val).cast(),
+            &raw mut len,
+            std::ptr::null(),
+            0,
+        )
+    };
+    (ret == 0 && val > 0).then_some(val as usize)
+}
+
+#[cfg(target_os = "macos")]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // Prefer the performance-core count on asymmetric Apple Silicon; fall back
+    // to all physical cores on uniform (Intel) Macs, where perflevel0 is absent.
+    sysctlbyname_int(c"hw.perflevel0.physicalcpu").or_else(|| sysctlbyname_int(c"hw.physicalcpu"))
+}
+
+#[cfg(target_os = "freebsd")]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // kern.smp.cores is the physical-core count; kern.smp.threads_per_core is
+    // the SMT factor (verified on FreeBSD 14: cores=8, threads_per_core=1).
+    sysctlbyname_int(c"kern.smp.cores")
+}
+
+#[cfg(target_os = "linux")]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // Count distinct (physical_package_id, core_id) pairs across the CPUs in
+    // sysfs topology; SMT siblings share a core_id within a package, so this is
+    // the true physical-core count. Reading sysfs avoids any external crate.
+    use std::collections::HashSet;
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let dir = std::fs::read_dir("/sys/devices/system/cpu").ok()?;
+    for entry in dir.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        // Match `cpuN` (a CPU dir), not `cpufreq`/`cpuidle`/etc.
+        let Some(rest) = name.strip_prefix("cpu") else {
+            continue;
+        };
+        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
+            continue;
+        }
+        let topo = entry.path().join("topology");
+        let pkg = std::fs::read_to_string(topo.join("physical_package_id")).ok();
+        let core = std::fs::read_to_string(topo.join("core_id")).ok();
+        if let (Some(pkg), Some(core)) = (pkg, core) {
+            seen.insert((pkg.trim().to_owned(), core.trim().to_owned()));
+        }
+    }
+    (!seen.is_empty()).then_some(seen.len())
+}
+
+#[cfg(any(target_os = "illumos", target_os = "solaris"))]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // No sysconf/sysctl exposes a physical-core count here; only kstat does.
+    // FFI'ing libkstat would mean hand-mirroring kstat_ctl_t/kstat_t/
+    // kstat_named_t layouts — a wrong offset is UB — so we read the
+    // always-present `kstat` tool and count distinct (chip_id, core_id) pairs.
+    // Verified on OmniOS r151058: 16 physical cores on a 1-socket SMT host.
+    use std::process::Command;
+    let out = Command::new("kstat")
+        .args(["-p", "cpu_info"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(out.stdout).ok()?;
+    let n = count_kstat_physical_cores(&text);
+    (n > 0).then_some(n)
+}
+
+/// Count distinct `(chip_id, core_id)` pairs from `kstat -p cpu_info` output.
+///
+/// Lines look like `cpu_info:<instance>:cpu_info<instance>:<field>\t<value>`.
+/// Defined unconditionally (not behind `cfg`) so it is unit-testable on any
+/// host. Returns 0 when the input carries no usable topology.
+#[cfg_attr(
+    not(any(target_os = "illumos", target_os = "solaris")),
+    allow(dead_code)
+)]
+fn count_kstat_physical_cores(kstat_p: &str) -> usize {
+    use std::collections::{HashMap, HashSet};
+    let mut chip: HashMap<&str, &str> = HashMap::new();
+    let mut core: HashMap<&str, &str> = HashMap::new();
+    for line in kstat_p.lines() {
+        let Some((key, value)) = line.split_once('\t') else {
+            continue;
+        };
+        let mut parts = key.split(':');
+        let (Some(_module), Some(instance), Some(_name), Some(field)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        match field {
+            "chip_id" => {
+                chip.insert(instance, value.trim());
+            }
+            "core_id" => {
+                core.insert(instance, value.trim());
+            }
+            _ => {}
+        }
+    }
+    let mut seen: HashSet<(&str, &str)> = HashSet::new();
+    for (instance, core_id) in &core {
+        let chip_id = chip.get(instance).copied().unwrap_or("");
+        seen.insert((chip_id, *core_id));
+    }
+    seen.len()
+}
+
+#[cfg(target_os = "windows")]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // SYSTEM_LOGICAL_PROCESSOR_INFORMATION; the trailing union (ProcessorCore /
+    // NumaNode / CACHE_DESCRIPTOR / ULONGLONG[2]) is 16 bytes, align 8 — modeled
+    // as [u64; 2] so the struct size/alignment match the OS layout exactly. We
+    // count entries whose Relationship == RelationProcessorCore.
+    #[repr(C)]
+    struct SystemLogicalProcessorInformation {
+        processor_mask: usize,
+        relationship: u32,
+        _union: [u64; 2],
+    }
+    const RELATION_PROCESSOR_CORE: u32 = 0;
+    const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+    extern "system" {
+        fn GetLogicalProcessorInformation(
+            buffer: *mut SystemLogicalProcessorInformation,
+            returned_length: *mut u32,
+        ) -> i32;
+        fn GetLastError() -> u32;
+    }
+
+    // First call sizes the buffer: it fails with ERROR_INSUFFICIENT_BUFFER and
+    // sets `len`.
+    let mut len: u32 = 0;
+    // SAFETY: a null buffer with a valid length-out pointer is the documented
+    // size-probe form.
+    let ret = unsafe { GetLogicalProcessorInformation(std::ptr::null_mut(), &raw mut len) };
+    // SAFETY: GetLastError reads thread-local error state.
+    if ret != 0 || unsafe { GetLastError() } != ERROR_INSUFFICIENT_BUFFER || len == 0 {
+        return None;
+    }
+
+    let entry_size = std::mem::size_of::<SystemLogicalProcessorInformation>();
+    let count = len as usize / entry_size;
+    let mut buf: Vec<SystemLogicalProcessorInformation> = Vec::with_capacity(count);
+    // SAFETY: the buffer has capacity for `len` bytes; the call fills it and we
+    // only set_len after it reports success.
+    let ret = unsafe { GetLogicalProcessorInformation(buf.as_mut_ptr(), &raw mut len) };
+    if ret == 0 {
+        return None;
+    }
+    // SAFETY: the call populated `len` bytes = `count` initialised entries.
+    unsafe { buf.set_len(count) };
+
+    let cores = buf
+        .iter()
+        .filter(|e| e.relationship == RELATION_PROCESSOR_CORE)
+        .count();
+    (cores > 0).then_some(cores)
+}
+
+#[cfg(not(any(
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "freebsd",
+    target_os = "illumos",
+    target_os = "solaris",
+    target_os = "windows",
+)))]
+fn physical_cpu_count_impl() -> Option<usize> {
+    // OpenBSD/NetBSD and any other target: no verified physical-core source.
+    // The caller applies a logical/2 SMT heuristic and warns. (OpenBSD disables
+    // SMT by default, so logical ≈ physical there in practice.)
+    None
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -696,6 +922,51 @@ mod tests {
         // drive the silent thread-pool downgrade this function exists to prevent.
         let n = cpu_count().expect("should detect CPU count");
         assert!(n > 0);
+    }
+
+    #[test]
+    fn physical_cpu_count_within_logical() {
+        // Where detectable, physical cores must be positive and never exceed the
+        // logical CPU count. `None` is allowed (OpenBSD/NetBSD/unknown targets).
+        if let Some(physical) = physical_cpu_count() {
+            assert!(physical > 0, "physical core count should be positive");
+            if let Some(logical) = cpu_count() {
+                assert!(
+                    physical <= logical,
+                    "physical {physical} should not exceed logical {logical}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn count_kstat_physical_cores_counts_distinct_core_chip_pairs() {
+        // Two chips × two cores each = 4 physical cores, with an SMT sibling per
+        // core (instances 0/1 share chip0/core0, etc.). The parser must collapse
+        // SMT siblings (same chip+core) and keep cross-chip cores distinct.
+        let sample = "\
+cpu_info:0:cpu_info0:chip_id\t0
+cpu_info:0:cpu_info0:core_id\t0
+cpu_info:1:cpu_info1:chip_id\t0
+cpu_info:1:cpu_info1:core_id\t0
+cpu_info:2:cpu_info2:chip_id\t0
+cpu_info:2:cpu_info2:core_id\t1
+cpu_info:3:cpu_info3:chip_id\t1
+cpu_info:3:cpu_info3:core_id\t0
+cpu_info:4:cpu_info4:chip_id\t1
+cpu_info:4:cpu_info4:core_id\t1
+cpu_info:5:cpu_info5:state\ton-line
+";
+        assert_eq!(count_kstat_physical_cores(sample), 4);
+    }
+
+    #[test]
+    fn count_kstat_physical_cores_handles_empty_and_garbage() {
+        assert_eq!(count_kstat_physical_cores(""), 0);
+        assert_eq!(
+            count_kstat_physical_cores("no tabs here\nand:colons:but:no\tcore"),
+            0
+        );
     }
 
     #[test]

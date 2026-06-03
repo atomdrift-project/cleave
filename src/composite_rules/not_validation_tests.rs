@@ -1049,6 +1049,7 @@ mod constraint_tests {
 
 #[cfg(test)]
 mod llm_validation_tests {
+    use crate::composite_rules::condition::{NotException, NotExceptionStructured};
     use crate::composite_rules::{Arch, Condition, TraitDefinition};
     use crate::types::Criticality;
 
@@ -1748,5 +1749,34 @@ mod llm_validation_tests {
 
         let warning = cond.check_symbol_regex_whitespace();
         assert!(warning.is_none());
+    }
+
+    // `not: exact:` negates against the regex's matched span and must be
+    // case-SENSITIVE ("exact string equality"). The powershell-case-randomized
+    // trait matches any casing of `powershell`, then excludes the canonical
+    // spellings via `not: exact:`. A case-insensitive `exact` would also exclude
+    // the respelled `pOwErShElL`, silently killing the whole technique.
+    #[test]
+    fn test_exact_not_exception_is_case_sensitive() {
+        let canonical = NotException::Structured(NotExceptionStructured {
+            exact: Some("PowerShell".to_string()),
+            substr: None,
+            regex: None,
+            lowered_substr: None,
+        });
+        // The canonical casing it names is suppressed.
+        assert!(
+            canonical.matches("PowerShell"),
+            "exact: PowerShell must match the identical span"
+        );
+        // A different casing (the evasion) is NOT suppressed.
+        assert!(
+            !canonical.matches("pOwErShElL"),
+            "exact: PowerShell must NOT match a case-randomized span"
+        );
+        assert!(
+            !canonical.matches("POWERSHELL"),
+            "exact: PowerShell must NOT match an all-caps span"
+        );
     }
 }

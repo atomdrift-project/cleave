@@ -356,7 +356,11 @@ impl NotException {
             }
             NotException::Structured(s) => {
                 if let Some(exact_str) = &s.exact {
-                    value.eq_ignore_ascii_case(exact_str)
+                    // Exact string equality is case-SENSITIVE: a `not: exact:`
+                    // negates against the regex's matched span, and casing is
+                    // significant (e.g. excluding canonical `PowerShell` must
+                    // not also excuse the AMSI-evasion respelling `pOwErShElL`).
+                    value == exact_str
                 } else if let Some(regex_str) = &s.regex {
                     // Case-sensitive, resolved via the shared lazy cache rather
                     // than a per-exception precompiled regex.

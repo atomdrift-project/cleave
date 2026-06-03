@@ -337,6 +337,7 @@ const ALLOWED_MB_HARDWARE: &[&str] = &[
     "block",
     "display",
     "flash",
+    "gpu",
     "input",
     "iokit",
     "smartcard",

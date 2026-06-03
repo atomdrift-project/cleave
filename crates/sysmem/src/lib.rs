@@ -139,7 +139,7 @@ fn cpu_count_impl() -> Option<usize> {
 fn total_memory_impl() -> Option<u64> {
     extern "C" {
         fn sysctlbyname(
-            name: *const i8,
+            name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
             oldlenp: *mut usize,
             newp: *const std::ffi::c_void,
@@ -729,7 +729,7 @@ fn current_rss_impl() -> Option<u64> {
 fn sysctlbyname_int(name: &core::ffi::CStr) -> Option<usize> {
     extern "C" {
         fn sysctlbyname(
-            name: *const i8,
+            name: *const core::ffi::c_char,
             oldp: *mut std::ffi::c_void,
             oldlenp: *mut usize,
             newp: *const std::ffi::c_void,

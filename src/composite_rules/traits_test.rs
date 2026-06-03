@@ -11,7 +11,7 @@
 //! - Platform and file type filtering
 //! - Downgrade logic
 
-use super::condition::Condition;
+use super::condition::{Condition, NotException, NotExceptionStructured};
 use super::context::EvaluationContext;
 use super::traits::*;
 use super::types::{Arch, FileType, Platform};
@@ -1220,4 +1220,67 @@ fn test_finding_has_correct_criticality() {
     assert!(result.is_some());
     let finding = result.unwrap();
     assert_eq!(finding.crit, Criticality::Hostile);
+}
+
+// ==================== Condition-level `not:` on text regex ====================
+
+/// Build a text trait whose `if:` regex matches `powershell` in any casing and
+/// carries a condition-level (`if: ... not:`) exception list excluding the
+/// canonical spellings — the exact shape of `powershell-case-randomized`.
+fn powershell_case_trait() -> TraitDefinition {
+    let exact = |s: &str| {
+        NotException::Structured(NotExceptionStructured {
+            exact: Some(s.to_string()),
+            substr: None,
+            regex: None,
+            lowered_substr: None,
+        })
+    };
+    let condition = Condition::Text {
+        exact: None,
+        substr: None,
+        regex: Some("[Pp][Oo][Ww][Ee][Rr][Ss][Hh][Ee][Ll][Ll]".to_string()),
+        word: None,
+        case_insensitive: false,
+        is_check: None,
+        section: None,
+        offset: None,
+        offset_range: None,
+        section_offset: None,
+        section_offset_range: None,
+        not: Some(vec![exact("powershell"), exact("PowerShell")]),
+        platforms: None,
+    };
+    create_test_trait("test/case::powershell-case-randomized", condition)
+}
+
+fn eval_text_against(trait_def: &TraitDefinition, content: &str) -> bool {
+    let report = create_report_with_size(content.len() as u64);
+    let ctx = {
+        let leaked_report = Box::leak(Box::new(report));
+        let leaked_data = Box::leak(content.as_bytes().to_vec().into_boxed_slice());
+        EvaluationContext::test_only_new(leaked_report, leaked_data, FileType::Text)
+    };
+    trait_def.evaluate(&ctx).is_some()
+}
+
+/// Regression: a condition-level `not:` on a text regex must be honored (it was
+/// previously dropped — only trait-level `not:` was forwarded to the evaluator),
+/// and `exact` must be case-SENSITIVE. Canonical `PowerShell`/`powershell` are
+/// excused; the AMSI-evasion respelling `pOwErShElL` still fires.
+#[test]
+fn test_condition_level_not_on_text_regex_is_honored() {
+    let t = powershell_case_trait();
+    assert!(
+        !eval_text_against(&t, "const shell = \"PowerShell\";"),
+        "canonical PowerShell must be excluded by condition-level not:"
+    );
+    assert!(
+        !eval_text_against(&t, "spawn(\"powershell\", args);"),
+        "canonical powershell must be excluded by condition-level not:"
+    );
+    assert!(
+        eval_text_against(&t, "var c = \"pOwErShElL\";"),
+        "case-randomized pOwErShElL must still fire"
+    );
 }

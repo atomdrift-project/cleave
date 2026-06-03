@@ -1105,6 +1105,21 @@ fn analyze_file_with_resources<P: AsRef<Path>>(
 /// Callers that already hashed the file for a fast-path cache lookup pass it
 /// through so the internal pipeline does not recompute the digest on the same
 /// bytes — a non-trivial cost on large inputs.
+/// Extract a human-readable message from a panic payload (`String` or `&str`).
+///
+/// `std::panic::catch_unwind` hands back the payload as `Box<dyn Any + Send>`;
+/// the standard panic machinery boxes either a `String` (from `format!`-style
+/// panics) or a `&'static str`, so those two cases cover every panic we raise.
+pub(crate) fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic".to_string()
+    }
+}
+
 fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
@@ -1113,16 +1128,43 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     preloaded: Option<file_io::FileData>,
     precomputed_sha256: Option<String>,
 ) -> Result<AnalysisReport> {
+    let path = path.as_ref();
     let _disable_guards = AnalysisDisableGuards::from_options(options);
-    analyze_file_with_resources_at_depth(
-        path,
-        options,
-        capability_mapper,
-        yara_engine,
-        preloaded,
-        precomputed_sha256,
-        0,
-    )
+
+    // Catch panics from any analyzer so a single malformed or adversarial file
+    // (e.g. a header offset pointing past EOF that trips unchecked slice
+    // indexing) can't unwind across the caller's thread boundary — a rayon
+    // worker or a tokio `spawn_blocking` task — and take down unrelated work.
+    // Library callers instead get a plain `Err` they can classify and log. The
+    // per-frame `ThreadLocalCacheClearGuard` inside the analysis still runs
+    // during the unwind, so thread-local caches are left clean before we return.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        analyze_file_with_resources_at_depth(
+            path,
+            options,
+            capability_mapper,
+            yara_engine,
+            preloaded,
+            precomputed_sha256,
+            0,
+        )
+    }));
+
+    match outcome {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = panic_payload_message(&payload);
+            tracing::error!(
+                path = %path.display(),
+                panic = %message,
+                "analyzer panicked; recovered as error",
+            );
+            Err(anyhow::anyhow!(
+                "analysis panicked for {}: {message}",
+                path.display()
+            ))
+        }
+    }
 }
 
 /// Synthesize an `AnalysisReport` from a cached `FileAnalysis` (cross-context file cache hit).

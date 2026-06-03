@@ -117,7 +117,7 @@ static SUCCESSFUL_ANALYSES: AtomicU64 = AtomicU64::new(0);
 /// Total number of failed archive member analyses
 static FAILED_ANALYSES: AtomicU64 = AtomicU64::new(0);
 
-const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 500;
+const SLOW_ARCHIVE_MEMBER_YARA_MS: u128 = 4_000;
 
 /// Warn when a single archive member analysis exceeds this threshold.
 const SLOW_ARCHIVE_MEMBER_ANALYSIS_MS: u128 = 30_000;

@@ -1312,7 +1312,7 @@ impl TraitDefinition {
                 word,
                 case_insensitive,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
                 section,
                 offset,
@@ -1334,9 +1334,12 @@ impl TraitDefinition {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
+                // Honor both condition-level (`if: ... not:`) and trait-level
+                // `not:` exception lists; condition-level was previously dropped.
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
                 timed_eval!(
                     "text",
-                    eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
+                    eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
                 )
             }
             Condition::Comment {
@@ -2693,7 +2696,7 @@ impl CompositeTrait {
                 word,
                 case_insensitive,
                 is_check,
-                not: _,
+                not,
                 platforms: _,
                 section,
                 offset,
@@ -2715,7 +2718,10 @@ impl CompositeTrait {
                     section_offset_range: *section_offset_range,
                     arch_clamp,
                 };
-                eval_text(&params, self.not.as_ref(), ctx, Some(self.id.as_str()))
+                // Honor both condition-level (`if: ... not:`) and trait-level
+                // `not:` exception lists; condition-level was previously dropped.
+                let merged_not = merge_not_exceptions(not.as_ref(), self.not.as_ref());
+                eval_text(&params, merged_not.as_ref(), ctx, Some(self.id.as_str()))
             }
             Condition::Comment {
                 exact,

@@ -1,6 +1,6 @@
 //! HTTP request handlers for the cleave API server.
 
-use crate::{AnalysisOptions, Criticality, analyze_file};
+use crate::{AnalysisOptions, Criticality, analyze_file, panic_payload_message};
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::StatusCode;
@@ -16,17 +16,6 @@ use tempfile::Builder as TempBuilder;
 use tracing::{Instrument, Span, error, info, info_span, warn};
 
 use super::AppState;
-
-/// Extract a human-readable message from a panic payload.
-fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
-    if let Some(s) = payload.downcast_ref::<String>() {
-        s.clone()
-    } else if let Some(s) = payload.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else {
-        "unknown panic".to_string()
-    }
-}
 
 fn analysis_error_response(error: &anyhow::Error) -> Response {
     let (status, message) = classify_analysis_error(error.root_cause().to_string().as_str());

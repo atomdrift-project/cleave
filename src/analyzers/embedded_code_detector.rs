@@ -1191,6 +1191,19 @@ pub(crate) fn process_all_strings(
     )
 }
 
+/// Document/prose file types whose fenced code blocks are instructional examples
+/// (e.g. a markdown README's ```bash apt-get install …``` block), not executable
+/// payloads. We do not promote their embedded code to its own typed sublayer —
+/// the raw text is still scanned as a plain "mention", but `for:[shell]`/etc.
+/// rules must not fire on documentation. Container/markup types that genuinely
+/// carry executable payloads in malware (HTML, XML, JSON, plists) are NOT listed.
+fn is_document_host_type(file_type: &FileType) -> bool {
+    matches!(
+        file_type,
+        FileType::Markdown | FileType::PkgInfo | FileType::Rtf | FileType::Text
+    )
+}
+
 pub(crate) fn process_all_strings_with_host(
     parent_path: &str,
     strings: &[StringInfo],
@@ -1205,6 +1218,20 @@ pub(crate) fn process_all_strings_with_host(
             parent_path
         );
         return (Vec::new(), Vec::new());
+    }
+
+    // Documentation/prose files embed code blocks as examples, not as executable
+    // sublayers. Treat them as plain text mentions: do not create typed embedded
+    // sub-analyses (which would let script-targeted rules fire on install docs).
+    if let Some(host) = host_file_type {
+        if is_document_host_type(host) {
+            tracing::debug!(
+                "embedded_code_detector: Skipping embedded sublayers for document type {:?} in {}",
+                host,
+                parent_path
+            );
+            return (Vec::new(), Vec::new());
+        }
     }
 
     let mut encoded_layers = Vec::new();

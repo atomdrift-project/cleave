@@ -1223,15 +1223,15 @@ pub(crate) fn process_all_strings_with_host(
     // Documentation/prose files embed code blocks as examples, not as executable
     // sublayers. Treat them as plain text mentions: do not create typed embedded
     // sub-analyses (which would let script-targeted rules fire on install docs).
-    if let Some(host) = host_file_type {
-        if is_document_host_type(host) {
-            tracing::debug!(
-                "embedded_code_detector: Skipping embedded sublayers for document type {:?} in {}",
-                host,
-                parent_path
-            );
-            return (Vec::new(), Vec::new());
-        }
+    if let Some(host) = host_file_type
+        && is_document_host_type(host)
+    {
+        tracing::debug!(
+            "embedded_code_detector: Skipping embedded sublayers for document type {:?} in {}",
+            host,
+            parent_path
+        );
+        return (Vec::new(), Vec::new());
     }
 
     let mut encoded_layers = Vec::new();

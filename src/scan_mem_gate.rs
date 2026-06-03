@@ -126,11 +126,14 @@ impl ScanMemGate {
     }
 
     fn release(&self, est: usize) {
-        let mut reserved = self
-            .reserved
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *reserved = reserved.saturating_sub(est);
+        {
+            let mut reserved = self
+                .reserved
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *reserved = reserved.saturating_sub(est);
+        }
+        // Wake waiters after dropping the guard so they don't immediately block.
         self.released.notify_all();
     }
 }
@@ -156,6 +159,8 @@ mod tests {
     fn no_available() -> Option<u64> {
         None
     }
+    // Signature is dictated by the `fn() -> Option<u64>` pointer type below.
+    #[allow(clippy::unnecessary_wraps)]
     fn avail_200mb() -> Option<u64> {
         Some(200 * MB)
     }

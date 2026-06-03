@@ -93,6 +93,246 @@ struct MemoryArchiveMember {
     sha256: String,
 }
 
+/// Streaming accumulator for per-member analysis results.
+///
+/// Folds each member's result into deduplicated aggregate state and drops the
+/// (large) member `AnalysisReport` immediately. This lets an archive's members
+/// be analyzed in bounded byte-windows without ever holding every member's
+/// report resident at once — the dominant per-archive memory term on
+/// member-heavy archives (e.g. a 4 MB wheel with thousands of members).
+#[derive(Default)]
+struct MemberAccumulator {
+    total_capabilities: HashSet<String>,
+    total_traits: HashSet<String>,
+    collected_traits: HashMap<String, Finding>,
+    collected_yara: Vec<YaraMatch>,
+    collected_strings: Vec<StringInfo>,
+    collected_archive_entries: Vec<ArchiveEntry>,
+    collected_files: Vec<FileAnalysis>,
+    files_analyzed: usize,
+}
+
+impl MemberAccumulator {
+    /// Fold one member's result into the aggregate, consuming and dropping it.
+    /// Member order is preserved because callers fold windows sequentially and
+    /// each window's `par_iter` collect is index-ordered.
+    fn fold(&mut self, result: MemberAnalysisResult) {
+        self.collected_archive_entries.push(result.entry_metadata);
+        let Some(file_report) = result.report else {
+            return;
+        };
+        self.files_analyzed += 1;
+
+        let (mut file_entry, mut nested_files, archive_contents) =
+            file_report.into_file_analysis(0);
+        file_entry.path = result.entry_path.clone();
+        file_entry.depth = 1;
+        file_entry.compute_summary();
+        file_entry.extracted_path = result.extracted_path.clone();
+        // `into_file_analysis` has just flattened `values_tree` into the
+        // serialized `kv` map. The tree itself is `#[serde(skip)]` — the compact
+        // output (which every consumer, including `cleave diff`, reads) never
+        // sees it — so retaining it per member only accumulates GB of dead
+        // structural JSON. Drop it now that `kv` is derived.
+        file_entry.values_tree = None;
+        for nested in &mut nested_files {
+            nested.values_tree = None;
+        }
+
+        for f in &file_entry.findings {
+            self.total_traits.insert(f.id.clone());
+            self.total_capabilities.insert(f.id.clone());
+            let mut new_finding = f.clone();
+            for evidence in &mut new_finding.evidence {
+                match &evidence.location {
+                    None => evidence.location = Some(result.archive_location.clone()),
+                    Some(loc) if !loc.starts_with("archive:") => {
+                        evidence.location = Some(format!("{}:{}", result.archive_location, loc));
+                    }
+                    _ => {}
+                }
+            }
+            self.collected_traits
+                .entry(new_finding.id.clone())
+                .and_modify(|existing| {
+                    if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
+                        > (existing.crit, std::cmp::Ordering::Equal)
+                    {
+                        *existing = new_finding.clone();
+                    }
+                })
+                .or_insert(new_finding);
+        }
+
+        for yara_match in &file_entry.yara_matches {
+            if !self
+                .collected_yara
+                .iter()
+                .any(|m| m.rule == yara_match.rule)
+                && self.collected_yara.len() < 1_000
+            {
+                self.collected_yara.push(yara_match.clone());
+            }
+        }
+
+        for string in &file_entry.strings {
+            if matches!(
+                string.string_type,
+                Some(StringType::Url | StringType::IP | StringType::Base64)
+            ) && self.collected_strings.len() < 10_000
+            {
+                self.collected_strings.push(string.clone());
+            }
+        }
+
+        self.collected_files.push(file_entry);
+        self.collected_archive_entries.extend(archive_contents);
+        for mut nested_file in nested_files {
+            if !nested_file.path.contains("!!") {
+                nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
+            }
+            nested_file.depth += 1;
+            self.collected_files.push(nested_file);
+        }
+    }
+
+    /// Merge the deduplicated aggregate into the parent report and write
+    /// archive-level metadata. Called once per archive after all members fold.
+    fn finalize(
+        self,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        tools_used: Vec<String>,
+        total_files: usize,
+    ) {
+        let files_analyzed = self.files_analyzed;
+        let trait_count = self.total_traits.len();
+        let capability_count = self.total_capabilities.len();
+        for (_, t) in self.collected_traits {
+            if !report.findings.iter().any(|existing| existing.id == t.id) {
+                report.findings.push(t);
+            }
+        }
+        for ym in self.collected_yara {
+            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
+                report.yara_matches.push(ym);
+            }
+        }
+        report.strings.extend(self.collected_strings);
+        report
+            .archive_contents
+            .extend(self.collected_archive_entries);
+        report.files.extend(self.collected_files);
+        report.metadata.errors.push(format!(
+            "{archive_label}: {total_files} members, {files_analyzed} analyzed, \
+             {trait_count} traits and {capability_count} capabilities detected"
+        ));
+        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
+        report.metadata.tools_used = tools_used;
+    }
+}
+
+/// Resident-byte budget for one member window. Caps how much decompressed
+/// member data co-resides; tunable via `CLEAVE_MEMBER_WINDOW_MB`.
+fn member_window_bytes() -> usize {
+    const DEFAULT_MB: usize = 32;
+    std::env::var("CLEAVE_MEMBER_WINDOW_MB")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|mb| *mb > 0)
+        .unwrap_or(DEFAULT_MB)
+        .saturating_mul(1024 * 1024)
+}
+
+/// Maximum members held in one window. Caps the per-window report transient
+/// (each window's `par_iter` collects this many full reports before folding)
+/// independent of member size; tunable via `CLEAVE_MEMBER_WINDOW_COUNT`.
+fn member_window_count() -> usize {
+    const DEFAULT: usize = 256;
+    std::env::var("CLEAVE_MEMBER_WINDOW_COUNT")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|n| *n > 0)
+        .unwrap_or(DEFAULT)
+}
+
+/// Byte-windowed member analysis driver.
+///
+/// Members are pushed in; when the resident window exceeds the byte budget or
+/// the member-count cap, the window is analyzed in parallel, folded into the
+/// accumulator, and dropped. This bounds both resident decompressed bytes and
+/// the per-window report transient, replacing the old all-members-resident
+/// depth-0 path (which held every member's data and report at once) and the
+/// fully-serial depth>=1 path with one memory-bounded, parallel path.
+struct MemberWindow<'a> {
+    analyzer: &'a ArchiveAnalyzer,
+    acc: MemberAccumulator,
+    window: Vec<MemoryArchiveMember>,
+    window_bytes: usize,
+    budget_bytes: usize,
+    max_count: usize,
+    parallel: bool,
+    total: usize,
+    slow_log_label: &'static str,
+}
+
+impl<'a> MemberWindow<'a> {
+    fn new(analyzer: &'a ArchiveAnalyzer, slow_log_label: &'static str) -> Self {
+        Self {
+            analyzer,
+            acc: MemberAccumulator::default(),
+            window: Vec::new(),
+            window_bytes: 0,
+            budget_bytes: member_window_bytes(),
+            max_count: member_window_count(),
+            parallel: analyzer.members_run_parallel(),
+            total: 0,
+            slow_log_label,
+        }
+    }
+
+    /// Add a member, flushing the window first if it is already full.
+    fn push(&mut self, member: MemoryArchiveMember) {
+        self.total += 1;
+        self.window_bytes += member.data.len();
+        self.window.push(member);
+        if self.window_bytes >= self.budget_bytes || self.window.len() >= self.max_count {
+            self.flush();
+        }
+    }
+
+    /// Analyze the current window in parallel, fold results, drop the buffers.
+    fn flush(&mut self) {
+        if self.window.is_empty() {
+            return;
+        }
+        let analyzer = self.analyzer;
+        let label = self.slow_log_label;
+        let results = par_filter_map_members(&self.window, self.parallel, |member| {
+            analyzer.analyze_one_member(member, label)
+        });
+        for result in results {
+            self.acc.fold(result);
+        }
+        self.window.clear();
+        self.window_bytes = 0;
+    }
+
+    /// Flush any remainder and merge the aggregate into the parent report.
+    fn finalize(
+        mut self,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        tools_used: Vec<String>,
+    ) {
+        self.flush();
+        self.acc
+            .finalize(report, start, archive_label, tools_used, self.total);
+    }
+}
+
 fn find_main_class_in_members(members: &[MemoryArchiveMember]) -> Option<String> {
     let manifest = members
         .iter()
@@ -615,18 +855,15 @@ impl ArchiveAnalyzer {
         }
 
         let fake_root = Path::new("/__cleave_archive__");
-        let stream_members = !self.members_run_parallel();
-        let mut members = if stream_members {
-            Vec::new()
-        } else {
-            Vec::with_capacity(indexed_entries.len().min(10_000))
-        };
-        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
-            Vec::with_capacity(indexed_entries.len().min(10_000))
-        } else {
-            Vec::new()
-        };
-        let mut total_streamed: usize = 0;
+        // JAR main-class detection needs the full member list, so JARs keep the
+        // all-resident path; everything else streams through a byte-windowed
+        // accumulator that never holds more than one window of members resident.
+        let is_jar = matches!(
+            crate::analyzers::detect_file_type(archive_path),
+            Ok(FileType::Jar)
+        );
+        let mut window = MemberWindow::new(self, "filefacts ZIP index");
+        let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
 
         for entry in indexed_entries {
             if self.is_cancelled() {
@@ -741,41 +978,20 @@ impl ArchiveAnalyzer {
                 file_type,
                 sha256,
             };
-            if stream_members {
-                if let Some(result) = self.analyze_one_member(&member, "filefacts ZIP index") {
-                    streamed_results.push(result);
-                }
-                total_streamed += 1;
+            if is_jar {
+                jar_members.push(member);
             } else {
-                members.push(member);
+                window.push(member);
             }
         }
 
-        if stream_members {
-            self.aggregate_member_results(
-                streamed_results,
-                report,
-                start,
-                "ZIP archive",
-                vec![
-                    "archive_analyzer".to_string(),
-                    "filefacts_zip_index".to_string(),
-                ],
-                total_streamed,
-            );
-        } else if matches!(
-            crate::analyzers::detect_file_type(archive_path),
-            Ok(FileType::Jar)
-        ) {
-            self.analyze_jar_members_in_memory(&members, archive_path, report, start);
+        if is_jar {
+            self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
         } else {
-            self.analyze_in_memory_members(
-                &members,
-                archive_path,
+            window.finalize(
                 report,
                 start,
                 "ZIP archive",
-                "filefacts ZIP index",
                 vec![
                     "archive_analyzer".to_string(),
                     "filefacts_zip_index".to_string(),
@@ -820,24 +1036,17 @@ impl ArchiveAnalyzer {
 
         let fake_root = Path::new("/__cleave_archive__");
 
-        // When we're already inside a rayon worker, the per-member work runs
-        // sequentially anyway (`par_filter_map_if_outermost` skips the inner
-        // par_iter to avoid contention). In that case we can stream: read one
-        // member, analyze it, drop the buffer, before reading the next.
-        // Caps in-flight decompressed-bytes per worker to a single member
-        // instead of the whole archive.
-        let stream_members = !self.members_run_parallel();
-        let mut members = if stream_members {
-            Vec::new()
-        } else {
-            Vec::with_capacity(archive.len().min(10_000))
-        };
-        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
-            Vec::with_capacity(archive.len().min(10_000))
-        } else {
-            Vec::new()
-        };
-        let mut total_streamed: usize = 0;
+        // Members stream through a byte-windowed accumulator: each window is
+        // analyzed in parallel then dropped, so resident decompressed bytes and
+        // the report transient stay bounded regardless of member count. JARs
+        // need the full member list for main-class detection, so they keep the
+        // all-resident path.
+        let is_jar = matches!(
+            crate::analyzers::detect_file_type(archive_path),
+            Ok(FileType::Jar)
+        );
+        let mut window = MemberWindow::new(self, "memory ZIP");
+        let mut jar_members: Vec<MemoryArchiveMember> = Vec::new();
 
         for i in 0..archive.len() {
             if self.is_cancelled() {
@@ -997,40 +1206,20 @@ impl ArchiveAnalyzer {
                 file_type,
                 sha256,
             };
-            if stream_members {
-                if let Some(result) = self.analyze_one_member(&member, "memory ZIP") {
-                    streamed_results.push(result);
-                }
-                total_streamed += 1;
-                // `member` (with its decompressed `data: Vec<u8>`) drops here;
-                // next loop iteration starts with a fresh allocation.
+            if is_jar {
+                jar_members.push(member);
             } else {
-                members.push(member);
+                window.push(member);
             }
         }
 
-        if stream_members {
-            self.aggregate_member_results(
-                streamed_results,
-                report,
-                start,
-                "ZIP archive",
-                vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
-                total_streamed,
-            );
-        } else if matches!(
-            crate::analyzers::detect_file_type(archive_path),
-            Ok(FileType::Jar)
-        ) {
-            self.analyze_jar_members_in_memory(&members, archive_path, report, start);
+        if is_jar {
+            self.analyze_jar_members_in_memory(&jar_members, archive_path, report, start);
         } else {
-            self.analyze_in_memory_members(
-                &members,
-                archive_path,
+            window.finalize(
                 report,
                 start,
                 "ZIP archive",
-                "memory ZIP",
                 vec!["archive_analyzer".to_string(), "in_memory_zip".to_string()],
             );
         }
@@ -1245,25 +1434,14 @@ impl ArchiveAnalyzer {
     pub(super) fn analyze_asar_archive_in_memory(
         &self,
         data: &[u8],
-        archive_path: &Path,
+        _archive_path: &Path,
         report: &mut AnalysisReport,
         start: std::time::Instant,
         guard: &ExtractionGuard,
     ) -> Result<()> {
         let entries = super::asar::collect_entries(data)?;
         let fake_root = Path::new("/__cleave_archive__");
-        let stream_members = !self.members_run_parallel();
-        let mut members = if stream_members {
-            Vec::new()
-        } else {
-            Vec::with_capacity(entries.len().min(10_000))
-        };
-        let mut streamed_results: Vec<MemberAnalysisResult> = if stream_members {
-            Vec::with_capacity(entries.len().min(10_000))
-        } else {
-            Vec::new()
-        };
-        let mut total_streamed = 0usize;
+        let mut window = MemberWindow::new(self, "memory ASAR");
 
         for entry in entries {
             if self.is_cancelled() {
@@ -1339,36 +1517,15 @@ impl ArchiveAnalyzer {
                 file_type,
                 sha256,
             };
-            if stream_members {
-                if let Some(result) = self.analyze_one_member(&member, "memory ASAR") {
-                    streamed_results.push(result);
-                }
-                total_streamed += 1;
-            } else {
-                members.push(member);
-            }
+            window.push(member);
         }
 
-        if stream_members {
-            self.aggregate_member_results(
-                streamed_results,
-                report,
-                start,
-                "ASAR archive",
-                vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
-                total_streamed,
-            );
-        } else {
-            self.analyze_in_memory_members(
-                &members,
-                archive_path,
-                report,
-                start,
-                "ASAR archive",
-                "memory ASAR",
-                vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
-            );
-        }
+        window.finalize(
+            report,
+            start,
+            "ASAR archive",
+            vec!["archive_analyzer".to_string(), "in_memory_asar".to_string()],
+        );
         Ok(())
     }
 
@@ -1475,7 +1632,12 @@ impl ArchiveAnalyzer {
                 &member.sha256,
             )
         })) {
-            Ok(Ok(Some(r))) => Some(r),
+            Ok(Ok(Some(mut r))) => {
+                // Matching is done; drop the fields nothing downstream reads so
+                // they don't pile up across the archive's members.
+                r.clear_unserialized_member_fields();
+                Some(r)
+            }
             Ok(Ok(None)) => None,
             Ok(Err(e)) => {
                 debug!("Failed to analyze archive member {}: {}", entry_path, e);
@@ -1523,6 +1685,11 @@ impl ArchiveAnalyzer {
     /// Aggregate per-member analysis results into the parent archive report.
     /// Splits findings, yara matches, strings, and nested archive entries
     /// across the appropriate top-level fields.
+    ///
+    /// Thin wrapper over [`MemberAccumulator`] for callers that already hold
+    /// the full `results` vector. The byte-windowed ZIP path folds directly
+    /// into a [`MemberAccumulator`] instead, so it never materializes every
+    /// member's report at once.
     fn aggregate_member_results(
         &self,
         results: Vec<MemberAnalysisResult>,
@@ -1532,107 +1699,11 @@ impl ArchiveAnalyzer {
         tools_used: Vec<String>,
         total_files: usize,
     ) {
-        let mut total_capabilities = HashSet::new();
-        let mut total_traits = HashSet::new();
-        let mut collected_traits = HashMap::<String, Finding>::with_capacity(total_files.min(500));
-        let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
-        let mut collected_strings = Vec::<StringInfo>::with_capacity((total_files * 2).min(200));
-        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
-        let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
-        let mut files_analyzed = 0usize;
-
+        let mut acc = MemberAccumulator::default();
         for result in results {
-            collected_archive_entries.push(result.entry_metadata);
-            let Some(file_report) = result.report else {
-                continue;
-            };
-            files_analyzed += 1;
-
-            let (mut file_entry, nested_files, archive_contents) =
-                file_report.into_file_analysis(0);
-            file_entry.path = result.entry_path.clone();
-            file_entry.depth = 1;
-            file_entry.compute_summary();
-            file_entry.extracted_path = result.extracted_path.clone();
-
-            for f in &file_entry.findings {
-                total_traits.insert(f.id.clone());
-                total_capabilities.insert(f.id.clone());
-                let mut new_finding = f.clone();
-                for evidence in &mut new_finding.evidence {
-                    match &evidence.location {
-                        None => evidence.location = Some(result.archive_location.clone()),
-                        Some(loc) if !loc.starts_with("archive:") => {
-                            evidence.location =
-                                Some(format!("{}:{}", result.archive_location, loc));
-                        }
-                        _ => {}
-                    }
-                }
-                collected_traits
-                    .entry(new_finding.id.clone())
-                    .and_modify(|existing| {
-                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
-                            > (existing.crit, std::cmp::Ordering::Equal)
-                        {
-                            *existing = new_finding.clone();
-                        }
-                    })
-                    .or_insert(new_finding);
-            }
-
-            for yara_match in &file_entry.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
-                    && collected_yara.len() < 1_000
-                {
-                    collected_yara.push(yara_match.clone());
-                }
-            }
-
-            for string in &file_entry.strings {
-                if matches!(
-                    string.string_type,
-                    Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) && collected_strings.len() < 10_000
-                {
-                    collected_strings.push(string.clone());
-                }
-            }
-
-            collected_files.push(file_entry);
-            collected_archive_entries.extend(archive_contents);
-            for mut nested_file in nested_files {
-                if !nested_file.path.contains("!!") {
-                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
-                }
-                nested_file.depth += 1;
-                collected_files.push(nested_file);
-            }
+            acc.fold(result);
         }
-
-        for (_, t) in collected_traits {
-            if !report.findings.iter().any(|existing| existing.id == t.id) {
-                report.findings.push(t);
-            }
-        }
-        for ym in collected_yara {
-            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
-                report.yara_matches.push(ym);
-            }
-        }
-        report.strings.extend(collected_strings);
-        report.archive_contents.extend(collected_archive_entries);
-        report.files.extend(collected_files);
-        report.metadata.errors.push(format!(
-            "{}: {} members, {} analyzed, {} traits and {} capabilities detected",
-            archive_label,
-            total_files,
-            files_analyzed,
-            total_traits.len(),
-            total_capabilities.len()
-        ));
-        report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
-        report.metadata.tools_used = tools_used;
+        acc.finalize(report, start, archive_label, tools_used, total_files);
     }
 
     /// Analyze a PyInstaller-bundled executable entirely in memory. Decodes

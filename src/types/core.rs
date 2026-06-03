@@ -930,6 +930,31 @@ impl AnalysisReport {
         self.files.shrink_to_fit();
     }
 
+    /// Drop the analysis fields that nothing downstream consumes, the moment a
+    /// member's analysis (matching) is complete.
+    ///
+    /// `traits`, `structure`, `yara_matches`, `syscalls`, `paths`,
+    /// `directories`, and `env_vars` are produced by analyzers and matched
+    /// against during trait evaluation, but the compact output
+    /// (`compact::convert_file`) never serializes them and `finalize()` drops
+    /// the top-level copies. On an archive with thousands of members, retaining
+    /// them per member until the end accumulates multiple GB of live, unused
+    /// memory. Clearing them here — right after the member's matching finishes,
+    /// before the result is collected — keeps the compact output identical
+    /// (yara findings are already folded into `findings` during analysis).
+    pub(crate) fn clear_unserialized_member_fields(&mut self) {
+        self.traits = Vec::new();
+        self.structure = Vec::new();
+        self.yara_matches = Vec::new();
+        self.syscalls = Vec::new();
+        self.paths = Vec::new();
+        self.directories = Vec::new();
+        self.env_vars = Vec::new();
+        for file in &mut self.files {
+            file.clear_unserialized_fields();
+        }
+    }
+
     /// Finalize the report for output: populate files[], clear top-level duplicates,
     /// merge metadata into summary, filter internal symbols findings.
     ///

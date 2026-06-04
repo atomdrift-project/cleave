@@ -22,7 +22,6 @@ use anyhow::Context;
 use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::collections::HashSet;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -60,7 +59,7 @@ fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> us
         && !id.contains("::")
         && id.contains('/')
     {
-        let distinct: HashSet<&str> = result
+        let distinct: rustc_hash::FxHashSet<&str> = result
             .matched_trait_ids
             .iter()
             .map(String::as_str)

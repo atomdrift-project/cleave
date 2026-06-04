@@ -458,7 +458,7 @@ impl super::CapabilityMapper {
         // Build lookup from qualified ID → Option<&[Condition]> (the unless: list, if any).
         // Covers both atomic traits and composite rules.
         // Trait/composite IDs are qualified at load time (e.g. "well-known/foo::bar-id").
-        let mut unless_by_id: HashMap<&str, &[Condition]> = HashMap::new();
+        let mut unless_by_id: FxHashMap<&str, &[Condition]> = FxHashMap::default();
         for t in &self.trait_definitions {
             if let Some(conds) = t.unless.as_deref() {
                 unless_by_id.insert(t.id.as_str(), conds);

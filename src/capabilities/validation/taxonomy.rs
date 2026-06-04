@@ -1406,16 +1406,9 @@ const BROAD_PLATFORM_THRESHOLD: usize = 4;
 
 /// Threshold for flagging a trait as having too many effective file types.
 ///
-/// The threshold is set to 23 to allow the two most common two-group combinations:
-/// - `for: [scripts, binaries]` = 15 types (executable code — scripts + compiled)
-/// - `for: [scripts, source]`   = 22 types (text code — scripts + source languages)
-/// - `for: [binaries, source]`  = 17 types (compiled + source language files)
-///
-/// Anything requiring all three groups (scripts+binaries+source = 27 types) or
-/// broader (documents, media, etc.) should be narrowed or placed in an allowlisted
-/// directory.
-const BROAD_FILETYPE_THRESHOLD: usize = 23;
-const BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM: usize = 23;
+/// Traits should be focused on exactly the filetypes they are designed to fire against.
+const BROAD_FILETYPE_THRESHOLD: usize = 13;
+const BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM: usize = 7;
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
 pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =

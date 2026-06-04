@@ -430,16 +430,16 @@ fn parse_hex_or_dec(s: &str) -> Option<u64> {
 /// Items with the same key are merged, combining their offsets and counts.
 #[must_use]
 pub(crate) fn deduplicate_evidence(evidence: Vec<Evidence>) -> Vec<Evidence> {
-    use std::collections::HashMap;
-
     if evidence.len() <= 1 {
         return evidence;
     }
 
-    // Group by (method, source, value)
-    // Use Entry API with match to avoid clone in and_modify (ev consumed exactly once)
+    // Group by (method, source, value). FxHashMap (not SipHash) for the hot
+    // post-eval dedup; output order follows iteration order, which isn't
+    // guaranteed either way.
     use std::collections::hash_map::Entry;
-    let mut groups: HashMap<(String, String, String), Evidence> = HashMap::new();
+    let mut groups: rustc_hash::FxHashMap<(String, String, String), Evidence> =
+        rustc_hash::FxHashMap::default();
 
     for ev in evidence {
         let key = (ev.method.clone(), ev.source.clone(), ev.value.clone());

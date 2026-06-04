@@ -33,7 +33,7 @@ impl super::CapabilityMapper {
 
         // Pre-allocate capacity for findings to reduce reallocations
         let mut all_findings: Vec<Finding> = Vec::with_capacity(100);
-        let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
+        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
         // Track which composite IDs have already matched (including original findings)
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
@@ -500,7 +500,7 @@ impl super::CapabilityMapper {
             std::fs::read(&container_report.target.path).unwrap_or_else(|_| Vec::new());
 
         // Track which composite IDs have already matched
-        let mut seen_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut seen_ids: rustc_hash::FxHashSet<String> = rustc_hash::FxHashSet::default();
         let mut matched_bits = TraitBitSet::with_capacity(self.trait_definitions.len());
         for finding in &container_report.findings {
             seen_ids.insert(finding.id.clone());

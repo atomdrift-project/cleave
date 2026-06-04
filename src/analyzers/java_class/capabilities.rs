@@ -424,18 +424,22 @@ impl super::JavaClassAnalyzer {
     fn contains_word(haystack: &str, needle: &str) -> bool {
         let hay = haystack.as_bytes();
         let ndl = needle.as_bytes();
-        if ndl.len() > hay.len() {
+        if ndl.is_empty() || ndl.len() > hay.len() {
             return false;
         }
-        for i in 0..=(hay.len() - ndl.len()) {
-            if &hay[i..i + ndl.len()] == ndl {
-                let before_ok = i == 0 || !hay[i - 1].is_ascii_alphanumeric();
-                let after_ok =
-                    i + ndl.len() == hay.len() || !hay[i + ndl.len()].is_ascii_alphanumeric();
-                if before_ok && after_ok {
-                    return true;
-                }
+        // SIMD-accelerated candidate search (built once per needle, then cached);
+        // the boundary rule below is byte-identical to the former naive scan.
+        let finder = crate::composite_rules::condition::cached_finder(needle);
+        let mut from = 0;
+        while let Some(rel) = finder.find(&hay[from..]) {
+            let i = from + rel;
+            let before_ok = i == 0 || !hay[i - 1].is_ascii_alphanumeric();
+            let after_ok =
+                i + ndl.len() == hay.len() || !hay[i + ndl.len()].is_ascii_alphanumeric();
+            if before_ok && after_ok {
+                return true;
             }
+            from = i + 1;
         }
         false
     }

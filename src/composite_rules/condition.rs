@@ -60,29 +60,33 @@ pub(crate) fn lazy_regex(
     }
 }
 
-/// Raw-content matcher's lazy regex source. Like [`lazy_regex`] but also serves
-/// `word:` by building `\bword\b` on demand (cached/shared), and enables
-/// multi-line mode (`(?m)`) so `^`/`$` anchor per line — matching the byte-regex
-/// path's `multi_line(true)` (see `compile_bytes_regex`) so non-ASCII raw
-/// patterns honor per-line anchors identically. TODO: make `word:` a literal
-/// byte-boundary scan here too so raw content never touches the regex engine for
-/// literals; for now it's lazy + deduplicated (no longer the eager per-condition
-/// compilation that cost ~1.5 GB).
-pub(crate) fn lazy_raw_regex(
+/// Raw-content matcher's regex pattern source. Serves `word:` by building
+/// `\bword\b`, and enables multi-line mode (`(?m)`/`(?im)`) so `^`/`$` anchor per
+/// line — matching the byte-regex path's `multi_line(true)` (see
+/// `compile_bytes_regex`) so non-ASCII raw patterns honor per-line anchors
+/// identically.
+///
+/// Returns the **pattern string** without compiling anything: the raw matcher
+/// chooses the byte-vs-unicode engine from the pattern alone, so an ASCII pattern
+/// (which matches via a `regex::bytes::Regex`) never pays to compile the unicode
+/// `regex::Regex` it would only call `.as_str()` on — that wasted compile
+/// dominated peak RSS on member-heavy archives. The unicode engine is built (via
+/// [`cached_regex`]) only on the non-ASCII branch, with this exact string.
+pub(crate) fn raw_regex_pattern(
     word: Option<&str>,
     regex: Option<&str>,
     case_insensitive: bool,
-) -> Option<&'static regex::Regex> {
+) -> Option<String> {
     let base = match (word, regex) {
         (Some(w), _) => format!(r"\b{}\b", regex::escape(w)),
         (None, Some(r)) => r.to_string(),
         (None, None) => return None,
     };
-    if case_insensitive {
-        cached_regex(&format!("(?im){base}"))
+    Some(if case_insensitive {
+        format!("(?im){base}")
     } else {
-        cached_regex(&format!("(?m){base}"))
-    }
+        format!("(?m){base}")
+    })
 }
 
 /// Shared, lazy, leaked case-sensitive substring searcher per unique needle.

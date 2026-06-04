@@ -139,6 +139,10 @@ impl SectionMap {
             return true;
         }
 
+        if macho_section_component_matches(actual, required) {
+            return true;
+        }
+
         if is_fuzzy_name(required) {
             for pattern in fuzzy_section_patterns(required) {
                 if actual == *pattern {
@@ -186,6 +190,13 @@ impl SectionMap {
         // Bare PE/ELF name → dotted form (e.g. `rsrc` -> `.rsrc`).
         for section in &self.sections {
             if bare_matches_dotted(&section.name, name) {
+                return Some((section.start, section.end));
+            }
+        }
+
+        // Bare Mach-O section component (e.g. `__const`/`const` -> `__TEXT,__const`).
+        for section in &self.sections {
+            if macho_section_component_matches(&section.name, name) {
                 return Some((section.start, section.end));
             }
         }
@@ -329,6 +340,25 @@ fn bare_matches_dotted(actual: &str, required: &str) -> bool {
         && actual.strip_prefix('.') == Some(required)
 }
 
+/// Mach-O sections are reported as `SEGMENT,SECTION` (e.g. `__TEXT,__const`,
+/// `__TEXT,__cstring`). Let authors reference one by its bare section component
+/// — with or without the leading `__` — so `section: __const`, `section: const`,
+/// `section: __cstring`, and `section: cstring` all match `__TEXT,__const` /
+/// `__TEXT,__cstring`. The segment prefix rarely distinguishes intent, so a bare
+/// reference matches that section in any segment. This mirrors how a user reads
+/// the name out of `cleave sections` and drops the `SEGMENT,` qualifier.
+fn macho_section_component_matches(actual: &str, required: &str) -> bool {
+    if required.is_empty() || required.contains(',') {
+        return false;
+    }
+    match actual.split_once(',') {
+        Some((_segment, section)) => {
+            section == required || section.strip_prefix("__") == Some(required)
+        }
+        None => false,
+    }
+}
+
 fn is_fuzzy_name(name: &str) -> bool {
     matches!(
         name,
@@ -370,6 +400,32 @@ mod tests {
     fn test_bounds_fuzzy_macho() {
         let map = SectionMap::from_sections_and_size(vec![("__TEXT,__text", 0x100, 0x200)], 0x1000);
         assert_eq!(map.bounds(".text"), Some((0x100, 0x200)));
+    }
+
+    #[test]
+    fn test_bare_macho_section_component_matches() {
+        // Mach-O sections are `SEGMENT,SECTION`; a bare section component should
+        // resolve, with or without the leading `__`.
+        let map = SectionMap::from_sections_and_size(
+            vec![
+                ("__TEXT,__text", 0x1000, 0x2000),
+                ("__TEXT,__const", 0x2000, 0x2800),
+                ("__TEXT,__cstring", 0x2800, 0x3000),
+            ],
+            0x4000,
+        );
+        assert_eq!(map.bounds("__const"), Some((0x2000, 0x2800)));
+        assert_eq!(map.bounds("const"), Some((0x2000, 0x2800)));
+        assert_eq!(map.bounds("__cstring"), Some((0x2800, 0x3000)));
+        assert_eq!(map.bounds("cstring"), Some((0x2800, 0x3000)));
+        // Full `SEGMENT,SECTION` and the fuzzy `rdata` alias still work.
+        assert_eq!(map.bounds("__TEXT,__const"), Some((0x2000, 0x2800)));
+        assert_eq!(map.bounds("rdata"), Some((0x2000, 0x2800)));
+        assert!(SectionMap::section_matches("__TEXT,__const", "__const"));
+        assert!(SectionMap::section_matches("__TEXT,__const", "const"));
+        // A non-matching component must not resolve.
+        assert_eq!(map.bounds("__data"), None);
+        assert!(!SectionMap::section_matches("__TEXT,__const", "text"));
     }
 
     #[test]

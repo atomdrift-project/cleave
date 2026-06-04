@@ -1186,9 +1186,11 @@ pub(crate) fn eval_raw<'a>(
     trait_id: Option<&str>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
-    // Regexes are not precompiled per condition; resolve `word:`/`regex:` through
-    // the shared lazy cache.
-    let compiled_regex = crate::composite_rules::condition::lazy_raw_regex(
+    // Resolve the pattern *string* without compiling. The engine is chosen from
+    // the pattern alone (ASCII → bytes engine, else unicode), so an ASCII
+    // pattern never compiles the unicode `regex::Regex` it would only read
+    // `.as_str()` off of — that wasted compile dominated peak RSS on archives.
+    let raw_pattern = crate::composite_rules::condition::raw_regex_pattern(
         word.map(String::as_str),
         regex.map(String::as_str),
         case_insensitive,
@@ -1241,11 +1243,10 @@ pub(crate) fn eval_raw<'a>(
     // Track match count for constraint checking
     let mut match_count = 0usize;
 
-    // Use pre-compiled regex (handles both word and regex patterns)
-    // OPTIMIZATION: Try bytes regex first for ASCII patterns to avoid UTF-8 conversion
-    if let Some(re) = compiled_regex {
-        // Check if the original pattern is ASCII-only to use bytes regex
-        let pattern_str = re.as_str();
+    // Match via the bytes engine for ASCII patterns (no UTF-8 conversion), else
+    // compile and use the unicode engine. The unicode `regex::Regex` is built
+    // ONLY on the non-ASCII branch — ASCII patterns skip it entirely.
+    if let Some(pattern_str) = raw_pattern.as_deref() {
         let use_bytes_regex = can_use_byte_matching(pattern_str);
 
         if use_bytes_regex {
@@ -1341,65 +1342,69 @@ pub(crate) fn eval_raw<'a>(
                 }
             }
         } else {
-            // UNICODE PATH: Use cached UTF-8 conversion for Unicode regex
-            // Reuse the per-member UTF-8 view validated once at ctx construction
-            // (source types); only re-validate for sub-ranges or non-source members.
-            let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
-                Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
-                    std::borrow::Cow::Borrowed(s)
-                }
-                _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
-            };
-            let mut first_match = None;
-            let mut first_offset = None;
-            for (idx, mat) in re.find_iter(&content).enumerate() {
-                // Limit match processing to prevent DoS on pattern-dense files
-                if idx >= MAX_MATCHES_TO_PROCESS {
-                    if let Some(trait_id_val) = trait_id {
-                        tracing::info!(
-                            trait_id = %trait_id_val,
-                            pattern = %re.as_str(),
-                            limit = MAX_MATCHES_TO_PROCESS,
-                            "Hit regex-pattern match limit; stopping early"
-                        );
-                    } else {
-                        tracing::info!(
-                            pattern = %re.as_str(),
-                            limit = MAX_MATCHES_TO_PROCESS,
-                            "Hit regex-pattern match limit; stopping early"
-                        );
+            // UNICODE PATH: compile the unicode engine now — only non-ASCII
+            // patterns reach here. A compile failure (unreachable for corpus
+            // patterns, which compiled before) simply yields no matches.
+            if let Some(re) = crate::composite_rules::condition::cached_regex(pattern_str) {
+                // Reuse the per-member UTF-8 view validated once at ctx construction
+                // (source types); only re-validate for sub-ranges or non-source members.
+                let content: std::borrow::Cow<'_, str> = match ctx.cached_source_utf8 {
+                    Some(s) if search_start == 0 && search_end == ctx.binary_data.len() => {
+                        std::borrow::Cow::Borrowed(s)
                     }
-                    break;
+                    _ => super::utf8_view(ctx.binary_data, (search_start, search_end)),
+                };
+                let mut first_match = None;
+                let mut first_offset = None;
+                for (idx, mat) in re.find_iter(&content).enumerate() {
+                    // Limit match processing to prevent DoS on pattern-dense files
+                    if idx >= MAX_MATCHES_TO_PROCESS {
+                        if let Some(trait_id_val) = trait_id {
+                            tracing::info!(
+                                trait_id = %trait_id_val,
+                                pattern = %re.as_str(),
+                                limit = MAX_MATCHES_TO_PROCESS,
+                                "Hit regex-pattern match limit; stopping early"
+                            );
+                        } else {
+                            tracing::info!(
+                                pattern = %re.as_str(),
+                                limit = MAX_MATCHES_TO_PROCESS,
+                                "Hit regex-pattern match limit; stopping early"
+                            );
+                        }
+                        break;
+                    }
+                    let match_str = mat.as_str();
+                    // Skip matches that don't pass validation
+                    if !validate_match(match_str, is_check) {
+                        continue;
+                    }
+                    // Skip matches that trigger 'not' filters
+                    if let Some(not_filters) = not
+                        && not_filters.iter().any(|filter| filter.matches(match_str))
+                    {
+                        continue;
+                    }
+                    match_count += 1;
+                    if first_match.is_none() {
+                        first_match = Some(match_str.to_string());
+                        first_offset = Some((search_start + mat.start()) as u64);
+                    }
                 }
-                let match_str = mat.as_str();
-                // Skip matches that don't pass validation
-                if !validate_match(match_str, is_check) {
-                    continue;
-                }
-                // Skip matches that trigger 'not' filters
-                if let Some(not_filters) = not
-                    && not_filters.iter().any(|filter| filter.matches(match_str))
+                if match_count > 0
+                    && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+                    && let Some(matched) = first_match
                 {
-                    continue;
+                    evidence.push(Evidence {
+                        method: "raw".to_string(),
+                        source: "raw_content".to_string(),
+                        value: matched,
+                        location: None,
+                        offsets: first_offset.into_iter().collect(),
+                        ..Default::default()
+                    });
                 }
-                match_count += 1;
-                if first_match.is_none() {
-                    first_match = Some(match_str.to_string());
-                    first_offset = Some((search_start + mat.start()) as u64);
-                }
-            }
-            if match_count > 0
-                && evidence.len() < MAX_EVIDENCE_PER_TRAIT
-                && let Some(matched) = first_match
-            {
-                evidence.push(Evidence {
-                    method: "raw".to_string(),
-                    source: "raw_content".to_string(),
-                    value: matched,
-                    location: None,
-                    offsets: first_offset.into_iter().collect(),
-                    ..Default::default()
-                });
             }
         }
     } else if let Some(exact_str) = exact {
@@ -1785,7 +1790,7 @@ pub(crate) fn eval_raw<'a>(
 
     if exact.is_some() {
         precision = 2.0;
-    } else if compiled_regex.is_some() {
+    } else if raw_pattern.is_some() {
         precision = 1.5;
     } else if substr.is_some() {
         precision = 1.0;

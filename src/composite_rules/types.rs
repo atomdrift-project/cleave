@@ -251,6 +251,8 @@ pub(crate) enum FileType {
     Data,
     /// Generic JSON document
     Json,
+    /// node-gyp build manifest (binding.gyp, .gyp, .gypi)
+    Gyp,
     /// npm package.json manifest
     PackageJson,
     /// npm package-lock.json lockfile
@@ -584,6 +586,7 @@ impl FileType {
             "text" | "txt" | "b64" | "base64" => FileType::Text,
             "data" | "dat" | "bin" | "payload" | "raw" => FileType::Data,
             "json" => FileType::Json,
+            "gyp" | "gypi" | "binding.gyp" => FileType::Gyp,
             // cpp aliases to c (handled above)
             // Manifest/config formats
             "package.json" | "packagejson" => FileType::PackageJson,

@@ -329,3 +329,8 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
+
+# TEMP (local dev): build against the local filefacts checkout so the new
+# FileType::Gyp detection is available before the codeberg push + lockfile bump.
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }

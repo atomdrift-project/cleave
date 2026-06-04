@@ -421,6 +421,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "manifests" => vec![
                     RuleFileType::PackageJson,
                     RuleFileType::PackageLockJson,
+                    RuleFileType::Gyp,
                     RuleFileType::ChromeManifest,
                     RuleFileType::VsixManifest,
                     RuleFileType::CargoToml,
@@ -495,6 +496,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "text" | "txt" | "b64" | "base64" => vec![RuleFileType::Text],
                 "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
                 "json" => vec![RuleFileType::Json],
+                "gyp" | "gypi" | "binding.gyp" => vec![RuleFileType::Gyp],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
                 "class" => vec![RuleFileType::Class],

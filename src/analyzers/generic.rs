@@ -62,40 +62,11 @@ impl GenericAnalyzer {
         }
     }
 
-    fn file_type_str(&self) -> &'static str {
-        match self.file_type {
-            FileType::C => "c",
-            FileType::Swift => "swift",
-            FileType::ObjectiveC => "objc",
-            FileType::Groovy => "groovy",
-            FileType::Scala => "scala",
-            FileType::Zig => "zig",
-            FileType::Elixir => "elixir",
-            FileType::Clojure => "clojure",
-            FileType::Batch => "batch",
-            FileType::Vbs => "vbs",
-            FileType::GithubActions => "github-actions",
-            FileType::SystemdService => "systemd",
-            FileType::DesktopEntry => "desktop-entry",
-            FileType::Xml => "xml",
-            FileType::PkgInfo => "pkg-info",
-            FileType::CargoToml => "cargo.toml",
-            FileType::PyProjectToml => "pyproject.toml",
-            FileType::PackageLockJson => "package-lock.json",
-            FileType::Json => "json",
-            FileType::Plist => "plist",
-            FileType::Html => "html",
-            FileType::Markdown => "markdown",
-            FileType::Makefile => "makefile",
-            FileType::Dockerfile => "dockerfile",
-            FileType::Text => "text",
-            FileType::Data => "data",
-            FileType::Pdf => "pdf",
-            FileType::PythonBytecode => "python-bytecode",
-            FileType::Beam => "beam",
-            FileType::Lnk => "lnk",
-            _ => "unknown",
-        }
+    /// Report-facing type string. Delegates to the canonical
+    /// [`FileTypeExt::report_file_type`] so there is a single source of truth
+    /// for type stringification (adding a `FileType` only touches that map).
+    fn file_type_str(&self) -> String {
+        crate::analyzers::FileTypeExt::report_file_type(&self.file_type)
     }
 
     #[allow(dead_code)] // Used by embedded_code_detector
@@ -136,7 +107,7 @@ impl GenericAnalyzer {
 
         let target = TargetInfo {
             path: file_path.display().to_string(),
-            file_type: self.file_type_str().to_string(),
+            file_type: self.file_type_str(),
             size_bytes,
             sha256,
             architectures: None,
@@ -169,7 +140,7 @@ impl GenericAnalyzer {
         report
             .structure
             .push(crate::analyzers::utils::create_language_feature(
-                self.file_type_str(),
+                &self.file_type_str(),
                 &parser_name,
                 &description,
             ));

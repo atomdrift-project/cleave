@@ -1186,12 +1186,14 @@ pub(crate) fn eval_raw<'a>(
     trait_id: Option<&str>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
-    // Resolve the pattern *string* without compiling. The engine is chosen from
-    // the pattern alone (ASCII → bytes engine, else unicode), so an ASCII
-    // pattern never compiles the unicode `regex::Regex` it would only read
-    // `.as_str()` off of — that wasted compile dominated peak RSS on archives.
+    // `word:` is a literal byte-boundary scan (no regex engine) — see the word
+    // branch below. Only `regex:` resolves to a pattern string here, and even
+    // then the engine is chosen from the string alone (ASCII → bytes engine,
+    // else unicode), so an ASCII pattern never compiles the unicode
+    // `regex::Regex` it would only read `.as_str()` off of — that wasted compile
+    // dominated peak RSS on archives.
     let raw_pattern = crate::composite_rules::condition::raw_regex_pattern(
-        word.map(String::as_str),
+        None,
         regex.map(String::as_str),
         case_insensitive,
     );
@@ -1243,10 +1245,56 @@ pub(crate) fn eval_raw<'a>(
     // Track match count for constraint checking
     let mut match_count = 0usize;
 
-    // Match via the bytes engine for ASCII patterns (no UTF-8 conversion), else
-    // compile and use the unicode engine. The unicode `regex::Regex` is built
-    // ONLY on the non-ASCII branch — ASCII patterns skip it entirely.
-    if let Some(pattern_str) = raw_pattern.as_deref() {
+    // `word:` — literal byte-boundary scan over raw bytes, no regex engine. The
+    // boundary rule mirrors the `\bword\b` regex this used to compile (see
+    // `raw_word_match_offsets`); `\bword\b` matches can't overlap, so the offset
+    // set equals the regex's.
+    if let Some(w) = word.map(String::as_str) {
+        let needle_len = w.len();
+        let offsets = crate::composite_rules::condition::raw_word_match_offsets(
+            search_data,
+            w,
+            case_insensitive,
+            MAX_MATCHES_TO_PROCESS,
+        );
+        let mut first_match = None;
+        let mut first_offset = None;
+        for start in offsets {
+            let match_bytes = &search_data[start..start + needle_len];
+            if is_check.is_some() || not.is_some() {
+                let match_str = String::from_utf8_lossy(match_bytes);
+                if !validate_match(&match_str, is_check) {
+                    continue;
+                }
+                if let Some(not_filters) = not
+                    && not_filters.iter().any(|filter| filter.matches(&match_str))
+                {
+                    continue;
+                }
+                if first_match.is_none() {
+                    first_match = Some(match_str.to_string());
+                    first_offset = Some((search_start + start) as u64);
+                }
+            } else if first_match.is_none() {
+                first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
+                first_offset = Some((search_start + start) as u64);
+            }
+            match_count += 1;
+        }
+        if match_count > 0
+            && evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            && let Some(matched) = first_match
+        {
+            evidence.push(Evidence {
+                method: "raw".to_string(),
+                source: "raw_content".to_string(),
+                value: matched,
+                location: None,
+                offsets: first_offset.into_iter().collect(),
+                ..Default::default()
+            });
+        }
+    } else if let Some(pattern_str) = raw_pattern.as_deref() {
         let use_bytes_regex = can_use_byte_matching(pattern_str);
 
         if use_bytes_regex {
@@ -1790,7 +1838,7 @@ pub(crate) fn eval_raw<'a>(
 
     if exact.is_some() {
         precision = 2.0;
-    } else if raw_pattern.is_some() {
+    } else if word.is_some() || raw_pattern.is_some() {
         precision = 1.5;
     } else if substr.is_some() {
         precision = 1.0;

@@ -170,6 +170,54 @@ fn word_boundary_ok(hb: &[u8], nb: &[u8], start: usize, end: usize) -> bool {
     left && right
 }
 
+/// Byte offsets of every `\bneedle\b` match in raw `haystack` bytes, capped at
+/// `cap`. The literal-scan equivalent of the `\bneedle\b` regex the raw content
+/// matcher used to compile — memmem (or ASCII-case-insensitive Aho-Corasick) for
+/// the literal, then the same `\b` boundary rule (`word_boundary_ok`), so it
+/// matches what the regex did without building a regex engine. `\bword\b` matches
+/// can't overlap (they're bounded by non-word bytes), so the offsets are the same
+/// set the regex's `find_iter` would yield.
+#[must_use]
+pub(crate) fn raw_word_match_offsets(
+    haystack: &[u8],
+    needle: &str,
+    case_insensitive: bool,
+    cap: usize,
+) -> Vec<usize> {
+    let nb = needle.as_bytes();
+    let mut out = Vec::new();
+    if nb.is_empty() || nb.len() > haystack.len() {
+        return out;
+    }
+    if case_insensitive {
+        let Some(ac) = cached_ci_searcher(needle) else {
+            return out;
+        };
+        for m in ac.find_iter(haystack) {
+            if word_boundary_ok(haystack, nb, m.start(), m.end()) {
+                out.push(m.start());
+                if out.len() >= cap {
+                    break;
+                }
+            }
+        }
+    } else {
+        let finder = cached_finder(needle);
+        let mut from = 0;
+        while let Some(rel) = finder.find(&haystack[from..]) {
+            let start = from + rel;
+            if word_boundary_ok(haystack, nb, start, start + nb.len()) {
+                out.push(start);
+                if out.len() >= cap {
+                    break;
+                }
+            }
+            from = start + 1;
+        }
+    }
+    out
+}
+
 /// Case-sensitive `word:` match using a pre-resolved `Finder`. Returns the byte
 /// offset of the first occurrence whose neighbours satisfy `\bneedle\b`.
 #[must_use]
@@ -4130,6 +4178,50 @@ exact: curl
         // haystack (not the lowercased needle) — mirrors the old `mat.as_str()`.
         let start = super::word_match_start("call EVAL now", "eval", true).expect("match");
         assert_eq!(&"call EVAL now"[start..start + "eval".len()], "EVAL");
+    }
+
+    /// `raw_word_match_offsets` (the raw-content `word:` scan) must return the
+    /// SAME match offsets the `\bneedle\b` regex `find_iter` yields — this is the
+    /// parity the byte-scan replacement of the compiled raw regex relies on.
+    #[allow(clippy::expect_used)]
+    fn assert_raw_word_offsets_match_regex(haystack: &str, needle: &str, ci: bool) {
+        let pat = format!(r"\b{}\b", regex::escape(needle));
+        let re = regex::RegexBuilder::new(&pat)
+            .case_insensitive(ci)
+            .build()
+            .expect("valid regex");
+        let want: Vec<usize> = re.find_iter(haystack).map(|m| m.start()).collect();
+        let got = super::raw_word_match_offsets(haystack.as_bytes(), needle, ci, 4096);
+        assert_eq!(
+            want, got,
+            "needle={needle:?} ci={ci} haystack={haystack:?}: regex={want:?} scan={got:?}"
+        );
+    }
+
+    #[test]
+    fn raw_word_offsets_agree_with_regex_find_iter() {
+        let cases = [
+            ("zsh ~/.zshrc and /etc/zshrc plus zshrc.bak", "zshrc"),
+            ("zshrcbak myzshrc nope", "zshrc"), // both have a word-char neighbour → no match
+            ("eval eval eval", "eval"),         // repeated, non-overlapping
+            ("(eval) [eval] {eval}", "eval"),   // punctuation neighbours
+            ("a.eval.b eval", "eval"),
+            ("ñeval evalé", "eval"), // non-ASCII letter neighbours → no match
+            ("no hits here", "eval"),
+        ];
+        for (h, n) in cases {
+            assert_raw_word_offsets_match_regex(h, n, false);
+            assert_raw_word_offsets_match_regex(h, n, true);
+        }
+        // case-insensitive: content case varies, boundaries still hold
+        assert_raw_word_offsets_match_regex("ZSHRC zshrc ZsHrC", "zshrc", true);
+    }
+
+    #[test]
+    fn raw_word_offsets_respect_cap() {
+        let hay = "x ".repeat(10); // 10 word-`x` occurrences, all boundary-valid
+        let got = super::raw_word_match_offsets(hay.as_bytes(), "x", false, 3);
+        assert_eq!(got.len(), 3);
     }
 
     #[test]

@@ -546,6 +546,15 @@ impl FileTypeExt for FileType {
             FileType::PythonBytecode => "python-bytecode".to_string(),
             FileType::PackageLockJson => "package-lock.json".to_string(),
             FileType::Json => "json".to_string(),
+            FileType::Gyp => "gyp".to_string(),
+            // Explicit forms below differ from the Debug-lowercase fallback;
+            // kept here so this stays the single source of truth for the report
+            // type string (generic.rs delegates to it instead of duplicating).
+            FileType::ObjectiveC => "objc".to_string(),
+            FileType::GithubActions => "github-actions".to_string(),
+            FileType::PkgInfo => "pkg-info".to_string(),
+            FileType::CargoToml => "cargo.toml".to_string(),
+            FileType::PyProjectToml => "pyproject.toml".to_string(),
             _ => format!("{:?}", self).to_lowercase(),
         }
     }

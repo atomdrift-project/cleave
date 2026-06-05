@@ -11,34 +11,34 @@ use crate::capabilities::indexes::{
 use crate::capabilities::models::{TraitInfo, TraitMappings};
 use crate::capabilities::parsing::{apply_composite_defaults, apply_trait_defaults};
 use crate::capabilities::validation::{
-    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
-    ObjectivesWellknownViolation, autoprefix_trait_refs, check_basename_pattern_duplicates,
-    check_exact_contained_by_substr, check_overlapping_regex_patterns,
-    check_regex_alternative_subsets, check_regex_or_overlapping_exact, check_regex_should_be_exact,
+    BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
+    autoprefix_trait_refs, check_basename_pattern_duplicates, check_exact_contained_by_substr,
+    check_overlapping_regex_patterns, check_regex_alternative_subsets,
+    check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
     find_alternation_merge_candidates, find_archive_scope_without_archive_for,
     find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
     find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
     find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
-    find_composite_only_wellknown_files, find_condition_scope_violations, find_depth_violations,
-    find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_second_level_directories, find_empty_condition_clauses,
-    find_excessive_file_types, find_excessive_skip_conditions, find_for_only_duplicates,
-    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
-    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
-    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
-    find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
-    find_many_directory_refs, find_meta_missing_section_filter, find_metadata_cross_tier_refs,
-    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
-    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
-    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
-    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
-    find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
-    find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
-    find_regex_literal_overlap_issues, find_self_referencing_traits, find_short_pattern_warnings,
-    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
-    find_string_content_collisions, find_string_literal_should_use_text,
-    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
+    find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
+    find_duplicate_composite_rules, find_duplicate_second_level_directories,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
+    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
+    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
+    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
+    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
+    find_malware_subcategory_violations, find_many_directory_refs,
+    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
+    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
+    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
+    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
+    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
+    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
+    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
+    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
+    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
+    find_string_literal_should_use_text, find_string_pattern_duplicates,
+    find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -2404,15 +2404,16 @@ impl super::CapabilityMapper {
             let broad_ft = find_broad_filetype_traits(&trait_definitions, &rule_source_files);
             if !broad_ft.is_empty() {
                 eprintln!(
-                    "\n❌ ERROR: {} traits target too many file types (23+ types — exceeds 2-group threshold)",
+                    "\n❌ ERROR: {} traits exceed the file-type cap for their matcher type",
                     broad_ft.len()
                 );
-                eprintln!("   Narrow the file type scope or move to an allowlisted directory:");
-                for prefix in BROAD_FILETYPE_ALLOWLIST {
-                    eprintln!("     {prefix}");
-                }
-                eprintln!();
-                for (trait_id, source_file, count, matched_types) in &broad_ft {
+                eprintln!(
+                    "   Caps run widest (text) to narrowest (tree-sitter) by matcher type; each line shows its own cap."
+                );
+                eprintln!(
+                    "   Narrow `for:`, or add a type-qualified allowlist entry (\"<type>:<dir-prefix>\").\n"
+                );
+                for (trait_id, source_file, count, matched_types, category, cap) in &broad_ft {
                     let line_hint = find_line_number(source_file, "for:");
                     let count_str = if *count == usize::MAX {
                         "all".to_string()
@@ -2426,61 +2427,26 @@ impl super::CapabilityMapper {
                         .join(", ");
                     if let Some(line) = line_hint {
                         eprintln!(
-                            "   {}:{}: '{}' ({} types: {})",
-                            source_file, line, trait_id, count_str, types_str
+                            "   {}:{}: '{}' (type:{} has {} types, cap {}: {})",
+                            source_file, line, trait_id, category, count_str, cap, types_str
                         );
                     } else {
                         eprintln!(
-                            "   {}: '{}' ({} types: {})",
-                            source_file, trait_id, count_str, types_str
+                            "   {}: '{}' (type:{} has {} types, cap {}: {})",
+                            source_file, trait_id, category, count_str, cap, types_str
                         );
                     }
                 }
                 eprintln!();
                 warnings.push(format!(
-                    "{} traits target 6+ file types (narrow scope or move to allowlisted directory)",
+                    "{} traits exceed the file-type cap for their matcher type (narrow for: or add a type-qualified allowlist entry)",
                     broad_ft.len()
                 ));
                 has_fatal_errors = true;
             }
 
-            // Validate: condition-type-specific filetype scope limits
-            // ast: ≤2 types, symbol/hex/yara: ≤4 types
-            tracing::trace!("Checking condition-type filetype scope limits");
-            let cond_scope =
-                find_condition_scope_violations(&trait_definitions, &rule_source_files);
-            if !cond_scope.is_empty() {
-                eprintln!(
-                    "\n❌ ERROR: {} traits exceed the filetype limit for their condition type",
-                    cond_scope.len()
-                );
-                eprintln!("   ast: ≤2 types  |  symbol/hex/yara: ≤4 types\n");
-                for (trait_id, source_file, kind, count, max) in &cond_scope {
-                    let count_str = if *count == usize::MAX {
-                        "all".to_string()
-                    } else {
-                        count.to_string()
-                    };
-                    let line_hint = find_line_number(source_file, "for:");
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: '{}' (type:{} has {} types, max {})",
-                            source_file, line, trait_id, kind, count_str, max
-                        );
-                    } else {
-                        eprintln!(
-                            "   {}: '{}' (type:{} has {} types, max {})",
-                            source_file, trait_id, kind, count_str, max
-                        );
-                    }
-                }
-                eprintln!();
-                warnings.push(format!(
-                    "{} traits exceed filetype limit for condition type (tree-sitter≤2, symbol/hex/yara≤4)",
-                    cond_scope.len()
-                ));
-                has_fatal_errors = true;
-            }
+            // Condition-type-specific filetype caps are now enforced by
+            // find_broad_filetype_traits (per-matcher-type thresholds).
 
             let disable_wellknown_size_filter_validation =
                 crate::validation_controls::is_validator_disabled("wellknown-size-filter");
@@ -3523,7 +3489,7 @@ impl super::CapabilityMapper {
             let pure_aliases = find_pure_alias_traits(&trait_definitions);
             if !pure_aliases.is_empty() {
                 eprintln!(
-                    "\n⚠️  WARNING: {} traits are pure aliases with no added value",
+                    "\n❌ ERROR: {} traits are pure aliases with no added value",
                     pure_aliases.len()
                 );
                 eprintln!(
@@ -3552,6 +3518,7 @@ impl super::CapabilityMapper {
                     "{} traits are pure aliases with no added value",
                     pure_aliases.len()
                 ));
+                has_fatal_errors = true;
             }
 
             // Validate: orphaned component traits not referenced by any rule

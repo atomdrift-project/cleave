@@ -1429,7 +1429,6 @@ mod tests {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -1668,7 +1667,6 @@ mod tests {
             section: None,
             encoding_chain: vec!["xor".to_string()],
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(detect_language(&info, true), None);
     }
@@ -1694,7 +1692,6 @@ mod tests {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(detect_language(&info, false), None);
     }

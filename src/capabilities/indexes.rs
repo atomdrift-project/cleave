@@ -362,9 +362,12 @@ impl SymbolMatchIndex {
                 } => {
                     symbol_trait_indices.insert(trait_idx);
                     // Symbol regex is no longer precompiled per condition; resolve
-                    // it from the shared lazy cache (Arc-backed clone is cheap).
+                    // it from the shared lazy cache. The index owns one engine per
+                    // symbol-regex trait (built once, bounded by trait count), so
+                    // clone it out of the shared `Arc` here.
                     trait_regex[trait_idx] =
-                        crate::composite_rules::condition::cached_regex(regex_str).cloned();
+                        crate::composite_rules::condition::cached_regex(regex_str)
+                            .map(|re| (*re).clone());
                     match StringMatchIndex::extract_regex_literal(regex_str) {
                         Some(literal) => {
                             let normalized = normalize_symbol(&literal);
@@ -954,9 +957,6 @@ impl StringMatchIndex {
                 && let Some(trait_indices) = self.exact_patterns.get(string_info.value.as_str())
             {
                 for &trait_idx in trait_indices {
-                    string_info
-                        .matched
-                        .store(true, std::sync::atomic::Ordering::Relaxed);
                     matching_traits.insert(trait_idx);
                     let entry = trait_evidence.entry(trait_idx).or_default();
                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -979,9 +979,6 @@ impl StringMatchIndex {
                     self.ci_exact_patterns.get(lower_buf.as_str())
                 {
                     for &trait_idx in trait_indices {
-                        string_info
-                            .matched
-                            .store(true, std::sync::atomic::Ordering::Relaxed);
                         matching_traits.insert(trait_idx);
                         let entry = trait_evidence.entry(trait_idx).or_default();
                         if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1005,9 +1002,6 @@ impl StringMatchIndex {
                         self.substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
-                            string_info
-                                .matched
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1037,9 +1031,6 @@ impl StringMatchIndex {
                         self.ci_substr_to_traits.get(pattern_idx)
                     {
                         for &trait_idx in trait_indices {
-                            string_info
-                                .matched
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1096,9 +1087,6 @@ impl StringMatchIndex {
                             self.exact_patterns.get(string_info.value.as_str())
                     {
                         for &trait_idx in trait_indices {
-                            string_info
-                                .matched
-                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1121,9 +1109,6 @@ impl StringMatchIndex {
                             self.ci_exact_patterns.get(lower_buf.as_str())
                         {
                             for &trait_idx in trait_indices {
-                                string_info
-                                    .matched
-                                    .store(true, std::sync::atomic::Ordering::Relaxed);
                                 matching_traits.insert(trait_idx);
                                 let entry = trait_evidence.entry(trait_idx).or_default();
                                 if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1147,9 +1132,6 @@ impl StringMatchIndex {
                                 self.substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
-                                    string_info
-                                        .matched
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -1181,9 +1163,6 @@ impl StringMatchIndex {
                                 self.ci_substr_to_traits.get(pattern_idx)
                             {
                                 for &trait_idx in trait_indices {
-                                    string_info
-                                        .matched
-                                        .store(true, std::sync::atomic::Ordering::Relaxed);
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
                                     if entry.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -2397,7 +2376,6 @@ mod tests {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

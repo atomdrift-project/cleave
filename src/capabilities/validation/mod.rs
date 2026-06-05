@@ -132,13 +132,12 @@ pub(crate) use patterns::{
 // Taxonomy validation
 pub(crate) use directory_whitelist::validate_directory_structure;
 pub(crate) use taxonomy::{
-    BROAD_FILETYPE_ALLOWLIST, BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY,
-    ObjectivesWellknownViolation, find_banned_directory_segments, find_broad_filetype_traits,
-    find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
-    find_composite_only_wellknown_files, find_depth_violations,
-    find_duplicate_second_level_directories, find_generic_wellknown_leaf_dirs,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_invalid_trait_ids,
-    find_malware_subcategory_violations, find_meta_missing_section_filter,
+    BROAD_PLATFORM_ALLOWLIST, MAX_TRAITS_PER_DIRECTORY, ObjectivesWellknownViolation,
+    find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
+    find_cap_obj_violations, find_cap_wellknown_violations, find_composite_only_wellknown_files,
+    find_depth_violations, find_duplicate_second_level_directories,
+    find_generic_wellknown_leaf_dirs, find_hostile_cap_rules, find_hostile_meta_rules,
+    find_invalid_trait_ids, find_malware_subcategory_violations, find_meta_missing_section_filter,
     find_metadata_cross_tier_refs, find_objectives_wellknown_violations,
     find_oversized_trait_directories, find_parent_duplicate_segments,
     find_platform_named_directories, find_redundant_unix_platforms,
@@ -149,13 +148,13 @@ pub(crate) use taxonomy::{
 // Logic constraint validation
 #[allow(unused_imports)] // find_needs_zero used by binary target
 pub(crate) use constraints::{
-    find_condition_scope_violations, find_empty_condition_clauses, find_excessive_file_types,
-    find_excessive_skip_conditions, find_hex_binary_missing_section,
-    find_impossible_count_constraints, find_impossible_needs, find_impossible_size_constraints,
-    find_invalid_not_usage, find_kv_exists_with_matcher, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_none_only_with_proximity,
-    find_orphaned_components, find_pure_alias_traits, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_should_use_defaults, find_too_short_patterns,
+    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
+    find_hex_binary_missing_section, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_kv_exists_with_matcher,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_none_only_with_proximity, find_orphaned_components, find_pure_alias_traits,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_should_use_defaults,
+    find_too_short_patterns,
 };
 
 // Utility functions

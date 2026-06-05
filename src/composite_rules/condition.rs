@@ -15,43 +15,57 @@ fn compile_regex_logged(
 
 /// Process-global, deduplicated, lazily-compiled regex cache.
 ///
-/// Replaces eager per-condition precompilation. Previously every `word:` /
-/// `regex:` condition compiled its own `regex::Regex` at load — a heavyweight
-/// meta-engine object (~tens of KB) built for all ~100k conditions, ~1.5 GB
-/// total, even though top-level traits match via the capability indexes and
-/// most composite sub-conditions never evaluate. Here a pattern is compiled on
-/// first evaluation and shared (and leaked — rules live for the whole process)
-/// across every condition that uses it, so only patterns that actually fire
-/// cost anything, and identical patterns cost once.
-pub(crate) fn cached_regex(pattern: &str) -> Option<&'static regex::Regex> {
-    use std::sync::{LazyLock, RwLock};
-    static CACHE: LazyLock<RwLock<std::collections::HashMap<String, &'static regex::Regex>>> =
-        LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
-    // Hot path is a concurrent read lock — only the first compile of each unique
-    // pattern takes the write lock, so warmed-up evals never serialize.
-    if let Ok(cache) = CACHE.read()
-        && let Some(&re) = cache.get(pattern)
+/// Replaces eager per-condition precompilation. A pattern is compiled on first
+/// evaluation and shared as an `Arc` across every condition that uses it, so
+/// only patterns that actually fire cost anything and identical patterns cost
+/// once. The cache is a **bounded LRU**: cold patterns evict instead of living
+/// for the whole process. The previous design `Box::leak`'d every distinct
+/// engine (~95 KB apiece, ~19k of them on member-heavy archives) — an immortal
+/// leak that was the dominant steady-state RSS. Cloning the `Arc` (never the
+/// `Regex`) hands out the same warm instance the `&'static` did, without leaking.
+/// Distinct compiled trait regexes kept warm; sized to the regex-using slice of
+/// the corpus (a few thousand), so the working set fits and never thrashes.
+const REGEX_CACHE_CAP: std::num::NonZeroUsize = {
+    #[allow(clippy::expect_used)]
+    std::num::NonZeroUsize::new(16_384).expect("REGEX_CACHE_CAP is non-zero")
+};
+
+static REGEX_CACHE: std::sync::LazyLock<
+    std::sync::RwLock<lru::LruCache<String, Arc<regex::Regex>>>,
+> = std::sync::LazyLock::new(|| std::sync::RwLock::new(lru::LruCache::new(REGEX_CACHE_CAP)));
+
+pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<regex::Regex>> {
+    // Hot path: `peek` under a read lock — it doesn't bump LRU recency, so warm
+    // evals never serialize on the write lock (the bytes cache learned this the
+    // hard way: `get`'s &mut recency update cost ~25% CPU in lock wait).
+    if let Some(arc) = REGEX_CACHE
+        .read()
+        .ok()
+        .and_then(|c| c.peek(pattern).cloned())
     {
-        return Some(re);
+        return Some(arc);
     }
-    let re = regex::Regex::new(pattern).ok()?;
-    let leaked: &'static regex::Regex = Box::leak(Box::new(re));
-    if let Ok(mut cache) = CACHE.write() {
-        // `or_insert` makes the first writer win under a benign build race, so
-        // every caller converges on the same shared instance.
-        return Some(*cache.entry(pattern.to_string()).or_insert(leaked));
+    // Compile outside the lock; write-lock only to insert.
+    let arc = Arc::new(regex::Regex::new(pattern).ok()?);
+    if let Ok(mut cache) = REGEX_CACHE.write() {
+        cache.put(pattern.to_string(), Arc::clone(&arc));
     }
-    Some(leaked)
+    Some(arc)
+}
+
+/// Clear the process-global lazy regex cache (see [`cached_regex`]). Shared
+/// across all threads; call from a single thread under memory pressure.
+pub(crate) fn clear_cached_regex() {
+    if let Ok(mut cache) = REGEX_CACHE.write() {
+        cache.clear();
+    }
 }
 
 /// Resolve a `regex:` pattern through [`cached_regex`], applying the `(?i)`
 /// prefix for case-insensitivity. This is the **only** place the extracted-
 /// string path builds a `regex::Regex`: `word:`/`substr:`/`exact:` are literal
 /// matches (see [`word_match_start`]) and never touch the regex engine.
-pub(crate) fn lazy_regex(
-    regex: Option<&str>,
-    case_insensitive: bool,
-) -> Option<&'static regex::Regex> {
+pub(crate) fn lazy_regex(regex: Option<&str>, case_insensitive: bool) -> Option<Arc<regex::Regex>> {
     let raw = regex?;
     if case_insensitive {
         cached_regex(&format!("(?i){raw}"))
@@ -1067,6 +1081,24 @@ enum ConditionTagged {
         section_offset_range: Option<(i64, Option<i64>)>,
     },
 
+    /// Match the file path (full path by default; `basename`/`dirname` scope it).
+    Path {
+        #[serde(default)]
+        exact: Option<String>,
+        #[serde(default)]
+        substr: Option<String>,
+        #[serde(default)]
+        regex: Option<String>,
+        #[serde(default)]
+        case_insensitive: bool,
+        #[serde(rename = "is", default)]
+        is_check: Option<StringValidator>,
+        #[serde(default)]
+        basename: bool,
+        #[serde(default)]
+        dirname: bool,
+    },
+
     /// Match the basename (final path component, not the full path)
     /// Example: { type: basename, exact: "__init__.py" }
     /// Example: { type: basename, regex: "^setup\\." }
@@ -1457,18 +1489,38 @@ impl From<ConditionDeser> for Condition {
                     section_offset,
                     section_offset_range,
                 },
+                // `type: basename` is sugar for a filename-scoped path matcher.
                 ConditionTagged::Basename {
                     exact,
                     substr,
                     regex,
                     case_insensitive,
                     is_check,
-                } => Condition::Basename {
+                } => Condition::Path {
                     exact,
                     substr,
                     regex,
                     case_insensitive,
                     is_check,
+                    basename: true,
+                    dirname: false,
+                },
+                ConditionTagged::Path {
+                    exact,
+                    substr,
+                    regex,
+                    case_insensitive,
+                    is_check,
+                    basename,
+                    dirname,
+                } => Condition::Path {
+                    exact,
+                    substr,
+                    regex,
+                    case_insensitive,
+                    is_check,
+                    basename,
+                    dirname,
                 },
                 ConditionTagged::Kv {
                     path,
@@ -1758,18 +1810,22 @@ impl From<Condition> for ConditionTagged {
                 section_offset,
                 section_offset_range,
             },
-            Condition::Basename {
+            Condition::Path {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 is_check,
-            } => ConditionTagged::Basename {
+                basename,
+                dirname,
+            } => ConditionTagged::Path {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 is_check,
+                basename,
+                dirname,
             },
             Condition::Kv {
                 path,
@@ -2298,27 +2354,26 @@ pub(crate) enum Condition {
         section_offset_range: Option<(i64, Option<i64>)>,
     },
 
-    /// Match the basename (final path component, not the full path)
-    /// Useful for special files like __init__.py, setup.py, etc.
-    /// Example: { type: basename, exact: "__init__.py" }
-    /// Example: { type: basename, regex: "^setup\\." }
-    Basename {
-        /// Full basename match (entire basename must equal this)
+    /// Match the file path. Full path by default; `basename`/`dirname` scope it.
+    Path {
         #[serde(skip_serializing_if = "Option::is_none")]
         exact: Option<String>,
-        /// Substring match (appears anywhere in basename)
         #[serde(skip_serializing_if = "Option::is_none")]
         substr: Option<String>,
-        /// Regex pattern to match
         #[serde(skip_serializing_if = "Option::is_none")]
         regex: Option<String>,
-        /// Case insensitive matching (default: false)
         #[serde(default)]
         case_insensitive: bool,
-        /// Optional high-fidelity validation check
         #[serde(rename = "is", default)]
         is_check: Option<StringValidator>,
+        /// Match only the final path component (filename).
+        #[serde(default)]
+        basename: bool,
+        /// Match only the directory portion of the path.
+        #[serde(default)]
+        dirname: bool,
     },
+
 
     /// Query structural values using path expressions.
     /// Supports dot notation for nested access and [*] for array iteration.
@@ -2417,7 +2472,17 @@ impl Condition {
             Condition::Raw { .. } => "raw",
             Condition::Section { .. } => "section",
             Condition::Encoded { .. } => "encoded",
-            Condition::Basename { .. } => "basename",
+            Condition::Path {
+                basename, dirname, ..
+            } => {
+                if *basename {
+                    "basename"
+                } else if *dirname {
+                    "dirname"
+                } else {
+                    "path"
+                }
+            }
             Condition::Kv { .. } => "value",
         }
     }
@@ -3169,11 +3234,11 @@ impl Condition {
                     |e| anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e),
                 )?;
             }
-            Condition::Basename {
+            Condition::Path {
                 regex: Some(regex_pattern),
                 ..
             } => {
-                compile_regex_logged("basename.regex", regex_pattern, regex_pattern, false)
+                compile_regex_logged("path.regex", regex_pattern, regex_pattern, false)
                     .map_err(|e| {
                         anyhow::anyhow!(
                             "Failed to compile basename regex '{}': {}",
@@ -3915,7 +3980,6 @@ exact: curl
             section: Some("ast-number".to_string()),
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
         let platforms = vec![Platform::All];
         let ctx = crate::composite_rules::EvaluationContext::new(
@@ -4022,12 +4086,14 @@ exact: curl
 
     #[test]
     fn greedy_pattern_lint_skips_basename_regex() {
-        let cond = Condition::Basename {
+        let cond = Condition::Path {
             exact: None,
             substr: None,
             regex: Some(r"^ssh(d|-.+)?$".to_string()),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         assert!(cond.check_greedy_patterns().is_none());
     }

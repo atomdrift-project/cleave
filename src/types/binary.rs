@@ -7,121 +7,39 @@ use super::ml_features::{
     RegisterUsage,
 };
 
-/// The body of an extracted string — either a borrowed range into the file's
-/// raw bytes (used during analysis to avoid duplicating `file_data`), or an
-/// owned `String` (used for decoded/reassembled strings and for any survivor
-/// materialized at the end of analysis).
+/// The body of an extracted string — an owned UTF-8 `String`. (Truncated to
+/// `MAX_EVIDENCE_VALUE_SIZE` on serialization; see [`serialize_truncated_string`].)
 ///
-/// **Invariant:** by the time analysis returns, every `Slice` variant has been
-/// converted to `Owned` (via `materialize`). Post-analysis consumers
-/// (serialization, ML, diff, cache) only ever see `Owned`. Calling Deref /
-/// AsRef / Hash / PartialEq / Display / Serialize on a `Slice` variant panics —
-/// that's an invariant violation, not an expected runtime path.
-#[derive(Debug, Clone)]
-pub enum StringValue {
-    /// A `[start, start+len)` byte range into `file_data`. Resolved on demand
-    /// via `as_str(Some(file_data))` while `file_data` is live.
-    Slice {
-        /// Start byte offset into `file_data`.
-        start: u32,
-        /// Length in bytes (the string is the raw byte slice; we require
-        /// callers to only produce Slice when the slice is valid UTF-8).
-        len: u32,
-    },
-    /// An owned UTF-8 string — decoded/reassembled, or materialized at finalize.
-    Owned(String),
-}
+/// A newtype rather than a bare `String` so it can carry the truncating
+/// `Serialize` and the `str`-like trait impls (`Deref`, `AsRef`, `PartialEq`,
+/// `Hash`, …) the rest of the code relies on.
+#[derive(Debug, Clone, Default)]
+pub struct StringValue(String);
 
 impl StringValue {
-    /// Length in bytes — works for both variants without `file_data`.
+    /// Length in bytes.
     #[must_use]
     pub fn len(&self) -> usize {
-        match self {
-            StringValue::Slice { len, .. } => *len as usize,
-            StringValue::Owned(s) => s.len(),
-        }
+        self.0.len()
     }
 
     /// True when the value has zero bytes.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.len() == 0
+        self.0.is_empty()
     }
 
-    /// Get the `Owned` `&str`. Panics for `Slice` variants — post-finalize
-    /// every value is `Owned`, so this is safe outside the analysis frame.
-    /// Inside the analysis frame use [`StringValue::resolve`] with the file's
-    /// bytes.
+    /// Borrow as `&str`.
     #[must_use]
-    // Intentional invariant guard: a `Slice` reaching `as_str()` (which has no
-    // `file_data`) is a programming error — fail loud rather than return wrong
-    // data. Post-finalize all variants are `Owned`, so this never fires there.
-    #[allow(clippy::panic)]
     pub fn as_str(&self) -> &str {
-        match self {
-            StringValue::Owned(s) => s.as_str(),
-            StringValue::Slice { .. } => panic!(
-                "StringValue::Slice::as_str() called without file_data — use .resolve(Some(file_data))"
-            ),
-        }
-    }
-
-    /// Resolve to `&str` using `file_data` for `Slice` variants. Pass `None`
-    /// outside the analysis frame (all variants are `Owned` post-finalize).
-    /// Panics for `Slice` if `file_data` is missing — that means a consumer
-    /// saw a Slice that should have been materialized.
-    #[must_use]
-    // Intentional: a `Slice` resolved without `file_data` means a consumer kept
-    // a Slice past materialization — a bug we surface loudly, not silently.
-    #[allow(clippy::expect_used)]
-    pub fn resolve<'a>(&'a self, file_data: Option<&'a [u8]>) -> &'a str {
-        match self {
-            StringValue::Slice { start, len } => {
-                let data = file_data.expect(
-                    "StringValue::Slice accessed without file_data — analysis frame must call materialize before file_data drops",
-                );
-                let s = *start as usize;
-                let e = s + *len as usize;
-                // SAFETY: producers (convert_stng_strings_owned) only create
-                // Slice when the byte range is valid UTF-8; fall back to "" if
-                // that invariant is violated rather than panicking on every
-                // matcher iteration.
-                std::str::from_utf8(&data[s..e]).unwrap_or("")
-            }
-            StringValue::Owned(s) => s.as_str(),
-        }
-    }
-
-    /// Materialize a `Slice` to `Owned` using `file_data`. No-op for `Owned`.
-    pub fn materialize(&mut self, file_data: &[u8]) {
-        if let StringValue::Slice { start, len } = *self {
-            let s = start as usize;
-            let e = s + len as usize;
-            let bytes = &file_data[s..e];
-            let owned = std::str::from_utf8(bytes)
-                .map(str::to_owned)
-                .unwrap_or_else(|_| String::from_utf8_lossy(bytes).into_owned());
-            *self = StringValue::Owned(owned);
-        }
+        self.0.as_str()
     }
 }
 
-// Deref to `str` so the bulk of existing `.value.foo()` call sites keep
-// working without an explicit accessor. PANICS for `Slice` — analysis-phase
-// consumers that see Slice variants must use `.value.as_str(Some(file_data))`
-// instead. Post-analysis, all variants are Owned (invariant), so Deref is safe.
 impl std::ops::Deref for StringValue {
     type Target = str;
-    // Intentional invariant guard (see the impl doc above): Deref on a `Slice`
-    // is only reachable as a bug; post-analysis all variants are `Owned`.
-    #[allow(clippy::panic)]
     fn deref(&self) -> &str {
-        match self {
-            StringValue::Owned(s) => s.as_str(),
-            StringValue::Slice { .. } => panic!(
-                "StringValue::Slice cannot Deref without file_data — use .as_str(Some(file_data))"
-            ),
-        }
+        self.0.as_str()
     }
 }
 
@@ -145,12 +63,7 @@ impl std::fmt::Display for StringValue {
 
 impl PartialEq for StringValue {
     fn eq(&self, other: &Self) -> bool {
-        // Owned/Owned is the common case post-materialize; any path comparing
-        // Slice variants must Deref first (which panics without file_data — but
-        // matchers that compare values do so through accessors, not ==).
-        let lhs: &str = self;
-        let rhs: &str = other;
-        lhs == rhs
+        self.0 == other.0
     }
 }
 
@@ -184,38 +97,27 @@ impl std::hash::Hash for StringValue {
     }
 }
 
-impl Default for StringValue {
-    fn default() -> Self {
-        StringValue::Owned(String::new())
-    }
-}
-
 impl From<String> for StringValue {
     fn from(s: String) -> Self {
-        StringValue::Owned(s)
+        StringValue(s)
     }
 }
 
 impl From<&str> for StringValue {
     fn from(s: &str) -> Self {
-        StringValue::Owned(s.to_string())
+        StringValue(s.to_string())
     }
 }
 
 impl Serialize for StringValue {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
-        match self {
-            StringValue::Owned(s) => serialize_truncated_string(s.as_str(), ser),
-            StringValue::Slice { .. } => Err(serde::ser::Error::custom(
-                "StringValue::Slice cannot serialize — materialize first",
-            )),
-        }
+        serialize_truncated_string(self.0.as_str(), ser)
     }
 }
 
 impl<'de> Deserialize<'de> for StringValue {
     fn deserialize<D: Deserializer<'de>>(de: D) -> Result<Self, D::Error> {
-        Ok(StringValue::Owned(String::deserialize(de)?))
+        Ok(StringValue(String::deserialize(de)?))
     }
 }
 
@@ -395,11 +297,9 @@ pub struct DecodedString {
 }
 
 /// A string literal extracted from a binary or source file
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StringInfo {
-    /// The string value (truncated to 4KB on serialization). During analysis
-    /// this may be a borrowed range into `file_data`; by the time analysis
-    /// returns, every value is materialized to `Owned`.
+    /// The string value (truncated to 4KB on serialization).
     pub value: StringValue,
     /// File offset where string was found (serialized as hex, e.g., "0x1234")
     #[serde(
@@ -424,31 +324,6 @@ pub struct StringInfo {
     /// Fragments if this is a stack-constructed string
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub fragments: Option<Vec<String>>,
-    /// Set by matchers when this string contributed to *any* trait Evidence.
-    /// Read at end-of-analyze to drop unmatched strings (survivor-only
-    /// materialization). Interior-mutable via `&StringInfo` so matchers can
-    /// flag without `&mut` access; `Relaxed` ordering is sufficient because
-    /// we only care about "any thread ever set it true," not ordering with
-    /// other operations. Skipped from serialization.
-    #[serde(skip, default)]
-    pub matched: std::sync::atomic::AtomicBool,
-}
-
-impl Clone for StringInfo {
-    fn clone(&self) -> Self {
-        Self {
-            value: self.value.clone(),
-            offset: self.offset,
-            encoding: self.encoding.clone(),
-            string_type: self.string_type,
-            section: self.section.clone(),
-            encoding_chain: self.encoding_chain.clone(),
-            fragments: self.fragments.clone(),
-            matched: std::sync::atomic::AtomicBool::new(
-                self.matched.load(std::sync::atomic::Ordering::Relaxed),
-            ),
-        }
-    }
 }
 
 // Re-export stng's StringKind as StringType for compatibility
@@ -939,7 +814,6 @@ mod tests {
             section: Some(".rodata".to_string()),
             encoding_chain: vec![],
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(info.value, "http://example.com");
         assert_eq!(info.offset, Some(0x1000));
@@ -956,7 +830,6 @@ mod tests {
             section: None,
             encoding_chain: vec!["base64".to_string(), "zlib".to_string()],
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(info.encoding_chain.len(), 2);
         assert_eq!(info.encoding_chain[0], "base64");
@@ -972,7 +845,6 @@ mod tests {
             section: Some(".text".to_string()),
             encoding_chain: vec![],
             fragments: Some(vec!["s".to_string(), "t".to_string(), "a".to_string()]),
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
         assert_eq!(info.string_type, Some(StringType::StackString));
         assert!(info.fragments.is_some());

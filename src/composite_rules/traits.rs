@@ -8,9 +8,9 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    ContentLocationParams, SectionParams, eval_ast, eval_basename, eval_encoded, eval_hex,
-    eval_metrics, eval_raw, eval_section, eval_string_literal, eval_symbol, eval_syscall,
-    eval_text, eval_trait, eval_yara_inline,
+    ContentLocationParams, SectionParams, eval_ast, eval_encoded, eval_hex,
+    eval_metrics, eval_path, eval_raw, eval_section, eval_string_literal, eval_symbol,
+    eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
 use super::types::{
     Arch, FileType, Platform, default_architectures, default_file_types, default_platforms,
@@ -19,28 +19,9 @@ use crate::types::{
     Criticality, Evidence, Finding, FindingKind, MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence,
 };
 use anyhow::Context;
-use dashmap::DashMap;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
-
-/// Global concurrent statistics for condition evaluation timing
-static CONDITION_STATS: OnceLock<DashMap<&'static str, (AtomicU64, AtomicU64)>> = OnceLock::new();
-
-fn stats_map() -> &'static DashMap<&'static str, (AtomicU64, AtomicU64)> {
-    CONDITION_STATS.get_or_init(DashMap::new)
-}
-
-/// Reset condition statistics.
-/// Can be called periodically in long-running processes to prevent stats accumulation.
-/// Note: CONDITION_STATS is keyed by static condition type names (~20 entries max),
-/// so memory growth is bounded, but clearing is still useful for accurate per-batch stats.
-#[allow(dead_code)] // Called via public API wrapper in mod.rs
-pub(crate) fn clear_condition_stats() {
-    stats_map().clear();
-}
 
 /// Hard deadline for a single rule evaluation (30 seconds).
 /// When exceeded, evaluation is interrupted and a timeout finding is emitted.
@@ -70,34 +51,12 @@ fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> us
     1
 }
 
-/// Macro to time condition evaluation
+/// Dispatch a condition's evaluation. The first argument is a static label kept
+/// at call sites for readability; it carries no runtime cost.
 macro_rules! timed_eval {
     ($name:expr, $eval:expr) => {{
-        let _start = std::time::Instant::now();
-        let result = $eval;
-        let _elapsed = _start.elapsed();
-
-        // Prefer the read-lock `get` path: after the first insert per condition type
-        // (~20 keys across the whole run) every eval is a hit, and `entry()` would
-        // otherwise take a shard write lock on every call. The AtomicU64 counters
-        // are internally synchronized so a shared ref is all we need.
-        let stats = stats_map();
-        if let Some(entry) = stats.get(&$name) {
-            entry.0.fetch_add(1, Ordering::Relaxed);
-            entry
-                .1
-                .fetch_add(_elapsed.as_nanos() as u64, Ordering::Relaxed);
-        } else {
-            let entry = stats
-                .entry($name)
-                .or_insert_with(|| (AtomicU64::new(0), AtomicU64::new(0)));
-            entry.0.fetch_add(1, Ordering::Relaxed);
-            entry
-                .1
-                .fetch_add(_elapsed.as_nanos() as u64, Ordering::Relaxed);
-        }
-
-        result
+        let _ = $name;
+        $eval
     }};
 }
 
@@ -1622,20 +1581,24 @@ impl TraitDefinition {
                     )
                 )
             }
-            Condition::Basename {
+            Condition::Path {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 is_check,
+                basename,
+                dirname,
             } => timed_eval!(
-                "basename",
-                eval_basename(
+                "path",
+                eval_path(
                     exact.as_ref(),
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
                     *is_check,
+                    *basename,
+                    *dirname,
                     ctx,
                 )
             ),
@@ -2981,20 +2944,24 @@ impl CompositeTrait {
                     )
                 )
             }
-            Condition::Basename {
+            Condition::Path {
                 exact,
                 substr,
                 regex,
                 case_insensitive,
                 is_check,
+                basename,
+                dirname,
             } => timed_eval!(
-                "basename",
-                eval_basename(
+                "path",
+                eval_path(
                     exact.as_ref(),
                     substr.as_ref(),
                     regex.as_ref(),
                     *case_insensitive,
                     *is_check,
+                    *basename,
+                    *dirname,
                     ctx,
                 )
             ),

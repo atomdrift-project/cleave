@@ -91,7 +91,6 @@ pub(super) fn build_all_strings(
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
     for exp in &report.exports {
@@ -107,7 +106,6 @@ pub(super) fn build_all_strings(
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
     all_strings

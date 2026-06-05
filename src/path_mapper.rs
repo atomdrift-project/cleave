@@ -484,7 +484,6 @@ mod tests {
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
-                matched: std::sync::atomic::AtomicBool::new(false),
             },
             StringInfo {
                 value: ("/bin/sh".to_string()).into(),
@@ -494,7 +493,6 @@ mod tests {
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
-                matched: std::sync::atomic::AtomicBool::new(false),
             },
             StringInfo {
                 value: ("not a path".to_string()).into(),
@@ -504,7 +502,6 @@ mod tests {
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
-                matched: std::sync::atomic::AtomicBool::new(false),
             },
         ];
 

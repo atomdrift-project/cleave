@@ -240,12 +240,14 @@ pub(crate) fn apply_trait_defaults(
     // This uses a basename regex that matches everything
     let mut condition =
         raw.condition
-            .unwrap_or_else(|| crate::composite_rules::Condition::Basename {
+            .unwrap_or_else(|| crate::composite_rules::Condition::Path {
                 exact: None,
                 substr: None,
                 regex: Some(".".to_string()),
                 case_insensitive: false,
                 is_check: None,
+                basename: false,
+                dirname: false,
             });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance
@@ -370,7 +372,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     | "documents"
                     | "images"
                     | "media"
-                    | "data"
                     | "ipa"
                     | "archives"
             );
@@ -446,14 +447,6 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                     RuleFileType::Ooxml,
                 ],
                 "images" | "media" => vec![RuleFileType::Jpeg, RuleFileType::Png],
-                // `data` is generic, non-container content only. IPA is a
-                // ZIP-based app bundle (an archive — see FileType::is_archive),
-                // not generic data; it lives in `archives`/`ipa`. Keeping it
-                // here made every `for: [data]` trait spuriously satisfy the
-                // archive-family match (FileType::is_archive on a group member),
-                // so whole-file entropy/blob traits fired on any archive
-                // container (e.g. a .crx).
-                "data" => vec![RuleFileType::Text, RuleFileType::Data, RuleFileType::Json],
                 "ipa" => vec![RuleFileType::Ipa],
                 "archives" => vec![
                     RuleFileType::Archive,
@@ -494,7 +487,11 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "makefile" | "make" | "mk" | "mak" => vec![RuleFileType::Makefile],
                 "dockerfile" | "docker" | "containerfile" => vec![RuleFileType::Dockerfile],
                 "text" | "txt" | "b64" | "base64" => vec![RuleFileType::Text],
-                "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
+                // `data` maps to the concrete Data type (opaque .dat/.bin/.payload
+                // content) — NOT a group. An alias that collides with a real file
+                // type must resolve to that type; authors who want loose text-ish
+                // content write `[text, data, json]` explicitly.
+                "data" | "dat" | "bin" | "payload" | "raw" => vec![RuleFileType::Data],
                 "json" => vec![RuleFileType::Json],
                 "gyp" | "gypi" | "binding.gyp" => vec![RuleFileType::Gyp],
                 // Compiled languages (fullname + extension)
@@ -654,9 +651,13 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     }
 
     let has_windows = platforms.contains(&Platform::Windows);
-    // Unix-like systems: Linux and generic Unix (BSD, AIX, Solaris, etc.).
-    // Note: `unix` is the superset — it conceptually includes Linux and macOS.
-    // Android is treated separately since it is a mobile OS, not a traditional Unix flavor.
+    // The `unix` umbrella platform: generic Unix (Linux, BSD, AIX, Solaris, …).
+    // macOS is itself a Unix, so the `unix` umbrella conceptually includes it —
+    // but `has_unix` deliberately does NOT flip on for a *macos-only* trait,
+    // because that proxy also gates Linux/BSD-only formats like ELF (which do
+    // not run on macOS). Apple-format arms therefore test `has_unix || has_macos
+    // || has_ios` so a `[unix]` trait still reaches macOS-native formats.
+    // Android is a mobile OS, not a traditional Unix flavor, so it is separate.
     let has_unix = platforms
         .iter()
         .any(|p| matches!(p, Platform::Linux | Platform::Unix));
@@ -664,9 +665,9 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     let has_linux = platforms.contains(&Platform::Linux);
     let has_android = platforms.contains(&Platform::Android);
     let has_macos = platforms.contains(&Platform::MacOS);
-    let has_apple = platforms
-        .iter()
-        .any(|p| matches!(p, Platform::MacOS | Platform::Ios));
+    let has_ios = platforms.contains(&Platform::Ios);
+    // macOS is a Unix, so the unix umbrella reaches macOS-native formats too.
+    let has_darwin = has_unix || has_macos || has_ios;
     // True when the platform set includes at least one desktop/server OS.
     // Unix covers Linux and macOS for scripting language purposes.
     let has_desktop = has_windows || has_unix || has_macos;
@@ -684,12 +685,13 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Nupkg => has_windows,
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
-                // Mach-O runs on macOS/iOS (unix is the superset that includes macOS);
-                // Shell runs on all unix-like systems (unix covers Linux and macOS).
-                RuleFileType::Macho | RuleFileType::Shell => has_apple || has_unix,
-                // AppleScript/Swift/ObjC are macOS/iOS-specific languages, not generic unix
+                // Mach-O runs on macOS/iOS; Shell runs on all unix-like systems.
+                // macOS is a Unix, so the `unix` umbrella reaches both.
+                RuleFileType::Macho | RuleFileType::Shell => has_darwin,
+                // AppleScript/Swift/ObjC are macOS/iOS-native languages; the `unix`
+                // umbrella includes macOS, so a unix-targeting trait reaches them.
                 RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
-                    has_apple
+                    has_darwin
                 }
                 // Perl is a unix/linux scripting language, not a macOS-native concern
                 RuleFileType::Perl => has_unix,
@@ -701,8 +703,8 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => has_desktop,
-                // Apple-specific formats
-                RuleFileType::Plist | RuleFileType::Ipa => has_apple,
+                // macOS/iOS-native formats — the `unix` umbrella includes macOS.
+                RuleFileType::Plist | RuleFileType::Ipa => has_darwin,
                 // systemd/deb/rpm are Linux-specific, not generic Unix
                 RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
@@ -726,14 +728,15 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf | RuleFileType::Apk => {
                     (has_unix || has_android, "linux, unix, or android")
                 }
-                RuleFileType::Macho => (has_apple || has_unix, "macos, ios, or unix"),
-                RuleFileType::Shell => (has_unix || has_apple, "linux, unix, macos, or ios"),
-                // Apple-specific languages and formats
+                RuleFileType::Macho => (has_darwin, "macos, ios, or unix"),
+                RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
+                // macOS/iOS-native languages and formats — the `unix` umbrella
+                // includes macOS, so a unix-targeting trait satisfies them.
                 RuleFileType::AppleScript
                 | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist
-                | RuleFileType::Ipa => (has_apple, "macos or ios"),
+                | RuleFileType::Ipa => (has_darwin, "macos, ios, or unix"),
                 RuleFileType::Perl => (has_unix, "linux or unix"),
                 RuleFileType::Python
                 | RuleFileType::Pyc
@@ -1065,7 +1068,7 @@ fn fix_literal_regex_patterns(condition: &mut crate::composite_rules::Condition)
                 *regex_opt = None;
             }
         }
-        Condition::Basename {
+        Condition::Path {
             regex: regex_opt,
             substr,
             ..
@@ -1171,7 +1174,7 @@ fn check_regex_length(
         | Condition::TreeSitter { regex, .. }
         | Condition::Section { regex, .. }
         | Condition::Encoded { regex, .. }
-        | Condition::Basename { regex, .. }
+        | Condition::Path { regex, .. }
         | Condition::Kv { regex, .. } => regex.as_deref(),
         _ => None,
     };
@@ -1189,7 +1192,12 @@ fn check_regex_length(
             MAX_REGEX_OR_SYMBOLS
         };
         let or_symbol_count = count_regex_or_symbols(pattern);
+        // `path` matchers idiomatically anchor with `(^|[\\/])…([\\/]|$)` (two
+        // pipes before any content) and alternate over extensions/dir names;
+        // "decompose into multiple traits" doesn't fit a path-structure matcher,
+        // so they are exempt from the alternation-chain check.
         if or_symbol_count > max_or_symbols
+            && !matches!(condition, Condition::Path { .. })
             && !crate::validation_controls::is_validator_disabled("simple-alternation-chain")
         {
             warnings.push(format!(
@@ -2161,12 +2169,14 @@ mod tests {
     #[test]
     fn test_regex_length_ok() {
         let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES);
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Path {
             exact: None,
             substr: None,
             regex: Some(pattern),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2176,12 +2186,14 @@ mod tests {
     #[test]
     fn test_regex_length_over_limit_warns() {
         let pattern = "a".repeat(MAX_REGEX_LENGTH_BYTES + 1);
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Path {
             exact: None,
             substr: None,
             regex: Some(pattern),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2200,12 +2212,14 @@ mod tests {
 
     #[test]
     fn test_regex_length_no_regex_no_warning() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Path {
             exact: None,
             substr: Some("some substring".to_string()),
             regex: None,
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2224,12 +2238,23 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_warns() {
-        let condition = crate::composite_rules::Condition::Basename {
+        // `path` matchers are exempt from the alternation-chain check (their
+        // `(^|[\\/])…` anchoring spends pipes structurally), so exercise the
+        // limit with a content matcher that is subject to it.
+        let condition = crate::composite_rules::Condition::Text {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e".to_string()),
+            word: None,
             case_insensitive: false,
             is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2238,12 +2263,20 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_allows_escaped_and_charclass_pipes() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Text {
             exact: None,
             substr: None,
             regex: Some(r"a\|b|[|]|c|d".to_string()),
+            word: None,
             case_insensitive: false,
             is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2252,12 +2285,20 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_relaxed_for_data_text_traits() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Text {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g".to_string()),
+            word: None,
             case_insensitive: false,
             is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
         };
         let mut warnings = Vec::new();
         super::check_regex_length(
@@ -2273,12 +2314,20 @@ mod tests {
 
     #[test]
     fn test_regex_or_symbol_limit_still_caps_data_text_traits() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Text {
             exact: None,
             substr: None,
             regex: Some("a|b|c|d|e|f|g|h".to_string()),
+            word: None,
             case_insensitive: false,
             is_check: None,
+            not: None,
+            platforms: None,
+            section: None,
+            offset: None,
+            offset_range: None,
+            section_offset: None,
+            section_offset_range: None,
         };
         let mut warnings = Vec::new();
         super::check_regex_length(
@@ -2294,12 +2343,14 @@ mod tests {
 
     #[test]
     fn test_simple_alphanumeric_alternation_warns() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Path {
             exact: None,
             substr: None,
             regex: Some("word1|word2|word3".to_string()),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);
@@ -2312,12 +2363,14 @@ mod tests {
 
     #[test]
     fn test_non_simple_alternation_does_not_warn() {
-        let condition = crate::composite_rules::Condition::Basename {
+        let condition = crate::composite_rules::Condition::Path {
             exact: None,
             substr: None,
             regex: Some(r"word1|word-2|\d+".to_string()),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         };
         let mut warnings = Vec::new();
         super::check_regex_length("test-trait", &condition, None, &mut warnings);

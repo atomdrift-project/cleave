@@ -484,7 +484,6 @@ impl UnifiedSourceAnalyzer {
                         Vec::new()
                     },
                     fragments: None,
-                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
         }
@@ -747,7 +746,6 @@ impl UnifiedSourceAnalyzer {
                 section: None,
                 encoding_chain: Vec::new(),
                 fragments: None,
-                matched: std::sync::atomic::AtomicBool::new(false),
             };
             let mut all_strings = report.strings.clone();
             all_strings.push(content_as_string);
@@ -938,7 +936,6 @@ impl UnifiedSourceAnalyzer {
                             section: Some("ast".to_string()),
                             encoding_chain: Vec::new(),
                             fragments: None,
-                            matched: std::sync::atomic::AtomicBool::new(false),
                         });
                     }
                 }
@@ -969,7 +966,6 @@ impl UnifiedSourceAnalyzer {
                         section: Some("ast-number".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
-                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             } else if kind.contains("comment") {
@@ -991,7 +987,6 @@ impl UnifiedSourceAnalyzer {
                             section: Some("comment".to_string()),
                             encoding_chain: Vec::new(),
                             fragments: None,
-                            matched: std::sync::atomic::AtomicBool::new(false),
                         });
                     }
                 }

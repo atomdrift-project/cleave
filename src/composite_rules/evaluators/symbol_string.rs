@@ -137,8 +137,9 @@ pub(crate) fn eval_symbol<'a>(
     // Resolve the symbol regex once. Symbol regex is case-sensitive (no `(?i)`);
     // it's compiled lazily + shared via `cached_regex` rather than stored per
     // condition.
-    let effective_regex: Option<&regex::Regex> =
+    let effective_regex_owned: Option<std::sync::Arc<regex::Regex>> =
         pattern.and_then(|p| crate::composite_rules::condition::cached_regex(p.as_str()));
+    let effective_regex: Option<&regex::Regex> = effective_regex_owned.as_deref();
 
     // Decide which symbol categories to walk.  `None` preserves the historical
     // behaviour of matching across all of imports/exports/functions.
@@ -427,7 +428,7 @@ enum StringMatcher<'p> {
         needle: &'p str,
         ac: &'static aho_corasick::AhoCorasick,
     },
-    Regex(&'static regex::Regex),
+    Regex(std::sync::Arc<regex::Regex>),
     /// Pattern couldn't be resolved (e.g. AC/regex build failed) — never matches.
     Never,
 }
@@ -669,7 +670,6 @@ pub(crate) fn eval_text<'a, 'b>(
                     let excluded_by_is = !validate_match(original_value, params.is_check);
 
                     if !excluded_by_not && !excluded_by_is {
-                        s.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                         evidence.push(Evidence {
                             method: "text".to_string(),
                             source: "string_extractor".to_string(),
@@ -689,7 +689,6 @@ pub(crate) fn eval_text<'a, 'b>(
                 let excluded_by_is = !validate_match(exact_str, params.is_check);
 
                 if !excluded_by_not && !excluded_by_is {
-                    s.matched.store(true, std::sync::atomic::Ordering::Relaxed);
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
@@ -731,9 +730,6 @@ pub(crate) fn eval_text<'a, 'b>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
-                string_info
-                    .matched
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -791,9 +787,6 @@ pub(crate) fn eval_string_literal<'a, 'b>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
-                string_info
-                    .matched
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     evidence.push(Evidence {
@@ -1144,9 +1137,6 @@ pub(crate) fn eval_numeric_literal<'a>(
             continue;
         }
         match_count += 1;
-        string_info
-            .matched
-            .store(true, std::sync::atomic::Ordering::Relaxed);
         if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
             evidence.push(Evidence {
                 method: "literal".to_string(),
@@ -1997,9 +1987,6 @@ pub(crate) fn eval_encoded<'a>(
 
             if !excluded_by_not && !excluded_by_is {
                 match_count += 1;
-                string_info
-                    .matched
-                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                     let value_preview = if string_info.value.len() > 100 {
                         format!(

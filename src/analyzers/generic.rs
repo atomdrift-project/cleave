@@ -227,7 +227,6 @@ impl GenericAnalyzer {
                         section: es.section.clone(),
                         encoding_chain,
                         fragments,
-                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
                 tracing::debug!(
@@ -359,7 +358,6 @@ impl GenericAnalyzer {
                         section: Some("ast".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
-                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }
@@ -402,7 +400,6 @@ impl GenericAnalyzer {
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
-                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }
@@ -420,7 +417,6 @@ impl GenericAnalyzer {
                         section: Some("regex".to_string()),
                         encoding_chain: Vec::new(),
                         fragments: None,
-                        matched: std::sync::atomic::AtomicBool::new(false),
                     });
                 }
             }

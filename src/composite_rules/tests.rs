@@ -47,7 +47,6 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     (report, vec![])
@@ -361,7 +360,6 @@ fn test_not_directive_shorthand() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("evil.com".to_string()).into(),
@@ -371,7 +369,6 @@ fn test_not_directive_shorthand() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -439,7 +436,6 @@ fn test_not_directive_exact() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("bad.com".to_string()).into(),
@@ -449,7 +445,6 @@ fn test_not_directive_exact() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -522,7 +517,6 @@ fn test_not_directive_regex() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("8.8.8.8".to_string()).into(),
@@ -532,7 +526,6 @@ fn test_not_directive_regex() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1016,7 +1009,6 @@ fn test_all_three_directives_combined() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("evil.com".to_string()).into(),
@@ -1026,7 +1018,6 @@ fn test_all_three_directives_combined() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Add finding for downgrade
@@ -1122,7 +1113,6 @@ fn test_string_exact_match_requires_full_equality() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("hello world".to_string()).into(),
@@ -1132,7 +1122,6 @@ fn test_string_exact_match_requires_full_equality() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1201,7 +1190,6 @@ fn test_string_substr_matches_substrings() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("hello world".to_string()).into(),
@@ -1211,7 +1199,6 @@ fn test_string_substr_matches_substrings() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1392,7 +1379,6 @@ fn test_string_case_insensitive_exact() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1456,7 +1442,6 @@ fn test_string_word_boundary_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("category".to_string()).into(),
@@ -1466,7 +1451,6 @@ fn test_string_word_boundary_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1534,7 +1518,6 @@ fn test_string_regex_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("10.0.0.1".to_string()).into(),
@@ -1544,7 +1527,6 @@ fn test_string_regex_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("not an ip".to_string()).into(),
@@ -1554,7 +1536,6 @@ fn test_string_regex_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -1811,12 +1792,14 @@ fn test_basename_in_trait_definition() {
         arch: vec![Arch::All],
         r#for: vec![FileType::Python],
         for_from_groups: false,
-        r#if: Condition::Basename {
+        r#if: Condition::Path {
             exact: Some("__init__.py".to_string()),
             substr: None,
             regex: None,
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         },
         size_max: None,
         count_min: None,
@@ -1867,12 +1850,14 @@ fn test_basename_in_composite_rule() {
         for_from_groups: false,
         size_min: None,
         size_max: None,
-        all: Some(vec![Condition::Basename {
+        all: Some(vec![Condition::Path {
             exact: None,
             substr: None,
             regex: Some("^setup\\.py$".to_string()),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         }]),
         any: None,
         unless: None,
@@ -2057,12 +2042,14 @@ fn test_composite_unless_with_basename() {
         }]),
         all: None,
         // Skip if this looks like libX11 itself
-        unless: Some(vec![Condition::Basename {
+        unless: Some(vec![Condition::Path {
             exact: None,
             substr: None,
             regex: Some(r"^libX11(\\.so|\\.dylib).*".to_string()),
             case_insensitive: false,
             is_check: None,
+            basename: true,
+            dirname: false,
         }]),
         not: None,
         downgrade: None,
@@ -2096,7 +2083,6 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let ctx = EvaluationContext::new(&report, &data, FileType::Elf, &[Platform::All], None, None);
@@ -2130,12 +2116,14 @@ fn test_composite_unless_multiple_conditions_any_matches() {
         any: None,
         // Multiple unless conditions - any match should skip the rule
         unless: Some(vec![
-            Condition::Basename {
+            Condition::Path {
                 exact: Some("system-library.so".to_string()),
                 substr: None,
                 regex: None,
                 case_insensitive: false,
                 is_check: None,
+                basename: true,
+                dirname: false,
             },
             Condition::Text {
                 exact: None,
@@ -3708,7 +3696,6 @@ fn test_downgrade_combined_all_and_none_blocked_by_none() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Add finding for none: condition — this should BLOCK the downgrade
@@ -3813,7 +3800,6 @@ fn test_downgrade_combined_all_and_none_pass() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // No findings that would match the none: condition

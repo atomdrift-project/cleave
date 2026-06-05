@@ -310,7 +310,6 @@ fn test_string_info_creation() {
         section: Some(".rodata".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     assert_eq!(string.value, "http://example.com");

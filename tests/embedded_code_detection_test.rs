@@ -31,7 +31,6 @@ fn make_string_info(value: &str) -> StringInfo {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     }
 }
 
@@ -144,7 +143,6 @@ fn test_analyze_hex_encoded_javascript() {
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();
@@ -190,7 +188,6 @@ fn test_analyze_plain_embedded_python() {
         section: Some("test".to_string()),
         encoding_chain: vec![], // No encoding - plain embedded
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();
@@ -232,7 +229,6 @@ fn test_max_depth_limit() {
         section: Some("test".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     };
 
     let capability_mapper = make_capability_mapper();

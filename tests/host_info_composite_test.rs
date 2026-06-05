@@ -27,7 +27,6 @@ fn test_host_info_composite_fires_with_4_atomics() {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
             value: ("GateWay: 192.168.1.254".to_string()).into(),
@@ -37,7 +36,6 @@ fn test_host_info_composite_fires_with_4_atomics() {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
             value: ("OSInfo: Linux".to_string()).into(),
@@ -47,7 +45,6 @@ fn test_host_info_composite_fires_with_4_atomics() {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         },
         cleave::types::StringInfo {
             value: ("Userame: root".to_string()).into(),
@@ -57,7 +54,6 @@ fn test_host_info_composite_fires_with_4_atomics() {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         },
     ];
 

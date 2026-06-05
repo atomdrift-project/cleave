@@ -852,7 +852,6 @@ mod tests {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         }
     }
 

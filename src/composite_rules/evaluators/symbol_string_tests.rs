@@ -493,7 +493,6 @@ fn test_eval_string_exact_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -530,7 +529,6 @@ fn test_eval_string_substr_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -566,7 +564,6 @@ fn test_eval_string_regex_match() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -603,7 +600,6 @@ fn test_eval_string_case_insensitive() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -639,7 +635,6 @@ fn test_eval_string_not_exception() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -704,7 +699,6 @@ fn test_eval_string_literal_matches_only_ast_strings() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("literal_value".to_string()).into(),
@@ -714,7 +708,6 @@ fn test_eval_string_literal_matches_only_ast_strings() {
         section: Some("ast".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = EvaluationContext::test_only_new(&report, &data, FileType::Python);
@@ -1090,7 +1083,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".data".to_string()),
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report.strings.push(StringInfo {
@@ -1101,7 +1093,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".data".to_string()),
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Hex-encoded strings
@@ -1113,7 +1104,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".text".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report.strings.push(StringInfo {
@@ -1124,7 +1114,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".text".to_string()),
         encoding_chain: vec!["hex".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // XOR-encoded strings
@@ -1136,7 +1125,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".data".to_string()),
         encoding_chain: vec!["xor".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // URL-encoded strings
@@ -1148,7 +1136,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".data".to_string()),
         encoding_chain: vec!["url".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Plain string (no encoding)
@@ -1160,7 +1147,6 @@ fn create_test_report_with_multiple_encodings() -> AnalysisReport {
         section: Some(".data".to_string()),
         encoding_chain: vec![],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     report
@@ -1538,7 +1524,6 @@ fn test_eval_string_match_count_exceeds_evidence_cap() {
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1586,7 +1571,6 @@ fn test_eval_encoded_not_filter() {
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(StringInfo {
         value: ("http://apple.com/safe".to_string()).into(),
@@ -1596,7 +1580,6 @@ fn test_eval_encoded_not_filter() {
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![];
@@ -1640,7 +1623,6 @@ fn test_eval_encoded_external_ip_filter() {
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // String with RFC1918 internal IP
     report.strings.push(StringInfo {
@@ -1651,7 +1633,6 @@ fn test_eval_encoded_external_ip_filter() {
         section: None,
         encoding_chain: vec!["base64".to_string()],
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![];
@@ -1766,7 +1747,6 @@ fn test_eval_string_external_ip_filters_private() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // Add string containing an external IP — should be kept
     report.strings.push(StringInfo {
@@ -1777,7 +1757,6 @@ fn test_eval_string_external_ip_filters_private() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -1892,7 +1871,6 @@ fn test_eval_string_word_boundary() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // "cat" inside another word — should NOT match word boundary
     report.strings.push(StringInfo {
@@ -1903,7 +1881,6 @@ fn test_eval_string_word_boundary() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);
@@ -2091,7 +2068,6 @@ fn test_eval_string_section_offset_with_section_map() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // String at absolute offset 0x2050 (= .data + 0x50)
     report.strings.push(StringInfo {
@@ -2102,7 +2078,6 @@ fn test_eval_string_section_offset_with_section_map() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let data = vec![0u8; 0x3000];
@@ -2278,7 +2253,6 @@ fn test_eval_string_offset_range_filters() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     // Same string at offset 5000
     report.strings.push(StringInfo {
@@ -2289,7 +2263,6 @@ fn test_eval_string_offset_range_filters() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let data = vec![];
     let ctx = create_test_context(&report, &data);

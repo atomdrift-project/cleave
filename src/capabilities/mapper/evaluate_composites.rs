@@ -403,57 +403,78 @@ impl super::CapabilityMapper {
     ) -> Vec<Finding> {
         use crate::composite_rules::Condition;
 
+        #[derive(Clone, Copy)]
+        enum Scope {
+            Base,
+            Dir,
+            Full,
+        }
         let mut findings = Vec::new();
         for trait_def in &self.trait_definitions {
-            // Only evaluate traits with Basename conditions
-            let Condition::Basename {
-                ref exact,
-                ref substr,
-                ref regex,
-                case_insensitive,
-                is_check: _,
-            } = trait_def.r#if
-            else {
-                continue;
+            // `basename` matches the final path component; `path` matches the
+            // full entry path (or its dir/base when scoped). Archive members
+            // carry their real entry path, so `path` traits detect member
+            // layouts (`node_modules/X/package.json`, nested `*.jar!…`, …).
+            let (exact, substr, regex, case_insensitive, scope) = match &trait_def.r#if {
+                Condition::Path {
+                    exact,
+                    substr,
+                    regex,
+                    case_insensitive,
+                    basename,
+                    dirname,
+                    ..
+                } => (
+                    exact,
+                    substr,
+                    regex,
+                    *case_insensitive,
+                    if *basename {
+                        Scope::Base
+                    } else if *dirname {
+                        Scope::Dir
+                    } else {
+                        Scope::Full
+                    },
+                ),
+                _ => continue,
             };
 
-            // Resolve the basename regex lazily + shared via `lazy_regex` (applies
-            // `(?i)` when case-insensitive) rather than storing it per condition.
-            let resolved_regex: Option<&regex::Regex> = regex.as_deref().and_then(|r| {
-                crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
-            });
+            // Resolve the regex lazily + shared via `lazy_regex` (applies `(?i)`
+            // when case-insensitive) rather than storing it per condition.
+            let resolved_regex_owned: Option<std::sync::Arc<regex::Regex>> =
+                regex.as_deref().and_then(|r| {
+                    crate::composite_rules::condition::lazy_regex(Some(r), case_insensitive)
+                });
+            let resolved_regex: Option<&regex::Regex> = resolved_regex_owned.as_deref();
 
             for entry_name in entry_names {
-                let basename = std::path::Path::new(entry_name)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("");
-                if basename.is_empty() {
+                let p = std::path::Path::new(entry_name);
+                let target: &str = match scope {
+                    Scope::Base => p.file_name().and_then(|s| s.to_str()).unwrap_or(""),
+                    Scope::Dir => p.parent().and_then(|s| s.to_str()).unwrap_or(""),
+                    Scope::Full => entry_name.as_str(),
+                };
+                if target.is_empty() {
                     continue;
                 }
 
-                let (cmp_base, cmp_entry, cmp_exact, cmp_substr) = if case_insensitive {
+                let (cmp_target, cmp_exact, cmp_substr) = if case_insensitive {
                     (
-                        basename.to_lowercase(),
-                        entry_name.to_lowercase(),
+                        target.to_lowercase(),
                         exact.as_ref().map(|s| s.to_lowercase()),
                         substr.as_ref().map(|s| s.to_lowercase()),
                     )
                 } else {
-                    (
-                        basename.to_string(),
-                        entry_name.clone(),
-                        exact.clone(),
-                        substr.clone(),
-                    )
+                    (target.to_string(), exact.clone(), substr.clone())
                 };
 
                 let matched = if let Some(ref e) = cmp_exact {
-                    cmp_base == *e || cmp_entry == *e
+                    cmp_target == *e
                 } else if let Some(ref s) = cmp_substr {
-                    cmp_base.contains(s.as_str()) || cmp_entry.contains(s.as_str())
+                    cmp_target.contains(s.as_str())
                 } else if let Some(re) = resolved_regex {
-                    re.is_match(basename) || re.is_match(entry_name)
+                    re.is_match(target)
                 } else {
                     false
                 };
@@ -795,7 +816,7 @@ traits:
     crit: suspicious
     conf: 0.96
     if:
-      type: basename
+      type: path
       regex: 'var/folders/[a-z]{2}/[A-Za-z0-9_]+/T/tmp[a-z0-9]+/.{1,80}/package/'
 "#;
         let file = write_test_traits(yaml);

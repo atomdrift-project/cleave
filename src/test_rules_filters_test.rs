@@ -75,7 +75,6 @@ fn test_trait_filter_size_min() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // File size (100 B) < size_min (1 MB) → must NOT match
@@ -161,7 +160,6 @@ fn test_trait_filter_size_max() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let mut large_report = create_report_with_size(130 * 1024 * 1024);
@@ -173,7 +171,6 @@ fn test_trait_filter_size_max() {
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Small file: size_max satisfied → should match

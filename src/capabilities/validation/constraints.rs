@@ -6,7 +6,6 @@
 use crate::capabilities::models::{RawCompositeRule, RawTraitDefinition, TraitDefaults};
 use crate::capabilities::validation::shared::is_limited_byte_range;
 use crate::composite_rules::{CompositeTrait, Condition, FileType, TraitDefinition};
-use std::collections::HashMap;
 
 /// Compare two slices of strings in a case-insensitive, order-independent way.
 fn vec_values_equal(a: &[String], b: &[String]) -> bool {
@@ -394,7 +393,7 @@ pub(crate) fn find_missing_search_patterns(trait_definitions: &[TraitDefinition]
                 regex,
                 ..
             }
-            | Condition::Basename {
+            | Condition::Path {
                 exact,
                 substr,
                 regex,
@@ -1243,52 +1242,8 @@ pub(crate) fn find_hex_binary_missing_section(
         .collect()
 }
 
-/// Maximum effective file types allowed per condition type.
-///
-/// These limits reflect the semantic specificity of each matching engine:
-/// - tree-sitter: language-specific parse trees — max 2 types
-/// - Symbol: binary/bytecode symbol tables — max 4 types
-/// - Hex / YARA: byte-level patterns, often binary-specific — max 4 types
-const TREE_SITTER_MAX_FILETYPES: usize = 2;
-const SYMBOL_HEX_YARA_MAX_FILETYPES: usize = 4;
-
-/// Find traits whose condition type exceeds the allowed effective file type count.
-///
-/// tree-sitter conditions are inherently language-specific and must target
-/// at most 2 file types. Symbol, hex, and YARA conditions are byte/binary-level
-/// and must target at most 4 file types.
-///
-/// `FileType::All` always exceeds any threshold.
-///
-/// Returns `Vec<(trait_id, source_file, condition_kind, effective_count, max_allowed)>`
-#[must_use]
-pub(crate) fn find_condition_scope_violations(
-    trait_definitions: &[TraitDefinition],
-    rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String, &'static str, usize, usize)> {
-    trait_definitions
-        .iter()
-        .filter_map(|t| {
-            let (kind, max) = match &t.r#if {
-                Condition::TreeSitter { .. } => ("tree-sitter", TREE_SITTER_MAX_FILETYPES),
-                Condition::Symbol { .. } => ("symbol", SYMBOL_HEX_YARA_MAX_FILETYPES),
-                Condition::Hex { .. } => ("hex", SYMBOL_HEX_YARA_MAX_FILETYPES),
-                Condition::Yara { .. } => ("yara", SYMBOL_HEX_YARA_MAX_FILETYPES),
-                _ => return None,
-            };
-            let count = if t.r#for.contains(&FileType::All) {
-                usize::MAX
-            } else {
-                t.r#for.len()
-            };
-            if count <= max {
-                return None;
-            }
-            let source = rule_source_files
-                .get(&t.id)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string());
-            Some((t.id.clone(), source, kind, count, max))
-        })
-        .collect()
-}
+// Per-condition-type file-type caps moved to
+// `validation::taxonomy::find_broad_filetype_traits`, which now enforces a
+// single per-matcher-type threshold table (text/value/symbol/ast) plus a
+// type-qualified allowlist. The former `find_condition_scope_violations`
+// (tree-sitter ≤2, symbol/hex/yara ≤4) is subsumed by those caps.

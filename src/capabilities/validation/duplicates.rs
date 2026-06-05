@@ -749,7 +749,7 @@ fn extract_patterns(trait_def: &TraitDefinition) -> Vec<(String, PatternLocation
                 add_pattern("string_literal", "regex", v.clone(), sec.clone(), None);
             }
         }
-        Condition::Basename {
+        Condition::Path {
             exact,
             substr,
             regex,
@@ -1943,7 +1943,7 @@ fn collect_case_insensitive_overlap_issues(
                     add_case_pattern("encoded", "regex", v.clone(), *case_insensitive);
                 }
             }
-            Condition::Basename {
+            Condition::Path {
                 exact,
                 substr,
                 regex,
@@ -2268,7 +2268,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
             Condition::Raw { regex: Some(r), .. } => add_regex("raw", r.clone()),
             Condition::Text { regex: Some(r), .. } => add_regex("text", r.clone()),
             Condition::Literal { regex: Some(r), .. } => add_regex("string_literal", r.clone()),
-            Condition::Basename { regex: Some(r), .. } => add_regex("basename", r.clone()),
+            Condition::Path { regex: Some(r), .. } => add_regex("basename", r.clone()),
             Condition::Encoded { regex: Some(r), .. } => add_regex("encoded", r.clone()),
             _ => {}
         }
@@ -2356,7 +2356,7 @@ pub(crate) fn find_regex_literal_overlap_issues(
                     add_literal("string_literal", "word", w.clone());
                 }
             }
-            Condition::Basename { exact, substr, .. } => {
+            Condition::Path { exact, substr, .. } => {
                 if let Some(e) = exact {
                     add_literal("basename", "exact", e.clone());
                 }
@@ -2706,7 +2706,7 @@ pub(crate) fn check_regex_alternative_subsets(
                 case_insensitive,
                 ..
             } => add_regex("string_literal", r.clone(), *case_insensitive),
-            Condition::Basename {
+            Condition::Path {
                 regex: Some(r),
                 case_insensitive,
                 ..
@@ -2947,7 +2947,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             | Condition::Raw { exact: Some(s), .. }
             | Condition::Text { exact: Some(s), .. }
             | Condition::Literal { exact: Some(s), .. }
-            | Condition::Basename { exact: Some(s), .. }
+            | Condition::Path { exact: Some(s), .. }
             | Condition::Encoded { exact: Some(s), .. } => {
                 literal_patterns.push((
                     s.clone(),
@@ -2969,7 +2969,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             | Condition::Literal {
                 substr: Some(s), ..
             }
-            | Condition::Basename {
+            | Condition::Path {
                 substr: Some(s), ..
             }
             | Condition::Encoded {
@@ -2994,7 +2994,7 @@ pub(crate) fn validate_regex_overlap_with_literal(
             | Condition::Raw { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
             | Condition::Literal { regex: Some(r), .. }
-            | Condition::Basename { regex: Some(r), .. }
+            | Condition::Path { regex: Some(r), .. }
             | Condition::Encoded { regex: Some(r), .. } => Some(r),
             _ => None,
         };
@@ -3312,7 +3312,7 @@ pub(crate) fn find_alternation_merge_candidates(
             | Condition::Symbol { regex: Some(r), .. }
             | Condition::Text { regex: Some(r), .. }
             | Condition::Literal { regex: Some(r), .. }
-            | Condition::Basename { regex: Some(r), .. }
+            | Condition::Path { regex: Some(r), .. }
             | Condition::Encoded { regex: Some(r), .. } => Some(r.clone()),
             _ => None,
         };
@@ -3507,7 +3507,7 @@ pub(crate) fn check_basename_pattern_duplicates(
 
     for trait_def in trait_definitions {
         // Only process basename conditions
-        if let Condition::Basename {
+        if let Condition::Path {
             exact,
             substr,
             regex,

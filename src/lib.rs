@@ -99,7 +99,6 @@ pub use types::SampleExtractionConfig;
 pub use types::traits_findings::{Evidence, Finding, FindingKind, Trait, TraitKind};
 
 // Re-export cache management functions
-pub use composite_rules::clear_condition_stats;
 pub use shared_resources::{reload_capability_mapper, set_skip_traits_override};
 
 use rustc_hash::FxHasher;
@@ -868,7 +867,6 @@ impl Default for AnalysisOptions {
 pub fn clear_all_thread_caches() {
     clear_thread_local_caches();
     clear_regex_caches();
-    clear_condition_stats();
     tracing::debug!("Cleared thread-local caches and regex caches on calling thread");
 }
 
@@ -2074,28 +2072,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .filefacts_metrics
             .get_or_insert_with(Default::default)
             .set_u("file.size", size);
-    }
-
-    // Survivor-only materialization: drop unmatched `Slice` strings (the
-    // bulk — they're only useful to matchers and no matcher set their
-    // `.matched` flag), then materialize any remaining `Slice` variants
-    // to `Owned` before `file_data` drops. `Owned` strings (decoded
-    // base64, UTF-16, stack-constructed, post-extraction additions) are
-    // always kept — those have no Slice form to reclaim and may include
-    // detection-relevant content even without an explicit trait match.
-    //
-    // This is the per-worker memory win: matched survivors are <1% of
-    // extracted strings on most binaries, so the materialize transition
-    // touches almost nothing. The bulk of `report.strings` is dropped
-    // before `file_data` drops, freeing both the file's mmap pressure
-    // and (with the Slice path enabled) the duplicate-of-file-bytes
-    // baseline cost.
-    report.strings.retain(|s| {
-        s.matched.load(std::sync::atomic::Ordering::Relaxed)
-            || matches!(s.value, crate::types::binary::StringValue::Owned(_))
-    });
-    for s in &mut report.strings {
-        s.value.materialize(file_data);
     }
 
     // Collapse duplicate findings (same id) before anything downstream sees

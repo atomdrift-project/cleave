@@ -125,9 +125,8 @@ impl StringExtractor {
     pub(crate) fn extract_smart(&self, data: &[u8]) -> Vec<StringInfo> {
         let raw = self.extract_raw_smart(data);
         // We own `raw` and don't need it after conversion — move each element
-        // instead of cloning. Pass `data` so sliceable strings borrow the
-        // file's bytes instead of duplicating them into StringInfo.value.
-        self.convert_stng_strings_owned(raw, Some(data))
+        // instead of cloning.
+        self.convert_stng_strings_owned(raw)
     }
 
     /// Extract raw stng strings from binary data.
@@ -205,7 +204,6 @@ impl StringExtractor {
     pub(crate) fn convert_stng_strings_owned(
         &self,
         stng_strings: Vec<ExtractedString>,
-        file_data: Option<&[u8]>,
     ) -> Vec<StringInfo> {
         let mut strings = Vec::with_capacity(stng_strings.len().min(MAX_STRINGS_PER_FILE));
         let mut total_bytes = 0;
@@ -228,51 +226,7 @@ impl StringExtractor {
 
             total_bytes += value_len;
             let decoded_sidecar = self.decoded_base64_sidecar(&es);
-            // Decide sliceability BEFORE moving es (we need es.data_offset + value).
-            // A string is sliceable iff its bytes are byte-for-byte identical to a
-            // slice of file_data at data_offset — that distinguishes raw-scan /
-            // section strings (slice OK) from base64/utf16/stack-reassembled
-            // strings (value ≠ source bytes, must stay Owned).
-            // The Slice path is GATED OFF by default: empirical A/B on the
-            // slow2 dataset (May 2026) showed +130 MB RSS and +16% wall
-            // regression vs all-Owned baseline, because the end-of-analyze
-            // `materialize` step doubles memory at the Slice→Owned
-            // transition (the transition IS the new peak) and the
-            // per-string byte-comparison + materialize loop add CPU. The
-            // win is only realisable when materialize touches *only*
-            // survivors of strip_verbose — a follow-up that requires
-            // matcher-side "this string was used" instrumentation.
-            // Opt-in via `CLEAVE_ENABLE_SLICE=1` for A/B experiments.
-            let effective_file_data = if std::env::var_os("CLEAVE_ENABLE_SLICE").is_some() {
-                file_data
-            } else {
-                None
-            };
-            let slice = match (effective_file_data, es.data_offset) {
-                (Some(fd), offset)
-                    if offset <= u32::MAX as u64
-                        && value_len <= u32::MAX as usize
-                        && (offset as usize)
-                            .checked_add(value_len)
-                            .is_some_and(|e| e <= fd.len())
-                        && &fd[offset as usize..offset as usize + value_len]
-                            == es.value.as_bytes() =>
-                {
-                    Some(crate::types::binary::StringValue::Slice {
-                        start: offset as u32,
-                        len: value_len as u32,
-                    })
-                }
-                _ => None,
-            };
-            let mut info = self.convert_extracted_string(es);
-            if let Some(slice_value) = slice {
-                // Replace the Owned String with a Slice ref; the heap allocation
-                // moved from stng is freed when `info.value` is reassigned. This
-                // is the per-worker memory win: extracted strings no longer
-                // duplicate file_data bytes during matching.
-                info.value = slice_value;
-            }
+            let info = self.convert_extracted_string(es);
             strings.push(info);
 
             if let Some(decoded) = decoded_sidecar {
@@ -324,7 +278,6 @@ impl StringExtractor {
             section: es.section.clone(),
             encoding_chain: vec!["base64".to_string()],
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         })
     }
 
@@ -350,7 +303,6 @@ impl StringExtractor {
             encoding_chain: Vec::new(),
             // Note: fragments from stng are StringFragment, not String - skip for now
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         };
 
         // Track the stng method as an encoding layer if it's a special string construction
@@ -420,10 +372,7 @@ mod tests {
     fn test_string_extraction() {
         let data = b"Hello World http://example.com /usr/bin/ls";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         assert!(!strings.is_empty());
     }
@@ -436,10 +385,7 @@ mod tests {
         // sees the bare address and can label it as Email.
         let data = b"\0admin@example.com\0other string\0";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         let email_string = strings
             .iter()
@@ -458,10 +404,7 @@ mod tests {
     fn test_min_length_filter() {
         let data = b"ab  Hello World";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         // "ab" should be filtered (< 4 chars), "Hello World" should be kept
         assert!(!strings.iter().any(|s| s.value == "ab"));
@@ -472,10 +415,7 @@ mod tests {
     fn test_control_characters_filtered() {
         let data = b"Hello\x00\x01World";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         // Should extract "Hello" and "World" separately
         assert!(strings.len() >= 2);
@@ -485,10 +425,7 @@ mod tests {
     fn test_offset_recorded() {
         let data = b"start test string end";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         // Offset should be recorded for each string
         assert!(strings.iter().all(|s| s.offset.is_some()));
@@ -504,10 +441,7 @@ mod tests {
     fn test_trimmed_strings() {
         let data = b"  spaced  ";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         // Should trim whitespace
         if let Some(s) = strings.first() {
@@ -519,10 +453,7 @@ mod tests {
     fn test_empty_data() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         assert!(strings.is_empty());
     }
@@ -531,10 +462,7 @@ mod tests {
     fn test_binary_data_only() {
         let data = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(&data);
-        for __s in &mut strings {
-            __s.value.materialize(&data);
-        }
+        let strings = extractor.extract_smart(&data);
 
         // No printable strings should be found
         assert!(strings.is_empty());
@@ -589,10 +517,7 @@ mod tests {
         // Basic test with null-terminated strings so stng can extract them individually
         let data = b"Hello World\0http://example.com\0/usr/bin/ls\0";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         assert!(!strings.is_empty());
 
@@ -620,10 +545,7 @@ mod tests {
     fn test_extract_smart_empty() {
         let data = b"";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         assert!(strings.is_empty());
     }
@@ -633,10 +555,7 @@ mod tests {
         // Test that duplicate strings are removed
         let data = b"test string\0test string\0test string";
         let extractor = StringExtractor::new();
-        let mut strings = extractor.extract_smart(data);
-        for __s in &mut strings {
-            __s.value.materialize(data);
-        }
+        let strings = extractor.extract_smart(data);
 
         // Should not have duplicate values
         let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
@@ -654,10 +573,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let mut strings = extractor.extract_smart(&data);
-        for __s in &mut strings {
-            __s.value.materialize(&data);
-        }
+        let strings = extractor.extract_smart(&data);
 
         // Should find strings from both lang_strings and basic extraction
         assert!(!strings.is_empty());
@@ -680,10 +596,7 @@ mod tests {
         let data = std::fs::read(path).unwrap();
         let extractor = StringExtractor::new();
 
-        let mut strings = extractor.extract_smart(&data);
-        for __s in &mut strings {
-            __s.value.materialize(&data);
-        }
+        let strings = extractor.extract_smart(&data);
 
         // Should find strings
         assert!(!strings.is_empty());

@@ -1335,7 +1335,6 @@ impl PackageJsonAnalyzer {
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
-                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
 
@@ -1349,7 +1348,6 @@ impl PackageJsonAnalyzer {
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
-                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
 
@@ -1363,7 +1361,6 @@ impl PackageJsonAnalyzer {
                     section: Some(format!("scripts.{}", name)),
                     encoding_chain: Vec::new(),
                     fragments: None,
-                    matched: std::sync::atomic::AtomicBool::new(false),
                 });
             }
         }

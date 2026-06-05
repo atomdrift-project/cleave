@@ -133,51 +133,76 @@ pub(crate) fn eval_trait<'a>(id: &str, ctx: &EvaluationContext<'a>) -> Condition
     }
 }
 
-/// Evaluate a basename condition - match against the final path component
+/// Test-only alias: `basename` is now a filename-scoped `path` match. The real
+/// implementation lives in [`eval_path`]; this shim keeps the basename tests.
+#[cfg(test)]
 #[must_use]
-pub(crate) fn eval_basename<'a>(
+pub(crate) fn eval_basename(
     exact: Option<&String>,
     substr: Option<&String>,
     regex: Option<&String>,
     case_insensitive: bool,
     is_check: Option<StringValidator>,
-    ctx: &EvaluationContext<'a>,
+    ctx: &EvaluationContext<'_>,
 ) -> ConditionResult {
-    // Extract basename from path
-    let path = &ctx.report.target.path;
-    let basename = std::path::Path::new(path)
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
+    eval_path(
+        exact,
+        substr,
+        regex,
+        case_insensitive,
+        is_check,
+        true,
+        false,
+        ctx,
+    )
+}
 
-    // Match against the basename
-    let (compare_basename, compare_exact, compare_substr) = if case_insensitive {
+/// Evaluate a `type: path` condition against the file path. Matches the full
+/// path by default; `basename` scopes to the final component, `dirname` to the
+/// directory portion.
+pub(crate) fn eval_path(
+    exact: Option<&String>,
+    substr: Option<&String>,
+    regex: Option<&String>,
+    case_insensitive: bool,
+    is_check: Option<StringValidator>,
+    basename: bool,
+    dirname: bool,
+    ctx: &EvaluationContext<'_>,
+) -> ConditionResult {
+    let full = ctx.report.target.path.as_str();
+    let p = std::path::Path::new(full);
+    let target: &str = if basename {
+        p.file_name().and_then(|s| s.to_str()).unwrap_or("")
+    } else if dirname {
+        p.parent().and_then(|s| s.to_str()).unwrap_or("")
+    } else {
+        full
+    };
+
+    let (cmp_target, cmp_exact, cmp_substr) = if case_insensitive {
         (
-            basename.to_lowercase(),
+            target.to_lowercase(),
             exact.map(|s| s.to_lowercase()),
             substr.map(|s| s.to_lowercase()),
         )
     } else {
-        (basename.to_string(), exact.cloned(), substr.cloned())
+        (target.to_string(), exact.cloned(), substr.cloned())
     };
 
-    let matched = if let Some(exact_str) = &compare_exact {
-        compare_basename == *exact_str
-    } else if let Some(substr_str) = &compare_substr {
-        compare_basename.contains(substr_str.as_str())
+    let matched = if let Some(e) = &cmp_exact {
+        cmp_target == *e
+    } else if let Some(s) = &cmp_substr {
+        cmp_target.contains(s.as_str())
     } else if let Some(r) = regex {
-        // Resolve lazily + shared via `lazy_regex` (applies `(?i)` when
-        // case-insensitive) instead of compiling a fresh regex per evaluation.
         crate::composite_rules::condition::lazy_regex(Some(r.as_str()), case_insensitive)
-            .map(|re| re.is_match(basename))
+            .map(|re| re.is_match(target))
             .unwrap_or(false)
     } else {
         false
     };
 
-    // Calculate precision
     let mut precision = 0.0f32;
-
     if exact.is_some() {
         precision = 2.0;
     } else if regex.is_some() {
@@ -185,24 +210,22 @@ pub(crate) fn eval_basename<'a>(
     } else if substr.is_some() {
         precision = 1.0;
     }
-
     if case_insensitive {
         precision *= 0.5;
     }
-
     if is_check.is_some() {
         precision += 0.5;
     }
 
-    let matched = matched && validate_match(basename, is_check);
+    let matched = matched && validate_match(target, is_check);
 
     ConditionResult {
         matched,
         evidence: if matched {
             vec![Evidence {
-                method: "basename".to_string(),
+                method: "path".to_string(),
                 source: "target".to_string(),
-                value: basename.to_string(),
+                value: target.to_string(),
                 location: None,
                 ..Default::default()
             }]

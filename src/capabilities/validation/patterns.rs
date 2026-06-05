@@ -43,7 +43,7 @@ fn substr_regex_fields(
         Condition::Encoded { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "encoded"))
         }
-        Condition::Basename { substr, regex, .. } => {
+        Condition::Path { substr, regex, .. } => {
             Some((substr.as_deref(), regex.as_deref(), "basename"))
         }
         Condition::Kv { substr, regex, .. } => Some((substr.as_deref(), regex.as_deref(), "value")),

@@ -445,12 +445,14 @@ mod duplicate_tests {
     ) -> TraitDefinition {
         create_test_trait(
             id,
-            Condition::Basename {
+            Condition::Path {
                 exact: None,
                 substr: None,
                 regex: Some(pattern.to_string()),
                 case_insensitive: false,
                 is_check: None,
+                basename: true,
+                dirname: false,
             },
             for_types,
             file_path,
@@ -1723,24 +1725,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Basename {
+                Condition::Path {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     regex: None,
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Basename {
+                Condition::Path {
                     exact: Some("setup.py".to_string()),
                     substr: None,
                     regex: None,
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file2.yaml",
@@ -1761,24 +1767,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: Some("chrome".to_string()),
                     regex: None,
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::All],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: Some("chrome".to_string()),
                     regex: None,
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::All],
                 "file2.yaml",
@@ -1797,24 +1807,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("\\.pyc$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("\\.pyc$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file2.yaml",
@@ -1833,24 +1847,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("^Makefile$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::All],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("^setup\\.py$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file2.yaml",
@@ -1869,12 +1887,14 @@ mod duplicate_tests {
     fn test_basename_regex_should_be_exact_case_insensitive() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Basename {
+            Condition::Path {
                 exact: None,
                 substr: None,
                 regex: Some("(?i)^setup\\.py$".to_string()),
                 case_insensitive: false,
                 is_check: None,
+                basename: true,
+                dirname: false,
             },
             vec![FileType::Python],
             "file1.yaml",
@@ -1892,24 +1912,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "test1",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("^(setup|install)\\.py$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Python],
                 "file1.yaml",
             ),
             create_test_trait(
                 "test2",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some(".*\\.exe$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Pe],
                 "file2.yaml",
@@ -1929,12 +1953,14 @@ mod duplicate_tests {
     fn test_basename_empty_pattern_skipped() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Basename {
+            Condition::Path {
                 exact: None,
                 substr: None,
                 regex: None,
                 case_insensitive: false,
                 is_check: None,
+                basename: true,
+                dirname: false,
             },
             vec![FileType::All],
             "file1.yaml",
@@ -1951,12 +1977,14 @@ mod duplicate_tests {
     fn test_basename_bogus_dot_pattern_skipped() {
         let traits = vec![create_test_trait(
             "test1",
-            Condition::Basename {
+            Condition::Path {
                 exact: None,
                 substr: None,
                 regex: Some(".".to_string()),
                 case_insensitive: false,
                 is_check: None,
+                basename: true,
+                dirname: false,
             },
             vec![FileType::All],
             "file1.yaml",
@@ -2178,24 +2206,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "basename_exact",
-                Condition::Basename {
+                Condition::Path {
                     exact: Some("sshd".to_string()),
                     substr: None,
                     regex: None,
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Shell],
                 "file1.yaml",
             ),
             create_test_trait(
                 "basename_regex",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("^(ssh|sshd|ssh_config)$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::Shell],
                 "file2.yaml",
@@ -2272,24 +2304,28 @@ mod duplicate_tests {
         let traits = vec![
             create_test_trait(
                 "subset",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("\\.(test|spec)\\.[cm]?[jt]sx?$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::JavaScript, FileType::TypeScript],
                 "file1.yaml",
             ),
             create_test_trait(
                 "superset",
-                Condition::Basename {
+                Condition::Path {
                     exact: None,
                     substr: None,
                     regex: Some("\\.(test|spec|bench)\\.[cm]?[jt]sx?$".to_string()),
                     case_insensitive: false,
                     is_check: None,
+                    basename: true,
+                    dirname: false,
                 },
                 vec![FileType::JavaScript, FileType::TypeScript],
                 "file2.yaml",

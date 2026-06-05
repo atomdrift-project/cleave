@@ -624,7 +624,7 @@ fn score_condition(condition: &Condition) -> f32 {
             }
             score *= ENCODED_MATCH_MULTIPLIER;
         }
-        Condition::Basename {
+        Condition::Path {
             exact,
             substr,
             regex,

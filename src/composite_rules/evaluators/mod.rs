@@ -187,6 +187,7 @@ pub fn clear_regex_caches() {
     if let Some(cache) = BYTES_REGEX_CACHE.get() {
         cache.write().clear();
     }
+    crate::composite_rules::condition::clear_cached_regex();
 }
 
 /// Check if a symbol matches a pattern (supports exact match or regex).

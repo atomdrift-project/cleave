@@ -1542,9 +1542,10 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
 
     // Resolve the regex once: compiled lazily + shared via `lazy_regex` (applies
     // `(?i)` when case-insensitive) rather than stored per condition.
-    let resolved_regex: Option<&regex::Regex> = regex_str
+    let resolved_regex_owned: Option<std::sync::Arc<regex::Regex>> = regex_str
         .as_deref()
         .and_then(|r| crate::composite_rules::condition::lazy_regex(Some(r), *case_insensitive));
+    let resolved_regex: Option<&regex::Regex> = resolved_regex_owned.as_deref();
 
     // Build matcher
     let matcher = KvMatcher::new(

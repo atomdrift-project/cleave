@@ -260,7 +260,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -297,7 +296,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -334,7 +332,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -471,7 +468,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -629,7 +625,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
         value: ("keyword".to_string()).into(),
@@ -639,7 +634,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let findings = mapper.evaluate_traits(&report, binary_data);
     assert_eq!(findings.len(), 0, "Should not match with only 2 strings");
@@ -655,7 +649,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
         value: ("keyword".to_string()).into(),
@@ -665,7 +658,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     report.strings.push(crate::types::StringInfo {
         value: ("keyword".to_string()).into(),
@@ -675,7 +667,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
     let findings = mapper.evaluate_traits(&report, binary_data);
     assert_eq!(findings.len(), 1, "Should match with 3 strings");
@@ -709,7 +700,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -796,7 +786,6 @@ traits:
         section: Some(".text".to_string()),
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     let findings = mapper.evaluate_traits(&report, binary_data);
@@ -853,7 +842,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     // Use evaluate_and_merge_findings which is the production code path
@@ -932,7 +920,6 @@ traits:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -1016,7 +1003,6 @@ composite_rules:
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1109,7 +1095,6 @@ composite_rules:
         section: None,
         encoding_chain: Vec::new(),
         fragments: None,
-        matched: std::sync::atomic::AtomicBool::new(false),
     });
 
     mapper.evaluate_and_merge_findings(&mut report, binary_data, None, None);
@@ -1202,7 +1187,6 @@ composite_rules:
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 
@@ -1277,7 +1261,6 @@ composite_rules:
             section: None,
             encoding_chain: Vec::new(),
             fragments: None,
-            matched: std::sync::atomic::AtomicBool::new(false),
         });
     }
 

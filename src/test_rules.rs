@@ -1909,7 +1909,7 @@ fn evaluate_condition_simple(
     ctx: &EvaluationContext<'_>,
 ) -> crate::composite_rules::context::ConditionResult {
     use crate::composite_rules::evaluators::{
-        SectionParams, eval_basename, eval_section, eval_syscall,
+        SectionParams, eval_path, eval_section, eval_syscall,
     };
 
     // Evaluate conditions that fall through to the _ => case in debug_condition
@@ -1957,18 +1957,22 @@ fn evaluate_condition_simple(
         Condition::Syscall { name, number, arch } => {
             eval_syscall(name.as_ref(), number.as_ref(), arch.as_ref(), ctx)
         }
-        Condition::Basename {
+        Condition::Path {
             exact,
             substr,
             regex,
             case_insensitive,
             is_check,
-        } => eval_basename(
+            basename,
+            dirname,
+        } => eval_path(
             exact.as_ref(),
             substr.as_ref(),
             regex.as_ref(),
             *case_insensitive,
             *is_check,
+            *basename,
+            *dirname,
             ctx,
         ),
         _ => crate::composite_rules::context::ConditionResult::no_match(),

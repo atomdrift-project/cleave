@@ -1402,13 +1402,111 @@ const CONCRETE_PLATFORM_COUNT: usize = 6; // Linux, MacOS, Windows, Unix, Androi
 const ALL_FILETYPES_COUNT: usize = usize::MAX;
 
 /// Threshold for flagging a trait as having too many effective platforms.
+///
+/// A trait must declare only the platforms and file types it actually needs to
+/// fire — and no more. This is a **performance** constraint as much as a
+/// correctness one: every declared platform/type widens the set of files the
+/// trait is evaluated against, so an over-broad `platforms:`/`for:` makes the
+/// engine scan the matcher across inputs it can never legitimately match,
+/// wasting CPU on every analysis. Constrain to the minimum necessary to execute.
 const BROAD_PLATFORM_THRESHOLD: usize = 4;
 
-/// Threshold for flagging a trait as having too many effective file types.
+/// Maximum effective file types a trait may target, **by matcher (query)
+/// type**, before it must narrow `for:` or earn a type-qualified
+/// [`BROAD_FILETYPE_ALLOWLIST`] entry.
 ///
-/// Traits should be focused on exactly the filetypes they are designed to fire against.
-const BROAD_FILETYPE_THRESHOLD: usize = 13;
-const BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM: usize = 7;
+/// Traits should be focused on exactly the filetypes they are designed to fire
+/// against — and no more. Beyond accuracy and ML feature hygiene, this is a
+/// performance guardrail: a trait runs against every file of every type it
+/// declares, so superfluous `for:` entries cost scan time on every input for
+/// no possible match.
+///
+/// The cap depends on the matcher type because breadth means different things
+/// per type, in descending order of how language/format-agnostic the matcher
+/// is. Content strings (`text`/`literal`/`comment`) are the most agnostic — a
+/// string can appear in any host file — so they get the widest cap; whole-file
+/// `metrics` and `basename` patterns are nearly as agnostic; `raw`/`encoded`
+/// byte scans target progressively narrower sets; `section` is binary-bound;
+/// `symbol`/`syscall` and `hex`/`yara` are language/binary-bound; structural
+/// `value` paths are format-bound; and an AST (`tree-sitter`) query is written
+/// for exactly one grammar. A type-qualified allowlist entry
+/// (`"text:<dir-prefix>"`) only lifts the cap for that one matcher type.
+const BROAD_FILETYPE_THRESHOLD_PATH: usize = 4; // full-path matchers — start tight; whitelist/narrow case-by-case
+// Content-scan caps (text/metrics/encoded) include the macOS-native types
+// (applescript/plist/swift/objectivec) that ride into a group expansion now
+// that the `unix` umbrella reaches macOS (see resolve_platform_filetype_conflicts).
+// They were recalibrated +1 to absorb that umbrella member rather than penalize
+// legitimately-broad, group-scoped content matchers.
+const BROAD_FILETYPE_THRESHOLD_TEXT: usize = 17; // text / literal / comment
+const BROAD_FILETYPE_THRESHOLD_METRICS: usize = 16; // whole-file metrics
+// A basename matches the *filename*, which is artifact-specific — a filename
+// pattern that fires across many languages is almost always mis-scoped. Kept
+// deliberately tight (mirrors PATH): narrow `for:` to the type(s) the filename
+// implies, or add a `basename:<dir>` allowlist entry for the rare exception.
+const BROAD_FILETYPE_THRESHOLD_BASENAME: usize = 4; // filename patterns — tight
+const BROAD_FILETYPE_THRESHOLD_ENCODED: usize = 11; // decoded-content scan
+const BROAD_FILETYPE_THRESHOLD_SECTION: usize = 6; // binary section names
+const BROAD_FILETYPE_THRESHOLD_YARA: usize = 4; // yara rules (may span container formats)
+const BROAD_FILETYPE_THRESHOLD_SYMBOL: usize = 4; // symbol / syscall tables
+const BROAD_FILETYPE_THRESHOLD_VALUE: usize = 3; // structural value paths
+const BROAD_FILETYPE_THRESHOLD_RAW: usize = 3; // raw byte scan — native binary family (elf/macho/pe)
+const BROAD_FILETYPE_THRESHOLD_HEX: usize = 3; // hex byte pattern — native binary family (elf/macho/pe)
+const BROAD_FILETYPE_THRESHOLD_AST: usize = 1; // tree-sitter (single grammar)
+
+/// Per-matcher-type file-type cap. See [`BROAD_FILETYPE_THRESHOLD_TEXT`].
+fn filetype_cap_for_condition(cond: &Condition) -> usize {
+    match cond {
+        Condition::Text { .. } | Condition::Literal { .. } | Condition::Comment { .. } => {
+            BROAD_FILETYPE_THRESHOLD_TEXT
+        }
+        // An alias/composite-leg reference (`if: { id: X }`) does no scanning of
+        // its own — it delegates to the referenced trait, which is capped per its
+        // own matcher. The wrapper's `for:` is only an evaluation gate, so it is
+        // exempt from the file-type cap.
+        Condition::Trait { .. } => usize::MAX,
+        Condition::Metrics { .. } => BROAD_FILETYPE_THRESHOLD_METRICS,
+        // Full-path matchers use the dedicated path cap; `basename`/`dirname`-
+        // scoped paths are filename-bounded and get the basename cap. A path
+        // condition with no string matcher (exact/substr/regex/is) does no
+        // scanning at all — it is a trivially-true type/size gate (e.g. the
+        // `is-binary` building block), so it is exempt from the file-type cap.
+        Condition::Path {
+            basename,
+            dirname,
+            exact,
+            substr,
+            regex,
+            is_check,
+            ..
+        } => {
+            if exact.is_none() && substr.is_none() && regex.is_none() && is_check.is_none() {
+                usize::MAX
+            } else if *basename || *dirname {
+                BROAD_FILETYPE_THRESHOLD_BASENAME
+            } else {
+                BROAD_FILETYPE_THRESHOLD_PATH
+            }
+        }
+        Condition::Raw { .. } => BROAD_FILETYPE_THRESHOLD_RAW,
+        Condition::Encoded { .. } => BROAD_FILETYPE_THRESHOLD_ENCODED,
+        Condition::Section { .. } => BROAD_FILETYPE_THRESHOLD_SECTION,
+        Condition::Symbol { .. } | Condition::Syscall { .. } => BROAD_FILETYPE_THRESHOLD_SYMBOL,
+        Condition::Hex { .. } => BROAD_FILETYPE_THRESHOLD_HEX,
+        Condition::Yara { .. } => BROAD_FILETYPE_THRESHOLD_YARA,
+        Condition::Kv { .. } => BROAD_FILETYPE_THRESHOLD_VALUE,
+        Condition::TreeSitter { .. } => BROAD_FILETYPE_THRESHOLD_AST,
+    }
+}
+
+/// Canonical matcher-type label used to match type-qualified
+/// [`BROAD_FILETYPE_ALLOWLIST`] entries. Normalizes the obsolete
+/// `string_literal` alias to `literal`.
+fn broad_filetype_category(cond: &Condition) -> &'static str {
+    match cond.type_name() {
+        "string_literal" => "literal",
+        other => other,
+    }
+}
 
 /// Trait path prefixes where 4+ effective platforms are permitted.
 pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
@@ -1419,41 +1517,97 @@ pub(crate) const BROAD_PLATFORM_ALLOWLIST: &[&str] =
 /// These directories contain patterns (network indicators, encoding schemes, etc.)
 /// that legitimately appear across compiled binaries, scripts, source code, and
 /// documents — so requiring narrow file type targeting would silently drop coverage.
+/// Directory subtrees permitted to exceed the per-type file-type cap, qualified
+/// by matcher type: an entry `"<type>:<dir-prefix>"` lifts the cap only for
+/// matchers of `<type>` whose source file path contains `<dir-prefix>`. A broad
+/// `text` matcher in an allowlisted `text:` directory passes; the same directory
+/// does **not** license a broad `value`/`symbol`/etc. matcher.
 pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
     // Text data patterns (encoding, obfuscation markers) appear in any file
-    "micro-behaviors/data/text/",
+    "text:micro-behaviors/data/text/",
     // IP addresses and port numbers are embedded in binaries, scripts, manifests, docs
-    "micro-behaviors/communications/ip/",
+    "text:micro-behaviors/communications/ip/",
     // URLs and URL fragments appear in any file type
-    "micro-behaviors/communications/url/",
+    "text:micro-behaviors/communications/url/",
     // C2 infrastructure indicators (IPs, domains, ports, tunnels) appear in any file
-    "objectives/command-and-control/infrastructure/",
+    "text:objectives/command-and-control/infrastructure/",
     // HTTP header names and values appear in binaries, scripts, and documents
-    "micro-behaviors/communications/http/headers/",
+    "text:micro-behaviors/communications/http/headers/",
     // Credential access patterns (passwords, tokens, keys, wallets) appear in any file
-    "objectives/credential-access/",
-    // Sensitive credential paths can appear in source, scripts, configs, docs, and binaries
-    "micro-behaviors/fs/path/sensitive/credentials/",
+    "text:objectives/credential-access/",
+    // Filesystem path strings (/etc/passwd, ~/.aws/credentials, %APPDATA%\…) are
+    // language-agnostic content — the same path literal appears in any source,
+    // script, config, doc, or binary that references it.
+    "text:micro-behaviors/fs/path/",
     // IP discovery service hostnames are embedded in any executable (scripts, binaries, config)
-    "micro-behaviors/communications/http/ip-discovery/",
+    "text:micro-behaviors/communications/http/ip-discovery/",
     // Shell language markers are intentionally shared across scripts, source, and binaries
-    "micro-behaviors/process/create/shell/lang/",
+    "text:micro-behaviors/process/create/shell/lang/",
     // Download-execute dropper patterns are malicious whether they appear in a
     // shell script, package.json postinstall, setup.py cmdclass, Dockerfile RUN,
     // plist ProgramArguments, systemd ExecStart, etc.
-    "objectives/command-and-control/dropper/delivery/download-execute/",
+    "text:objectives/command-and-control/dropper/delivery/download-execute/",
     // Hardcoded C2 URL string literals (IP-pinned URLs, .php panel endpoints)
     // appear in any source language — same rationale as communications/url/.
     // The directory's -encoded and -binary legs are already narrowly scoped.
-    "micro-behaviors/communications/http/url/",
+    "text:micro-behaviors/communications/http/url/",
     // Cross-language text/format properties (license headers, human-language
     // prose, generic source tokens) appear in any language's files.
-    "metadata/file/text/",
+    "text:metadata/file/text/",
+    // Marking a file executable (chmod +x / mode 0o755) is a delivery step that
+    // appears across every script, source language, and manifest that drops and
+    // launches a payload — so the chmod-executable atoms scan broadly.
+    "text:micro-behaviors/fs/chmod/executable/",
     // "Code generated … DO NOT EDIT" markers appear in generated code of every language.
-    "metadata/lang/source/generated.yaml",
+    "text:metadata/lang/source/generated.yaml",
     // The Racket language classifier matches `#lang racket` to identify the
     // language of otherwise-unknown files, so it must scan broadly.
-    "metadata/lang/scripted/racket.yaml",
+    "text:metadata/lang/scripted/racket.yaml",
+    // Cryptographic vocabulary (ciphertext, shared secret, key-material labels)
+    // appears in crypto implementations of every language.
+    "text:micro-behaviors/crypto/",
+    // C2 messaging-channel indicators (e.g. Discord webhook URLs) are string
+    // markers embedded in malware written in any language.
+    "text:objectives/command-and-control/channel/messaging/",
+    // VSS / shadow-copy deletion commands (vssadmin, \\?\GLOBALROOT, robocopy
+    // \Device\Harddisk…) can be shelled out from any language.
+    "text:objectives/evasion/indicator-removal/shadow-copy/",
+    // String *literals* (parser-extracted) for the same cross-language content
+    // classes allowlisted for `text:` above: a hardcoded C2 IP/port, URL,
+    // credential path, or text marker is written as a quoted literal in source
+    // of every language. Same cross-language rationale, different matcher type.
+    "literal:micro-behaviors/communications/ip/",
+    "literal:micro-behaviors/communications/http/url/",
+    "literal:objectives/command-and-control/infrastructure/",
+    "literal:micro-behaviors/fs/path/sensitive/credentials/",
+    "literal:micro-behaviors/data/text/",
+    "literal:micro-behaviors/process/create/shell/lang/",
+    "literal:metadata/file/text/",
+    // Archive-member structural matchers (a vim-swap file, go.mod, .go source,
+    // or Package.swift shipped inside a package) legitimately span the whole
+    // archive family — the same member can appear in an npm tarball, gem, whl,
+    // crate, etc. — so these value paths scan broadly.
+    "value:metadata/package/files/",
+    // README-name-vs-package-name mismatch is checked against the README of
+    // every ecosystem's package archive, so the structural readme value paths
+    // span the archive family.
+    "value:objectives/supply-chain/impersonation/readme-clone/",
+    // Test/fixture/example directory layouts (`/tests/`, `/winetests/`,
+    // `__fixtures__/`) are detected inside package archives of every ecosystem,
+    // so these path matchers legitimately span the archive family.
+    "path:metadata/package/testing/presence/harness/",
+    // Test-path / embedded-runtime FP-suppression: excluding `…/test/…` and
+    // `jruby-complete.jar!…` paths from obfuscation flags applies across every
+    // code/archive type the obfuscation composites run on.
+    "path:objectives/anti-static/obfuscation/code-metrics/",
+    // Whole-file size / "is-binary" filters carry a match-anything path pattern
+    // and apply to the entire native+bytecode binary family (elf/macho/pe/
+    // class/pyc) and beyond.
+    "path:metadata/binary/",
+    // Well-known app/library identification by file path (release-archive names,
+    // source-tree directories, executable names) is inherently multi-format —
+    // an app ships as an exe, a tarball, a zip, and source at once.
+    "path:well-known/",
 ];
 
 /// Returns the effective platform count for a trait.
@@ -1552,55 +1706,56 @@ pub(crate) fn find_redundant_unix_platforms(
         .collect()
 }
 
-/// Find atomic traits with too many effective file types outside the broad-filetype allowlist.
+/// Find atomic traits whose effective file-type count exceeds the cap for their
+/// matcher type (see [`filetype_cap_for_condition`]), excluding those covered by
+/// a type-qualified [`BROAD_FILETYPE_ALLOWLIST`] entry.
 ///
-/// `FileType::All` always exceeds the threshold. Named groups are already expanded in
-/// `t.r#for`, so their member count is used directly. Single-platform traits get a higher
-/// limit (12) since the platform already constrains the realistic type set. Multi-platform
-/// traits must stay within 10.
+/// `FileType::All` expands to every file type and so exceeds any cap. Named `for:`
+/// groups are already expanded in `t.r#for`, so their member count is used directly.
 ///
-/// Returns `Vec<(trait_id, source_file, type_count, matched_types)>` for violations.
+/// Returns `Vec<(trait_id, source_file, type_count, matched_types, category, cap)>`
+/// for violations.
 #[must_use]
 pub(crate) fn find_broad_filetype_traits(
     trait_definitions: &[TraitDefinition],
     rule_source_files: &HashMap<String, String>,
-) -> Vec<(String, String, usize, Vec<FileType>)> {
+) -> Vec<(String, String, usize, Vec<FileType>, &'static str, usize)> {
     trait_definitions
         .iter()
-        .filter(|t| {
+        .filter_map(|t| {
             let count = effective_filetype_count(t);
-            let threshold = if effective_platform_count(&t.platforms) <= 1 {
-                BROAD_FILETYPE_THRESHOLD_SINGLE_PLATFORM
-            } else {
-                BROAD_FILETYPE_THRESHOLD
-            };
-            if count < threshold {
-                return false;
+            let cap = filetype_cap_for_condition(&t.r#if);
+            if count <= cap {
+                return None;
             }
+            let category = broad_filetype_category(&t.r#if);
             let source = rule_source_files
                 .get(&t.id)
                 .map(String::as_str)
                 .unwrap_or("");
-            !BROAD_FILETYPE_ALLOWLIST
-                .iter()
-                .any(|prefix| source.contains(prefix))
-        })
-        .map(|t| {
-            let source = rule_source_files
-                .get(&t.id)
-                .cloned()
-                .unwrap_or_else(|| "unknown".to_string());
+            // A type-qualified allowlist entry ("text:<dir-prefix>") lifts the
+            // cap only for matchers of that one type in that directory subtree.
+            let allowlisted = BROAD_FILETYPE_ALLOWLIST.iter().any(|entry| {
+                entry
+                    .split_once(':')
+                    .is_some_and(|(ty, prefix)| ty == category && source.contains(prefix))
+            });
+            if allowlisted {
+                return None;
+            }
             let matched_types = if t.r#for.contains(&FileType::All) {
                 vec![FileType::All]
             } else {
                 t.r#for.clone()
             };
-            (
+            Some((
                 t.id.clone(),
-                source,
-                effective_filetype_count(t),
+                source.to_string(),
+                count,
                 matched_types,
-            )
+                category,
+                cap,
+            ))
         })
         .collect()
 }

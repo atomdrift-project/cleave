@@ -330,9 +330,3 @@ opt-level = 3
 opt-level = 3
 
 
-
-# TEMP (local dev): build against the local filefacts checkout so the
-# Symbol facts-simplification (Decl + FunctionMetrics) is available before
-# the codeberg push + lockfile bump.
-[patch."https://codeberg.org/atomdrift/filefacts.git"]
-filefacts = { path = "../filefacts" }

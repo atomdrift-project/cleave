@@ -675,7 +675,6 @@ mod tests {
         };
 
         assert_eq!(e.method, "yara");
-        assert_eq!(e.source, "yara-x");
         assert_eq!(e.value, "suspicious_pattern");
         assert_eq!(e.location, Some("0x1234".to_string()));
     }

@@ -25,7 +25,6 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
@@ -33,7 +32,6 @@ fn create_test_context() -> (AnalysisReport, Vec<u8>) {
     report.imports.push(Import {
         symbol: "connect".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
@@ -1261,14 +1259,12 @@ fn test_symbol_exact_vs_substr() {
     report.imports.push(Import {
         symbol: "read".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
     report.imports.push(Import {
         symbol: "readlink".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
@@ -2621,14 +2617,12 @@ fn test_needs_with_all_and_any_matches_when_threshold_met() {
     report.imports.push(Import {
         symbol: "send".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
     report.imports.push(Import {
         symbol: "recv".to_string(),
         library: None,
-        source: "test".to_string(),
         offset: None,
         alias: None,
     });
@@ -4076,7 +4070,6 @@ fn test_composite_downgrade_all_match() {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -4178,7 +4171,6 @@ fn test_composite_downgrade_none_blocks() {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });

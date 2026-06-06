@@ -816,12 +816,12 @@ mod tests {
     fn symbols_distinguish_kind_and_library() {
         let mut old = unit();
         let mut new = unit();
-        old.imports = vec![Import::new("malloc", Some("libc.so.6".into()), "goblin")];
+        old.imports = vec![Import::new("malloc", Some("libc.so.6".into()))];
         new.imports = vec![
-            Import::new("malloc", Some("libc.so.6".into()), "goblin"),
-            Import::new("malloc", Some("musl.so".into()), "goblin"),
+            Import::new("malloc", Some("libc.so.6".into())),
+            Import::new("malloc", Some("musl.so".into())),
         ];
-        new.exports = vec![Export::new("init", None, "goblin")];
+        new.exports = vec![Export::new("init", None)];
 
         let d = diff_symbols(&old, &new, 0);
         assert_eq!(d.added.len(), 2); // malloc@musl + init export

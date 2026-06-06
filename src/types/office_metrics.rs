@@ -163,27 +163,6 @@ pub(crate) struct VbaMetrics {
     /// runtime — strong obfuscation signal).
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub declare_non_literal_count: u32,
-    /// Distinct DLL names referenced via `Declare ... Lib`.
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub distinct_dll_count: u32,
-
-    // === Per-DLL reference counts (high-risk subset only) ===
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub kernel32_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub user32_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub advapi32_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub urlmon_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub wininet_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub ws2_32_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub ole32_ref_count: u32,
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub shell32_ref_count: u32,
 
     // === CreateObject / GetObject ===
     /// Count of CreateObject calls in VBA modules
@@ -198,9 +177,6 @@ pub(crate) struct VbaMetrics {
     /// `GetObject` calls with non-literal moniker arg.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub getobject_non_literal_count: u32,
-    /// Distinct ProgID strings in CreateObject calls
-    #[serde(default, skip_serializing_if = "is_zero_u32")]
-    pub distinct_progid_count: u32,
 
     // === Trigger handlers (Auto_*, Document_*, Workbook_*, UserForm_*) ===
     /// Count of auto-execution trigger handler subs

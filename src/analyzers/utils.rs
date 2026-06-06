@@ -412,7 +412,6 @@ mod tests {
 
         let evidence = &feature.evidence[0];
         assert_eq!(evidence.method, "parser");
-        assert_eq!(evidence.source, "tree-sitter-python");
         assert_eq!(evidence.value, "python");
         assert_eq!(evidence.location, Some("AST".to_string()));
     }

@@ -191,7 +191,7 @@ impl PEAnalyzer {
         let mut findings = Vec::new();
         for imp in &imports {
             let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
-            if let Some(capability) = self.capability_mapper.lookup(&normalized, &imp.source) {
+            if let Some(capability) = self.capability_mapper.lookup(&normalized) {
                 findings.push(capability);
             }
         }
@@ -704,14 +704,6 @@ impl PEAnalyzer {
             .iter_kind(filefacts::SymbolKind::Function)
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-        if ctx
-            .parsed
-            .symbols()
-            .iter_kind(filefacts::SymbolKind::Function)
-            .any(|s| s.source() == "rizin")
-        {
-            tools_used.push("radare2".to_string());
-        }
 
         // String extraction no longer threads rizin's `izj` output
         // through stng: filefacts runs rizin once during `open`, and the
@@ -1648,10 +1640,8 @@ mod tests {
         // only.
         assert!(!report.sections.is_empty());
 
-        // Imports come from filefacts's typed view; the source tag is "pe".
-        let sources: std::collections::HashSet<&str> =
-            report.imports.iter().map(|i| i.source.as_str()).collect();
-        assert!(sources.contains("pe"));
+        // Imports come from filefacts's typed view.
+        assert!(!report.imports.is_empty(), "expected PE imports");
     }
 
     #[test]

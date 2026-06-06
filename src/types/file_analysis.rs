@@ -290,15 +290,6 @@ impl FileAnalysis {
                 e.source.clear();
             }
         }
-        for f in &mut self.functions {
-            f.source.clear();
-        }
-        for i in &mut self.imports {
-            i.source.clear();
-        }
-        for e in &mut self.exports {
-            e.source.clear();
-        }
         for p in &mut self.paths {
             p.source.clear();
             for e in &mut p.evidence {

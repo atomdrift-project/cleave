@@ -144,7 +144,6 @@ pub(crate) mod evaluate_traits;
 pub(crate) use evaluate_merged::AnalysisBorrow;
 pub(crate) mod filters;
 pub(crate) mod helpers;
-pub(crate) mod imports;
 pub(crate) mod loader_directory;
 pub(crate) mod loader_yaml;
 pub(crate) mod lookup;

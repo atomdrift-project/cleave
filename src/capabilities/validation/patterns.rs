@@ -538,6 +538,24 @@ pub(crate) fn find_slow_regex_patterns(traits: &[TraitDefinition], warnings: &mu
 /// Shorter substrings are too common in binary data to reliably match via extracted strings.
 const RAW_TO_TEXT_MIN_LITERAL_LEN: usize = 5;
 
+/// Minimum length for the plain-extractable-text `raw` misuse check. Matches the
+/// string-extractor's min length (4): any plain-text literal this long is surfaced
+/// as an extracted string for EVERY file type (flat strings extraction over the
+/// whole file), so `type: text` reaches it and `raw` is the wrong surface.
+const RAW_PLAIN_TEXT_MIN_LEN: usize = 4;
+
+/// True when a literal is plain printable ASCII text containing at least one
+/// letter — exactly the content `type: text` (string extraction) captures.
+/// Such a literal must never be a `raw` search: `raw` is reserved for byte
+/// patterns text extraction can't reach (sub-4-char runs, embedded NULs,
+/// high/non-UTF8 bytes). Escaped byte sequences (`\xNN`) are treated as
+/// intentional byte patterns and left alone.
+fn is_plain_extractable_text(s: &str) -> bool {
+    !s.contains("\\x")
+        && s.bytes().all(|b| (0x20..=0x7e).contains(&b))
+        && s.chars().any(|c| c.is_ascii_alphabetic())
+}
+
 /// Returns true if a regex pattern contains no meaningful metacharacters —
 /// i.e., it could be expressed as a simple `substr` match.
 ///
@@ -715,6 +733,31 @@ pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mu
 
         if condition_has_position_constraints(&trait_def.r#if) {
             continue;
+        }
+
+        // A `raw` literal that is plain extractable ASCII text is misusing
+        // `raw`: flat string extraction surfaces it for EVERY file type (incl.
+        // OLE/MSI/PDF/RTF containers — verified: cleave runs `strings` over the
+        // whole file), so `type: text` reaches it. This holds for ANY `for:`,
+        // which is why it is not gated on file type like the heuristics below.
+        if let Some(lit) = exact.or(substr).or(word) {
+            if lit.len() >= RAW_PLAIN_TEXT_MIN_LEN && is_plain_extractable_text(lit) {
+                let source_file = trait_def
+                    .defined_in
+                    .to_str()
+                    .unwrap_or("unknown")
+                    .to_string();
+                let location = match find_line_number(&source_file, &trait_def.id) {
+                    Some(line) => format!("{}:{}", source_file, line),
+                    None => source_file,
+                };
+                warnings.push(format!(
+                    "Wrong type: trait '{}' in {} uses `type: raw` for plain text '{}' — \
+                     use `type: text` (raw is reserved for bytes text extraction can't reach)",
+                    trait_def.id, location, lit
+                ));
+                continue;
+            }
         }
 
         let targets_binary = targets_binary_only(&trait_def.r#for);

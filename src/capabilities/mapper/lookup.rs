@@ -9,7 +9,7 @@ use crate::types::{Evidence, Finding, FindingKind};
 impl super::CapabilityMapper {
     /// Look up a symbol and return its capability finding if known
     #[must_use]
-    pub(crate) fn lookup(&self, symbol: &str, source: &str) -> Option<Finding> {
+    pub(crate) fn lookup(&self, symbol: &str) -> Option<Finding> {
         // Strip common prefixes for matching
         let clean_symbol = symbol
             .trim_start_matches('_') // C symbols often have leading underscore
@@ -27,7 +27,6 @@ impl super::CapabilityMapper {
                 trait_refs: vec![],
                 evidence: vec![Evidence {
                     method: "symbol".to_string(),
-                    source: source.to_string(),
                     value: symbol.to_string(),
                     location: None,
                     ..Default::default()

@@ -345,6 +345,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Keep one composite and update references.",
     },
     ValidatorSpec {
+        id: "duplicate-trait-id",
+        category: ValidatorCategory::Dedup,
+        display_id: "dup-id",
+        description: "Two traits or composites resolve to the same directory::id.",
+        fix: "Rename or remove one definition; each directory::id must be unique. References resolve by id, so a collision silently shadows one definition.",
+    },
+    ValidatorSpec {
         id: "orphaned-components",
         category: ValidatorCategory::Reuse,
         display_id: "orphan-comp",

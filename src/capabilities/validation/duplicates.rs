@@ -1538,12 +1538,12 @@ pub(crate) fn check_same_string_different_types(
         let mut has_overlap = false;
         'outer: for i in 0..all_locations.len() {
             for j in (i + 1)..all_locations.len() {
-                // Only check if they have different condition types
+                // Same literal searched two different ways (e.g. `raw` vs `text`,
+                // or `text` vs `symbol`) with overlapping file types is a
+                // duplicate the analyst must collapse — regardless of which file
+                // each trait lives in. The only gate is file-type overlap.
                 if all_locations[i].condition_type != all_locations[j].condition_type
                     && all_locations[i].match_type == all_locations[j].match_type
-                    && trait_dir(&all_locations[i].trait_id)
-                        == trait_dir(&all_locations[j].trait_id)
-                    && all_locations[i].file_path == all_locations[j].file_path
                     && has_filetype_overlap(all_locations[i], all_locations[j])
                 {
                     has_overlap = true;
@@ -1593,7 +1593,15 @@ pub(crate) fn check_same_string_different_types(
 }
 
 fn is_cross_type_canonicalization_candidate(condition_type: &str) -> bool {
-    matches!(condition_type, "text" | "string_literal")
+    // `raw` and `symbol` are included alongside `text`/`string_literal` so the
+    // same literal searched two different ways is caught: `raw` is reserved for
+    // bytes that text extraction would miss (never plain extractable text), and
+    // `symbol` is a distinct AST surface. Searching one string as both — with
+    // overlapping file types — is a duplicate the analyst must collapse.
+    matches!(
+        condition_type,
+        "text" | "string_literal" | "raw" | "symbol"
+    )
 }
 
 /// Detect exact patterns that are redundant because a substr pattern with the SAME string exists
@@ -3077,8 +3085,10 @@ pub(crate) fn validate_regex_overlap_with_literal(
     }
 }
 
-/// Find traits where both `type: text` and `type: raw` exist for the same pattern
-/// at the same criticality. These should be merged to just `raw` (which is broader).
+/// Find traits where both `type: text` and `type: raw` exist for the same pattern.
+/// These should be merged to just `raw` (which is broader). The matcher signatures
+/// are byte-identical here (literally the same string), so criticality is NOT part
+/// of the key — a `text`/`raw` twin is a duplicate regardless of criticality.
 /// Returns: Vec<(string_trait_id, raw_trait_id, pattern_description)>
 #[must_use]
 pub(crate) fn find_string_content_collisions(
@@ -3086,18 +3096,17 @@ pub(crate) fn find_string_content_collisions(
 ) -> Vec<(String, String, String)> {
     let mut collisions = Vec::new();
 
-    // Group traits by (signature, criticality, for, platforms)
-    // Key: (signature, crit, for, platforms) -> Vec<(trait_id, is_string_type)>
-    type SignatureGroup = HashMap<(MatchSignature, String, String, String), Vec<(String, bool)>>;
+    // Group traits by (signature, for, platforms). Criticality is intentionally
+    // excluded: identical matchers are duplicates regardless of crit.
+    // Key: (signature, for, platforms) -> Vec<(trait_id, is_string_type)>
+    type SignatureGroup = HashMap<(MatchSignature, String, String), Vec<(String, bool)>>;
     let mut groups: SignatureGroup = HashMap::new();
 
     for t in trait_definitions {
         if let Some((is_string, sig)) = extract_match_signature(&t.r#if) {
-            // Create a key that includes criticality, for, and platforms
-            let crit_key = format!("{:?}", t.crit);
             let for_key = format!("{:?}", t.r#for);
             let platforms_key = format!("{:?}", t.platforms);
-            let key = (sig, crit_key, for_key, platforms_key);
+            let key = (sig, for_key, platforms_key);
 
             groups
                 .entry(key)
@@ -3107,7 +3116,7 @@ pub(crate) fn find_string_content_collisions(
     }
 
     // Find groups with both string and content types
-    for ((sig, _crit, _for, _platforms), traits) in groups {
+    for ((sig, _for, _platforms), traits) in groups {
         let string_traits: Vec<_> = traits.iter().filter(|(_, is_str)| *is_str).collect();
         let content_traits: Vec<_> = traits.iter().filter(|(_, is_str)| !*is_str).collect();
 

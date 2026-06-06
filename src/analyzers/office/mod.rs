@@ -332,81 +332,12 @@ impl OfficeAnalyzer {
         // their defaults and the shape stats above are the only
         // signal we surface.
         if let Some(c) = ctx {
-            let mut distinct_libs = std::collections::BTreeSet::<String>::new();
-            let mut distinct_progids = std::collections::BTreeSet::<String>::new();
-            let mut distinct_triggers = std::collections::BTreeSet::<String>::new();
-            let mut ident_stats = vba_symbols::IdentifierStats::default();
+            // Push VBA symbols into the report for trait matching. The VBA
+            // metrics (`office.vba.*`) are owned and emitted by filefacts —
+            // cleave reads them, it does not recompute them.
+            report.imports.extend(c.imports_from_filefacts());
+            report.functions.extend(c.functions_from_filefacts());
 
-            for imp in c
-                .imports_from_filefacts()
-                .into_iter()
-                .filter(|i| i.source.starts_with("vba-"))
-            {
-                if let Some(lib) = &imp.library {
-                    // distinct_dll_count tracks Declare-imported native
-                    // DLLs only; CreateObject's pseudo-library `com` is
-                    // counted separately via distinct_progid_count.
-                    if imp.source == "vba-declare" && lib != vba_symbols::NON_LITERAL_SENTINEL {
-                        distinct_libs.insert(lib.clone());
-                    }
-                    match lib.as_str() {
-                        "kernel32" | "kernelbase" => {
-                            agg.kernel32_ref_count = agg.kernel32_ref_count.saturating_add(1);
-                        }
-                        "user32" => {
-                            agg.user32_ref_count = agg.user32_ref_count.saturating_add(1);
-                        }
-                        "advapi32" => {
-                            agg.advapi32_ref_count = agg.advapi32_ref_count.saturating_add(1);
-                        }
-                        "urlmon" => {
-                            agg.urlmon_ref_count = agg.urlmon_ref_count.saturating_add(1);
-                        }
-                        "wininet" | "winhttp" => {
-                            agg.wininet_ref_count = agg.wininet_ref_count.saturating_add(1);
-                        }
-                        "ws2_32" => {
-                            agg.ws2_32_ref_count = agg.ws2_32_ref_count.saturating_add(1);
-                        }
-                        "ole32" | "oleaut32" => {
-                            agg.ole32_ref_count = agg.ole32_ref_count.saturating_add(1);
-                        }
-                        "shell32" | "shlwapi" => {
-                            agg.shell32_ref_count = agg.shell32_ref_count.saturating_add(1);
-                        }
-                        _ => {}
-                    }
-                    if (lib == "com" || lib == "com-getobject")
-                        && imp.symbol != vba_symbols::NON_LITERAL_SENTINEL
-                    {
-                        distinct_progids.insert(imp.symbol.clone());
-                    }
-                }
-                ident_stats.record(&imp.symbol);
-                report.imports.push(imp);
-            }
-
-            for func in c
-                .functions_from_filefacts()
-                .into_iter()
-                .filter(|f| f.source.starts_with("vba-"))
-            {
-                if vba_symbols::is_trigger_handler(&func.name) {
-                    distinct_triggers.insert(func.name.clone());
-                }
-                ident_stats.record(&func.name);
-                report.functions.push(func);
-            }
-
-            agg.distinct_dll_count = distinct_libs.len() as u32;
-            agg.distinct_progid_count = distinct_progids.len() as u32;
-            agg.distinct_trigger_count = distinct_triggers.len() as u32;
-            agg.mean_identifier_length = ident_stats.mean_length();
-            agg.identifier_entropy = ident_stats.entropy_bits();
-
-            // Aggregate counts come straight from filefacts's metric
-            // map — they were folded across modules during the
-            // filefacts-side regex pass.
             let m = c.parsed.metrics();
             let counter = |key: &str| -> u32 { m.get(key).map(|v| v as u32).unwrap_or(0) };
             agg.declare_count = counter("office.vba.declare_count");
@@ -417,6 +348,10 @@ impl OfficeAnalyzer {
             agg.getobject_count = counter("office.vba.getobject_count");
             agg.getobject_non_literal_count = counter("office.vba.getobject_non_literal_count");
             agg.trigger_handler_count = counter("office.vba.trigger_handler_count");
+            agg.distinct_trigger_count = counter("office.vba.distinct_trigger_count");
+            agg.mean_identifier_length =
+                m.get("office.vba.mean_identifier_length").unwrap_or(0.0) as f32;
+            agg.identifier_entropy = m.get("office.vba.identifier_entropy").unwrap_or(0.0) as f32;
         }
 
         let prev_source_size = flat.get_u("office.vba_source_size").unwrap_or(0);

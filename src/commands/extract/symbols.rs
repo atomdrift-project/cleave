@@ -93,7 +93,6 @@ fn run_with_layer(
             address: None,
             library: import.library.clone(),
             symbol_type: "import".to_string(),
-            source: import.source.clone(),
             forward_to: None,
         });
     }
@@ -104,7 +103,6 @@ fn run_with_layer(
             address: export.offset.clone(),
             library: None,
             symbol_type: "export".to_string(),
-            source: export.source.clone(),
             forward_to: export.forward_to.clone(),
         });
     }
@@ -115,7 +113,6 @@ fn run_with_layer(
             address: func.offset.clone(),
             library: None,
             symbol_type: "function".to_string(),
-            source: func.source.clone(),
             forward_to: None,
         });
     }
@@ -148,7 +145,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: None,
                         library: import.library.clone(),
                         symbol_type: "import".to_string(),
-                        source: import.source.clone(),
                         forward_to: None,
                     });
                 }
@@ -158,7 +154,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: export.offset.clone(),
                         library: None,
                         symbol_type: "export".to_string(),
-                        source: export.source.clone(),
                         forward_to: export.forward_to.clone(),
                     });
                 }
@@ -168,7 +163,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: func.offset.clone(),
                         library: None,
                         symbol_type: "function".to_string(),
-                        source: func.source.clone(),
                         forward_to: None,
                     });
                 }
@@ -201,7 +195,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: None,
                         library: import.library,
                         symbol_type: "import".to_string(),
-                        source: import.source,
                         forward_to: None,
                     });
                 }
@@ -213,7 +206,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: export.offset,
                         library: None,
                         symbol_type: "export".to_string(),
-                        source: export.source,
                         forward_to: export.forward_to.clone(),
                     });
                 }
@@ -225,7 +217,6 @@ fn run_direct(target: &str, format: &cli::OutputFormat, filter: SymbolFilter) ->
                         address: func.offset,
                         library: None,
                         symbol_type: "function".to_string(),
-                        source: func.source,
                         forward_to: None,
                     });
                 }

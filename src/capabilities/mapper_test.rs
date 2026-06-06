@@ -98,7 +98,7 @@ symbols:
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
     assert_eq!(mapper.mapping_count(), 1);
-    assert!(mapper.lookup("malloc", "libc").is_some());
+    assert!(mapper.lookup("malloc").is_some());
 }
 
 #[test]
@@ -173,7 +173,7 @@ symbols:
     let (_dir, path) = create_test_yaml(yaml);
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
-    let finding = mapper.lookup("malloc", "libc").unwrap();
+    let finding = mapper.lookup("malloc").unwrap();
     assert_eq!(finding.id, "micro-behaviors/mem/allocate::malloc");
     assert_eq!(finding.desc, "Allocate memory");
     assert_eq!(finding.crit, Criticality::Baseline);
@@ -182,7 +182,7 @@ symbols:
 #[test]
 fn test_lookup_nonexistent_symbol() {
     let mapper = CapabilityMapper::empty();
-    let finding = mapper.lookup("nonexistent_func", "libfoo");
+    let finding = mapper.lookup("nonexistent_func");
     assert!(finding.is_none());
 }
 
@@ -199,7 +199,7 @@ symbols:
     let mapper = CapabilityMapper::from_yaml(&path).unwrap();
 
     // Should strip common prefixes like '_', '__', etc.
-    let finding = mapper.lookup("_malloc", "libc");
+    let finding = mapper.lookup("_malloc");
     assert!(finding.is_some());
     assert_eq!(finding.unwrap().id, "micro-behaviors/mem/allocate::malloc");
 }
@@ -390,7 +390,7 @@ traits:
 
     // The symbol_map should NOT contain this trait since it has for: [dll]
     assert!(
-        mapper.lookup("textdomain", "test").is_none(),
+        mapper.lookup("textdomain").is_none(),
         "symbol_map should not include traits with restrictive for: constraints"
     );
 
@@ -399,7 +399,7 @@ traits:
     report.target.file_type = "elf".to_string();
     report
         .imports
-        .push(crate::types::Import::new("textdomain", None, "test"));
+        .push(crate::types::Import::new("textdomain", None));
 
     let findings = mapper.evaluate_traits(&report, b"");
     assert!(
@@ -447,14 +447,13 @@ traits:
     report.imports.push(Import {
         symbol: "malloc".to_string(),
         library: Some("libc".to_string()),
-        source: "static".to_string(),
         offset: None,
         alias: None,
     });
 
     // Manually lookup and add symbol findings
     for import in &report.imports {
-        if let Some(finding) = mapper.lookup(&import.symbol, &import.source) {
+        if let Some(finding) = mapper.lookup(&import.symbol) {
             report.findings.push(finding);
         }
     }

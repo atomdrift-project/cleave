@@ -51,18 +51,17 @@ impl AppleScriptAnalyzer {
         if let Ok(parser) = scpt::ScptParser::new(data) {
             // Extract all symbols
             for symbol in parser.symbols() {
-                let (source, library) = match symbol.kind {
-                    scpt::SymbolKind::Variable => ("scpt_variable", None),
-                    scpt::SymbolKind::AppleEvent => ("scpt_event", Some("AppleEvents")),
-                    scpt::SymbolKind::FourCharCode => ("scpt_fourcc", Some("OSType")),
-                    scpt::SymbolKind::Application => ("scpt_app", Some("Applications")),
+                let library = match symbol.kind {
+                    scpt::SymbolKind::Variable => None,
+                    scpt::SymbolKind::AppleEvent => Some("AppleEvents"),
+                    scpt::SymbolKind::FourCharCode => Some("OSType"),
+                    scpt::SymbolKind::Application => Some("Applications"),
                     scpt::SymbolKind::StringLiteral => continue, // Skip string literals for imports
                 };
 
                 report.imports.push(Import {
                     symbol: symbol.name,
                     library: library.map(String::from),
-                    source: source.to_string(),
                     offset: None,
                     alias: None,
                 });
@@ -74,7 +73,6 @@ impl AppleScriptAnalyzer {
                 report.imports.push(Import {
                     symbol: format!("{}.{}", event.class_code, event.event_code),
                     library: Some("AppleEvents".to_string()),
-                    source: "scpt_event".to_string(),
                     offset: None,
                     alias: None,
                 });
@@ -84,7 +82,6 @@ impl AppleScriptAnalyzer {
                     report.imports.push(Import {
                         symbol: event.desc.to_string(),
                         library: Some("AppleScript".to_string()),
-                        source: "scpt_command".to_string(),
                         offset: None,
                         alias: None,
                     });

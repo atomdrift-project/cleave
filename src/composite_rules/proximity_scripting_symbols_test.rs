@@ -119,10 +119,12 @@ def decoder(payload):
     #[test]
     fn call_sites_emit_per_site_imports_with_offsets() {
         let report = parse_python(CLUSTERED_PY);
+        // AST call-site imports are exactly the ones carrying a byte offset
+        // (module-level imports have none).
         let ast_imports: Vec<&Import> = report
             .imports
             .iter()
-            .filter(|i| i.source == "ast")
+            .filter(|i| i.offset.is_some())
             .collect();
 
         // One entry per call site — no HashSet dedup. The sample has
@@ -299,7 +301,7 @@ def decoder(payload):
 
     #[test]
     fn import_offset_roundtrips_through_serde() {
-        let import = Import::with_offset("exec", None, "ast", 0x2a);
+        let import = Import::with_offset("exec", None, 0x2a);
         assert_eq!(import.symbol, "exec");
         assert_eq!(import.offset.as_deref(), Some("0x2a"));
 
@@ -337,7 +339,7 @@ def decoder(payload):
         });
         report
             .imports
-            .push(Import::with_offset("exec", None, "ast", 0x42));
+            .push(Import::with_offset("exec", None, 0x42));
 
         let data: Vec<u8> = vec![0; 0x100];
         let ctx = EvaluationContext::new(

@@ -289,14 +289,6 @@ impl MachOAnalyzer {
             .iter_kind(filefacts::SymbolKind::Function)
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
-        if ctx
-            .parsed
-            .symbols()
-            .iter_kind(filefacts::SymbolKind::Function)
-            .any(|s| s.source() == "rizin")
-        {
-            tools_used.push("radare2".to_string());
-        }
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;
         let _ = (allow_rizin, precomputed_sha256, codesig_data);
 
@@ -491,7 +483,7 @@ impl MachOAnalyzer {
     /// lookups against each, and merge into the report.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         for imp in ctx.imports_from_filefacts() {
-            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source)
+            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol)
                 && !report.findings.iter().any(|c| c.id == cap.id)
             {
                 report.findings.push(cap);
@@ -1095,12 +1087,6 @@ impl MachOAnalyzer {
                 continue;
             }
             let slice_bytes = &data[offset..offset + size];
-            let arch_name = slice
-                .get("cpu_type")
-                .and_then(|x| x.as_str())
-                .unwrap_or("unknown");
-            let import_source = format!("filefacts-{}", arch_name);
-
             let Ok(slice_ctx) =
                 crate::analysis_context::AnalysisContext::open(dummy_path, slice_bytes)
             else {
@@ -1115,10 +1101,9 @@ impl MachOAnalyzer {
                 }
                 let symbol = imp.symbol.clone();
                 report.imports.push(crate::types::Import {
-                    source: import_source.clone(),
                     ..imp
                 });
-                if let Some(cap) = self.capability_mapper.lookup(&symbol, "macho-bind")
+                if let Some(cap) = self.capability_mapper.lookup(&symbol)
                     && !report.findings.iter().any(|c| c.id == cap.id)
                 {
                     report.findings.push(cap);
@@ -1131,7 +1116,6 @@ impl MachOAnalyzer {
                     continue;
                 }
                 report.exports.push(Export {
-                    source: import_source.clone(),
                     ..exp
                 });
             }

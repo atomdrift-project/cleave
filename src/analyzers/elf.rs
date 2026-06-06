@@ -248,14 +248,6 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            if ctx
-                .parsed
-                .symbols()
-                .iter_kind(filefacts::SymbolKind::Function)
-                .any(|s| s.source() == "rizin")
-            {
-                tools_used.push("radare2".to_string());
-            }
             let r2_strings_extracted: Option<Vec<stng::ExtractedString>> = None;
 
             // ELF overlay detection: data after the last PT_LOAD segment.
@@ -444,14 +436,6 @@ impl ElfAnalyzer {
                 .iter_kind(filefacts::SymbolKind::Function)
                 .filter_map(crate::analysis_context::project_filefacts_function)
                 .collect();
-            if ctx
-                .parsed
-                .symbols()
-                .iter_kind(filefacts::SymbolKind::Function)
-                .any(|s| s.source() == "rizin")
-            {
-                tools_used.push("radare2".to_string());
-            }
             let _ = (parse_failed, allow_rizin, precomputed_sha256);
             (None, 0u64)
         };
@@ -748,7 +732,7 @@ impl ElfAnalyzer {
         for imp in ctx.imports_from_filefacts() {
             // Capability lookup runs against the symbol name; the
             // source argument is used only for evidence attribution.
-            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol, &imp.source)
+            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol)
                 && !report.findings.iter().any(|c| c.id == cap.id)
             {
                 report.findings.push(cap);

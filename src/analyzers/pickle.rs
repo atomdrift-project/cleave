@@ -63,11 +63,7 @@ impl PickleAnalyzer {
         // Extract globals (module.attr references) as import symbols
         let globals = extract_pickle_globals(data);
         for global_ref in &globals {
-            report.imports.push(crate::types::Import::new(
-                global_ref.as_str(),
-                Some("pickle-global".to_string()),
-                "pickle-analyzer",
-            ));
+            report.imports.push(crate::types::Import::new(global_ref.as_str(), Some("pickle-global".to_string())));
         }
 
         // Extract readable strings from pickle data
@@ -466,7 +462,6 @@ mod tests {
         let report = analyzer.analyze_pickle(Path::new("payload.pkl"), &data);
 
         assert!(report.imports.iter().any(|i| i.symbol == "builtins.exec"));
-        assert!(report.imports.iter().all(|i| i.source == "pickle-analyzer"));
     }
 
     #[test]

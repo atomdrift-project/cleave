@@ -1147,7 +1147,6 @@ mod formula_tests {
         fa.imports.push(Import::new(
             "CreateFileW",
             Some("kernel32.dll".into()),
-            "test",
         ));
         fa.sections.push(Section {
             name: ".text".into(),

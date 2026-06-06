@@ -942,14 +942,25 @@ impl super::CapabilityMapper {
                 }
 
                 // Check for ID conflicts with previously loaded traits (cross-file duplicates)
-                if trait_definitions_map.contains_key(&trait_def.id)
-                    && !crate::validation_controls::is_validator_disabled("duplicate-composites")
-                {
+                // Duplicate trait id — two atomic traits resolving to the same
+                // `directory::id`. The runtime stores traits in a HashMap keyed
+                // by id, so the second silently overwrites the first and every
+                // reference resolves to whichever loaded last. This is never
+                // acceptable: report it as an ungated hard error (cannot be
+                // silenced via a validator override) so the tree is forced to
+                // keep every id unique.
+                if trait_definitions_map.contains_key(&trait_def.id) {
+                    let prior = trait_source_files
+                        .get(&trait_def.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("(already loaded)");
                     warnings.push_id(
-                        "duplicate-composites",
+                        "duplicate-trait-id",
                         format!(
-                            "Trait ID '{}' defined in multiple files - last definition wins",
-                            trait_def.id
+                            "Duplicate trait id '{}' — defined in both {} and {}; each directory::id must be unique",
+                            trait_def.id,
+                            prior,
+                            path.display()
                         ),
                     );
                     // HashMap insert will automatically replace the old one
@@ -1066,15 +1077,21 @@ impl super::CapabilityMapper {
                     autoprefix_trait_refs(&mut rule, prefix);
                 }
 
-                // Check for duplicate rule ID with other composite rules
-                if composite_rules_map.contains_key(&rule.id)
-                    && !crate::validation_controls::is_validator_disabled("duplicate-composites")
-                {
+                // Duplicate composite id — two composites resolving to the same
+                // `directory::id`. Same hazard as duplicate atomic ids: the
+                // second silently overwrites the first. Ungated hard error.
+                if composite_rules_map.contains_key(&rule.id) {
+                    let prior = rule_source_files
+                        .get(&rule.id)
+                        .map(std::string::String::as_str)
+                        .unwrap_or("(already loaded)");
                     warnings.push_id(
-                        "duplicate-composites",
+                        "duplicate-trait-id",
                         format!(
-                            "Composite rule '{}' defined in multiple files - last definition wins",
-                            rule.id
+                            "Duplicate composite id '{}' — defined in both {} and {}; each directory::id must be unique",
+                            rule.id,
+                            prior,
+                            path.display()
                         ),
                     );
                     // HashMap insert will automatically replace the old one

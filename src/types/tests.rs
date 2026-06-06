@@ -195,7 +195,6 @@ fn test_trait_new_constructor() {
 
     assert_eq!(trait_obj.kind, TraitKind::String);
     assert_eq!(trait_obj.value, "test_value");
-    assert_eq!(trait_obj.source, "test_source");
 }
 
 #[test]
@@ -238,7 +237,6 @@ fn test_evidence_creation() {
     };
 
     assert_eq!(evidence.method, "symbol");
-    assert_eq!(evidence.source, "goblin");
     assert_eq!(evidence.value, "socket");
     assert_eq!(evidence.location, Some("0x1000".to_string()));
 }
@@ -285,7 +283,6 @@ fn test_function_creation() {
         size: Some(256),
         complexity: Some(5),
         calls: vec!["printf".to_string()],
-        source: "radare2".to_string(),
         control_flow: None,
         register_usage: None,
         constants: vec![],
@@ -297,7 +294,6 @@ fn test_function_creation() {
     assert_eq!(func.name, "main");
     assert_eq!(func.size, Some(256));
     assert_eq!(func.calls.len(), 1);
-    assert_eq!(func.source, "radare2");
 }
 
 #[test]
@@ -339,14 +335,12 @@ fn test_import_creation() {
     let import = Import {
         symbol: "printf".to_string(),
         library: Some("libc.so.6".to_string()),
-        source: "goblin".to_string(),
         offset: None,
         alias: None,
     };
 
     assert_eq!(import.symbol, "printf");
     assert_eq!(import.library, Some("libc.so.6".to_string()));
-    assert_eq!(import.source, "goblin");
 }
 
 #[test]
@@ -354,13 +348,11 @@ fn test_export_creation() {
     let export = Export {
         symbol: "my_function".to_string(),
         offset: Some("0x1500".to_string()),
-        source: "goblin".to_string(),
         forward_to: None,
     };
 
     assert_eq!(export.symbol, "my_function");
     assert_eq!(export.offset, Some("0x1500".to_string()));
-    assert_eq!(export.source, "goblin");
 }
 
 #[test]

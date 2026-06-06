@@ -392,18 +392,7 @@ impl super::CapabilityMapper {
         }
         let _d_eval2 = t_eval2.elapsed();
 
-        // Step 3: Generate synthetic metadata/import findings from discovered imports
-        // This MUST happen before Step 4 so composite rules can reference them
-        let t_imports = std::time::Instant::now();
-        let pre_import_count = report.findings.len();
-        Self::generate_import_findings(report);
-        // Update seen with any newly added import findings
-        for f in &report.findings[pre_import_count..] {
-            seen.insert(f.id.clone());
-        }
-        let _d_imports = t_imports.elapsed();
-
-        // Step 4: Evaluate composite rules (which can now access atomic traits AND metadata/import findings)
+        // Step 4: Evaluate composite rules (which can now access atomic traits)
         let t_comp = std::time::Instant::now();
         let composite_findings = self.evaluate_composite_rules(
             report,

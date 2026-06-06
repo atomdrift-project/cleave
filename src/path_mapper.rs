@@ -519,7 +519,6 @@ mod tests {
         assert_eq!(path_info.path, "/etc/passwd");
         assert_eq!(path_info.path_type, PathType::Absolute);
         assert_eq!(path_info.category, PathCategory::Config);
-        assert_eq!(path_info.source, "strings");
         assert!(!path_info.evidence.is_empty());
     }
 

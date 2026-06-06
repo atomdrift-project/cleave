@@ -8,68 +8,10 @@
 //! those symbols:
 //!
 //! - [`compute_module_shape`] / [`looks_random_module_name`] —
-//!   per-module logical-line and identifier-randomness heuristics
-//!   (not symbol extraction)
-//! - [`IdentifierStats`] — streaming entropy/mean-length accumulator
-//!   the office analyzer feeds filefacts-emitted names into
-//! - [`is_trigger_handler`] — closed-set predicate over VBA's
-//!   auto-execution vocabulary
-//! - [`NON_LITERAL_SENTINEL`] — re-export of filefacts's sentinel so
-//!   callers can compare `imp.library` against it
+//!   per-module logical-line and identifier-randomness heuristics.
 //!
 //! Anything that looks like "where do imports come from?" is in
 //! `filefacts/src/formats/vba_symbols.rs`.
-
-/// Sentinel library/argument value emitted when a Declare's `Lib`
-/// clause or a CreateObject/GetObject argument is not a string
-/// literal. Re-exported from filefacts so cleave-side consumers don't
-/// have to import the filefacts-public path.
-pub(crate) const NON_LITERAL_SENTINEL: &str = filefacts::VBA_NON_LITERAL_SENTINEL;
-
-// Trigger-handler vocabulary kept in cleave so the office analyzer's
-// distinct-trigger aggregation runs without round-tripping through
-// filefacts's typed views. The list mirrors filefacts's internal
-// `TRIGGER_NAMES`; the two must stay in sync.
-const TRIGGER_NAMES: &[&str] = &[
-    "Auto_Open",
-    "AutoOpen",
-    "Auto_Close",
-    "AutoClose",
-    "AutoExec",
-    "AutoExit",
-    "AutoNew",
-    "Document_Open",
-    "Document_New",
-    "Document_Close",
-    "Document_BeforeClose",
-    "Document_BeforePrint",
-    "Document_BeforeSave",
-    "Document_ContentControlOnEnter",
-    "Workbook_Open",
-    "Workbook_Activate",
-    "Workbook_Deactivate",
-    "Workbook_BeforeClose",
-    "Workbook_BeforeSave",
-    "Workbook_BeforePrint",
-    "Worksheet_Activate",
-    "Worksheet_Calculate",
-    "Worksheet_Change",
-    "Worksheet_SelectionChange",
-    "UserForm_Activate",
-    "UserForm_Initialize",
-    "UserForm_Click",
-    "UserForm_Layout",
-    "Chart_Activate",
-    "Chart_Calculate",
-    "App_NewMail",
-];
-
-/// Public-facing wrapper used by the office analyzer to count distinct
-/// triggers across modules.
-#[must_use]
-pub(crate) fn is_trigger_handler(name: &str) -> bool {
-    TRIGGER_NAMES.iter().any(|t| t.eq_ignore_ascii_case(name))
-}
 
 // ---------------------------------------------------------------------------
 // Per-module shape statistics
@@ -165,65 +107,6 @@ pub(crate) fn looks_random_module_name(name: &str) -> bool {
 /// from a module. Yields the mean identifier length and the Shannon
 /// entropy of the character distribution across all identifiers.
 ///
-/// Entropy is in bits; randomly-renamed identifier sets typically run
-/// 4.0–4.7 (close to log2(26+10+_) for an alphanumeric+underscore
-/// alphabet), while human-authored names cluster 3.0–3.8.
-#[derive(Debug)]
-pub(crate) struct IdentifierStats {
-    counts: [u32; 256],
-    total_chars: u64,
-    total_idents: u32,
-}
-
-impl Default for IdentifierStats {
-    fn default() -> Self {
-        Self {
-            counts: [0u32; 256],
-            total_chars: 0,
-            total_idents: 0,
-        }
-    }
-}
-
-impl IdentifierStats {
-    pub(crate) fn record(&mut self, name: &str) {
-        if name.is_empty() {
-            return;
-        }
-        self.total_idents = self.total_idents.saturating_add(1);
-        for b in name.bytes() {
-            self.counts[b as usize] = self.counts[b as usize].saturating_add(1);
-            self.total_chars = self.total_chars.saturating_add(1);
-        }
-    }
-
-    /// Mean identifier length in characters (0 when no identifiers).
-    pub(crate) fn mean_length(&self) -> f32 {
-        if self.total_idents == 0 {
-            return 0.0;
-        }
-        (self.total_chars as f64 / self.total_idents as f64) as f32
-    }
-
-    /// Shannon entropy in bits over the byte-frequency distribution
-    /// across every identifier observed.
-    pub(crate) fn entropy_bits(&self) -> f32 {
-        if self.total_chars == 0 {
-            return 0.0;
-        }
-        let total = self.total_chars as f64;
-        let mut e = 0.0f64;
-        for &c in &self.counts {
-            if c == 0 {
-                continue;
-            }
-            let p = c as f64 / total;
-            e -= p * p.log2();
-        }
-        e as f32
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
@@ -260,34 +143,5 @@ End Sub
         let shape = compute_module_shape(src);
         assert_eq!(shape.logical_lines, 6, "shape: {:?}", shape);
         assert_eq!(shape.comment_lines, 2);
-    }
-
-    #[test]
-    fn identifier_stats_computes_mean_and_entropy() {
-        let mut s = IdentifierStats::default();
-        s.record("Document_Open");
-        s.record("VirtualAlloc");
-        s.record("RtlMoveMemory");
-        let mean = s.mean_length();
-        assert!((mean - 12.666_667).abs() < 0.001, "got {mean}");
-        let e = s.entropy_bits();
-        assert!(e > 3.0 && e < 5.0, "entropy {e} out of expected range");
-    }
-
-    #[test]
-    fn identifier_stats_empty_produces_zero() {
-        let s = IdentifierStats::default();
-        assert_eq!(s.mean_length(), 0.0);
-        assert_eq!(s.entropy_bits(), 0.0);
-    }
-
-    /// `is_trigger_handler` matches case-insensitively against the
-    /// trigger vocabulary.
-    #[test]
-    fn trigger_handler_matches_case_insensitively() {
-        assert!(is_trigger_handler("Document_Open"));
-        assert!(is_trigger_handler("DOCUMENT_OPEN"));
-        assert!(is_trigger_handler("workbook_open"));
-        assert!(!is_trigger_handler("regularSub"));
     }
 }

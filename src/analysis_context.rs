@@ -100,16 +100,13 @@ impl<'a> AnalysisContext<'a> {
                 filefacts::Symbol::Import {
                     name,
                     library,
-                    source,
                     offset,
                     alias,
                     ..
                 } => Some(
                     match offset {
-                        Some(off) => {
-                            Import::with_offset(name, library.clone(), source.clone(), *off)
-                        }
-                        None => Import::new(name, library.clone(), source.clone()),
+                        Some(off) => Import::with_offset(name, library.clone(), *off),
+                        None => Import::new(name, library.clone()),
                     }
                     .with_alias(alias.clone()),
                 ),
@@ -127,12 +124,11 @@ impl<'a> AnalysisContext<'a> {
             .filter_map(|s| match s {
                 filefacts::Symbol::Export {
                     name,
-                    source,
                     offset,
                     forward_to,
                     ..
                 } => {
-                    let mut out = Export::new(name, offset.map(hex_offset), source.clone());
+                    let mut out = Export::new(name, offset.map(hex_offset));
                     out.forward_to = forward_to.clone();
                     Some(out)
                 }
@@ -181,7 +177,6 @@ pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
         offset,
         complexity,
         callees,
-        source,
         ..
     } = sym
     else {
@@ -193,7 +188,6 @@ pub fn project_filefacts_function(sym: &filefacts::Symbol) -> Option<Function> {
         size: None,
         complexity: *complexity,
         calls: callees.clone(),
-        source: source.clone(),
         control_flow: None,
         register_usage: None,
         constants: Vec::new(),

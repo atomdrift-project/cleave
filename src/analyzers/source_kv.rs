@@ -172,11 +172,11 @@ mod tests {
     fn imports_surface_sorted_and_distinct() {
         let mut r = empty_report();
         r.imports
-            .push(Import::new("requests", Some("test".into()), "test"));
+            .push(Import::new("requests", Some("test".into())));
         r.imports
-            .push(Import::new("os", Some("test".into()), "test"));
+            .push(Import::new("os", Some("test".into())));
         r.imports
-            .push(Import::new("os", Some("test".into()), "test"));
+            .push(Import::new("os", Some("test".into())));
         let v = build_source_kv(&r, None).expect("non-empty");
         let imports = v["imports"].as_array().unwrap();
         let names: Vec<&str> = imports.iter().filter_map(|x| x.as_str()).collect();
@@ -210,7 +210,7 @@ mod tests {
     #[test]
     fn attach_preserves_existing_kv() {
         let mut r = empty_report();
-        r.imports.push(Import::new("requests", None, "test"));
+        r.imports.push(Import::new("requests", None));
         r.values_tree = Some(Box::new(json!({"existing": "value"})));
         attach_to_report(&mut r, None);
         let kv = r.values_tree.as_ref().unwrap();

@@ -1266,7 +1266,6 @@ impl PackageJsonAnalyzer {
             report.imports.push(Import {
                 symbol: name.to_string(),
                 library: Some(version.to_string()),
-                source: "package.json".to_string(),
                 offset: None,
                 alias: None,
             });

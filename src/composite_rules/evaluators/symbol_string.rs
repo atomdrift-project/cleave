@@ -190,7 +190,6 @@ pub(crate) fn eval_symbol<'a>(
                         };
                         evidence.push(Evidence {
                             method: "symbol".to_string(),
-                            source: import.source.clone(),
                             value: import.symbol.clone(),
                             location,
                             offsets,
@@ -246,7 +245,6 @@ pub(crate) fn eval_symbol<'a>(
                     };
                     evidence.push(Evidence {
                         method: "symbol".to_string(),
-                        source: export.source.clone(),
                         value: export.symbol.clone(),
                         location,
                         ..Default::default()
@@ -277,7 +275,6 @@ pub(crate) fn eval_symbol<'a>(
                     if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
                         evidence.push(Evidence {
                             method: "symbol".to_string(),
-                            source: func.source.clone(),
                             value: func.name.clone(),
                             location: func.offset.clone(),
                             ..Default::default()

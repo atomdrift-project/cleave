@@ -138,9 +138,6 @@ pub struct Function {
     /// Functions called by this function
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub calls: Vec<String>,
-    /// Tool that discovered this function (radare2, tree-sitter, etc.)
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub source: String,
     /// Control flow graph metrics
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub control_flow: Option<ControlFlowMetrics>,
@@ -382,9 +379,6 @@ pub struct Import {
     /// Library providing this symbol (e.g., "libc.so.6", "kernel32.dll")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub library: Option<String>,
-    /// Tool that discovered this import (goblin, radare2, etc.)
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub source: String,
     /// File offset of the call site for scripting-language imports (hex
     /// string like `"0x1234"`). `None` for compiled-binary imports, which
     /// have no single meaningful offset. Populated by AST extraction so
@@ -400,15 +394,10 @@ pub struct Import {
 
 impl Import {
     /// Create a new Import with normalized symbol name
-    pub fn new(
-        symbol: impl Into<String>,
-        library: Option<String>,
-        source: impl Into<String>,
-    ) -> Self {
+    pub fn new(symbol: impl Into<String>, library: Option<String>) -> Self {
         Self {
             symbol: normalize_symbol(&symbol.into()),
             library,
-            source: source.into(),
             offset: None,
             alias: None,
         }
@@ -419,13 +408,11 @@ impl Import {
     pub fn with_offset(
         symbol: impl Into<String>,
         library: Option<String>,
-        source: impl Into<String>,
         byte_offset: u64,
     ) -> Self {
         Self {
             symbol: normalize_symbol(&symbol.into()),
             library,
-            source: source.into(),
             offset: Some(format!("0x{byte_offset:x}")),
             alias: None,
         }
@@ -447,9 +434,6 @@ pub struct Export {
     /// File offset of the exported symbol (hex string like "0x1234")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub offset: Option<String>,
-    /// Tool that discovered this export (goblin, radare2, etc.)
-    #[serde(skip_serializing_if = "String::is_empty", default)]
-    pub source: String,
     /// Forwarded target for re-exports (`"KERNEL32.LoadLibraryA"` or
     /// `"NTDLL.#123"`). None for normal exports whose RVA points into the
     /// DLL's own code/data.
@@ -459,29 +443,19 @@ pub struct Export {
 
 impl Export {
     /// Create a new Export with normalized symbol name
-    pub fn new(
-        symbol: impl Into<String>,
-        offset: Option<String>,
-        source: impl Into<String>,
-    ) -> Self {
+    pub fn new(symbol: impl Into<String>, offset: Option<String>) -> Self {
         Self {
             symbol: normalize_symbol(&symbol.into()),
             offset,
-            source: source.into(),
             forward_to: None,
         }
     }
 
     /// Create a forwarded Export (`export → lib.target`).
-    pub fn forwarded(
-        symbol: impl Into<String>,
-        forward_to: impl Into<String>,
-        source: impl Into<String>,
-    ) -> Self {
+    pub fn forwarded(symbol: impl Into<String>, forward_to: impl Into<String>) -> Self {
         Self {
             symbol: normalize_symbol(&symbol.into()),
             offset: None,
-            source: source.into(),
             forward_to: Some(forward_to.into()),
         }
     }
@@ -619,64 +593,61 @@ mod tests {
 
     #[test]
     fn test_import_new_basic() {
-        let imp = Import::new("malloc", None, "symbols");
+        let imp = Import::new("malloc", None);
         assert_eq!(imp.symbol, "malloc");
         assert_eq!(imp.library, None);
-        assert_eq!(imp.source, "symbols");
     }
 
     #[test]
     fn test_import_new_with_library() {
-        let imp = Import::new("printf", Some("libc.so.6".to_string()), "imports");
+        let imp = Import::new("printf", Some("libc.so.6".to_string()));
         assert_eq!(imp.symbol, "printf");
         assert_eq!(imp.library, Some("libc.so.6".to_string()));
     }
 
     #[test]
     fn test_import_new_normalizes_symbol() {
-        let imp = Import::new("_malloc", None, "symbols");
+        let imp = Import::new("_malloc", None);
         assert_eq!(imp.symbol, "malloc");
     }
 
     #[test]
     fn test_import_new_normalizes_double_underscore() {
-        let imp = Import::new("__errno_location", Some("libc.so.6".to_string()), "dynsym");
+        let imp = Import::new("__errno_location", Some("libc.so.6".to_string()));
         assert_eq!(imp.symbol, "errno_location");
     }
 
     #[test]
     fn test_import_new_string_into() {
-        let imp = Import::new(String::from("_read"), None, String::from("dynsym"));
+        let imp = Import::new(String::from("_read"), None);
         assert_eq!(imp.symbol, "read");
-        assert_eq!(imp.source, "dynsym");
     }
 
     // ==================== Export::new Tests ====================
 
     #[test]
     fn test_export_new_basic() {
-        let exp = Export::new("my_function", None, "exports");
+        let exp = Export::new("my_function", None);
         assert_eq!(exp.symbol, "my_function");
         assert_eq!(exp.offset, None);
-        assert_eq!(exp.source, "exports");
     }
 
     #[test]
     fn test_export_new_with_offset() {
-        let exp = Export::new("init", Some("0x1000".to_string()), "symbols");
+        let exp = Export::new("init", Some("0x1000".to_string()));
         assert_eq!(exp.symbol, "init");
         assert_eq!(exp.offset, Some("0x1000".to_string()));
     }
 
     #[test]
     fn test_export_new_normalizes_symbol() {
-        let exp = Export::new("_start", Some("0x400".to_string()), "entry");
+        let exp = Export::new("_start", Some("0x400".to_string()));
         assert_eq!(exp.symbol, "start");
     }
 
     #[test]
     fn test_export_new_normalizes_double_underscore() {
-        let exp = Export::new("__init_array_start", None, "symbols");
+        let exp = Export::new("__init_array_start", None);
         assert_eq!(exp.symbol, "init_array_start");
     }
 
@@ -893,7 +864,6 @@ mod tests {
             size: None,
             complexity: None,
             calls: vec![],
-            source: "symbols".to_string(),
             control_flow: None,
             register_usage: None,
             constants: vec![],
@@ -902,7 +872,6 @@ mod tests {
             call_patterns: None,
         };
         assert_eq!(func.name, "main");
-        assert_eq!(func.source, "symbols");
     }
 
     #[test]
@@ -913,7 +882,6 @@ mod tests {
             size: Some(256),
             complexity: Some(10),
             calls: vec!["malloc".to_string(), "free".to_string()],
-            source: "analysis".to_string(),
             control_flow: None,
             register_usage: None,
             constants: vec![],

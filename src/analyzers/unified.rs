@@ -825,7 +825,6 @@ impl UnifiedSourceAnalyzer {
                     size: Some((node.end_byte() - node.start_byte()) as u64),
                     complexity: None,
                     calls: Vec::new(),
-                    source: format!("tree-sitter-{}", self.config.name),
                     control_flow: None,
                     register_usage: None,
                     constants: Vec::new(),

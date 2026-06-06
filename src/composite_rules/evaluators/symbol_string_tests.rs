@@ -127,7 +127,6 @@ fn test_eval_symbol_exact_match() {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -153,7 +152,7 @@ fn test_eval_symbol_exact_match() {
 fn test_eval_symbol_exact_match_with_leading_underscore() {
     let mut report = create_test_report();
     // Import::new normalizes "_socket" → "socket" at load time
-    report.imports.push(Import::new("_socket", None, "libc"));
+    report.imports.push(Import::new("_socket", None));
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -191,7 +190,7 @@ fn test_eval_symbol_substr_normalized() {
     // "__libc_start_main" → "libc_start_main" after normalization
     report
         .imports
-        .push(Import::new("__libc_start_main", None, "libc"));
+        .push(Import::new("__libc_start_main", None));
     let data = vec![];
     let ctx = create_test_context(&report, &data);
 
@@ -217,7 +216,6 @@ fn test_eval_symbol_substr_match() {
     report.imports.push(Import {
         symbol: "CreateRemoteThread".to_string(),
         library: Some("kernel32.dll".to_string()),
-        source: "pe".to_string(),
         offset: None,
         alias: None,
     });
@@ -244,14 +242,12 @@ fn test_eval_symbol_regex_match() {
     report.imports.push(Import {
         symbol: "connect".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
     report.imports.push(Import {
         symbol: "accept".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -272,7 +268,6 @@ fn test_eval_symbol_no_match() {
     report.imports.push(Import {
         symbol: "malloc".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -302,14 +297,12 @@ fn test_eval_symbol_not_filters_substr_match() {
     report.imports.push(Import {
         symbol: "eval".to_string(),
         library: None,
-        source: "builtin".to_string(),
         offset: None,
         alias: None,
     });
     report.imports.push(Import {
         symbol: "safe_eval_template".to_string(),
         library: None,
-        source: "builtin".to_string(),
         offset: None,
         alias: None,
     });
@@ -334,7 +327,6 @@ fn test_eval_symbol_not_filters_all_matches() {
     report.imports.push(Import {
         symbol: "eval_template".to_string(),
         library: None,
-        source: "builtin".to_string(),
         offset: None,
         alias: None,
     });
@@ -356,7 +348,6 @@ fn test_eval_symbol_platform_filtering() {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -397,7 +388,6 @@ fn test_eval_symbol_platform_all() {
     report.imports.push(Import {
         symbol: "socket".to_string(),
         library: None,
-        source: "libc".to_string(),
         offset: None,
         alias: None,
     });
@@ -424,7 +414,6 @@ fn test_eval_symbol_in_exports() {
     report.exports.push(Export {
         symbol: "my_exported_function".to_string(),
         offset: Some("0x1000".to_string()),
-        source: "elf".to_string(),
         forward_to: None,
     });
     let data = vec![];
@@ -453,7 +442,6 @@ fn test_eval_symbol_in_functions() {
         size: Some(100),
         complexity: None,
         calls: vec![],
-        source: "go".to_string(),
         control_flow: None,
         register_usage: None,
         constants: vec![],
@@ -2322,11 +2310,10 @@ fn report_with_import_export_function() -> AnalysisReport {
     let mut report = create_test_report();
     report
         .imports
-        .push(Import::new("LoadLibraryA", None, "goblin"));
+        .push(Import::new("LoadLibraryA", None));
     report.exports.push(Export::new(
         "MyExport",
         Some("0x1234".to_string()),
-        "goblin",
     ));
     report.functions.push(Function {
         name: "internal_func".to_string(),
@@ -2334,7 +2321,6 @@ fn report_with_import_export_function() -> AnalysisReport {
         size: None,
         complexity: None,
         calls: vec![],
-        source: "goblin".to_string(),
         control_flow: None,
         register_usage: None,
         constants: vec![],
@@ -2434,13 +2420,11 @@ fn kind_forward_matches_forwarded_exports_by_name_or_target() {
     report.exports.push(Export::forwarded(
         "GetFileAttributesA",
         "KERNEL32.GetFileAttributesA",
-        "goblin",
     ));
     // Non-forwarded export with a similar-looking name must NOT be counted.
     report.exports.push(Export::new(
         "GetLangID",
         Some("0x1010".to_string()),
-        "goblin",
     ));
     let data = vec![];
     let ctx = create_test_context(&report, &data);

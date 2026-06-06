@@ -33,7 +33,6 @@ pub(crate) fn ingest_filefacts_imports(
         report.imports.push(Import {
             symbol: name.clone(),
             library: library.clone(),
-            source: "import".to_string(),
             offset: offset.map(|o| format!("0x{o:x}")),
             alias: alias.clone(),
         });
@@ -203,7 +202,7 @@ pub(crate) fn extract_symbols_from_tree(
         *count += 1;
         report
             .imports
-            .push(Import::with_offset(symbol, None, "ast", offset));
+            .push(Import::with_offset(symbol, None, offset));
     }
 }
 

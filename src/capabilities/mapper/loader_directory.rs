@@ -21,7 +21,8 @@ use crate::capabilities::validation::{
     find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
     find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
     find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
-    find_duplicate_composite_rules, find_duplicate_second_level_directories,
+    find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    find_duplicate_second_level_directories,
     find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
     find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
     find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
@@ -1275,6 +1276,11 @@ impl super::CapabilityMapper {
             if !crate::validation_controls::is_validator_disabled("duplicate-composites") {
                 warnings.collect_as("duplicate-composites", |warnings| {
                     find_duplicate_composite_rules(&composite_rules, warnings);
+                });
+            }
+            if !crate::validation_controls::is_validator_disabled("duplicate-inline-exclusion") {
+                warnings.collect_as("duplicate-inline-exclusion", |warnings| {
+                    find_duplicate_inline_exclusions(&trait_definitions, &composite_rules, warnings);
                 });
             }
             tracing::trace!("Step 1c completed in {:?}", step_start.elapsed());

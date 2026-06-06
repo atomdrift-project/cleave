@@ -872,6 +872,15 @@ impl YaraEngine {
                     unsafe { &*(rules as *const yara_x::Rules) };
                 let mut s = yara_x::Scanner::new(rules_static);
                 s.set_timeout(Duration::from_secs(900));
+                // Cap per-pattern matches at the same limit cleave collects.
+                // yara-x's default is 1,000,000 — a pathological high-match
+                // pattern would otherwise store that many `Match` structs in
+                // native heap per scanner (GBs in-flight on dense inputs).
+                // cleave only ever reads the first `MAX_PATTERN_MATCHES` ranges,
+                // so storing more is pure waste. This also caps the count seen by
+                // third-party rule conditions (`#a`); conditions relying on
+                // counts >= MAX_PATTERN_MATCHES are not used in this deployment.
+                s.max_matches_per_pattern(MAX_PATTERN_MATCHES);
                 tracing::debug!("Created new YARA scanner for tier (ptr={:#x})", key);
                 cache.put(key, s);
             }

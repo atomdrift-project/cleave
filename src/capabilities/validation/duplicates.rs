@@ -260,6 +260,112 @@ pub(crate) fn find_duplicate_composite_rules(
     );
 }
 
+/// Extract a `(condition_type, match_type, normalized_value)` from a single
+/// inline condition (as used inside `unless:` arrays). Returns `None` for
+/// `Condition::Trait` (already an `- id:` reference) and for non-string
+/// conditions (Section/Hex/Metrics/Syscall/Kv/Ast) that aren't reusable as a
+/// shared string atom. Mirrors the per-variant extraction in
+/// [`extract_patterns`].
+fn inline_condition_value(cond: &Condition) -> Option<(&'static str, &'static str, String)> {
+    let (ct, mt, raw): (&'static str, &'static str, &String) = match cond {
+        Condition::Symbol { exact: Some(v), .. } => ("symbol", "exact", v),
+        Condition::Symbol { substr: Some(v), .. } => ("symbol", "substr", v),
+        Condition::Symbol { regex: Some(v), .. } => ("symbol", "regex", v),
+        Condition::Raw { exact: Some(v), .. } => ("raw", "exact", v),
+        Condition::Raw { substr: Some(v), .. } => ("raw", "substr", v),
+        Condition::Raw { word: Some(v), .. } => ("raw", "word", v),
+        Condition::Raw { regex: Some(v), .. } => ("raw", "regex", v),
+        Condition::Text { exact: Some(v), .. } => ("text", "exact", v),
+        Condition::Text { substr: Some(v), .. } => ("text", "substr", v),
+        Condition::Text { word: Some(v), .. } => ("text", "word", v),
+        Condition::Text { regex: Some(v), .. } => ("text", "regex", v),
+        Condition::Literal { exact: Some(v), .. } => ("string_literal", "exact", v),
+        Condition::Literal { substr: Some(v), .. } => ("string_literal", "substr", v),
+        Condition::Literal { word: Some(v), .. } => ("string_literal", "word", v),
+        Condition::Literal { regex: Some(v), .. } => ("string_literal", "regex", v),
+        Condition::Path { exact: Some(v), .. } => ("basename", "exact", v),
+        Condition::Path { substr: Some(v), .. } => ("basename", "substr", v),
+        Condition::Path { regex: Some(v), .. } => ("basename", "regex", v),
+        Condition::Encoded { exact: Some(v), .. } => ("encoded", "exact", v),
+        Condition::Encoded { substr: Some(v), .. } => ("encoded", "substr", v),
+        Condition::Encoded { word: Some(v), .. } => ("encoded", "word", v),
+        Condition::Encoded { regex: Some(v), .. } => ("encoded", "regex", v),
+        _ => return None,
+    };
+    let normalized = normalize_pattern_for_comparison(raw, mt == "regex");
+    // Skip very-short / low-signal values — they're rarely worth a shared atom
+    // and would be noisy to flag.
+    if normalized.chars().filter(|c| c.is_alphanumeric()).count() < 3 {
+        return None;
+    }
+    Some((ct, mt, normalized))
+}
+
+/// Detect the same inline `unless:` exclusion condition repeated across many
+/// files. Inline conditions inside `unless:` arrays are not atomic traits, so
+/// neither [`find_duplicate_atomic_traits`] nor [`find_string_pattern_duplicates`]
+/// sees them — a copy-pasted exclusion can therefore proliferate and silently
+/// drift (fix it in one file, miss the rest). When the same
+/// `(type, match, value)` appears inline in at least
+/// `INLINE_EXCLUSION_FILE_THRESHOLD` distinct files it should be a single shared
+/// atom referenced by `- id:` (or deleted, if the matched file type is never
+/// processed). `not:`/`NotException` is intentionally out of scope.
+pub(crate) fn find_duplicate_inline_exclusions(
+    trait_definitions: &[TraitDefinition],
+    composite_rules: &[CompositeTrait],
+    warnings: &mut Vec<String>,
+) {
+    use std::collections::BTreeSet;
+    const INLINE_EXCLUSION_FILE_THRESHOLD: usize = 4;
+
+    // key ("type|match|value") -> (human-readable display, distinct source files)
+    let mut index: HashMap<String, (String, BTreeSet<String>)> = HashMap::new();
+
+    let mut record = |unless: &Option<Vec<Condition>>, file: &std::path::Path| {
+        let Some(conds) = unless else { return };
+        for cond in conds {
+            if let Some((ct, mt, val)) = inline_condition_value(cond) {
+                let key = format!("{ct}|{mt}|{val}");
+                index
+                    .entry(key)
+                    .or_insert_with(|| (format!("{ct} {mt}: {val}"), BTreeSet::new()))
+                    .1
+                    .insert(file.to_string_lossy().to_string());
+            }
+        }
+    };
+
+    for t in trait_definitions {
+        record(&t.unless, &t.defined_in);
+    }
+    for r in composite_rules {
+        record(&r.unless, &r.defined_in);
+    }
+
+    let mut flagged: Vec<&(String, BTreeSet<String>)> = index
+        .values()
+        .filter(|(_, files)| files.len() >= INLINE_EXCLUSION_FILE_THRESHOLD)
+        .collect();
+    flagged.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
+
+    for (display, files) in flagged {
+        let sample: Vec<&str> = files.iter().take(5).map(String::as_str).collect();
+        let more = files.len().saturating_sub(sample.len());
+        let suffix = if more > 0 {
+            format!("\n   (+{more} more)")
+        } else {
+            String::new()
+        };
+        warnings.push(format!(
+            "Inline unless: exclusion '{}' is duplicated across {} files:\n   {}{}\n   → Action: define one shared atom (e.g. under metadata/file/extension/) and reference it via `- id:` in each unless block — or delete the guard if the matched file type is never processed (e.g. unknown extensions cleave skips).",
+            display,
+            files.len(),
+            sample.join("\n   "),
+            suffix,
+        ));
+    }
+}
+
 /// Split a regex pattern on top-level `|` only — not inside parentheses or brackets.
 /// This avoids false positives from patterns like `(?:foo|bar)baz` being split into
 /// `(?:foo` and `bar)baz`.

@@ -352,6 +352,13 @@ pub(crate) const VALIDATOR_SPECS: &[ValidatorSpec] = &[
         fix: "Rename or remove one definition; each directory::id must be unique. References resolve by id, so a collision silently shadows one definition.",
     },
     ValidatorSpec {
+        id: "duplicate-inline-exclusion",
+        category: ValidatorCategory::Dedup,
+        display_id: "dup-unless",
+        description: "The same inline unless: exclusion is copy-pasted across many files.",
+        fix: "Define one shared atom and reference it via `- id:` in each unless block, or delete the guard if the matched file type is never processed.",
+    },
+    ValidatorSpec {
         id: "orphaned-components",
         category: ValidatorCategory::Reuse,
         display_id: "orphan-comp",

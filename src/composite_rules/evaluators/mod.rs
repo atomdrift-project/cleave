@@ -76,15 +76,11 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
 /// raw file bytes, skipping UTF-8 validation. Only ASCII callers populate it;
 /// callers gate on `can_use_byte_matching` before asking for compilation.
 ///
-/// Callers clone the `Regex` out (which starts a fresh, empty scratch pool) on
-/// purpose: the per-eval lazy-DFA scratch is then freed when the clone drops,
-/// keeping peak RSS bounded. Sharing the instance (Arc) instead *retains* a
-/// per-thread scratch cache per pattern — measured ~+60% peak on large-file
-/// datasets for no wall-clock gain, since matching is CPU-bound, not alloc-bound.
-// Stores `Arc<Regex>`, not `Regex`: callers clone the `Arc` (cheap, shares the
-// one warm instance) rather than the `Regex` (which builds a fresh, COLD
-// lazy-DFA `Pool<Cache>` per clone — rebuilding all DFA states on the next
-// search dominated CPU in `eval_raw`, profiled as `Lazy::init_cache`).
+/// NOTE: a per-pattern meta-engine grows a lazy-DFA cache to ~778 KB while
+/// scanning content; at ~10k cached raw/text `regex:` patterns that was measured
+/// as ~7.7 GB / 83% of RSS. The fix is *not* a leaner engine (PikeVM costs ~7x
+/// wall) but eliminating `eval_raw`'s redundant full-content re-scan via the
+/// prefilter's recorded match offset — see the raw-content offset path.
 static BYTES_REGEX_CACHE: OnceLock<
     RwLock<lru::LruCache<(String, bool), std::sync::Arc<regex::bytes::Regex>>>,
 > = OnceLock::new();
@@ -115,6 +111,18 @@ pub(crate) fn compile_bytes_regex(
     builder.case_insensitive(case_insensitive);
     builder.multi_line(true);
     builder.build()
+}
+
+/// Log compiled-regex cache occupancy (unicode meta-engine cache + bytes cache).
+#[allow(dead_code)] // called from lib.rs end-of-scan path
+pub fn log_regex_cache_stats() {
+    let uni = REGEX_CACHE.get().map_or(0, |c| c.read().len());
+    let bytes = BYTES_REGEX_CACHE.get().map_or(0, |c| c.read().len());
+    tracing::info!(
+        unicode_cache_entries = uni,
+        bytes_cache_entries = bytes,
+        "regex cache stats"
+    );
 }
 
 /// Create a Scanner for the given Rules.

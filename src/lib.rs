@@ -2375,6 +2375,7 @@ where
     analyze_files();
 
     crate::mem_profile::report();
+    crate::composite_rules::evaluators::log_regex_cache_stats();
 
     let total = walked.load(Ordering::Relaxed);
     let final_analyzed = analyzed.load(Ordering::Relaxed);

@@ -8,7 +8,7 @@ use super::condition::{
 };
 use super::context::{ConditionResult, EvaluationContext, StringParams};
 use super::evaluators::{
-    ContentLocationParams, SectionParams, eval_ast, eval_encoded, eval_hex,
+    ContentLocationParams, MatchCountGuard, SectionParams, eval_ast, eval_encoded, eval_hex,
     eval_metrics, eval_path, eval_raw, eval_section, eval_string_literal, eval_symbol,
     eval_syscall, eval_text, eval_trait, eval_yara_inline,
 };
@@ -803,9 +803,26 @@ impl TraitDefinition {
         false
     }
 
+    /// Whether this trait's evaluation needs the exact `match_count` — i.e. it
+    /// has a count/density filter. When false, raw/text matching may stop at the
+    /// first match (the dominant RSS lever; see `eval_raw`'s `needs_count`). The
+    /// exact count is consumed only by these filters: no other consumer reads it
+    /// and the ML pipeline (collimator) does not feature on `match_count`.
+    pub(crate) fn needs_match_count(&self) -> bool {
+        self.count_min.is_some()
+            || self.count_max.is_some()
+            || self.per_kb_min.is_some()
+            || self.per_kb_max.is_some()
+    }
+
     /// Evaluate this trait definition against the analysis context
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{ConditionDebug, DowngradeDebug, SkipReason};
+
+        // Let raw/text matching stop at the first match unless this trait needs
+        // the exact `match_count` (count/density filter). Restored on drop so
+        // nested `Condition::Trait` evaluations don't clobber it.
+        let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
         let platform_match = self.platforms.contains(&Platform::All)
@@ -2079,10 +2096,20 @@ impl CompositeTrait {
         }
     }
 
+    /// Composite traits carry no count/density filters, so raw/text matching in
+    /// their conditions never needs the exact `match_count` (see `eval_raw`).
+    pub(crate) fn needs_match_count(&self) -> bool {
+        false
+    }
+
     /// Evaluate this rule against the analysis context
     #[must_use]
     pub(crate) fn evaluate<'a>(&self, ctx: &EvaluationContext<'a>) -> Option<Finding> {
         use super::debug::{DowngradeDebug, ProximityDebug, SkipReason};
+
+        // Composite traits have no count/density filter, so raw/text matching in
+        // their conditions can stop at the first match. Restored on drop.
+        let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
         let platform_match = self.platforms.contains(&Platform::All)

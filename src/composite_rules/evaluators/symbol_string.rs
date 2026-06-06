@@ -38,6 +38,38 @@ use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, truncate_evidence_value};
 /// Maximum number of matches to process from regex find_iter() to prevent DoS on pattern-dense files
 const MAX_MATCHES_TO_PROCESS: usize = 10_000;
 
+thread_local! {
+    /// Per-thread flag: does the trait currently being evaluated need the exact
+    /// `match_count`? Set by [`MatchCountGuard`] at the top of each trait's
+    /// evaluation. Default `true` = safe (full count) for any direct caller
+    /// (tests, `cleave test-rules`) that doesn't install a guard. When `false`,
+    /// `eval_raw` stops at the first passing match (the dominant RSS lever).
+    static NEEDS_MATCH_COUNT: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// Read the per-thread "needs exact match_count" flag.
+fn match_count_needed() -> bool {
+    NEEDS_MATCH_COUNT.with(std::cell::Cell::get)
+}
+
+/// RAII guard that sets the per-thread `NEEDS_MATCH_COUNT` flag for the duration
+/// of a trait's evaluation and restores the previous value on drop — so a nested
+/// trait reference (`Condition::Trait`) can't clobber the outer trait's setting.
+#[must_use]
+pub(crate) struct MatchCountGuard(bool);
+
+impl MatchCountGuard {
+    pub(crate) fn set(needs: bool) -> Self {
+        Self(NEEDS_MATCH_COUNT.with(|c| c.replace(needs)))
+    }
+}
+
+impl Drop for MatchCountGuard {
+    fn drop(&mut self) {
+        NEEDS_MATCH_COUNT.with(|c| c.set(self.0));
+    }
+}
+
 /// Parse a hex-prefixed byte offset string like `"0x1234"`. Accepts
 /// decimal too for robustness. Returns `None` on malformed input so the
 /// caller can safely fall through to evidence without offsets.
@@ -1173,6 +1205,14 @@ pub(crate) fn eval_raw<'a>(
     trait_id: Option<&str>,
 ) -> ConditionResult {
     let _mp = crate::mem_profile::phase(crate::mem_profile::Phase::EvalRaw);
+    // When the active trait has no count/density filter and no consumer reads the
+    // exact `match_count` (set per-trait via `MatchCountGuard`; default true =
+    // safe full count), raw matching may stop at the first passing match instead
+    // of scanning the whole file. The full `find_iter` scan is the dominant RSS
+    // lever — it grows each `regex::bytes::Regex` lazy-DFA cache to ~778 KB
+    // (~7.7 GB at 10k patterns). Parity-exact on finding id+level + evidence (the
+    // first match is identical); only the unused `match_count` value is truncated.
+    let needs_count = match_count_needed();
     // `word:` is a literal byte-boundary scan (no regex engine) — see the word
     // branch below. Only `regex:` resolves to a pattern string here, and even
     // then the engine is chosen from the string alone (ASCII → bytes engine,
@@ -1352,15 +1392,19 @@ pub(crate) fn eval_raw<'a>(
                             first_match = Some(match_str.to_string());
                             first_offset = Some((search_start + mat.start()) as u64);
                         }
-                    } else {
+                    } else if first_match.is_none() {
                         // No filters, just count
-                        if first_match.is_none() {
-                            first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
-                            first_offset = Some((search_start + mat.start()) as u64);
-                        }
+                        first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
+                        first_offset = Some((search_start + mat.start()) as u64);
                     }
 
                     match_count += 1;
+                    // No density constraint and nobody reads the exact count:
+                    // stop at the first passing match instead of scanning the
+                    // whole file (the full scan is what grows the DFA cache).
+                    if !needs_count {
+                        break;
+                    }
                 }
                 if match_count > 0
                     && evidence.len() < MAX_EVIDENCE_PER_TRAIT
@@ -1425,6 +1469,11 @@ pub(crate) fn eval_raw<'a>(
                     if first_match.is_none() {
                         first_match = Some(match_str.to_string());
                         first_offset = Some((search_start + mat.start()) as u64);
+                    }
+                    // See bytes branch: stop at first match when the count is
+                    // unneeded, to avoid scanning the whole file.
+                    if !needs_count {
+                        break;
                     }
                 }
                 if match_count > 0

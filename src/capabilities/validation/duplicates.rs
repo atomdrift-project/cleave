@@ -1541,9 +1541,17 @@ pub(crate) fn check_same_string_different_types(
                 // Same literal searched two different ways (e.g. `raw` vs `text`,
                 // or `text` vs `symbol`) with overlapping file types is a
                 // duplicate the analyst must collapse — regardless of which file
-                // each trait lives in. The only gate is file-type overlap.
+                // each trait lives in. Gate on file-type overlap AND section
+                // scope: a section-scoped matcher (e.g. text in `.rdata`) is not
+                // interchangeable with an unscoped one, per the same
+                // `section_scope_equivalent` convention used by
+                // matcher_context_reusable_as_is / exact_substr_context_reusable_as_is.
                 if all_locations[i].condition_type != all_locations[j].condition_type
                     && all_locations[i].match_type == all_locations[j].match_type
+                    && section_scope_equivalent(
+                        all_locations[i].section.as_deref(),
+                        all_locations[j].section.as_deref(),
+                    )
                     && has_filetype_overlap(all_locations[i], all_locations[j])
                 {
                     has_overlap = true;

@@ -269,25 +269,37 @@ pub(crate) fn find_duplicate_composite_rules(
 fn inline_condition_value(cond: &Condition) -> Option<(&'static str, &'static str, String)> {
     let (ct, mt, raw): (&'static str, &'static str, &String) = match cond {
         Condition::Symbol { exact: Some(v), .. } => ("symbol", "exact", v),
-        Condition::Symbol { substr: Some(v), .. } => ("symbol", "substr", v),
+        Condition::Symbol {
+            substr: Some(v), ..
+        } => ("symbol", "substr", v),
         Condition::Symbol { regex: Some(v), .. } => ("symbol", "regex", v),
         Condition::Raw { exact: Some(v), .. } => ("raw", "exact", v),
-        Condition::Raw { substr: Some(v), .. } => ("raw", "substr", v),
+        Condition::Raw {
+            substr: Some(v), ..
+        } => ("raw", "substr", v),
         Condition::Raw { word: Some(v), .. } => ("raw", "word", v),
         Condition::Raw { regex: Some(v), .. } => ("raw", "regex", v),
         Condition::Text { exact: Some(v), .. } => ("text", "exact", v),
-        Condition::Text { substr: Some(v), .. } => ("text", "substr", v),
+        Condition::Text {
+            substr: Some(v), ..
+        } => ("text", "substr", v),
         Condition::Text { word: Some(v), .. } => ("text", "word", v),
         Condition::Text { regex: Some(v), .. } => ("text", "regex", v),
         Condition::Literal { exact: Some(v), .. } => ("string_literal", "exact", v),
-        Condition::Literal { substr: Some(v), .. } => ("string_literal", "substr", v),
+        Condition::Literal {
+            substr: Some(v), ..
+        } => ("string_literal", "substr", v),
         Condition::Literal { word: Some(v), .. } => ("string_literal", "word", v),
         Condition::Literal { regex: Some(v), .. } => ("string_literal", "regex", v),
         Condition::Path { exact: Some(v), .. } => ("basename", "exact", v),
-        Condition::Path { substr: Some(v), .. } => ("basename", "substr", v),
+        Condition::Path {
+            substr: Some(v), ..
+        } => ("basename", "substr", v),
         Condition::Path { regex: Some(v), .. } => ("basename", "regex", v),
         Condition::Encoded { exact: Some(v), .. } => ("encoded", "exact", v),
-        Condition::Encoded { substr: Some(v), .. } => ("encoded", "substr", v),
+        Condition::Encoded {
+            substr: Some(v), ..
+        } => ("encoded", "substr", v),
         Condition::Encoded { word: Some(v), .. } => ("encoded", "word", v),
         Condition::Encoded { regex: Some(v), .. } => ("encoded", "regex", v),
         _ => return None,
@@ -1712,10 +1724,7 @@ fn is_cross_type_canonicalization_candidate(condition_type: &str) -> bool {
     // bytes that text extraction would miss (never plain extractable text), and
     // `symbol` is a distinct AST surface. Searching one string as both — with
     // overlapping file types — is a duplicate the analyst must collapse.
-    matches!(
-        condition_type,
-        "text" | "string_literal" | "raw" | "symbol"
-    )
+    matches!(condition_type, "text" | "string_literal" | "raw" | "symbol")
 }
 
 /// Detect exact patterns that are redundant because a substr pattern with the SAME string exists

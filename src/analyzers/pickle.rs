@@ -63,7 +63,10 @@ impl PickleAnalyzer {
         // Extract globals (module.attr references) as import symbols
         let globals = extract_pickle_globals(data);
         for global_ref in &globals {
-            report.imports.push(crate::types::Import::new(global_ref.as_str(), Some("pickle-global".to_string())));
+            report.imports.push(crate::types::Import::new(
+                global_ref.as_str(),
+                Some("pickle-global".to_string()),
+            ));
         }
 
         // Extract readable strings from pickle data

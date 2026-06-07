@@ -337,9 +337,7 @@ def decoder(payload):
             sha256: "t".to_string(),
             architectures: None,
         });
-        report
-            .imports
-            .push(Import::with_offset("exec", None, 0x42));
+        report.imports.push(Import::with_offset("exec", None, 0x42));
 
         let data: Vec<u8> = vec![0; 0x100];
         let ctx = EvaluationContext::new(

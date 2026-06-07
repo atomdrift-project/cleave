@@ -69,6 +69,21 @@ where
     U: Send,
     F: Fn(&T) -> Option<U> + Sync + Send,
 {
+    // Stack-overflow guard: a rayon worker blocked in a nested join (e.g. a
+    // member's scan_bytes par_iter) steals whatever task is pending — on a
+    // shared pool that includes *other* in-flight analyses' member tasks — and
+    // runs it on top of its current stack. Each stolen task can block and
+    // steal again, so frames from independent deep analyses compound without
+    // bound; no fixed thread stack survives that (litmus overflowed 64 MB
+    // with 4 large archives in flight). maybe_grow moves the member task onto
+    // a fresh heap-allocated stack segment whenever headroom is low, making
+    // the compounding harmless. The red zone must cover one member's full
+    // sequential chain (including in-place nested-archive recursion, capped at
+    // depth 3) since the next check only happens at the next member boundary.
+    // When headroom is fine the call is a thread-local read and a compare.
+    const MEMBER_RED_ZONE: usize = 64 * 1024 * 1024;
+    const MEMBER_GROWN_STACK: usize = 128 * 1024 * 1024;
+    let f = |item: &T| stacker::maybe_grow(MEMBER_RED_ZONE, MEMBER_GROWN_STACK, || f(item));
     if parallel {
         items.par_iter().filter_map(f).collect()
     } else {
@@ -588,8 +603,9 @@ impl ArchiveAnalyzer {
                 // If we're already running on a rayon worker, run the nested
                 // archive analysis directly on this thread. Rayon workers are
                 // configured with a large stack by the caller (litmus installs
-                // a 16 MB global pool), so we don't need the 8 MB std::thread
-                // for stack headroom.
+                // a 256 MB global pool), and par_filter_map_members grows onto
+                // a fresh heap segment when headroom runs low, so we don't
+                // need the 8 MB std::thread for stack headroom.
                 //
                 // Critically, spawning a std::thread and join()ing it from a
                 // rayon worker causes a deadlock cycle: the rayon worker

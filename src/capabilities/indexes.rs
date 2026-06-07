@@ -368,7 +368,15 @@ impl SymbolMatchIndex {
                     trait_regex[trait_idx] =
                         crate::composite_rules::condition::cached_regex(regex_str)
                             .map(|re| (*re).clone());
-                    match StringMatchIndex::extract_regex_literal(regex_str) {
+                    // Prefer the longest *mandatory* literal anywhere in the
+                    // pattern (not just a prefix). A prefix-only extractor dumps
+                    // most symbol regexes into the no-literal `RegexSet`, whose
+                    // per-symbol PikeVM `which_overlapping` scan was the single
+                    // biggest CPU hotspot (profiled). An inner-literal atom lets
+                    // the cheap Aho-Corasick prefilter cover them instead.
+                    let atom = crate::composite_rules::evaluators::best_mandatory_atom(regex_str)
+                        .and_then(|b| String::from_utf8(b).ok());
+                    match atom {
                         Some(literal) => {
                             let normalized = normalize_symbol(&literal);
                             if normalized.len() >= 3 {
@@ -1540,7 +1548,6 @@ impl RawContentRegexIndex {
             FxHashMap::default();
         let mut universal_substr: Vec<WordPattern> = Vec::new();
         let mut errors = Vec::new();
-        let (mut text_gated, mut text_ungated) = (0usize, 0usize);
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             // Extract regex patterns from Content traits
@@ -1630,7 +1637,6 @@ impl RawContentRegexIndex {
                     let atom = crate::composite_rules::evaluators::best_mandatory_atom(regex_str)
                         .and_then(|b| String::from_utf8(b).ok());
                     if let Some(literal) = atom {
-                        text_gated += 1;
                         let make = || WordPattern {
                             word: literal.clone(),
                             case_insensitive: *case_insensitive,
@@ -1643,19 +1649,13 @@ impl RawContentRegexIndex {
                                 by_file_type_substr.entry(*ft).or_default().push(make());
                             }
                         }
-                    } else {
-                        text_ungated += 1;
                     }
+                    // A `type: text` regex with no extractable mandatory literal
+                    // stays unindexed (ungated): `eval_raw` scans it directly.
                 }
                 _ => {}
             }
         }
-
-        tracing::info!(
-            text_gated,
-            text_ungated,
-            "RawContentRegexIndex: type:text regex traits (gated by atom vs ungated/no-literal)"
-        );
 
         let mut unique_patterns = FxHashSet::default();
         for (pattern, _) in &universal_patterns {

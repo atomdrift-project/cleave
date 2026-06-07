@@ -349,9 +349,16 @@ pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
 
 /// `true` for value paths whose content is fully shown by another diff
 /// scope. Currently `source.imports[]` and `source.exports[]` (the
-/// `symbols` scope is the canonical view).
+/// `symbols` scope is the canonical view), plus `file.basename`/`file.stem`:
+/// those are derived from the path the user passed on the command line — the
+/// rename is already shown in the diff header, and counting it as a value
+/// change makes two byte-identical files under different names read as
+/// "changed".
 fn is_redundant_kv_path(path: &str) -> bool {
-    path.starts_with("source.imports[") || path.starts_with("source.exports[")
+    path.starts_with("source.imports[")
+        || path.starts_with("source.exports[")
+        || path == "file.basename"
+        || path == "file.stem"
 }
 
 pub(super) fn diff_kv(old: &DiffUnit, new: &DiffUnit, limit: usize) -> ScopeDiff<KvChange> {
@@ -810,6 +817,25 @@ mod tests {
                 .iter()
                 .any(|c| c.new.path == "metadata.sig" && c.new.namespace == "metadata")
         );
+    }
+
+    /// `file.basename`/`file.stem` are derived from the CLI-supplied path —
+    /// the rename is already in the diff header. Two byte-identical files
+    /// under different names must diff as unchanged.
+    #[test]
+    fn kv_ignores_path_derived_file_identity() {
+        let mut old = unit();
+        let mut new = unit();
+        old.kv_flat = flatten_kv_for_diff(&serde_json::json!({
+            "file": {"basename": "file1.sh", "stem": "file1"},
+        }));
+        new.kv_flat = flatten_kv_for_diff(&serde_json::json!({
+            "file": {"basename": "file2.sh", "stem": "file2"},
+        }));
+        let d = diff_kv(&old, &new, 0);
+        assert!(d.added.is_empty());
+        assert!(d.removed.is_empty());
+        assert!(d.changed.is_empty());
     }
 
     #[test]

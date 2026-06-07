@@ -238,17 +238,17 @@ pub(crate) fn apply_trait_defaults(
 
     // For size-only traits without a condition, create a synthetic "always-true" condition
     // This uses a basename regex that matches everything
-    let mut condition =
-        raw.condition
-            .unwrap_or_else(|| crate::composite_rules::Condition::Path {
-                exact: None,
-                substr: None,
-                regex: Some(".".to_string()),
-                case_insensitive: false,
-                is_check: None,
-                basename: false,
-                dirname: false,
-            });
+    let mut condition = raw
+        .condition
+        .unwrap_or_else(|| crate::composite_rules::Condition::Path {
+            exact: None,
+            substr: None,
+            regex: Some(".".to_string()),
+            case_insensitive: false,
+            is_check: None,
+            basename: false,
+            dirname: false,
+        });
 
     // Auto-fix: Convert literal regex patterns to substr for better performance
     // If a regex pattern contains only alphanumeric chars and underscores, it's a literal
@@ -685,14 +685,16 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Nupkg => has_windows,
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
-                // Mach-O runs on macOS/iOS; Shell runs on all unix-like systems.
-                // macOS is a Unix, so the `unix` umbrella reaches both.
-                RuleFileType::Macho | RuleFileType::Shell => has_darwin,
-                // AppleScript/Swift/ObjC are macOS/iOS-native languages; the `unix`
-                // umbrella includes macOS, so a unix-targeting trait reaches them.
-                RuleFileType::AppleScript | RuleFileType::Swift | RuleFileType::ObjectiveC => {
-                    has_darwin
-                }
+                // Mach-O/Plist/Ipa and AppleScript/Swift/ObjC are macOS/iOS-native;
+                // Shell runs on all unix-like systems. macOS is a Unix, so the
+                // `unix` umbrella reaches all of them.
+                RuleFileType::Macho
+                | RuleFileType::Shell
+                | RuleFileType::AppleScript
+                | RuleFileType::Swift
+                | RuleFileType::ObjectiveC
+                | RuleFileType::Plist
+                | RuleFileType::Ipa => has_darwin,
                 // Perl is a unix/linux scripting language, not a macOS-native concern
                 RuleFileType::Perl => has_unix,
                 // Server/desktop-only languages — not meaningful on mobile-only targets
@@ -703,8 +705,6 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Groovy
                 | RuleFileType::Elixir
                 | RuleFileType::Scala => has_desktop,
-                // macOS/iOS-native formats — the `unix` umbrella includes macOS.
-                RuleFileType::Plist | RuleFileType::Ipa => has_darwin,
                 // systemd/deb/rpm are Linux-specific, not generic Unix
                 RuleFileType::SystemdService
                 | RuleFileType::DesktopEntry
@@ -728,11 +728,11 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf | RuleFileType::Apk => {
                     (has_unix || has_android, "linux, unix, or android")
                 }
-                RuleFileType::Macho => (has_darwin, "macos, ios, or unix"),
                 RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
                 // macOS/iOS-native languages and formats — the `unix` umbrella
                 // includes macOS, so a unix-targeting trait satisfies them.
-                RuleFileType::AppleScript
+                RuleFileType::Macho
+                | RuleFileType::AppleScript
                 | RuleFileType::Swift
                 | RuleFileType::ObjectiveC
                 | RuleFileType::Plist

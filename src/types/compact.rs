@@ -1144,10 +1144,8 @@ mod formula_tests {
             encoding_chain: Vec::new(),
             fragments: None,
         });
-        fa.imports.push(Import::new(
-            "CreateFileW",
-            Some("kernel32.dll".into()),
-        ));
+        fa.imports
+            .push(Import::new("CreateFileW", Some("kernel32.dll".into())));
         fa.sections.push(Section {
             name: ".text".into(),
             address: Some(0x1000),

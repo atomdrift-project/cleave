@@ -729,7 +729,10 @@ mod duplicate_tests {
     }
 
     #[test]
-    fn test_cross_type_skips_symbol_text_api_duplicate() {
+    fn test_cross_type_flags_symbol_raw_api_duplicate() {
+        // The same literal searched as both `symbol` and `raw` with
+        // overlapping file types is a duplicate to collapse, even in the
+        // same file.
         let symbol = create_symbol_exact(
             "micro-behaviors/fs/memory/mmap::create-file-mapping-w",
             "CreateFileMappingW",
@@ -747,11 +750,14 @@ mod duplicate_tests {
         let mut warnings = Vec::new();
         check_same_string_different_types(&[symbol, raw], &mut warnings);
 
-        assert_eq!(warnings.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("CreateFileMappingW"));
     }
 
     #[test]
-    fn test_cross_type_skips_cross_dir_api_duplicate() {
+    fn test_cross_type_flags_cross_dir_api_duplicate() {
+        // Cross-type duplicates are flagged regardless of which directory
+        // each trait lives in.
         let symbol = create_symbol_exact(
             "micro-behaviors/fs/memory/mmap::create-file-mapping-w",
             "CreateFileMappingW",
@@ -769,11 +775,14 @@ mod duplicate_tests {
         let mut warnings = Vec::new();
         check_same_string_different_types(&[symbol, raw], &mut warnings);
 
-        assert_eq!(warnings.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("CreateFileMappingW"));
     }
 
     #[test]
-    fn test_cross_type_skips_same_dir_different_file_duplicate() {
+    fn test_cross_type_flags_same_dir_different_file_duplicate() {
+        // Cross-type duplicates are flagged regardless of which file each
+        // trait lives in.
         let symbol = create_symbol_exact(
             "micro-behaviors/communications/http/get::internet-open",
             "InternetOpen",
@@ -791,7 +800,8 @@ mod duplicate_tests {
         let mut warnings = Vec::new();
         check_same_string_different_types(&[symbol, raw], &mut warnings);
 
-        assert_eq!(warnings.len(), 0);
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("InternetOpen"));
     }
 
     #[test]
@@ -5373,12 +5383,15 @@ mod raw_should_use_string_value_tests {
     }
 
     #[test]
-    fn skips_all_file_types() {
+    fn flags_plain_text_on_all_file_types() {
+        // Plain extractable text is reachable by `type: text` for EVERY file
+        // type (flat strings extraction), so `for: [all]` no longer skips.
         let mut t = binary_trait("t/all", raw_substr("long_pattern_here"));
         t.r#for = vec![FileType::All];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
     }
 
     #[test]
@@ -5448,12 +5461,15 @@ mod raw_should_use_string_value_tests {
     }
 
     #[test]
-    fn skips_mixed_binary_and_script_types() {
+    fn flags_plain_text_on_mixed_binary_and_script_types() {
+        // Plain extractable text is flagged regardless of the `for:` mix —
+        // string extraction surfaces it for every file type.
         let mut t = binary_trait("t/mixed", raw_substr("long_pattern_here"));
         t.r#for = vec![FileType::Elf, FileType::Shell];
         let mut warnings = Vec::new();
         find_raw_should_use_string_value(&[t], &mut warnings);
-        assert!(warnings.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("type: text"));
     }
 
     #[test]

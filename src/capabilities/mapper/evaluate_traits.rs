@@ -562,9 +562,8 @@ impl super::CapabilityMapper {
                 // Both are gated by the raw-content atom prefilter (text via the
                 // candidate-only substring/word path — see `RawContentRegexIndex`).
                 let has_content_regex = match &trait_def.r#if {
-                    Condition::Raw { regex: Some(_), .. } | Condition::Raw { word: Some(_), .. } => {
-                        true
-                    }
+                    Condition::Raw { regex: Some(_), .. }
+                    | Condition::Raw { word: Some(_), .. } => true,
                     Condition::Text { regex: Some(_), .. }
                     | Condition::Text { word: Some(_), .. } => file_type.uses_raw_text_search(),
                     _ => false,

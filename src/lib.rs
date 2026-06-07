@@ -935,6 +935,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
         if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
             report.target.path = path.display().to_string();
             report.analysis_timestamp = Some(chrono::Utc::now());
+            restamp_path_derived_values(&mut report, path);
             tracing::info!("Cache hit (fast path)");
             return Ok(report);
         }
@@ -1165,6 +1166,36 @@ fn analyze_file_with_resources_and_sha256<P: AsRef<Path>>(
     }
 }
 
+/// Re-stamp path-derived values on a cache-hit report.
+///
+/// The analysis cache is keyed by content hash, so a hit may originate from an
+/// identical-bytes file with a *different name*; `file.basename`/`file.stem`
+/// in the cached values tree describe the cache donor, not the file being
+/// analyzed. Observed symptom: `cleave diff` of two identical files reported a
+/// phantom `file.basename` change against an unrelated donor's name.
+fn restamp_path_derived_values(report: &mut AnalysisReport, path: &Path) {
+    let Some(file_values) = report
+        .values_tree
+        .as_deref_mut()
+        .and_then(|tree| tree.get_mut("file"))
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    if let Some(name) = path.file_name().and_then(|n| n.to_str())
+        && let Some(basename) = file_values.get_mut("basename")
+    {
+        *basename = serde_json::Value::String(name.to_string());
+    }
+    // `Path::file_stem` matches the extractor's stem convention: leading-dot
+    // names keep the dot, and only the last extension is stripped.
+    if let Some(s) = path.file_stem().and_then(|s| s.to_str())
+        && let Some(stem) = file_values.get_mut("stem")
+    {
+        *stem = serde_json::Value::String(s.to_string());
+    }
+}
+
 /// Synthesize an `AnalysisReport` from a cached `FileAnalysis` (cross-context file cache hit).
 fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::AnalysisReport {
     use types::TargetInfo;
@@ -1289,6 +1320,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     if let Some(mut cached_report) = analysis_cache::report_cache_lookup(&sha256_hex, options) {
         cached_report.target.path = path.display().to_string();
         cached_report.analysis_timestamp = Some(chrono::Utc::now());
+        restamp_path_derived_values(&mut cached_report, path);
         tracing::debug!("Cache hit");
         memory_tracker::log_after_file_processing(
             path.to_str().unwrap_or("unknown"),
@@ -2609,6 +2641,46 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn test_max_analysis_depth_constant() {
         assert_eq!(MAX_ANALYSIS_DEPTH, 8);
+    }
+
+    /// A cache-hit report carries the cache donor's `file.basename`/`file.stem`
+    /// (the cache is content-keyed); the hit path must re-stamp them with the
+    /// name of the file actually analyzed.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn restamp_path_derived_values_replaces_donor_name() {
+        let target = types::TargetInfo {
+            path: "donor.sh".to_string(),
+            file_type: "shell".to_string(),
+            size_bytes: 1,
+            sha256: "abc".to_string(),
+            architectures: None,
+        };
+        let mut report = types::AnalysisReport::new(target);
+        report.values_tree = Some(Box::new(serde_json::json!({
+            "file": { "basename": "donor.sh", "stem": "donor" },
+            "shebang": { "interpreter": "bash" },
+        })));
+
+        restamp_path_derived_values(&mut report, Path::new("/tmp/actual.tar.gz"));
+
+        let tree = report.values_tree.as_deref().expect("values tree retained");
+        assert_eq!(tree["file"]["basename"], "actual.tar.gz");
+        assert_eq!(tree["file"]["stem"], "actual.tar");
+        // Unrelated namespaces are untouched.
+        assert_eq!(tree["shebang"]["interpreter"], "bash");
+
+        // A report without a values tree (or without the `file` namespace)
+        // passes through unchanged.
+        let mut bare = types::AnalysisReport::new(types::TargetInfo {
+            path: "x".to_string(),
+            file_type: "shell".to_string(),
+            size_bytes: 1,
+            sha256: "abc".to_string(),
+            architectures: None,
+        });
+        restamp_path_derived_values(&mut bare, Path::new("/tmp/actual.sh"));
+        assert!(bare.values_tree.is_none());
     }
 
     /// `PhaseTracker::new()` must not register (otherwise every default

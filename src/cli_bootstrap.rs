@@ -377,9 +377,10 @@ pub(crate) fn start_memory_logger(
 
 /// Spawn a background thread that periodically checks for `parking_lot` lock cycles.
 ///
-/// Only compiled in debug builds (`debug_assertions`). Has no effect in release.
-/// Logs a tracing error with thread IDs and backtrace if a deadlock is detected.
-#[cfg(debug_assertions)]
+/// Only compiled with the `deadlock-detection` feature (which pulls in
+/// `parking_lot/deadlock_detection`). Off by default — that feature taxes every
+/// lock op. Logs a tracing error with thread IDs and backtrace on a lock cycle.
+#[cfg(feature = "deadlock-detection")]
 pub(crate) fn start_deadlock_detector() {
     let result = std::thread::Builder::new()
         .name("deadlock-detector".into())

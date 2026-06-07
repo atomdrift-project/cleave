@@ -735,29 +735,38 @@ pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mu
             continue;
         }
 
+        // Density constraints count differently per surface: `raw` counts byte
+        // occurrences while `text` counts matching extracted strings, so a
+        // density-constrained trait is never told to switch surfaces.
+        let has_density = trait_def.count_min.is_some_and(|c| c >= 2)
+            || trait_def.per_kb_min.is_some()
+            || trait_def.per_kb_max.is_some();
+
         // A `raw` literal that is plain extractable ASCII text is misusing
         // `raw`: flat string extraction surfaces it for EVERY file type (incl.
         // OLE/MSI/PDF/RTF containers — verified: cleave runs `strings` over the
         // whole file), so `type: text` reaches it. This holds for ANY `for:`,
         // which is why it is not gated on file type like the heuristics below.
-        if let Some(lit) = exact.or(substr).or(word) {
-            if lit.len() >= RAW_PLAIN_TEXT_MIN_LEN && is_plain_extractable_text(lit) {
-                let source_file = trait_def
-                    .defined_in
-                    .to_str()
-                    .unwrap_or("unknown")
-                    .to_string();
-                let location = match find_line_number(&source_file, &trait_def.id) {
-                    Some(line) => format!("{}:{}", source_file, line),
-                    None => source_file,
-                };
-                warnings.push(format!(
-                    "Wrong type: trait '{}' in {} uses `type: raw` for plain text '{}' — \
-                     use `type: text` (raw is reserved for bytes text extraction can't reach)",
-                    trait_def.id, location, lit
-                ));
-                continue;
-            }
+        if !has_density
+            && let Some(lit) = exact.or(substr).or(word)
+            && lit.len() >= RAW_PLAIN_TEXT_MIN_LEN
+            && is_plain_extractable_text(lit)
+        {
+            let source_file = trait_def
+                .defined_in
+                .to_str()
+                .unwrap_or("unknown")
+                .to_string();
+            let location = match find_line_number(&source_file, &trait_def.id) {
+                Some(line) => format!("{}:{}", source_file, line),
+                None => source_file,
+            };
+            warnings.push(format!(
+                "Wrong type: trait '{}' in {} uses `type: raw` for plain text '{}' — \
+                 use `type: text` (raw is reserved for bytes text extraction can't reach)",
+                trait_def.id, location, lit
+            ));
+            continue;
         }
 
         let targets_binary = targets_binary_only(&trait_def.r#for);
@@ -767,9 +776,6 @@ pub(crate) fn find_raw_should_use_text(traits: &[TraitDefinition], warnings: &mu
         }
 
         let suggestion = if targets_binary {
-            let has_density = trait_def.count_min.is_some_and(|c| c >= 2)
-                || trait_def.per_kb_min.is_some()
-                || trait_def.per_kb_max.is_some();
             if has_density {
                 continue;
             }

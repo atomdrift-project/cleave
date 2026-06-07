@@ -149,6 +149,11 @@ rusqlite = { version = "0.33", features = ["bundled"] }
 
 # Parallelization
 rayon = "1.12"
+# Stack growth for archive member tasks: a rayon worker blocked in a nested
+# join steals unrelated pending tasks and runs them on top of its current
+# stack, so frames from independent analyses compound without bound. maybe_grow
+# moves a task onto a fresh heap segment when headroom runs low.
+stacker = "0.1"
 
 # Cryptography (for decrypting obfuscated payloads)
 aes = "0.8"
@@ -157,13 +162,6 @@ cbc = { version = "0.1", features = ["alloc"] }
 # Utilities
 sha2 = { version = "0.10", features = ["asm-aarch64"] }
 md-5 = "0.10"
-# X.509 certificate parsing — surfaces PE Authenticode cert chain
-# details (issuer, validity, thumbprint, serial). Already a transitive
-# dep via macho_codesign's roxmltree, so no new download.
-x509-parser = "0.18"
-# SHA-1 — for PE Authenticode cert thumbprint computation. Already a
-# transitive dep via x509-parser.
-sha1 = "0.10"
 # RSA-PKCS1v15 verification — for cryptographic validation of PE
 # Authenticode SignerInfo signatures against the leaf cert pubkey.
 # Already a transitive dep via yara-x; pinning explicitly here.
@@ -176,8 +174,7 @@ p384 = { version = "0.13", features = ["ecdsa"] }
 # u32 output fits cleanly into the metric integer model.
 crc32fast = "1.5"
 regex = "1.12"
-regex-automata = "0.4"  # Lean PikeVM/NFA engines for windowed raw-content matching
-regex-syntax = "0.8"  # For safe literal extraction from regex patterns
+regex-syntax = "0.8"  # For safe literal extraction from regex patterns (mandatory-atom extraction)
 memchr = "2.8"
 aho-corasick = "1.1"
 rustc-hash = "2.1"
@@ -198,7 +195,7 @@ semver = "1"  # Version comparison for the update notifier
 # manifest; blocking so it stays off the async path). rustls-tls avoids a
 # system OpenSSL dependency.
 reqwest = { version = "0.12", features = ["blocking", "rustls-tls"], default-features = false }
-parking_lot = { version = "0.12", features = ["deadlock_detection"] }  # For efficient mutexes in memory tracking
+parking_lot = "0.12"  # Efficient mutexes/RwLocks. NOTE: `deadlock_detection` is opt-in (see the `deadlock-detection` feature) — it adds per-lock global-registry bookkeeping that has no place in release builds.
 libc = "0.2"          # For FreeBSD sysctl thread info and other OS APIs
 memmap2 = "0.9"  # Memory-mapped file I/O for large files
 smallvec = "1.15"  # Stack-allocated vectors for small collections
@@ -230,6 +227,10 @@ default = ["jemalloc"]
 # Skip YARA rule loading in tests for faster execution
 # Unit tests that don't need YARA scanning use this
 test_fast = []
+# Opt-in parking_lot deadlock detection (debug aid). OFF by default because it
+# adds global lock-registry bookkeeping to every acquire/release. Build with:
+# cargo build --features deadlock-detection
+deadlock-detection = ["parking_lot/deadlock_detection"]
 # Use jemalloc allocator for better memory management in long-running sessions.
 # Prevents glibc malloc arena fragmentation that causes multi-GB RSS bloat
 # when processing thousands of files across many rayon threads.
@@ -331,3 +332,6 @@ opt-level = 3
 opt-level = 3
 
 
+
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }

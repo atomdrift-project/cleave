@@ -98,7 +98,12 @@ fn js_date_loop_count(report: &cleave::AnalysisReport) -> usize {
         .count()
 }
 
+// Ignored by default: this is a ~2-minute stress test (40 uncached analysis
+// runs of a 248-member zip while spinner threads saturate every core). Run it
+// explicitly when touching the parallel archive-member path:
+//   cargo test --test archive_determinism_test -- --ignored
 #[test]
+#[ignore = "CPU-saturating ~2min stress test; run with -- --ignored"]
 fn archive_member_findings_are_deterministic() -> anyhow::Result<()> {
     let _guard = env_lock()
         .lock()

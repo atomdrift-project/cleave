@@ -31,8 +31,13 @@ const REGEX_CACHE_CAP: std::num::NonZeroUsize = {
 };
 
 static REGEX_CACHE: std::sync::LazyLock<
-    std::sync::RwLock<lru::LruCache<String, Arc<regex::Regex>>>,
-> = std::sync::LazyLock::new(|| std::sync::RwLock::new(lru::LruCache::new(REGEX_CACHE_CAP)));
+    std::sync::RwLock<lru::LruCache<String, Arc<regex::Regex>, rustc_hash::FxBuildHasher>>,
+> = std::sync::LazyLock::new(|| {
+    std::sync::RwLock::new(lru::LruCache::with_hasher(
+        REGEX_CACHE_CAP,
+        rustc_hash::FxBuildHasher,
+    ))
+});
 
 pub(crate) fn cached_regex(pattern: &str) -> Option<Arc<regex::Regex>> {
     // Hot path: `peek` under a read lock — it doesn't bump LRU recency, so warm
@@ -109,9 +114,11 @@ pub(crate) fn raw_regex_pattern(
 /// across evals instead of rebuilding per call, with no per-condition storage.
 pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'static> {
     use std::sync::{LazyLock, RwLock};
+    // FxHashMap: keyed by the needle string and hit on every eval; SipHash on
+    // string keys showed up as a hot frame, FxHash is far cheaper.
     static CACHE: LazyLock<
-        RwLock<std::collections::HashMap<String, &'static memchr::memmem::Finder<'static>>>,
-    > = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+        RwLock<rustc_hash::FxHashMap<String, &'static memchr::memmem::Finder<'static>>>,
+    > = LazyLock::new(|| RwLock::new(rustc_hash::FxHashMap::default()));
     // Hot path is a concurrent read lock; only first build of each needle writes.
     if let Ok(cache) = CACHE.read()
         && let Some(&f) = cache.get(needle)
@@ -131,8 +138,8 @@ pub(crate) fn cached_finder(needle: &str) -> &'static memchr::memmem::Finder<'st
 pub(crate) fn cached_ci_searcher(needle: &str) -> Option<&'static aho_corasick::AhoCorasick> {
     use std::sync::{LazyLock, RwLock};
     static CACHE: LazyLock<
-        RwLock<std::collections::HashMap<String, &'static aho_corasick::AhoCorasick>>,
-    > = LazyLock::new(|| RwLock::new(std::collections::HashMap::new()));
+        RwLock<rustc_hash::FxHashMap<String, &'static aho_corasick::AhoCorasick>>,
+    > = LazyLock::new(|| RwLock::new(rustc_hash::FxHashMap::default()));
     // Hot path is a concurrent read lock; only first build of each needle writes.
     if let Ok(cache) = CACHE.read()
         && let Some(&ac) = cache.get(needle)
@@ -2374,7 +2381,6 @@ pub(crate) enum Condition {
         dirname: bool,
     },
 
-
     /// Query structural values using path expressions.
     /// Supports dot notation for nested access and [*] for array iteration.
     /// Example: { type: value, path: "permissions", is: "debugger" }
@@ -3238,14 +3244,15 @@ impl Condition {
                 regex: Some(regex_pattern),
                 ..
             } => {
-                compile_regex_logged("path.regex", regex_pattern, regex_pattern, false)
-                    .map_err(|e| {
+                compile_regex_logged("path.regex", regex_pattern, regex_pattern, false).map_err(
+                    |e| {
                         anyhow::anyhow!(
                             "Failed to compile basename regex '{}': {}",
                             regex_pattern,
                             e
                         )
-                    })?;
+                    },
+                )?;
             }
             _ => {}
         }

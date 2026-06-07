@@ -11,6 +11,12 @@ fn isolated_cleave_cmd() -> assert_cmd::Command {
     let mut cmd = assert_cmd::cargo_bin_cmd!("cleave");
     cmd.env("CLEAVE_SKIP_YARA", "1");
     cmd.env("CLEAVE_SKIP_TRAITS", "1");
+    // The analysis cache is keyed by content hash and shared machine-wide.
+    // Several tests here write byte-identical fixtures under different names;
+    // without this, one test's cached report (with its donor filename baked
+    // into path-derived values) leaks into another's output — and into the
+    // developer's real cache.
+    cmd.env("CLEAVE_SKIP_CACHE", "1");
     cmd
 }
 

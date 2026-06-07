@@ -19,7 +19,7 @@ mod cli_dispatch;
 use anyhow::Result;
 use clap::Parser;
 use cleave::cli;
-#[cfg(debug_assertions)]
+#[cfg(feature = "deadlock-detection")]
 use cli_bootstrap::start_deadlock_detector;
 use cli_bootstrap::{
     apply_runtime_overrides, build_sample_extraction, configure_rayon_thread_pool,
@@ -142,7 +142,7 @@ fn main() -> Result<()> {
     // Configured via rayon::ThreadPoolBuilder in cli_bootstrap.
     configure_rayon_thread_pool();
 
-    #[cfg(debug_assertions)]
+    #[cfg(feature = "deadlock-detection")]
     start_deadlock_detector();
 
     let disabled = args.disabled_components();

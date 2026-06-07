@@ -22,24 +22,23 @@ use crate::capabilities::validation::{
     find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
     find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
     find_duplicate_composite_rules, find_duplicate_inline_exclusions,
-    find_duplicate_second_level_directories,
-    find_empty_condition_clauses, find_excessive_file_types, find_excessive_skip_conditions,
-    find_for_only_duplicates, find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section,
-    find_hostile_cap_rules, find_hostile_meta_rules, find_impossible_count_constraints,
-    find_impossible_needs, find_impossible_size_constraints, find_invalid_not_usage,
-    find_invalid_trait_ids, find_kv_exists_with_matcher, find_line_number,
-    find_malware_subcategory_violations, find_many_directory_refs,
-    find_meta_missing_section_filter, find_metadata_cross_tier_refs, find_missing_search_patterns,
-    find_needs_without_any, find_needs_zero, find_non_capturing_groups,
-    find_none_only_with_proximity, find_objectives_wellknown_violations, find_orphaned_components,
-    find_overlapping_conditions, find_oversized_trait_directories, find_parent_duplicate_segments,
-    find_platform_named_directories, find_pure_alias_traits, find_pure_directory_alias_composites,
-    find_raw_should_use_text, find_redundant_any_refs, find_redundant_explicit_defaults,
-    find_redundant_needs_one, find_redundant_unix_platforms, find_regex_literal_overlap_issues,
-    find_self_referencing_traits, find_short_pattern_warnings, find_should_use_defaults,
-    find_single_item_clauses, find_slow_regex_patterns, find_string_content_collisions,
-    find_string_literal_should_use_text, find_string_pattern_duplicates,
-    find_structural_regex_duplicates, find_too_short_patterns,
+    find_duplicate_second_level_directories, find_empty_condition_clauses,
+    find_excessive_file_types, find_excessive_skip_conditions, find_for_only_duplicates,
+    find_generic_wellknown_leaf_dirs, find_hex_binary_missing_section, find_hostile_cap_rules,
+    find_hostile_meta_rules, find_impossible_count_constraints, find_impossible_needs,
+    find_impossible_size_constraints, find_invalid_not_usage, find_invalid_trait_ids,
+    find_kv_exists_with_matcher, find_line_number, find_malware_subcategory_violations,
+    find_many_directory_refs, find_meta_missing_section_filter, find_metadata_cross_tier_refs,
+    find_missing_search_patterns, find_needs_without_any, find_needs_zero,
+    find_non_capturing_groups, find_none_only_with_proximity, find_objectives_wellknown_violations,
+    find_orphaned_components, find_overlapping_conditions, find_oversized_trait_directories,
+    find_parent_duplicate_segments, find_platform_named_directories, find_pure_alias_traits,
+    find_pure_directory_alias_composites, find_raw_should_use_text, find_redundant_any_refs,
+    find_redundant_explicit_defaults, find_redundant_needs_one, find_redundant_unix_platforms,
+    find_regex_literal_overlap_issues, find_self_referencing_traits, find_short_pattern_warnings,
+    find_should_use_defaults, find_single_item_clauses, find_slow_regex_patterns,
+    find_string_content_collisions, find_string_literal_should_use_text,
+    find_string_pattern_duplicates, find_structural_regex_duplicates, find_too_short_patterns,
     find_unanchored_wellknown_composites, find_wellknown_category_violations,
     find_wellknown_missing_section_filter, find_wellknown_missing_size_filter,
     precalculate_all_composite_precisions, simple_rule_to_composite_rule,
@@ -1280,7 +1279,11 @@ impl super::CapabilityMapper {
             }
             if !crate::validation_controls::is_validator_disabled("duplicate-inline-exclusion") {
                 warnings.collect_as("duplicate-inline-exclusion", |warnings| {
-                    find_duplicate_inline_exclusions(&trait_definitions, &composite_rules, warnings);
+                    find_duplicate_inline_exclusions(
+                        &trait_definitions,
+                        &composite_rules,
+                        warnings,
+                    );
                 });
             }
             tracing::trace!("Step 1c completed in {:?}", step_start.elapsed());

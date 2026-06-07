@@ -109,9 +109,8 @@ pub(crate) use duplicates::{
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, find_alternation_merge_candidates,
     find_atomic_logic_duplicates, find_case_insensitive_overlap_issues,
-    find_duplicate_atomic_traits, find_duplicate_composite_rules,
-    find_duplicate_inline_exclusions, find_duplicate_traits_and_composites,
-    find_for_only_duplicates,
+    find_duplicate_atomic_traits, find_duplicate_composite_rules, find_duplicate_inline_exclusions,
+    find_duplicate_traits_and_composites, find_for_only_duplicates,
     find_regex_literal_overlap_issues, find_string_content_collisions,
     find_string_pattern_duplicates, find_structural_regex_duplicates,
 };

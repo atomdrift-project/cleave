@@ -1100,9 +1100,7 @@ impl MachOAnalyzer {
                     continue;
                 }
                 let symbol = imp.symbol.clone();
-                report.imports.push(crate::types::Import {
-                    ..imp
-                });
+                report.imports.push(crate::types::Import { ..imp });
                 if let Some(cap) = self.capability_mapper.lookup(&symbol)
                     && !report.findings.iter().any(|c| c.id == cap.id)
                 {
@@ -1115,9 +1113,7 @@ impl MachOAnalyzer {
                 if !seen_exports.insert(symbol) {
                     continue;
                 }
-                report.exports.push(Export {
-                    ..exp
-                });
+                report.exports.push(Export { ..exp });
             }
         }
 

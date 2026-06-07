@@ -833,7 +833,7 @@ dependencies = [
  "simd-json",
  "smallvec",
  "stacker",
- "stng 1.5.1",
+ "stng 1.5.2",
  "streaming-iterator",
  "strsim",
  "sysmem",
@@ -1606,6 +1606,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.9.0"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#350af7ebd99a568563b9e6ea60e086c608b4133e"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -4440,8 +4441,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "1.5.1"
-source = "git+https://codeberg.org/atomdrift/stng.git#85e83130500aa1ec83968f9635cb287a5af7fea7"
+version = "1.5.2"
+source = "git+https://codeberg.org/atomdrift/stng.git#bcf10ba7e17cfc3df4cfb6a195135380422835f2"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5096,6 +5097,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#350af7ebd99a568563b9e6ea60e086c608b4133e"
 dependencies = [
  "cc",
  "tree-sitter",

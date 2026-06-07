@@ -337,6 +337,12 @@ pub(crate) fn all_valid_metric_paths() -> HashSet<String> {
         "png.bit_depth",
         "png.compression_ratio",
         "png.a_entropy",
+        "png.chunk_count",
+        "png.idat_chunk_count",
+        "png.unknown_chunk_count",
+        "png.text_chunk_bytes",
+        "png.trailing_bytes",
+        "png.chunks_after_iend",
     ] {
         paths.insert(field.to_string());
     }

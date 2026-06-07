@@ -545,9 +545,14 @@ impl ChromeManifestAnalyzer {
 
     fn check_update_url(&self, manifest: &ChromeManifest, report: &mut AnalysisReport) {
         if let Some(ref url) = manifest.update_url {
-            // Google's official update URL
-            if url.contains("clients2.google.com") {
-                return; // Normal Chrome Web Store update
+            // Official web-store update URLs are expected on every legitimately
+            // distributed extension and are not a supply-chain anomaly:
+            //   - Chrome Web Store: clients2.google.com
+            //   - Microsoft Edge Add-ons: edge.microsoft.com/extensionwebstorebase
+            if url.contains("clients2.google.com")
+                || url.contains("edge.microsoft.com/extensionwebstorebase")
+            {
+                return; // Normal first-party web-store update
             }
 
             report.add_finding(

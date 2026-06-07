@@ -39,6 +39,58 @@ use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
+/// True when an external-relationship target points at a remote location.
+///
+/// Office writes `TargetMode="External"` attachedTemplate/oleObject/frame
+/// relationships for two very different reasons: a remote template-injection
+/// payload (`http://attacker/x.dotm`, `\\10.0.0.1\share\x.dotm`) — the
+/// CVE-2017-0199 vector — and the perfectly ordinary case of a document
+/// created from a *local* custom template, where Word records a
+/// `file:///C:\Users\me\AppData\Roaming\Microsoft\Templates\Report.dot`
+/// back-reference. Only the former is an attack; the discriminator is whether
+/// the target resolves off-host, so gate the hostile verdict on remoteness.
+fn target_is_remote(target: &str) -> bool {
+    let t = target.trim();
+    let lower = t.to_ascii_lowercase();
+    // Explicit network URL schemes.
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("ftp://")
+        || lower.starts_with("ftps://")
+        || lower.starts_with("smb://")
+        || lower.starts_with("webdav://")
+    {
+        return true;
+    }
+    // UNC / authority-relative paths: \\host\share or //host/share. A leading
+    // `file://` is stripped first so `file://server/share` is judged on the
+    // authority, while `file:///C:/...` and `file:///path` (empty authority)
+    // read as local.
+    let after_file = lower
+        .strip_prefix("file:")
+        .map(|r| r.trim_start_matches('/'))
+        .unwrap_or(&lower);
+    if (t.starts_with("\\\\") || t.starts_with("//")) && !lower.starts_with("file:") {
+        return true;
+    }
+    // file://host/... — non-empty authority that isn't a drive letter or
+    // localhost is a remote host.
+    if lower.starts_with("file://") {
+        if let Some(rest) = lower.strip_prefix("file://") {
+            // rest is "host/..." for remote, "" or "/path" / "localhost/" for local.
+            if !rest.is_empty() && !rest.starts_with('/') {
+                let host = rest.split(['/', '\\']).next().unwrap_or("");
+                let is_drive = host.len() == 2 && host.ends_with(':');
+                if !host.is_empty() && host != "localhost" && !is_drive {
+                    return true;
+                }
+            }
+        }
+    }
+    let _ = after_file;
+    false
+}
+
 /// Microsoft Office document analyzer.
 ///
 /// Supports both OLE2 (legacy) and OOXML (modern) formats. Extracts VBA macros
@@ -1203,10 +1255,16 @@ impl OfficeAnalyzer {
             let is_template = ext_ref.rel_type.contains("attachedTemplate")
                 || ext_ref.rel_type.contains("oleObject")
                 || ext_ref.rel_type.contains("frame");
-            let crit = if is_template {
-                Criticality::Hostile
-            } else {
-                Criticality::Suspicious
+            // A template/oleObject/frame ref is only an injection vector when it
+            // fetches from a remote host. A local-template back-reference
+            // (file:///C:\Users\…\Templates\X.dot) is what Word writes for every
+            // document built from a custom template — notable, not hostile.
+            let remote = target_is_remote(&ext_ref.target);
+            let crit = match (is_template, remote) {
+                (true, true) => Criticality::Hostile,
+                (false, true) => Criticality::Suspicious,
+                // Local target: surface it, but it does not indicate an attack.
+                (_, false) => Criticality::Notable,
             };
 
             findings.push(Finding {
@@ -1321,6 +1379,7 @@ impl OfficeAnalyzer {
                     && (r.rel_type.contains("attachedTemplate")
                         || r.rel_type.contains("oleObject")
                         || r.rel_type.contains("frame"))
+                    && target_is_remote(&r.target)
             }),
             // DDE execution: any DDE field code observed.
             has_dde_execution: !doc.dde_links.is_empty(),
@@ -1366,13 +1425,19 @@ impl OfficeAnalyzer {
         let mut cross = OfficeCrossCounts::default();
         for ext_ref in &doc.external_refs {
             cross.external_ref_count = cross.external_ref_count.saturating_add(1);
-            if ext_ref.rel_type.contains("attachedTemplate") {
+            // The template/oleObject/frame counts feed injection-vector traits
+            // (CVE-2017-0199 et al.), which only matter for remote targets. A
+            // local-template back-reference is benign, so it must not inflate
+            // these counts. Image refs stay a raw total (tracking-pixel signal).
+            let remote = target_is_remote(&ext_ref.target);
+            if remote && ext_ref.rel_type.contains("attachedTemplate") {
                 cross.external_template_count = cross.external_template_count.saturating_add(1);
             }
-            if ext_ref.rel_type.contains("oleObject") {
+            if remote && ext_ref.rel_type.contains("oleObject") {
                 cross.external_oleobject_count = cross.external_oleobject_count.saturating_add(1);
             }
-            if ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument") {
+            if remote && (ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument"))
+            {
                 cross.external_frame_count = cross.external_frame_count.saturating_add(1);
             }
             if ext_ref.rel_type.contains("image") {
@@ -1482,6 +1547,24 @@ fn add_metadata_findings(meta: &ole2::DocumentMetadata, findings: &mut Vec<Findi
 #[allow(clippy::expect_used, clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_target_remoteness() {
+        // Remote injection vectors.
+        assert!(target_is_remote("http://attacker.example/x.dotm"));
+        assert!(target_is_remote("HTTPS://Attacker.example/x.dotm"));
+        assert!(target_is_remote("\\\\10.0.0.1\\share\\x.dotm"));
+        assert!(target_is_remote("//host/share/x.dotm"));
+        assert!(target_is_remote("file://server/share/x.dot"));
+        // Benign local-template back-references and in-package paths.
+        assert!(!target_is_remote(
+            "file:///C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Templates\\Report.dot"
+        ));
+        assert!(!target_is_remote("file://localhost/Users/me/Templates/Report.dot"));
+        assert!(!target_is_remote("C:\\Users\\me\\Templates\\Report.dot"));
+        assert!(!target_is_remote("../templates/base.dotx"));
+        assert!(!target_is_remote("Normal.dotm"));
+    }
 
     #[test]
     fn test_office_analyzer_can_analyze() {

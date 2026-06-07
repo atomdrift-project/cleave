@@ -1606,7 +1606,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.9.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#350af7ebd99a568563b9e6ea60e086c608b4133e"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#2e6fab5285d753c0ac7c25af0295f9fbe84b603a"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -5097,7 +5097,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#350af7ebd99a568563b9e6ea60e086c608b4133e"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#2e6fab5285d753c0ac7c25af0295f9fbe84b603a"
 dependencies = [
  "cc",
  "tree-sitter",

@@ -2544,6 +2544,61 @@ fn compile_bytes_regex_enables_multi_line_anchors() {
     );
 }
 
+// Windowed-verify foundation: PikeVM `Input::span` MUST resolve look-around
+// (`^`/`$`/`\b`) against the FULL haystack, not the span — otherwise a mid-file
+// verify window would treat its start as a line/word boundary and corrupt
+// anchored patterns. This is the load-bearing assumption for atom-windowed verify.
+#[test]
+fn pikevm_span_resolves_word_boundary_against_full_haystack() {
+    use regex_automata::nfa::thompson::pikevm::PikeVM;
+    use regex_automata::util::syntax;
+    use regex_automata::Input;
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    let re = PikeVM::builder()
+        .syntax(syntax::Config::new().multi_line(true).utf8(false))
+        .build(r"\bfoo")
+        .unwrap();
+    let mut cache = re.create_cache();
+    // "foo" is word-bounded only at offset 5 (space before). At offset 1 the
+    // preceding 'x' is a word char, so `\b` there is NOT a boundary.
+    let hay = b"xfoo foo";
+    #[allow(clippy::unwrap_used)]
+    let m = re.find(&mut cache, Input::new(hay).span(1..hay.len())).unwrap();
+    // Full-haystack anchors -> leftmost match at 5. Span-relative would wrongly
+    // treat offset 1 as a boundary and match there.
+    assert_eq!(
+        m.start(),
+        5,
+        "Input::span must resolve \\b against the full haystack, not the span"
+    );
+}
+
+#[test]
+fn pikevm_span_resolves_line_anchor_against_full_haystack() {
+    use regex_automata::nfa::thompson::pikevm::PikeVM;
+    use regex_automata::util::syntax;
+    use regex_automata::Input;
+    #[allow(clippy::unwrap_used, clippy::expect_used)]
+    let re = PikeVM::builder()
+        .syntax(syntax::Config::new().multi_line(true).utf8(false))
+        .build(r"^namespace")
+        .unwrap();
+    let mut cache = re.create_cache();
+    let hay = b"<?php namespace A;\nnamespace B;\n";
+    // First "namespace" (offset 6) is mid-line; the `\n` is at 18, so the
+    // line-start "namespace" is at 19. A span starting at 6 must match at 19,
+    // NOT 6 (which would mean `^` treats the span start as start-of-text).
+    let m = re.find(&mut cache, Input::new(hay).span(6..hay.len()));
+    #[allow(clippy::unwrap_used)]
+    let m = m.unwrap();
+    assert_eq!(
+        m.start(),
+        19,
+        "Input::span must resolve ^ against full-haystack line boundaries (got {})",
+        m.start()
+    );
+}
+
 #[test]
 fn build_regex_dollar_anchors_per_line() {
     // `$` should match before each `\n` as well as at end of haystack.

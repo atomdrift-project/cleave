@@ -26,7 +26,7 @@
 //! - `mapper.lookup()` - Look up symbol by name
 
 mod error_formatting;
-mod indexes;
+pub(crate) mod indexes;
 mod mapper;
 mod models;
 mod parsing;

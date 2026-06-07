@@ -1337,27 +1337,25 @@ pub(crate) fn eval_raw<'a>(
             // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold
             // lazy-DFA cache and rebuilds every DFA state on first search; the
             // shared `Arc` reuses the warm instance across members/threads.
-            let bytes_re: Option<std::sync::Arc<regex::bytes::Regex>> = {
+            let lean: Option<std::sync::Arc<super::LeanRegex>> = {
                 let cached = cache.read().peek(&key).cloned();
                 if cached.is_some() {
                     cached
                 } else {
                     // Compile outside the lock; write-lock only to insert.
-                    match super::compile_bytes_regex(pattern_str, case_insensitive) {
-                        Ok(re) => {
-                            let arc = std::sync::Arc::new(re);
-                            cache.write().put(key, std::sync::Arc::clone(&arc));
-                            Some(arc)
-                        }
-                        Err(_) => None,
-                    }
+                    super::compile_bytes_regex(pattern_str, case_insensitive).map(|re| {
+                        let arc = std::sync::Arc::new(re);
+                        cache.write().put(key, std::sync::Arc::clone(&arc));
+                        arc
+                    })
                 }
             };
 
-            if let Some(ref bytes_re) = bytes_re {
+            if let Some(ref lean) = lean {
                 let mut first_match = None;
                 let mut first_offset = None;
-                for (idx, mat) in bytes_re.find_iter(search_data).enumerate() {
+                let mut idx = 0usize;
+                lean.for_each_match(search_data, |start, end| {
                     if idx >= MAX_MATCHES_TO_PROCESS {
                         if let Some(trait_id_val) = trait_id {
                             tracing::info!(
@@ -1373,39 +1371,38 @@ pub(crate) fn eval_raw<'a>(
                                 "Hit regex-pattern match limit; stopping early"
                             );
                         }
-                        break;
+                        return false;
                     }
-                    let match_bytes = mat.as_bytes();
+                    idx += 1;
+                    let match_bytes = &search_data[start..end];
 
                     // For validators or not filters, convert only the match to string
                     if is_check.is_some() || not.is_some() {
                         let match_str = String::from_utf8_lossy(match_bytes);
                         if !validate_match(&match_str, is_check) {
-                            continue;
+                            return true;
                         }
                         if let Some(not_filters) = not
                             && not_filters.iter().any(|filter| filter.matches(&match_str))
                         {
-                            continue;
+                            return true;
                         }
                         if first_match.is_none() {
                             first_match = Some(match_str.to_string());
-                            first_offset = Some((search_start + mat.start()) as u64);
+                            first_offset = Some((search_start + start) as u64);
                         }
                     } else if first_match.is_none() {
                         // No filters, just count
                         first_match = Some(String::from_utf8_lossy(match_bytes).to_string());
-                        first_offset = Some((search_start + mat.start()) as u64);
+                        first_offset = Some((search_start + start) as u64);
                     }
 
                     match_count += 1;
                     // No density constraint and nobody reads the exact count:
                     // stop at the first passing match instead of scanning the
-                    // whole file (the full scan is what grows the DFA cache).
-                    if !needs_count {
-                        break;
-                    }
-                }
+                    // whole file.
+                    needs_count
+                });
                 if match_count > 0
                     && evidence.len() < MAX_EVIDENCE_PER_TRAIT
                     && let Some(matched) = first_match

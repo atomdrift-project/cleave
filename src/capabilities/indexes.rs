@@ -1322,6 +1322,20 @@ struct FileTypeRegexSet {
     ci_word_automaton: Option<AhoCorasick>,
     /// Maps case-insensitive word pattern index -> trait indices
     ci_word_to_traits: Vec<Vec<usize>>,
+    /// Candidate-only substring atoms for `type: text`-on-source traits. Unlike
+    /// `*_literal_*` (raw patterns, verified by `individual_regexes`), an atom hit
+    /// here marks the trait a candidate **without** an in-index regex verify — the
+    /// PikeVM in `eval_raw` is the authority. This gates text traits (so PikeVM
+    /// runs only when the atom is present) without compiling a meta-engine per
+    /// text pattern, which is what made `type: text` the RSS hog. No word-boundary
+    /// check (text regex atoms aren't necessarily token-bounded).
+    cs_substr_automaton: Option<AhoCorasick>,
+    /// Maps case-sensitive substring-atom index -> trait indices.
+    cs_substr_to_traits: Vec<Vec<usize>>,
+    /// Aho-Corasick for case-insensitive substring atoms.
+    ci_substr_automaton: Option<AhoCorasick>,
+    /// Maps case-insensitive substring-atom index -> trait indices.
+    ci_substr_to_traits: Vec<Vec<usize>>,
 }
 
 impl std::fmt::Debug for FileTypeRegexSet {
@@ -1426,6 +1440,44 @@ impl FileTypeRegexSet {
             }
         }
 
+        // Step 1d: substring atoms for `type: text` traits — candidate-only, no
+        // boundary check, no in-index regex verify (eval_raw's PikeVM verifies).
+        // Mark the trait a candidate on any atom occurrence anywhere in `content`.
+        if let Some(ref ac) = self.cs_substr_automaton {
+            let total = self.cs_substr_to_traits.len();
+            let mut seen: FxHashSet<usize> = FxHashSet::default();
+            for mat in ac.find_iter(content) {
+                let atom_idx = mat.pattern().as_usize();
+                if seen.insert(atom_idx) {
+                    if let Some(trait_indices) = self.cs_substr_to_traits.get(atom_idx) {
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
+                    }
+                    if seen.len() == total {
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(ref ac) = self.ci_substr_automaton {
+            let total = self.ci_substr_to_traits.len();
+            let mut seen: FxHashSet<usize> = FxHashSet::default();
+            for mat in ac.find_iter(content) {
+                let atom_idx = mat.pattern().as_usize();
+                if seen.insert(atom_idx) {
+                    if let Some(trait_indices) = self.ci_substr_to_traits.get(atom_idx) {
+                        for &t in trait_indices {
+                            matched_traits.insert(t);
+                        }
+                    }
+                    if seen.len() == total {
+                        break;
+                    }
+                }
+            }
+        }
+
         tracing::trace!(
             "Hybrid prefilter: {} literal candidates, {} no-literal patterns",
             literal_candidates.len(),
@@ -1483,7 +1535,12 @@ impl RawContentRegexIndex {
         let mut by_file_type_words: FxHashMap<RuleFileType, Vec<WordPattern>> =
             FxHashMap::default();
         let mut universal_words: Vec<WordPattern> = Vec::new();
+        // Candidate-only substring atoms from `type: text`-on-source regex traits.
+        let mut by_file_type_substr: FxHashMap<RuleFileType, Vec<WordPattern>> =
+            FxHashMap::default();
+        let mut universal_substr: Vec<WordPattern> = Vec::new();
         let mut errors = Vec::new();
+        let (mut text_gated, mut text_ungated) = (0usize, 0usize);
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
             // Extract regex patterns from Content traits
@@ -1535,9 +1592,70 @@ impl RawContentRegexIndex {
                         }
                     }
                 }
+                // `type: text` on source delegates to `eval_raw` (raw content);
+                // gate it via cheap atom prefilters so its PikeVM runs only when an
+                // atom is present — but candidate-only, with no compiled verifier
+                // (eval_raw verifies). `word:` reuses the boundary-checked word path;
+                // `regex:` contributes its mandatory literal (if extractable) to the
+                // substring path. A regex with no extractable literal stays unindexed
+                // (ungated; eval_raw scans it as before — correctness over speed).
+                Condition::Text {
+                    word: Some(word_str),
+                    case_insensitive,
+                    ..
+                } => {
+                    let make = || WordPattern {
+                        word: word_str.clone(),
+                        case_insensitive: *case_insensitive,
+                        trait_idx,
+                    };
+                    if trait_def.r#for.contains(&RuleFileType::All) {
+                        universal_words.push(make());
+                    } else {
+                        for ft in &trait_def.r#for {
+                            by_file_type_words.entry(*ft).or_default().push(make());
+                        }
+                    }
+                }
+                Condition::Text {
+                    regex: Some(regex_str),
+                    case_insensitive,
+                    ..
+                } => {
+                    // Gate on the longest *mandatory* literal anywhere in the
+                    // pattern (the same atom `eval_raw`'s engine windows on), not
+                    // just a prefix — otherwise ~half of `type: text` patterns are
+                    // ungated and re-scan every source file. Skip non-UTF-8 atoms
+                    // (the substring AC is built from `String`s); they stay ungated.
+                    let atom = crate::composite_rules::evaluators::best_mandatory_atom(regex_str)
+                        .and_then(|b| String::from_utf8(b).ok());
+                    if let Some(literal) = atom {
+                        text_gated += 1;
+                        let make = || WordPattern {
+                            word: literal.clone(),
+                            case_insensitive: *case_insensitive,
+                            trait_idx,
+                        };
+                        if trait_def.r#for.contains(&RuleFileType::All) {
+                            universal_substr.push(make());
+                        } else {
+                            for ft in &trait_def.r#for {
+                                by_file_type_substr.entry(*ft).or_default().push(make());
+                            }
+                        }
+                    } else {
+                        text_ungated += 1;
+                    }
+                }
                 _ => {}
             }
         }
+
+        tracing::info!(
+            text_gated,
+            text_ungated,
+            "RawContentRegexIndex: type:text regex traits (gated by atom vs ungated/no-literal)"
+        );
 
         let mut unique_patterns = FxHashSet::default();
         for (pattern, _) in &universal_patterns {
@@ -1565,6 +1683,7 @@ impl RawContentRegexIndex {
         let all_file_types: FxHashSet<RuleFileType> = by_file_type_patterns
             .keys()
             .chain(by_file_type_words.keys())
+            .chain(by_file_type_substr.keys())
             .copied()
             .collect();
         let ft_data: Vec<_> = all_file_types
@@ -1572,17 +1691,19 @@ impl RawContentRegexIndex {
             .map(|ft| {
                 let patterns = by_file_type_patterns.remove(&ft).unwrap_or_default();
                 let words = by_file_type_words.remove(&ft).unwrap_or_default();
-                (ft, patterns, words)
+                let substr = by_file_type_substr.remove(&ft).unwrap_or_default();
+                (ft, patterns, words, substr)
             })
             .collect();
         let results: Vec<_> = ft_data
             .into_par_iter()
-            .map(|(ft, patterns, words)| {
+            .map(|(ft, patterns, words, substr)| {
                 (
                     ft,
                     Self::build_regex_set(
                         &patterns,
                         &words,
+                        &substr,
                         traits,
                         Some(&shared_individual_regexes),
                     ),
@@ -1606,6 +1727,7 @@ impl RawContentRegexIndex {
         let universal = match Self::build_regex_set(
             &universal_patterns,
             &universal_words,
+            &universal_substr,
             traits,
             Some(&shared_individual_regexes),
         ) {
@@ -1644,6 +1766,16 @@ impl RawContentRegexIndex {
                     indexed_traits.insert(trait_idx);
                 }
             }
+            for trait_indices in ft_set
+                .cs_substr_to_traits
+                .iter()
+                .chain(&ft_set.ci_substr_to_traits)
+            {
+                total_patterns += 1;
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
         }
         if let Some(ref universal_set) = universal {
             total_patterns += universal_set.pattern_to_traits.len();
@@ -1664,6 +1796,16 @@ impl RawContentRegexIndex {
                     indexed_traits.insert(trait_idx);
                 }
             }
+            for trait_indices in universal_set
+                .cs_substr_to_traits
+                .iter()
+                .chain(&universal_set.ci_substr_to_traits)
+            {
+                total_patterns += 1;
+                for &trait_idx in trait_indices {
+                    indexed_traits.insert(trait_idx);
+                }
+            }
         }
 
         Ok(Self {
@@ -1677,10 +1819,11 @@ impl RawContentRegexIndex {
     fn build_regex_set(
         patterns: &[(String, usize)],
         words: &[WordPattern],
+        substr: &[WordPattern],
         traits: &[TraitDefinition],
         shared_individual_regexes: Option<&FxHashMap<String, Arc<regex::bytes::Regex>>>,
     ) -> Result<Option<FileTypeRegexSet>, Vec<String>> {
-        if patterns.is_empty() && words.is_empty() {
+        if patterns.is_empty() && words.is_empty() && substr.is_empty() {
             return Ok(None);
         }
 
@@ -1839,7 +1982,51 @@ impl RawContentRegexIndex {
             None
         };
 
-        // If there are no regex patterns (only word patterns), build a minimal set
+        // Substring-atom automata (candidate-only, no boundary check) for text traits.
+        let mut cs_substr: Vec<String> = Vec::new();
+        let mut cs_substr_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut cs_substr_map: FxHashMap<String, usize> = FxHashMap::default();
+        let mut ci_substr: Vec<String> = Vec::new();
+        let mut ci_substr_to_traits: Vec<Vec<usize>> = Vec::new();
+        let mut ci_substr_map: FxHashMap<String, usize> = FxHashMap::default();
+        for sp in substr {
+            if sp.case_insensitive {
+                let lower = sp.word.to_lowercase();
+                if let Some(&idx) = ci_substr_map.get(&lower) {
+                    ci_substr_to_traits[idx].push(sp.trait_idx);
+                } else {
+                    let idx = ci_substr.len();
+                    ci_substr_map.insert(lower.clone(), idx);
+                    ci_substr.push(lower);
+                    ci_substr_to_traits.push(vec![sp.trait_idx]);
+                }
+            } else if let Some(&idx) = cs_substr_map.get(&sp.word) {
+                cs_substr_to_traits[idx].push(sp.trait_idx);
+            } else {
+                let idx = cs_substr.len();
+                cs_substr_map.insert(sp.word.clone(), idx);
+                cs_substr.push(sp.word.clone());
+                cs_substr_to_traits.push(vec![sp.trait_idx]);
+            }
+        }
+        let cs_substr_automaton = if !cs_substr.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(false)
+                .build(&cs_substr)
+                .ok()
+        } else {
+            None
+        };
+        let ci_substr_automaton = if !ci_substr.is_empty() {
+            AhoCorasick::builder()
+                .ascii_case_insensitive(true)
+                .build(&ci_substr)
+                .ok()
+        } else {
+            None
+        };
+
+        // If there are no regex patterns (only word/substr patterns), build a minimal set
         if pattern_strs.is_empty() {
             return Ok(Some(FileTypeRegexSet {
                 pattern_to_traits: Vec::new(),
@@ -1856,6 +2043,10 @@ impl RawContentRegexIndex {
                 cs_word_to_traits,
                 ci_word_automaton,
                 ci_word_to_traits,
+                cs_substr_automaton,
+                cs_substr_to_traits,
+                ci_substr_automaton,
+                ci_substr_to_traits,
             }));
         }
 
@@ -1897,6 +2088,10 @@ impl RawContentRegexIndex {
             cs_word_to_traits,
             ci_word_automaton,
             ci_word_to_traits,
+            cs_substr_automaton,
+            cs_substr_to_traits,
+            ci_substr_automaton,
+            ci_substr_to_traits,
         }))
     }
 

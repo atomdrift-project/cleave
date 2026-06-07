@@ -176,6 +176,7 @@ p384 = { version = "0.13", features = ["ecdsa"] }
 # u32 output fits cleanly into the metric integer model.
 crc32fast = "1.5"
 regex = "1.12"
+regex-automata = "0.4"  # Lean PikeVM/NFA engines for windowed raw-content matching
 regex-syntax = "0.8"  # For safe literal extraction from regex patterns
 memchr = "2.8"
 aho-corasick = "1.1"

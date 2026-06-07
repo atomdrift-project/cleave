@@ -72,45 +72,241 @@ fn regex_cache() -> &'static RwLock<lru::LruCache<(String, bool), Regex>> {
     REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
-/// Bounded LRU cache for ASCII `regex::bytes::Regex` — matches directly against
-/// raw file bytes, skipping UTF-8 validation. Only ASCII callers populate it;
-/// callers gate on `can_use_byte_matching` before asking for compilation.
+/// A lean byte-regex engine: a `PikeVM` (Thompson NFA + on-stack simulation) with
+/// a thread-safe pool of reusable search caches.
 ///
-/// NOTE: a per-pattern meta-engine grows a lazy-DFA cache to ~778 KB while
-/// scanning content; at ~10k cached raw/text `regex:` patterns that was measured
-/// as ~7.7 GB / 83% of RSS. The fix is *not* a leaner engine (PikeVM costs ~7x
-/// wall) but eliminating `eval_raw`'s redundant full-content re-scan via the
-/// prefilter's recorded match offset — see the raw-content offset path.
+/// **Why not `regex::bytes::Regex`?** The meta-engine bundles forward+reverse NFA,
+/// one-pass DFA, bounded backtracker, lazy DFA and literal prefilters — ~745 KB
+/// resident per compiled pattern after its lazy-DFA cache fills. At ~10k cached
+/// `raw`/`text` patterns that measured **~12 GB / a permanent process floor**.
+/// A `PikeVM` keeps only the Thompson NFA (avg ~23 KB; measured 238 MB total for
+/// the same 10,434 patterns — a ~50× cut, matching YARA-X's footprint).
+///
+/// **Parity:** `PikeVM` defaults to [`MatchKind::LeftmostFirst`], the exact match
+/// semantics the `regex` crate exposes (it is built on these same `regex-automata`
+/// components). With `multi_line` + Unicode + `utf8(false)` (allow byte matches),
+/// `find_iter` returns the identical leftmost, non-overlapping match set.
+///
+/// **Multi-line is enabled** — see the historical note: trait authors writing
+/// `regex: '^namespace '` against source expect per-line anchoring, not
+/// whole-file anchoring. `^`/`$` match at every `\n`.
+/// Max bytes a windowed verify reads forward from an atom occurrence. Mirrors
+/// YARA-X's `DEFAULT_SCAN_LIMIT` (4096): a match that extends beyond this from its
+/// prefix atom is intentionally not found — an accepted, bounded correctness cap
+/// that keeps the per-hit cost constant. Anchored verification of bounded patterns
+/// stops well before this; the cap only bounds unbounded patterns (`.*`).
+const WINDOW_LIMIT: usize = 4096;
+
+/// A lean byte-regex engine. Two variants, chosen by whether a usable mandatory
+/// atom could be extracted:
+///
+/// * [`LeanRegex::Windowed`] — the common case (~62% of patterns). A `PikeVM`
+///   (Thompson NFA, ~23 KB) plus an Aho-Corasick over the pattern's longest
+///   mandatory literal. Matching finds atom occurrences and verifies the pattern
+///   only on a bounded window around each (YARA-X style): tiny RAM, and PikeVM's
+///   slow-per-byte cost applies to ≤`WINDOW_LIMIT` bytes, not the whole file.
+/// * [`LeanRegex::Whole`] — the literal-free residue (`[A-Za-z0-9+/]{40,}`, hex
+///   blobs, entropy shapes): no atom to anchor a window, so it keeps the fast
+///   meta-engine (lazy DFA) for whole-content scanning. ~745 KB each, but this
+///   set is small, and a DFA is the only thing fast enough for whole-file scans.
+pub(crate) enum LeanRegex {
+    Windowed {
+        pikevm: std::sync::Arc<regex_automata::nfa::thompson::pikevm::PikeVM>,
+        pool: regex_automata::util::pool::Pool<
+            regex_automata::nfa::thompson::pikevm::Cache,
+            Box<dyn Fn() -> regex_automata::nfa::thompson::pikevm::Cache + Send + Sync>,
+        >,
+        atom: aho_corasick::AhoCorasick,
+    },
+    Whole {
+        meta: regex::bytes::Regex,
+    },
+}
+
+impl LeanRegex {
+    /// Iterate non-overlapping leftmost-first matches over `haystack`, invoking
+    /// `f(start, end)` (byte offsets); `f` returns `false` to stop early.
+    pub(crate) fn for_each_match(&self, haystack: &[u8], mut f: impl FnMut(usize, usize) -> bool) {
+        match self {
+            LeanRegex::Whole { meta } => {
+                for m in meta.find_iter(haystack) {
+                    if !f(m.start(), m.end()) {
+                        return;
+                    }
+                }
+            }
+            LeanRegex::Windowed { pikevm, pool, atom } => {
+                let mut cache = pool.get();
+                // Atom-windowed verify. The atom is a *mandatory* literal that may
+                // sit anywhere in a match, so for each occurrence verify the pattern
+                // (unanchored) over a bounded window on both sides — `multi_line`
+                // and `\b` anchors resolve against the full haystack (test-verified).
+                // Matches are deduped by start and re-linearised to non-overlapping
+                // leftmost-first, matching `find_iter` semantics.
+                let mut matches: Vec<(usize, usize)> = Vec::new();
+                let mut seen: rustc_hash::FxHashSet<usize> = rustc_hash::FxHashSet::default();
+                for hit in atom.find_overlapping_iter(haystack) {
+                    let lo = hit.start().saturating_sub(WINDOW_LIMIT);
+                    let hi = (hit.end() + WINDOW_LIMIT).min(haystack.len());
+                    for m in
+                        pikevm.find_iter(&mut cache, regex_automata::Input::new(haystack).span(lo..hi))
+                    {
+                        // Only matches covering this atom occurrence belong to it;
+                        // ones starting after it are found via their own occurrence.
+                        if m.start() <= hit.start() && hit.end() <= m.end() && seen.insert(m.start())
+                        {
+                            matches.push((m.start(), m.end()));
+                        }
+                        if m.start() > hit.start() {
+                            break;
+                        }
+                    }
+                }
+                matches.sort_unstable();
+                let mut last_end = 0usize;
+                for (s, e) in matches {
+                    if s < last_end {
+                        continue;
+                    }
+                    last_end = e.max(s + 1);
+                    if !f(s, e) {
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Whether the pattern matches anywhere in `haystack`. Test-only primitive.
+    #[cfg(test)]
+    pub(crate) fn is_match(&self, haystack: &[u8]) -> bool {
+        let mut hit = false;
+        self.for_each_match(haystack, |_, _| {
+            hit = true;
+            false
+        });
+        hit
+    }
+
+    /// Resident NFA/engine memory (per-search caches are pooled/transient and
+    /// excluded). Meta-engine size isn't directly queryable, so the literal-free
+    /// residue is reported via the separate `Whole` count in cache stats.
+    pub(crate) fn nfa_memory(&self) -> usize {
+        match self {
+            LeanRegex::Windowed { pikevm, .. } => pikevm.get_nfa().memory_usage(),
+            LeanRegex::Whole { .. } => 0,
+        }
+    }
+
+    /// True for the literal-free residue (whole-content meta-engine).
+    pub(crate) fn is_whole(&self) -> bool {
+        matches!(self, LeanRegex::Whole { .. })
+    }
+}
+
+/// Bounded LRU cache for ASCII byte-regex engines ([`LeanRegex`]) — matches
+/// directly against raw file bytes, skipping UTF-8 validation. Only ASCII callers
+/// populate it; callers gate on `can_use_byte_matching` before requesting one.
 static BYTES_REGEX_CACHE: OnceLock<
-    RwLock<lru::LruCache<(String, bool), std::sync::Arc<regex::bytes::Regex>>>,
+    RwLock<lru::LruCache<(String, bool), std::sync::Arc<LeanRegex>>>,
 > = OnceLock::new();
 
 /// Access the bytes regex cache.
 pub(crate) fn bytes_regex_cache()
--> &'static RwLock<lru::LruCache<(String, bool), std::sync::Arc<regex::bytes::Regex>>> {
+-> &'static RwLock<lru::LruCache<(String, bool), std::sync::Arc<LeanRegex>>> {
     BYTES_REGEX_CACHE.get_or_init(|| RwLock::new(lru::LruCache::new(REGEX_CACHE_SIZE)))
 }
 
-/// Compile an ASCII-only pattern into a `regex::bytes::Regex` for zero-UTF-8-validation
-/// matching against raw file bytes. Returns `Err` if the pattern uses Unicode features —
-/// callers must gate on `can_use_byte_matching` first.
+/// Compile an ASCII-only pattern into a lean [`LeanRegex`] for
+/// zero-UTF-8-validation matching against raw file bytes. Returns `None` if the
+/// pattern uses features both engines reject (e.g. backreferences) — callers must
+/// gate on `can_use_byte_matching` first.
+pub(crate) fn compile_bytes_regex(pattern: &str, case_insensitive: bool) -> Option<LeanRegex> {
+    // The longest *mandatory* literal anywhere in the pattern (not just the
+    // prefix). Its presence decides the engine: a usable atom → lean windowed
+    // PikeVM; none → fast meta-engine whole-content scan.
+    let atom = best_mandatory_atom(pattern).and_then(|lit| {
+        aho_corasick::AhoCorasick::builder()
+            .ascii_case_insensitive(case_insensitive)
+            .build([&lit])
+            .ok()
+    });
+
+    let Some(atom) = atom else {
+        // Literal-free residue: keep the fast lazy-DFA meta-engine for whole
+        // content. Mirrors the previous `regex::bytes::Regex` config exactly.
+        let mut builder = regex::bytes::RegexBuilder::new(pattern);
+        builder.case_insensitive(case_insensitive);
+        builder.multi_line(true);
+        return Some(LeanRegex::Whole {
+            meta: builder.build().ok()?,
+        });
+    };
+
+    use regex_automata::nfa::thompson;
+    use regex_automata::util::syntax;
+    let pikevm = thompson::pikevm::PikeVM::builder()
+        .syntax(
+            syntax::Config::new()
+                .case_insensitive(case_insensitive)
+                .multi_line(true)
+                // Allow matching arbitrary (possibly invalid-UTF-8) bytes, mirroring
+                // `regex::bytes::Regex`. Unicode classes stay enabled (the default).
+                .utf8(false),
+        )
+        .thompson(thompson::Config::new().utf8(false))
+        .build(pattern)
+        .ok()?;
+    let pikevm = std::sync::Arc::new(pikevm);
+    // Pool create-closure holds an `Arc` clone so it can mint caches without
+    // borrowing the engine; the closure is `Send + Sync` as the pool requires.
+    let pv = std::sync::Arc::clone(&pikevm);
+    let pool = regex_automata::util::pool::Pool::new(Box::new(move || pv.create_cache())
+        as Box<dyn Fn() -> thompson::pikevm::Cache + Send + Sync>);
+    Some(LeanRegex::Windowed { pikevm, pool, atom })
+}
+
+/// Smallest atom length worth searching for. Shorter literals occur too often to
+/// be useful prefilters (every occurrence forces a windowed verify). Measured: 3
+/// beats 2 on wall (fewer false-positive windows) at a negligible residue cost.
+const MIN_ATOM_LEN: usize = 3;
+
+/// Extract the longest **mandatory** literal anywhere in `pattern` — one that must
+/// appear in every match (a direct `Concat` child, or inside a `min>=1` repetition
+/// or a capture). Returns `None` when no literal of at least [`MIN_ATOM_LEN`] is
+/// guaranteed (e.g. alternations without a shared literal, leading `.*`, pure
+/// character classes) — those patterns fall back to a full PikeVM scan.
 ///
-/// **Multi-line is enabled.** `^` matches start-of-haystack and after every `\n`; `$`
-/// matches end-of-haystack and before every `\n`. This mirrors the per-line semantic
-/// of `text exact:` in raw-text mode — trait authors writing `regex: '^namespace '`
-/// against PHP source expect line anchoring, not whole-file anchoring. Without
-/// multi-line, `^namespace ` on a source file would only match if the file *began*
-/// with `namespace`, which is almost never true (PHP files start with `<?php`).
-/// Single-line strings extracted from binaries are unaffected because they contain
-/// no `\n` for the alternate anchor points to match.
-pub(crate) fn compile_bytes_regex(
-    pattern: &str,
-    case_insensitive: bool,
-) -> Result<regex::bytes::Regex, regex::Error> {
-    let mut builder = regex::bytes::RegexBuilder::new(pattern);
-    builder.case_insensitive(case_insensitive);
-    builder.multi_line(true);
-    builder.build()
+/// This is the key to keeping the whole-content residue tiny: a prefix-only
+/// extractor leaves ~half of `type: text` patterns atomless (`\s*foo`, `.*token`).
+///
+/// Shared with `RawContentRegexIndex` so the *gate* and the *verify* key on the
+/// same atom: a pattern gated by atom X is windowed by atom X.
+pub(crate) fn best_mandatory_atom(pattern: &str) -> Option<Vec<u8>> {
+    fn walk(hir: &regex_syntax::hir::Hir, best: &mut Vec<u8>) {
+        use regex_syntax::hir::HirKind;
+        match hir.kind() {
+            HirKind::Literal(lit) => {
+                if lit.0.len() > best.len() {
+                    *best = lit.0.to_vec();
+                }
+            }
+            HirKind::Concat(subs) => {
+                for s in subs {
+                    walk(s, best);
+                }
+            }
+            HirKind::Capture(c) => walk(&c.sub, best),
+            // A repetition that runs at least once still guarantees its sub-literal.
+            HirKind::Repetition(r) if r.min >= 1 => walk(&r.sub, best),
+            // Alternation / optional / class / look-around: no single guaranteed literal.
+            _ => {}
+        }
+    }
+    let hir = regex_syntax::parse(pattern).ok()?;
+    let mut best = Vec::new();
+    walk(&hir, &mut best);
+    (best.len() >= MIN_ATOM_LEN).then_some(best)
 }
 
 /// Log compiled-regex cache occupancy (unicode meta-engine cache + bytes cache).
@@ -123,6 +319,32 @@ pub fn log_regex_cache_stats() {
         bytes_cache_entries = bytes,
         "regex cache stats"
     );
+
+    // Sum the resident NFA memory of the lean byte-regex cache (per-search caches
+    // are pooled/transient and excluded).
+    if let Some(cache) = BYTES_REGEX_CACHE.get() {
+        let guard = cache.read();
+        let mut total: usize = 0;
+        let mut max: usize = 0;
+        let mut whole = 0usize;
+        let n = guard.len();
+        for (_, lean) in guard.iter() {
+            let m = lean.nfa_memory();
+            total += m;
+            max = max.max(m);
+            if lean.is_whole() {
+                whole += 1;
+            }
+        }
+        tracing::info!(
+            entries = n,
+            whole_meta = whole,
+            nfa_total_mb = total / (1024 * 1024),
+            nfa_avg_kb = if n > 0 { total / n / 1024 } else { 0 },
+            nfa_max_kb = max / 1024,
+            "lean byte-regex cache NFA memory"
+        );
+    }
 }
 
 /// Create a Scanner for the given Rules.

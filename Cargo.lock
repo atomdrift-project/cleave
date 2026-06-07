@@ -808,6 +808,7 @@ dependencies = [
  "pyinstx",
  "rayon",
  "regex",
+ "regex-automata",
  "regex-syntax",
  "reqwest",
  "roxmltree",

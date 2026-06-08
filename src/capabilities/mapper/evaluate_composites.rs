@@ -1020,4 +1020,98 @@ traits:
 
         assert_eq!(target_findings[0].crit, Criticality::Suspicious);
     }
+
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn test_scope_outer_composite_evaluates_at_archive_level() {
+        // A composite with `for: [javascript]` is normally gated out at the
+        // container/archive level (the container's file_type is the archive
+        // type, not javascript). But `scope: outer`/`archive` explicitly pools
+        // evidence across archive entries, so such a composite MUST be allowed
+        // to run at the container level — otherwise it can never see the
+        // cross-entry findings it was written for (e.g. a browser-extension
+        // rule whose content-script and manifest evidence live in different
+        // CRX entries). A plain file-scoped composite must stay gated out.
+        let yaml = r#"
+defaults:
+  for: [javascript]
+  platforms: [all]
+
+traits:
+  - id: "test/ext::scrape"
+    desc: "AI chat scrape"
+    crit: suspicious
+    if:
+      type: text
+      substr: "SCRAPE_MARKER"
+  - id: "test/ext::cors"
+    desc: "CORS rewrite"
+    crit: suspicious
+    if:
+      type: text
+      substr: "CORS_MARKER"
+
+composite_rules:
+  - id: "test/ext::outer-exfil"
+    desc: "Outer-scoped cross-entry exfil"
+    crit: hostile
+    conf: 0.95
+    scope: outer
+    all:
+      - id: "test/ext::scrape"
+      - id: "test/ext::cors"
+  - id: "test/ext::file-exfil"
+    desc: "File-scoped exfil (control)"
+    crit: hostile
+    conf: 0.95
+    all:
+      - id: "test/ext::scrape"
+      - id: "test/ext::cors"
+"#;
+        let file = write_test_traits(yaml);
+        let mapper =
+            super::super::CapabilityMapper::from_yaml(file.path()).expect("load scope mapper");
+
+        // Simulate two leaf findings firing in *different* entries of a CRX.
+        let finding_in_entry = |id: &str, entry: &str| {
+            Finding::capability(id.to_string(), format!("test {id}"), 0.9)
+                .with_criticality(Criticality::Suspicious)
+                .with_evidence(vec![crate::types::Evidence {
+                    method: "text".to_string(),
+                    source: "test".to_string(),
+                    value: "marker".to_string(),
+                    location: Some(entry.to_string()),
+                    ..Default::default()
+                }])
+        };
+        let report = make_test_report();
+        let nested = vec![
+            finding_in_entry("test/ext::scrape", "ext.crx!content_script.js"),
+            finding_in_entry("test/ext::cors", "ext.crx!rules.json"),
+        ];
+
+        let container_findings = mapper.evaluate_container_composites(&report, &nested, "crx");
+
+        // The scope: outer composite must fire at the archive container level
+        // despite its `for: [javascript]` not matching the crx container type.
+        assert!(
+            container_findings
+                .iter()
+                .any(|f| f.id == "test/ext::outer-exfil"),
+            "scope: outer composite should evaluate at archive container level, got: {:?}",
+            container_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+
+        // The file-scoped (default) composite with for: [javascript] must stay
+        // gated out at the archive container level — the relaxation is specific
+        // to outer/archive scope and must not turn every leaf-typed composite
+        // into a container-level rule.
+        assert!(
+            !container_findings
+                .iter()
+                .any(|f| f.id == "test/ext::file-exfil"),
+            "file-scoped composite must not fire at archive container level, got: {:?}",
+            container_findings.iter().map(|f| &f.id).collect::<Vec<_>>()
+        );
+    }
 }

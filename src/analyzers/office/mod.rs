@@ -1436,7 +1436,8 @@ impl OfficeAnalyzer {
             if remote && ext_ref.rel_type.contains("oleObject") {
                 cross.external_oleobject_count = cross.external_oleobject_count.saturating_add(1);
             }
-            if remote && (ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument"))
+            if remote
+                && (ext_ref.rel_type.contains("frame") || ext_ref.rel_type.contains("subDocument"))
             {
                 cross.external_frame_count = cross.external_frame_count.saturating_add(1);
             }
@@ -1560,7 +1561,9 @@ mod tests {
         assert!(!target_is_remote(
             "file:///C:\\Users\\me\\AppData\\Roaming\\Microsoft\\Templates\\Report.dot"
         ));
-        assert!(!target_is_remote("file://localhost/Users/me/Templates/Report.dot"));
+        assert!(!target_is_remote(
+            "file://localhost/Users/me/Templates/Report.dot"
+        ));
         assert!(!target_is_remote("C:\\Users\\me\\Templates\\Report.dot"));
         assert!(!target_is_remote("../templates/base.dotx"));
         assert!(!target_is_remote("Normal.dotm"));

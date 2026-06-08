@@ -2142,10 +2142,20 @@ impl CompositeTrait {
         // In that case, allow only archive-family rules to match rather than treating
         // All as a universal wildcard for every script/source/binary rule.
         let wants_archive_family = self.r#for.iter().any(super::types::FileType::is_archive);
+        // A composite scoped to the whole input (`outer`) or to the enclosing
+        // archive (`archive`) explicitly intends to pool evidence across archive
+        // entries, so it must be allowed to run at the container/archive level
+        // even when its `for:` lists only leaf types (e.g. a browser-extension
+        // rule `for: [javascript]` whose evidence is split across the CRX's
+        // content script and its manifest/rules JSON). Without this, such a rule
+        // would only ever evaluate on a single leaf and never see the pooled
+        // cross-entry findings it was written for.
+        let pools_across_archive =
+            matches!(self.scope, Some(Scope::Outer) | Some(Scope::Archive));
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
             || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())
-                && wants_archive_family);
+                && (wants_archive_family || pools_across_archive));
 
         if !file_type_match {
             ctx.record_skip(SkipReason::FileTypeMismatch {
@@ -3366,14 +3376,35 @@ pub(super) fn evidence_to_byte_offset(evidence: &Evidence) -> Option<u64> {
 }
 
 /// Parse a location string as a byte offset.
-/// Handles "0x1234", "offset:0x1234", "offset:1234".
+/// Handles "0x1234", "offset:0x1234", "offset:1234", and embedded-code
+/// parent offsets such as "embedded@0x1234:1:5".
 fn parse_location_as_byte_offset(loc: &str) -> Option<u64> {
+    if let Some(offset) = parse_embedded_location_offset(loc) {
+        return Some(offset);
+    }
     if let Some(rest) = loc.strip_prefix("offset:") {
         return parse_hex_or_dec_offset(rest);
     }
     if loc.starts_with("0x") || loc.starts_with("0X") {
         return parse_hex_or_dec_offset(loc);
     }
+    None
+}
+
+fn parse_embedded_location_offset(loc: &str) -> Option<u64> {
+    if let Some(rest) = loc.strip_prefix("embedded@") {
+        let offset = rest.split_once(':').map_or(rest, |(offset, _)| offset);
+        return parse_hex_or_dec_offset(offset);
+    }
+
+    if let Some(rest) = loc.strip_prefix("embedded:") {
+        let (_, offset_and_tail) = rest.rsplit_once('@')?;
+        let offset = offset_and_tail
+            .split_once(':')
+            .map_or(offset_and_tail, |(offset, _)| offset);
+        return parse_hex_or_dec_offset(offset);
+    }
+
     None
 }
 
@@ -3709,6 +3740,57 @@ mod scope_tests {
         // Older `embedded:<kind>@<offset>` form (used by base64 binary
         // payload detection and office/ole extractors) also pools.
         assert_eq!(Scope::File.key(Some("embedded:base64@0x100")), "");
+    }
+
+    #[test]
+    fn embedded_parent_offsets_map_to_parent_lines() {
+        let line_starts = build_line_index(b"zero\none\ntwo\n");
+
+        let embedded = ev("embedded@0x6:unknown");
+        assert_eq!(evidence_to_byte_offset(&embedded), Some(0x6));
+        assert_eq!(evidence_to_line(&embedded, &line_starts), Some(2));
+
+        let legacy = ev("embedded:shell@0xb:1:5");
+        assert_eq!(evidence_to_byte_offset(&legacy), Some(0xb));
+        assert_eq!(evidence_to_line(&legacy, &line_starts), Some(3));
+
+        let tagged = tag(0, "embedded@0x6:unknown");
+        assert_eq!(tagged_to_line(&tagged, &line_starts), Some(2));
+        assert_eq!(tagged_to_byte_offset(&tagged), Some(0x6));
+    }
+
+    #[test]
+    fn near_lines_accepts_embedded_findings_in_same_parent_window() {
+        let mut rule = composite_with(2, None);
+        rule.near_lines = Some(1);
+
+        let evidence = vec![ev("embedded@0x1:unknown"), ev("embedded@0x6:unknown")];
+        let tags = vec![
+            tag(0, "embedded@0x1:unknown"),
+            tag(1, "embedded@0x6:unknown"),
+        ];
+
+        let filtered = rule
+            .check_proximity_constraints(evidence, &tags, b"aaaa\nbbbb\ncccc\n")
+            .expect("embedded findings are on adjacent parent lines");
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn near_lines_rejects_embedded_findings_outside_parent_window() {
+        let mut rule = composite_with(2, None);
+        rule.near_lines = Some(1);
+
+        let evidence = vec![ev("embedded@0x1:unknown"), ev("embedded@0xb:unknown")];
+        let tags = vec![
+            tag(0, "embedded@0x1:unknown"),
+            tag(1, "embedded@0xb:unknown"),
+        ];
+
+        assert!(
+            rule.check_proximity_constraints(evidence, &tags, b"aaaa\nbbbb\ncccc\n")
+                .is_none()
+        );
     }
 
     #[test]

@@ -151,7 +151,17 @@ pub(crate) fn prepare_test_analysis(
     file_type: FileType,
     capability_mapper: &crate::capabilities::CapabilityMapper,
 ) -> Result<PreparedTestAnalysis> {
-    let full_data = fs::read(path)?;
+    // Normalize text encoding (UTF-16 LE/BE BOM -> UTF-8) before building the
+    // report and evaluating traits, mirroring the production analyze pipeline
+    // (`lib.rs`). Without this, `type: text` patterns are matched against
+    // null-interleaved UTF-16 bytes, so every text rule on a UTF-16 script
+    // (e.g. a VBS/JScript dropper) reports NOT MATCHED here while firing in a
+    // real `cleave analyze`. BOM-gated, so binaries/archives are untouched.
+    let raw_data = fs::read(path)?;
+    let full_data = match crate::file_io::normalize_text_encoding(&raw_data) {
+        std::borrow::Cow::Owned(decoded) => decoded,
+        std::borrow::Cow::Borrowed(_) => raw_data,
+    };
     let prepared_target = prepare_test_target(&file_type, &full_data);
     let mut report = create_analysis_report(
         path,

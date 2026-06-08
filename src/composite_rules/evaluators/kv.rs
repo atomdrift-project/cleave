@@ -1382,6 +1382,7 @@ pub(crate) fn structured_format_from_file_type(
     match file_type {
         crate::composite_rules::FileType::PackageJson
         | crate::composite_rules::FileType::PackageLockJson
+        | crate::composite_rules::FileType::ComposerJson
         | crate::composite_rules::FileType::ChromeManifest => StructuredFormat::Json,
         crate::composite_rules::FileType::CargoToml
         | crate::composite_rules::FileType::PyProjectToml => StructuredFormat::Toml,

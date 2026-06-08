@@ -61,8 +61,25 @@ magnitude slower.
 | `--soak-days` | `7` | stable lags beta by ≥ this many days |
 | `--valid-days` | `7` | `valid_until` = now + this |
 | `--channels` | `stable,beta` | channels to populate, in order |
+| `--artifact-prefix` | `""` | path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. `traits/` when bundles live under `cleave/traits/` but the manifest is at `cleave/versions.toml`) |
 | `--no-validate` | off | skip the gate (structure only; unsafe) |
 | `--sign` / `--identity` | off | cosign-sign the manifest |
+
+## Publishing to R2
+
+`make gen-manifest` writes `dist/` (bundles + `versions.toml`); `make publish-cleave`
+uploads it with rclone in the safe order (bundles first, then manifest, then
+signature). `make release-cleave` does both. Public bucket layout:
+
+```
+<remote>/cleave/versions.toml                  # manifest (Cache-Control: max-age=60)
+<remote>/cleave/versions.toml.sigstore.json    # signature
+<remote>/cleave/traits/<date>-<commit>.tar.xz  # bundles (immutable, cache forever)
+```
+
+The manifest's `file` field is `traits/<name>` (via `--artifact-prefix traits/`),
+so a client resolves `…/cleave/` + `traits/<name>`. Override `R2_REMOTE` /
+`R2_CLEAVE` in the make invocation for a different bucket/prefix.
 
 ## Relationship to `../update-manifest`
 

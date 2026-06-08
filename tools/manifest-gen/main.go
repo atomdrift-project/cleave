@@ -38,6 +38,7 @@ type artifact struct {
 
 type config struct {
 	traits, repo, engineOverride, out string
+	artifactPrefix                    string
 	nReleases, nCommits               int
 	soakDays, validDays               int
 	channels                          []string
@@ -51,6 +52,8 @@ func main() {
 	flag.StringVar(&c.repo, "repo", ".", "path to the cleave (engine) git repo")
 	flag.StringVar(&c.engineOverride, "engine", "", "use this binary for ALL releases instead of building per tag (testing)")
 	flag.StringVar(&c.out, "out", "dist", "output directory")
+	flag.StringVar(&c.artifactPrefix, "artifact-prefix", "",
+		"path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. \"traits/\")")
 	flag.IntVar(&c.nReleases, "releases", 2, "recent engine release tags to key the manifest by")
 	flag.IntVar(&c.nCommits, "commits", 20, "recent traits commits to consider (the ceiling; the floor bounds the rest)")
 	flag.IntVar(&c.soakDays, "soak-days", 7, "stable lags beta by at least this many days")
@@ -124,7 +127,7 @@ func run(c *config) {
 
 	arts := buildArtifacts(c, pointers, tarCache)
 	validUntil := time.Now().UTC().AddDate(0, 0, c.validDays).Format("2006-01-02T15:04:05Z")
-	manifest := render(validUntil, arts, tags, c.channels, pointers)
+	manifest := render(validUntil, c.artifactPrefix, arts, tags, c.channels, pointers)
 	path := filepath.Join(c.out, "versions.toml")
 	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
 		fatal("write %s: %v", path, err)
@@ -348,7 +351,7 @@ func buildArtifact(traits, out string, c commit, tarCache map[string][]byte) art
 
 // --- manifest render + floor parse ------------------------------------------
 
-func render(validUntil string, arts map[string]artifact, tags, channels []string, pointers map[string]map[string]string) string {
+func render(validUntil, artifactPrefix string, arts map[string]artifact, tags, channels []string, pointers map[string]map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "manifest_version = 1\n")
 	fmt.Fprintf(&b, "valid_until      = %s\n\n", validUntil)
@@ -361,7 +364,7 @@ func render(validUntil string, arts map[string]artifact, tags, channels []string
 	for _, k := range keys {
 		a := arts[k]
 		fmt.Fprintf(&b, "[artifacts.%s]\n", a.key)
-		fmt.Fprintf(&b, "file   = %q\n", a.file)
+		fmt.Fprintf(&b, "file   = %q\n", artifactPrefix+a.file)
 		fmt.Fprintf(&b, "sha256 = %q\n", a.sha)
 		fmt.Fprintf(&b, "commit = %q\n", a.commit)
 		fmt.Fprintf(&b, "date   = %q\n\n", a.date)

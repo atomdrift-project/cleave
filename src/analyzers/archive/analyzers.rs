@@ -678,17 +678,19 @@ impl ArchiveAnalyzer {
                 Self::archive_member_rizin_skip_reason(relative_path, file_type);
             let _ = (file_path, sha256);
 
-            // Per-format selection of stng's XOR scan: text/source
-            // members skip it entirely. The historical "pre-launch
-            // rizin" optimization was retired in Wave B — rizin now
-            // runs inside `filefacts::open` on the member's bytes when
-            // the per-analyzer parse fires; there's no separate
-            // subprocess for the archive layer to overlap with.
-            let stng_opts = if skip_rizin_reason.is_some() {
-                crate::analyzers::stng_text_opts(4)
-            } else {
-                crate::analyzers::stng_analysis_opts(4)
-            };
+            // Archive members get the SAME string-extraction treatment as a
+            // standalone file (`lib.rs` uses `stng_analysis_opts` for every
+            // non-archive input). The previous code downgraded text/script
+            // members to `stng_text_opts`, which sets `FormatHint::Text` and
+            // SKIPS stng's XOR scan — silently dropping XOR-obfuscated payload
+            // detection on exactly the files attackers bury inside archives
+            // (npm tarballs, zips, jars). XOR/base64 detection parity with the
+            // standalone path matters far more than the per-member scan cost;
+            // an inconsistency that weakens detection only for archived content
+            // is a security hole. `skip_rizin_reason` still governs the rizin
+            // (binary disassembly) skip below — that's correct for non-native
+            // members — but it must NOT also gate string extraction.
+            let stng_opts = crate::analyzers::stng_analysis_opts(4);
             crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
             let stng_opts =
                 crate::analyzers::attach_stng_cancellation(stng_opts, self.cancelled.as_ref());
@@ -738,6 +740,37 @@ impl ArchiveAnalyzer {
             );
 
             let mut report = analyzer.analyze_input(&input)?;
+
+            // Run the SAME encoded-payload analysis the standalone path runs
+            // (`process_encoded_payloads` in lib.rs): emit the
+            // `metadata/encoded-payload/*` finding for each payload and
+            // recursively analyze the decoded bytes, merging decoded
+            // traits/findings back. Without this an obfuscated payload inside an
+            // archive member (npm tarball, zip, jar) silently lost its
+            // encoded-payload finding and every trait derived from the decoded
+            // content — detection that the same file gets when scanned
+            // standalone. Guarded on the mapper + options the recursion needs;
+            // `payloads` was extracted above (empty when extract_payloads=false,
+            // making this a no-op). `payloads` is moved — `input` (which
+            // borrowed it) is no longer used after `analyze_input` above.
+            if !payloads.is_empty() {
+                if let (Some(mapper), Some(opts)) = (
+                    self.capability_mapper.as_ref(),
+                    self.analysis_options.as_ref(),
+                ) {
+                    crate::process_encoded_payloads(
+                        payloads,
+                        &mut report,
+                        logical_path,
+                        *file_type,
+                        (self.current_depth + 1) as u32,
+                        opts,
+                        mapper,
+                        self.yara_engine.as_ref(),
+                    );
+                }
+            }
+
             if let Some(ref yara_engine) = self.yara_engine {
                 if let Some(reason) =
                     Self::archive_member_yara_skip_reason(relative_path, file_type, data.len())

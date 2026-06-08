@@ -1222,6 +1222,280 @@ fn report_from_file_analysis(fa: types::FileAnalysis, path: String) -> types::An
     report
 }
 
+/// Process encoded payloads discovered during string extraction: emit the
+/// `metadata/encoded-payload/*` finding for each and recursively analyze the
+/// decoded bytes (depth-limited), merging the decoded traits/findings back.
+///
+/// Factored out of `analyze_file_with_resources_at_depth` so the archive
+/// member path can run the SAME payload analysis — previously only top-level
+/// files got it, so an obfuscated payload inside an archive (npm/zip/jar) lost
+/// its encoded-payload finding and every trait derived from the decoded
+/// content. Detection must not depend on whether a file was scanned standalone
+/// or as an archive member.
+pub(crate) fn process_encoded_payloads(
+    encoded_payloads: Vec<types::ExtractedPayload>,
+    report: &mut types::AnalysisReport,
+    path: &std::path::Path,
+    file_type: FileType,
+    analysis_depth: u32,
+    options: &AnalysisOptions,
+    capability_mapper: &Arc<CapabilityMapper>,
+    yara_engine: Option<&Arc<yara_engine::YaraEngine>>,
+) {
+    for payload in encoded_payloads {
+        if options
+            .cancellation
+            .as_ref()
+            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            break;
+        }
+        // Skip benign encoded payloads (certificate URLs, PDB paths)
+        let preview_lower = payload.preview.to_lowercase();
+        if payload.encoding_chain.iter().any(|e| e == "url") {
+            // Skip URL-encoded strings from certificate/PKI infrastructure
+            if preview_lower.contains("microsoft.com/pki")
+                || preview_lower.contains("microsoft.com/pkiops")
+                || preview_lower.contains("crl.microsoft.com")
+                || preview_lower.contains("verisign.com")
+                || preview_lower.contains("digicert.com")
+                || preview_lower.contains("symantec.com")
+                || preview_lower.starts_with("http") && preview_lower.contains("ocsp.")
+                || preview_lower.starts_with("http") && preview_lower.contains("/crl/")
+                || preview_lower.starts_with("http") && preview_lower.contains("/certs/")
+            {
+                tracing::debug!("Skipping benign PKI URL payload: {}", payload.preview);
+                continue;
+            }
+            if should_skip_unknown_url_markup_payload(&payload) {
+                tracing::debug!(
+                    "Skipping URL-decoded markup fragment from unknown payload: {}",
+                    payload.preview
+                );
+                continue;
+            }
+        }
+        if payload.encoding_chain.iter().any(|e| e == "unicode-escape") {
+            // Skip unicode-escape strings that are Windows file paths (PDB, build paths)
+            // or JSON parser error messages containing U+XXXX references
+            if payload.preview.contains(":\\")
+                || payload.preview.contains(".pdb")
+                || payload.preview.contains("must be escaped")
+                || payload.preview.contains("control character U+")
+                || is_benign_unicode_escape_payload(&payload)
+                || (payload.detected_type == FileType::Unknown
+                    && is_generated_python_codec_unicode_escape(&report))
+            {
+                tracing::debug!(
+                    "Skipping benign unicode-escape payload: {}",
+                    payload.preview
+                );
+                continue;
+            }
+        }
+        if file_type == FileType::Pe
+            && !payload.encoding_chain.is_empty()
+            && payload.encoding_chain.iter().all(|e| e == "hex")
+            && payload.detected_type == FileType::Unknown
+            && is_signed_python_extension(&report)
+        {
+            tracing::debug!(
+                "Skipping unknown hex payload in signed Python extension data tables: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if payload.encoding_chain.len() == 1
+            && payload.encoding_chain[0] == "xor"
+            && payload.detected_type == FileType::Unknown
+            && payload.preview.len() < 32
+        {
+            tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
+            continue;
+        }
+        if should_skip_unknown_encoded_payload_for_text(&file_type, &payload) {
+            tracing::debug!(
+                "Skipping unknown encoded fragment in text/source file: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if should_skip_unknown_xor_payload_for_binary(
+            &file_type,
+            &payload,
+            &report.sections,
+            &report,
+        ) {
+            tracing::debug!(
+                "Skipping unknown xor fragment in ELF metadata section: {}",
+                payload.preview
+            );
+            continue;
+        }
+        if payload.encoding_chain.len() == 1
+            && payload.encoding_chain[0] == "xor"
+            && payload.detected_type == FileType::Unknown
+            && report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/binary/framework::dotnet-assembly")
+            && report
+                .findings
+                .iter()
+                .any(|f| f.id == "metadata/package/versioning::pe-version-resource")
+            && report.findings.iter().any(|f| {
+                f.id == "micro-behaviors/data/compress/library::dotnet-gzip-compression"
+                    || f.id
+                        == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
+            })
+        {
+            tracing::debug!(
+                "Skipping unknown xor fragment in versioned .NET resource library: {}",
+                payload.preview
+            );
+            continue;
+        }
+
+        // Add finding for the encoded payload
+        let is_unknown_unicode_escape = payload.detected_type == FileType::Unknown
+            && payload
+                .encoding_chain
+                .iter()
+                .any(|encoding| encoding == "unicode-escape");
+        let is_detached_signature_data = payload.detected_type == FileType::Unknown
+            && (path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("sig"))
+                || payload
+                    .preview
+                    .to_ascii_lowercase()
+                    .starts_with("untrusted comment: signature"));
+        let crit = if is_unknown_unicode_escape || is_detached_signature_data {
+            types::Criticality::Baseline
+        } else {
+            match payload.detected_type {
+                FileType::Python
+                | FileType::Shell
+                | FileType::Elf
+                | FileType::MachO
+                | FileType::Pe => types::Criticality::Suspicious,
+                _ => types::Criticality::Notable,
+            }
+        };
+        let desc = if is_detached_signature_data {
+            "Encoded detached signature data".to_string()
+        } else if is_unknown_unicode_escape {
+            "Decoded unicode-escape content".to_string()
+        } else {
+            format!(
+                "Encoded payload detected: {}",
+                payload.encoding_chain.join(" → ")
+            )
+        };
+
+        report.findings.push(types::Finding {
+            id: format!(
+                "metadata/encoded-payload/{}",
+                payload.encoding_chain.join("-")
+            ),
+            kind: types::FindingKind::Structural,
+            desc,
+            conf: 0.9,
+            crit,
+            mbc: None,
+            attack: None,
+            trait_refs: vec![],
+            evidence: vec![types::Evidence {
+                method: "pattern".to_string(),
+                source: "cleave".to_string(),
+                value: format!("{} <{}>", payload.preview, payload.encoding_chain.join("+")),
+                location: Some(format!("offset:{}", payload.original_offset)),
+                ..Default::default()
+            }],
+            match_count: 0,
+            source_file: None,
+        });
+
+        // Unknown-type payloads have no analyzer and would immediately bail — skip
+        // the expensive temp-file write + full pipeline call.  The encoded-payload
+        // finding was already pushed above so the discovery is still recorded.
+        if payload.detected_type == FileType::Unknown {
+            tracing::debug!(
+                encoding = %payload.encoding_chain.join("+"),
+                preview = %payload.preview,
+                "Skipping recursive analysis for unrecognized payload type"
+            );
+            continue;
+        }
+
+        // Analyze the decoded payload (with depth limit to prevent stack overflow)
+        if analysis_depth >= MAX_ANALYSIS_DEPTH {
+            tracing::warn!(
+                depth = analysis_depth,
+                path = %path.display(),
+                "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
+            );
+            report.findings.push(types::Finding {
+                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
+                kind: types::FindingKind::Indicator,
+                desc: format!(
+                    "Encoded payload nesting exceeds {MAX_ANALYSIS_DEPTH} layers, \
+                     a technique used to resist automated analysis"
+                ),
+                conf: 0.95,
+                crit: types::Criticality::Suspicious,
+                mbc: Some("OB0002".to_string()),
+                attack: Some("T1027".to_string()),
+                trait_refs: vec![],
+                evidence: vec![types::Evidence {
+                    method: "structural".to_string(),
+                    source: "cleave".to_string(),
+                    value: format!("depth={analysis_depth}"),
+                    location: None,
+                    ..Default::default()
+                }],
+                match_count: 0,
+                source_file: None,
+            });
+            break;
+        }
+        if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
+            let _ = std::io::Write::write_all(&mut temp_file, &payload.data);
+            if let Ok(payload_report) = analyze_file_with_resources_at_depth(
+                temp_file.path(),
+                options,
+                capability_mapper,
+                yara_engine,
+                None,
+                None,
+                analysis_depth + 1,
+            ) {
+                // Merge traits from payload analysis
+                for mut trait_item in payload_report.traits {
+                    // Prefix trait offset with encoding chain
+                    if let Some(ref offset) = trait_item.offset {
+                        trait_item.offset =
+                            Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
+                    } else {
+                        trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
+                    }
+                    report.traits.push(trait_item);
+                }
+
+                // Merge findings from payload analysis
+                let existing: std::collections::HashSet<String> =
+                    report.findings.iter().map(|f| f.id.clone()).collect();
+                for finding in payload_report.findings {
+                    if !existing.contains(finding.id.as_str()) {
+                        report.findings.push(finding);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     path: P,
     options: &AnalysisOptions,
@@ -1729,258 +2003,16 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     if !encoded_payloads.is_empty() {
         set_phase("payloads");
     }
-    for payload in encoded_payloads {
-        if options
-            .cancellation
-            .as_ref()
-            .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
-        {
-            break;
-        }
-        // Skip benign encoded payloads (certificate URLs, PDB paths)
-        let preview_lower = payload.preview.to_lowercase();
-        if payload.encoding_chain.iter().any(|e| e == "url") {
-            // Skip URL-encoded strings from certificate/PKI infrastructure
-            if preview_lower.contains("microsoft.com/pki")
-                || preview_lower.contains("microsoft.com/pkiops")
-                || preview_lower.contains("crl.microsoft.com")
-                || preview_lower.contains("verisign.com")
-                || preview_lower.contains("digicert.com")
-                || preview_lower.contains("symantec.com")
-                || preview_lower.starts_with("http") && preview_lower.contains("ocsp.")
-                || preview_lower.starts_with("http") && preview_lower.contains("/crl/")
-                || preview_lower.starts_with("http") && preview_lower.contains("/certs/")
-            {
-                tracing::debug!("Skipping benign PKI URL payload: {}", payload.preview);
-                continue;
-            }
-            if should_skip_unknown_url_markup_payload(&payload) {
-                tracing::debug!(
-                    "Skipping URL-decoded markup fragment from unknown payload: {}",
-                    payload.preview
-                );
-                continue;
-            }
-        }
-        if payload.encoding_chain.iter().any(|e| e == "unicode-escape") {
-            // Skip unicode-escape strings that are Windows file paths (PDB, build paths)
-            // or JSON parser error messages containing U+XXXX references
-            if payload.preview.contains(":\\")
-                || payload.preview.contains(".pdb")
-                || payload.preview.contains("must be escaped")
-                || payload.preview.contains("control character U+")
-                || is_benign_unicode_escape_payload(&payload)
-                || (payload.detected_type == FileType::Unknown
-                    && is_generated_python_codec_unicode_escape(&report))
-            {
-                tracing::debug!(
-                    "Skipping benign unicode-escape payload: {}",
-                    payload.preview
-                );
-                continue;
-            }
-        }
-        if file_type == FileType::Pe
-            && !payload.encoding_chain.is_empty()
-            && payload.encoding_chain.iter().all(|e| e == "hex")
-            && payload.detected_type == FileType::Unknown
-            && is_signed_python_extension(&report)
-        {
-            tracing::debug!(
-                "Skipping unknown hex payload in signed Python extension data tables: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if payload.encoding_chain.len() == 1
-            && payload.encoding_chain[0] == "xor"
-            && payload.detected_type == FileType::Unknown
-            && payload.preview.len() < 32
-        {
-            tracing::debug!("Skipping short unknown xor fragment: {}", payload.preview);
-            continue;
-        }
-        if should_skip_unknown_encoded_payload_for_text(&file_type, &payload) {
-            tracing::debug!(
-                "Skipping unknown encoded fragment in text/source file: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if should_skip_unknown_xor_payload_for_binary(
-            &file_type,
-            &payload,
-            &report.sections,
-            &report,
-        ) {
-            tracing::debug!(
-                "Skipping unknown xor fragment in ELF metadata section: {}",
-                payload.preview
-            );
-            continue;
-        }
-        if payload.encoding_chain.len() == 1
-            && payload.encoding_chain[0] == "xor"
-            && payload.detected_type == FileType::Unknown
-            && report
-                .findings
-                .iter()
-                .any(|f| f.id == "metadata/binary/framework::dotnet-assembly")
-            && report
-                .findings
-                .iter()
-                .any(|f| f.id == "metadata/package/versioning::pe-version-resource")
-            && report.findings.iter().any(|f| {
-                f.id == "micro-behaviors/data/compress/library::dotnet-gzip-compression"
-                    || f.id
-                        == "micro-behaviors/data/embedded/payload::dotnet-getmanifestresourcestream"
-            })
-        {
-            tracing::debug!(
-                "Skipping unknown xor fragment in versioned .NET resource library: {}",
-                payload.preview
-            );
-            continue;
-        }
-
-        // Add finding for the encoded payload
-        let is_unknown_unicode_escape = payload.detected_type == FileType::Unknown
-            && payload
-                .encoding_chain
-                .iter()
-                .any(|encoding| encoding == "unicode-escape");
-        let is_detached_signature_data = payload.detected_type == FileType::Unknown
-            && (path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("sig"))
-                || payload
-                    .preview
-                    .to_ascii_lowercase()
-                    .starts_with("untrusted comment: signature"));
-        let crit = if is_unknown_unicode_escape || is_detached_signature_data {
-            types::Criticality::Baseline
-        } else {
-            match payload.detected_type {
-                FileType::Python
-                | FileType::Shell
-                | FileType::Elf
-                | FileType::MachO
-                | FileType::Pe => types::Criticality::Suspicious,
-                _ => types::Criticality::Notable,
-            }
-        };
-        let desc = if is_detached_signature_data {
-            "Encoded detached signature data".to_string()
-        } else if is_unknown_unicode_escape {
-            "Decoded unicode-escape content".to_string()
-        } else {
-            format!(
-                "Encoded payload detected: {}",
-                payload.encoding_chain.join(" → ")
-            )
-        };
-
-        report.findings.push(types::Finding {
-            id: format!(
-                "metadata/encoded-payload/{}",
-                payload.encoding_chain.join("-")
-            ),
-            kind: types::FindingKind::Structural,
-            desc,
-            conf: 0.9,
-            crit,
-            mbc: None,
-            attack: None,
-            trait_refs: vec![],
-            evidence: vec![types::Evidence {
-                method: "pattern".to_string(),
-                source: "cleave".to_string(),
-                value: format!("{} <{}>", payload.preview, payload.encoding_chain.join("+")),
-                location: Some(format!("offset:{}", payload.original_offset)),
-                ..Default::default()
-            }],
-            match_count: 0,
-            source_file: None,
-        });
-
-        // Unknown-type payloads have no analyzer and would immediately bail — skip
-        // the expensive temp-file write + full pipeline call.  The encoded-payload
-        // finding was already pushed above so the discovery is still recorded.
-        if payload.detected_type == FileType::Unknown {
-            tracing::debug!(
-                encoding = %payload.encoding_chain.join("+"),
-                preview = %payload.preview,
-                "Skipping recursive analysis for unrecognized payload type"
-            );
-            continue;
-        }
-
-        // Analyze the decoded payload (with depth limit to prevent stack overflow)
-        if analysis_depth >= MAX_ANALYSIS_DEPTH {
-            tracing::warn!(
-                depth = analysis_depth,
-                path = %path.display(),
-                "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
-            );
-            report.findings.push(types::Finding {
-                id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
-                kind: types::FindingKind::Indicator,
-                desc: format!(
-                    "Encoded payload nesting exceeds {MAX_ANALYSIS_DEPTH} layers, \
-                     a technique used to resist automated analysis"
-                ),
-                conf: 0.95,
-                crit: types::Criticality::Suspicious,
-                mbc: Some("OB0002".to_string()),
-                attack: Some("T1027".to_string()),
-                trait_refs: vec![],
-                evidence: vec![types::Evidence {
-                    method: "structural".to_string(),
-                    source: "cleave".to_string(),
-                    value: format!("depth={analysis_depth}"),
-                    location: None,
-                    ..Default::default()
-                }],
-                match_count: 0,
-                source_file: None,
-            });
-            break;
-        }
-        if let Ok(mut temp_file) = tempfile::NamedTempFile::new() {
-            let _ = std::io::Write::write_all(&mut temp_file, &payload.data);
-            if let Ok(payload_report) = analyze_file_with_resources_at_depth(
-                temp_file.path(),
-                options,
-                capability_mapper,
-                yara_engine,
-                None,
-                None,
-                analysis_depth + 1,
-            ) {
-                // Merge traits from payload analysis
-                for mut trait_item in payload_report.traits {
-                    // Prefix trait offset with encoding chain
-                    if let Some(ref offset) = trait_item.offset {
-                        trait_item.offset =
-                            Some(format!("{}!{}", payload.encoding_chain.join("+"), offset));
-                    } else {
-                        trait_item.offset = Some(format!("{}!", payload.encoding_chain.join("+")));
-                    }
-                    report.traits.push(trait_item);
-                }
-
-                // Merge findings from payload analysis
-                let existing: std::collections::HashSet<String> =
-                    report.findings.iter().map(|f| f.id.clone()).collect();
-                for finding in payload_report.findings {
-                    if !existing.contains(finding.id.as_str()) {
-                        report.findings.push(finding);
-                    }
-                }
-            }
-        }
-    }
+    process_encoded_payloads(
+        encoded_payloads,
+        &mut report,
+        path,
+        file_type,
+        analysis_depth,
+        options,
+        capability_mapper,
+        yara_engine,
+    );
     let stage_payloads_ms = payloads_start.elapsed().as_millis() as u64;
 
     // Bail early if cancelled — skip YARA and remaining phases

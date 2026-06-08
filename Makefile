@@ -207,13 +207,36 @@ DIST ?= dist
 RELEASES ?= 2
 COMMITS ?= 10
 SOAK_DAYS ?= 7
+ARTIFACT_PREFIX ?= traits/
 gen-manifest: release ## Auto-generate versions.toml from recent release tags + traits commits ([RELEASES=2] [COMMITS=10] [SOAK_DAYS=7] [SIGN=1 IDENTITY=...])
 	cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
 	tools/manifest-gen/manifest-gen \
 	  --traits "$(TRAITS)" --repo . \
 	  --engine ./$(CARGO_TARGET)/release/$(BINARY) --out "$(DIST)" \
 	  --releases $(RELEASES) --commits $(COMMITS) --soak-days $(SOAK_DAYS) \
+	  --artifact-prefix "$(ARTIFACT_PREFIX)" \
 	  $(if $(SIGN),--sign --identity "$(IDENTITY)",)
+
+# Public R2 bucket layout: <remote>/<R2_CLEAVE>/versions.toml + <R2_CLEAVE>/traits/<bundles>
+R2_REMOTE ?= atomdrift-updates:atomdrift-updates
+R2_CLEAVE ?= cleave
+publish-cleave: ## Upload dist/ bundles + versions.toml to R2 (artifacts FIRST, then manifest, then signature)
+	@command -v rclone >/dev/null || { echo "rclone not found"; exit 1; }
+	@[ -f "$(DIST)/versions.toml" ] || { echo "no $(DIST)/versions.toml — run 'make gen-manifest' first"; exit 1; }
+	@echo "→ bundles (immutable, cache forever)"
+	rclone copy "$(DIST)" "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --include "*.tar.xz" \
+	  --header-upload "Cache-Control: public, max-age=31536000, immutable" --progress
+	@echo "→ manifest (short cache so polls see updates)"
+	rclone copyto "$(DIST)/versions.toml" "$(R2_REMOTE)/$(R2_CLEAVE)/versions.toml" \
+	  --header-upload "Cache-Control: public, max-age=60"
+	@if [ -f "$(DIST)/versions.toml.sigstore.json" ]; then \
+	  echo "→ signature"; \
+	  rclone copyto "$(DIST)/versions.toml.sigstore.json" "$(R2_REMOTE)/$(R2_CLEAVE)/versions.toml.sigstore.json" \
+	    --header-upload "Cache-Control: public, max-age=60"; \
+	else echo "(no signature bundle in $(DIST); skipping — sign before a real release)"; fi
+	@echo "✓ published to $(R2_REMOTE)/$(R2_CLEAVE)/"
+
+release-cleave: gen-manifest publish-cleave ## Generate the manifest and publish it to R2 in one step
 
 update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
 	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }

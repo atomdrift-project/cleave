@@ -1376,7 +1376,7 @@ fn push_octal_escape(
     out.push_str(&digits);
 }
 
-fn structured_format_from_file_type(
+pub(crate) fn structured_format_from_file_type(
     file_type: &crate::composite_rules::FileType,
 ) -> StructuredFormat {
     match file_type {

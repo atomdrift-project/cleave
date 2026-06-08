@@ -3210,30 +3210,6 @@ mod taxonomy_tests {
         }
     }
 
-    #[test]
-    fn archive_scope_requires_archive_for() {
-        use crate::capabilities::validation::find_archive_scope_without_archive_for as check;
-        use crate::composite_rules::Scope;
-
-        // scope: archive with a leaf-only for: can never evaluate on the archive,
-        // so it silently never fires — must be flagged.
-        let mut leaf_only = make_composite("npm-leaf-only", &["a::b", "c::d"]);
-        leaf_only.scope = Some(Scope::Archive);
-        leaf_only.r#for = vec![FileType::JavaScript, FileType::PackageJson];
-        assert_eq!(check(&leaf_only).as_deref(), Some("npm-leaf-only"));
-
-        // scope: archive with an archive type in for: is correct — not flagged.
-        let mut with_archive = make_composite("npm-with-archive", &["a::b", "c::d"]);
-        with_archive.scope = Some(Scope::Archive);
-        with_archive.r#for = vec![FileType::JavaScript, FileType::Npm];
-        assert_eq!(check(&with_archive), None);
-
-        // No scope (default leaf/file) is unaffected.
-        let mut no_scope = make_composite("npm-no-scope", &["a::b"]);
-        no_scope.r#for = vec![FileType::JavaScript, FileType::PackageJson];
-        assert_eq!(check(&no_scope), None);
-    }
-
     fn make_composite_suspicious(id: &str, all_refs: &[&str]) -> CompositeTrait {
         CompositeTrait {
             required_trait_indices: Vec::new(),

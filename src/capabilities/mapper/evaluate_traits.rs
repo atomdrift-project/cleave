@@ -426,7 +426,21 @@ impl super::CapabilityMapper {
                 .filefacts
                 .as_ref()
                 .is_some_and(|v| !v.symbols.is_empty());
-        if !dependent_only && !has_any_matches && !has_strings && binary_data.len() < 100 {
+        // Structured manifests carry their signal as parsed KV fields, not
+        // extracted strings: a 94-byte skeleton `package.json`
+        // (`{"name","version","license"}`) has zero strings yet `value:`/kv
+        // traits match its fields by reparsing the content. Skipping it would
+        // blind us to sub-100-byte namespace-squatting manifests — exactly the
+        // supply-chain shape worth flagging — so never short-circuit them.
+        let is_structured_manifest = crate::composite_rules::evaluators::kv::structured_format_from_file_type(
+            &file_type,
+        ) != crate::composite_rules::evaluators::kv::StructuredFormat::Unknown;
+        if !dependent_only
+            && !has_any_matches
+            && !has_strings
+            && !is_structured_manifest
+            && binary_data.len() < 100
+        {
             return vec![];
         }
 

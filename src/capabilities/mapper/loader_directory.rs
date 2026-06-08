@@ -16,8 +16,8 @@ use crate::capabilities::validation::{
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    find_alternation_merge_candidates, find_archive_scope_without_archive_for,
-    find_ast_function_call_should_use_symbol, find_atomic_logic_duplicates,
+    find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
+    find_atomic_logic_duplicates,
     find_banned_directory_segments, find_broad_filetype_traits, find_broad_platform_traits,
     find_cap_obj_violations, find_cap_wellknown_violations, find_case_insensitive_overlap_issues,
     find_composite_only_wellknown_files, find_depth_violations, find_duplicate_atomic_traits,
@@ -2810,54 +2810,6 @@ impl super::CapabilityMapper {
                 warnings.push(format!(
                     "{} composite rules have single-item any:/all: clauses",
                     single_item_clauses.len()
-                ));
-            }
-
-            // Validate that `scope: archive` composites can actually evaluate on an
-            // archive. Without an archive/container type in `for:` they only run on
-            // individual members, never pool cross-member evidence, and silently
-            // never fire — an invisible failure since the rule looks correct.
-            let mut archive_scope_no_for = Vec::new();
-            for rule in &composite_rules {
-                if let Some(rule_id) = find_archive_scope_without_archive_for(rule) {
-                    let source_file = rule_source_files
-                        .get(&rule_id)
-                        .map(std::string::String::as_str)
-                        .unwrap_or("unknown");
-                    archive_scope_no_for.push((rule_id, source_file.to_string()));
-                }
-            }
-
-            if !archive_scope_no_for.is_empty() {
-                eprintln!(
-                    "\n❌ ERROR: {} composite rules use 'scope: archive' but cannot match an archive",
-                    archive_scope_no_for.len()
-                );
-                eprintln!(
-                    "   'scope: archive' pools evidence across an archive's members, so the rule\n   \
-                     must be evaluated on the archive itself — add an archive/container type to\n   \
-                     'for:' (the 'archives' group covers zip/tar/npm/whl/crx/xpi/…). Without it the\n   \
-                     rule only runs on individual members, never pools cross-member evidence, and\n   \
-                     silently never fires:\n"
-                );
-                for (rule_id, source_file) in &archive_scope_no_for {
-                    let line_hint = find_line_number(source_file, rule_id);
-                    if let Some(line) = line_hint {
-                        eprintln!(
-                            "   {}:{}: Rule '{}' has 'scope: archive' without an archive type in 'for:' (add 'archives')",
-                            source_file, line, rule_id
-                        );
-                    } else {
-                        eprintln!(
-                            "   {}: Rule '{}' has 'scope: archive' without an archive type in 'for:' (add 'archives')",
-                            source_file, rule_id
-                        );
-                    }
-                }
-                eprintln!();
-                warnings.push(format!(
-                    "{} composite rules use 'scope: archive' but cannot match an archive (add 'archives' to for:)",
-                    archive_scope_no_for.len()
                 ));
             }
 

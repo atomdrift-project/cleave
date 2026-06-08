@@ -751,138 +751,22 @@ impl PackageJsonAnalyzer {
 
     fn analyze_scripts(&self, scripts: &HashMap<String, String>, report: &mut AnalysisReport) {
         for (name, script) in scripts {
-            // Check for base64 encoded content
-            if script.contains("base64") || script.contains("atob") || script.contains("btoa") {
-                report.add_finding(
-                    Finding::indicator(
-                        "obfuscation/encoding/base64".to_string(),
-                        format!("Script '{}' uses base64 encoding", name),
-                        0.7,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 100).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
+            // Per-script capability detection (base64/encoding, network egress,
+            // shell+eval, file deletion, env-var access, interpreters) now lives
+            // in YAML under objectives/supply-chain/install-hook/capability/<cap>/
+            // as per-hook value-lookup traits — one leaf directory per capability
+            // so each is a distinct ML feature, scoped to the lifecycle hooks
+            // that actually matter instead of this flat all-scripts substring
+            // scan. The hostile-tier combinations below (download+execute,
+            // pipe-to-interpreter, file-upload) stay in the engine for now.
 
-            // Check for network operations in scripts
-            if script.contains("curl ")
-                || script.contains("wget ")
-                || script.contains("fetch(")
-                || script.contains("http://")
-                || script.contains("https://")
-            {
-                report.add_finding(
-                    Finding::capability(
-                        "net/http/download".to_string(),
-                        format!("Script '{}' performs network operations", name),
-                        0.9,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 100).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
-
-            // Check for shell command execution
-            if script.contains("eval ")
-                || script.contains("$(")
-                || script.contains("`")
-                || script.contains("sh -c")
-                || script.contains("bash -c")
-            {
-                report.add_finding(
-                    Finding::capability(
-                        "execution/command/shell".to_string(),
-                        format!("Script '{}' executes shell commands", name),
-                        0.8,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 100).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
-
-            // Check for file system operations
-            if script.contains("rm -rf") || script.contains("rmdir") || script.contains("unlink") {
-                report.add_finding(
-                    Finding::capability(
-                        "fs/file/delete".to_string(),
-                        format!("Script '{}' performs file deletion", name),
-                        0.8,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 100).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
-
-            // Check for environment variable access (credential theft)
-            if script.contains("$HOME")
-                || script.contains("$USER")
-                || script.contains("$AWS_")
-                || script.contains("$GITHUB_TOKEN")
-                || script.contains("process.env")
-            {
-                report.add_finding(
-                    Finding::capability(
-                        "discovery/env-vars".to_string(),
-                        format!("Script '{}' accesses environment variables", name),
-                        0.7,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 100).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
-
-            // Check for data exfiltration via curl POST
-            if script.contains("curl -d")
-                || script.contains("curl --data")
-                || script.contains("-X POST")
-            {
-                report.add_finding(
-                    Finding::indicator(
-                        "exfiltration/http-post".to_string(),
-                        format!("Script '{}' sends data via HTTP POST", name),
-                        0.9,
-                    )
-                    .with_criticality(Criticality::Notable)
-                    .with_attack("T1041".to_string())
-                    .with_evidence(vec![Evidence {
-                        method: "pattern".to_string(),
-                        source: "package.json".to_string(),
-                        value: truncate_str(script, 200).to_string(),
-                        location: Some(format!("scripts.{}", name)),
-                        ..Default::default()
-                    }]),
-                );
-            }
+            // Install-time curl POST exfiltration now lives in YAML as per-hook
+            // value-lookup traits (objectives/supply-chain/install-hook/scripts/
+            // <hook>::curl-http-post), which scope the match to the exact script
+            // key and distinguish victim-side install hooks from author-side
+            // publish hooks — unlike this flat substring scan, which mislabeled
+            // benign `postpublish` build-hook triggers as exfiltration. The
+            // capability/network YAML trait records the egress itself.
 
             // Check for file exfiltration (curl -d "@file")
             if script.contains("curl") && script.contains("@/") {
@@ -904,34 +788,8 @@ impl PackageJsonAnalyzer {
                 );
             }
 
-            // Check for script interpreter execution (perl, python, ruby, etc.)
-            let interpreters = [
-                ("perl ", "execution/script/perl"),
-                ("python ", "execution/script/python"),
-                ("python3 ", "execution/script/python"),
-                ("ruby ", "execution/script/ruby"),
-                ("node ", "execution/script/node"),
-            ];
-            for (interp, finding_id) in interpreters {
-                if script.contains(interp) {
-                    report.add_finding(
-                        Finding::capability(
-                            finding_id.to_string(),
-                            format!("Script '{}' executes {} interpreter", name, interp.trim()),
-                            0.9,
-                        )
-                        .with_criticality(Criticality::Notable)
-                        .with_attack("T1059".to_string())
-                        .with_evidence(vec![Evidence {
-                            method: "pattern".to_string(),
-                            source: "package.json".to_string(),
-                            value: truncate_str(script, 200).to_string(),
-                            location: Some(format!("scripts.{}", name)),
-                            ..Default::default()
-                        }]),
-                    );
-                }
-            }
+            // Interpreter execution (perl/python/ruby/node) moved to YAML:
+            // objectives/supply-chain/install-hook/capability/interpreter/.
 
             // Check for download-and-execute pattern
             if (script.contains("curl") || script.contains("wget"))
@@ -1785,14 +1643,15 @@ mod tests {
             .analyze_package(Path::new("package.json"), content)
             .unwrap();
 
-        // Should detect both the install hook and the network operation
+        // Should detect the install hook. (Per-script capability findings such
+        // as the network operation now come from YAML capability traits, which
+        // this engine-only unit test does not load.)
         assert!(
             report
                 .findings
                 .iter()
                 .any(|f| f.id.contains("install-hook"))
         );
-        assert!(report.findings.iter().any(|f| f.id.contains("net/")));
     }
 
     #[test]

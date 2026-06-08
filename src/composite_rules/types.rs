@@ -311,6 +311,14 @@ pub(crate) enum FileType {
     Npm,
     /// NuGet package (.nupkg)
     Nupkg,
+    /// Rust crate (.crate)
+    Crate,
+    /// conda package (.conda)
+    Conda,
+    /// Python egg (.egg)
+    Egg,
+    /// OS installer package (.pkg) — macOS (xar), FreeBSD/Arch (compressed tar)
+    Pkg,
     /// Ruby gem (.gem)
     Gem,
     /// Python wheel (.whl)
@@ -437,6 +445,10 @@ impl FileType {
                 | FileType::Tar
                 | FileType::Npm
                 | FileType::Nupkg
+                | FileType::Crate
+                | FileType::Conda
+                | FileType::Egg
+                | FileType::Pkg
                 | FileType::Gem
                 | FileType::Whl
                 | FileType::Deb
@@ -535,6 +547,10 @@ impl FileType {
             FileType::Zst,
             FileType::Npm,
             FileType::Nupkg,
+            FileType::Crate,
+            FileType::Conda,
+            FileType::Egg,
+            FileType::Pkg,
             FileType::Gem,
             FileType::Whl,
             FileType::Deb,
@@ -562,7 +578,7 @@ impl FileType {
             "rust" | "rs" => FileType::Rust,
             "go" => FileType::Go,
             "java" => FileType::Java,
-            "class" => FileType::Class,
+            "class" | "java_class" | "javaclass" => FileType::Class,
             "pyc" | "python-bytecode" | "pythonbytecode" => FileType::Pyc,
             "ruby" | "rb" => FileType::Ruby,
             "php" => FileType::Php,
@@ -619,12 +635,22 @@ impl FileType {
             "archive" | "rar" | "7z" => FileType::Archive,
             // "unknown" falls through to the `_` wildcard arm below.
             "zip" => FileType::Zip,
-            "apk" => FileType::Apk,
+            // Both `.apk` ecosystems match generic `apk`-scoped traits; the
+            // fine-grained distinction lives in the report string for litmus /
+            // collimator, not in trait-capability routing.
+            "apk" | "apk_android" | "apk_alpine" => FileType::Apk,
             "jar" | "war" | "ear" => FileType::Jar,
             "tar" | "tgz" | "tar.gz" | "tar.bz2" | "tar.xz" => FileType::Tar,
             "zst" => FileType::Zst,
             "npm" => FileType::Npm,
             "nupkg" => FileType::Nupkg,
+            "crate" => FileType::Crate,
+            "conda" => FileType::Conda,
+            "egg" => FileType::Egg,
+            // The `.pkg` ecosystems share one trait-targeting bucket (like the
+            // two apk ecosystems share `Apk`); the fine-grained distinction
+            // lives in the report string for litmus / collimator.
+            "pkg_macos" | "pkg_freebsd" | "pkg_arch" => FileType::Pkg,
             "gem" => FileType::Gem,
             "whl" => FileType::Whl,
             "deb" => FileType::Deb,
@@ -810,6 +836,13 @@ mod tests {
         );
         assert_eq!(FileType::from_str("systemd"), FileType::SystemdService);
         assert_eq!(FileType::from_str("service"), FileType::SystemdService);
+    }
+
+    #[test]
+    fn test_from_str_java_class_aliases() {
+        assert_eq!(FileType::from_str("class"), FileType::Class);
+        assert_eq!(FileType::from_str("java_class"), FileType::Class);
+        assert_eq!(FileType::from_str("javaclass"), FileType::Class);
     }
 
     // ==================== Platform Equality Tests ====================

@@ -44,6 +44,28 @@ mod tests {
         assert!(!analyzer.can_analyze(Path::new("testclass")));
     }
 
+    #[test]
+    fn test_analyze_projects_filefacts_imports() {
+        let analyzer = JavaClassAnalyzer::new();
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/java/Suspicious.class"
+        ));
+
+        let report = analyzer.analyze(path).expect("analyze Java class fixture");
+        let symbols: std::collections::BTreeSet<&str> =
+            report.imports.iter().map(|i| i.symbol.as_str()).collect();
+
+        assert!(
+            symbols.contains("java/lang/Runtime.exec"),
+            "Java bytecode method refs should be owner-qualified for trait matching"
+        );
+        assert!(
+            symbols.contains("java/lang/ProcessBuilder.start"),
+            "ProcessBuilder.start should be available to symbol traits"
+        );
+    }
+
     // =============================================================================
     // Version mapping tests
     // =============================================================================

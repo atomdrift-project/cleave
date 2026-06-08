@@ -181,12 +181,13 @@ fn run_version() {
 }
 
 fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {
+    let dir = cleave::traits_repo::install_target();
     if let Some(commit) = pin {
-        cleave::traits_repo::pin(&commit).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::pin(&dir, &commit).map_err(anyhow::Error::msg)?;
     } else if check {
-        cleave::traits_repo::check_updates().map_err(anyhow::Error::msg)?;
+        cleave::rule_update::check(&dir).map_err(anyhow::Error::msg)?;
     } else {
-        cleave::traits_repo::update(force).map_err(anyhow::Error::msg)?;
+        cleave::rule_update::update(&dir, force).map_err(anyhow::Error::msg)?;
     }
 
     Ok(())

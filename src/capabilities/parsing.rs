@@ -496,7 +496,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "gyp" | "gypi" | "binding.gyp" => vec![RuleFileType::Gyp],
                 // Compiled languages (fullname + extension)
                 "java" => vec![RuleFileType::Java],
-                "class" => vec![RuleFileType::Class],
+                "class" | "java_class" | "javaclass" => vec![RuleFileType::Class],
                 "pyc" | "python-bytecode" | "pythonbytecode" => vec![RuleFileType::Pyc],
                 "c" | "cpp" | "c++" | "cc" | "cxx" => vec![RuleFileType::C],
                 "rust" => vec![RuleFileType::Rust],
@@ -553,6 +553,10 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "tar" | "tgz" => vec![RuleFileType::Tar],
                 "npm" => vec![RuleFileType::Npm],
                 "nupkg" => vec![RuleFileType::Nupkg],
+                "crate" => vec![RuleFileType::Crate],
+                "conda" => vec![RuleFileType::Conda],
+                "egg" => vec![RuleFileType::Egg],
+                "pkg" => vec![RuleFileType::Pkg],
                 "gem" => vec![RuleFileType::Gem],
                 "whl" => vec![RuleFileType::Whl],
                 "deb" => vec![RuleFileType::Deb],
@@ -1811,6 +1815,8 @@ mod tests {
                 "js".to_string(),
                 "ts".to_string(),
                 "rb".to_string(),
+                "java_class".to_string(),
+                "javaclass".to_string(),
                 "systemd-service".to_string(),
                 "systemd".to_string(),
             ],
@@ -1819,6 +1825,7 @@ mod tests {
         assert!(result.types.contains(&RuleFileType::Python));
         assert!(result.types.contains(&RuleFileType::JavaScript)); // "ts" also maps to JavaScript
         assert!(result.types.contains(&RuleFileType::Ruby));
+        assert!(result.types.contains(&RuleFileType::Class));
         assert!(result.types.contains(&RuleFileType::SystemdService));
         assert!(warnings.is_empty());
     }

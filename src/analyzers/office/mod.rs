@@ -75,15 +75,14 @@ fn target_is_remote(target: &str) -> bool {
     }
     // file://host/... — non-empty authority that isn't a drive letter or
     // localhost is a remote host.
-    if lower.starts_with("file://") {
-        if let Some(rest) = lower.strip_prefix("file://") {
-            // rest is "host/..." for remote, "" or "/path" / "localhost/" for local.
-            if !rest.is_empty() && !rest.starts_with('/') {
-                let host = rest.split(['/', '\\']).next().unwrap_or("");
-                let is_drive = host.len() == 2 && host.ends_with(':');
-                if !host.is_empty() && host != "localhost" && !is_drive {
-                    return true;
-                }
+    // strip_prefix already implies starts_with("file://").
+    if let Some(rest) = lower.strip_prefix("file://") {
+        // rest is "host/..." for remote, "" or "/path" / "localhost/" for local.
+        if !rest.is_empty() && !rest.starts_with('/') {
+            let host = rest.split(['/', '\\']).next().unwrap_or("");
+            let is_drive = host.len() == 2 && host.ends_with(':');
+            if !host.is_empty() && host != "localhost" && !is_drive {
+                return true;
             }
         }
     }

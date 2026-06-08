@@ -92,6 +92,9 @@ impl Analyzer for JavaClassAnalyzer {
         // Evaluate all rules (atomic + composite) and merge into report
         let filefacts_ctx =
             crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
+        if let Some(ctx) = filefacts_ctx.as_ref() {
+            report.imports.extend(ctx.imports_from_filefacts());
+        }
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -116,6 +119,9 @@ impl Analyzer for JavaClassAnalyzer {
 
         // Evaluate all rules (atomic + composite) and merge into report
         let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        if let Some(ctx) = filefacts_ctx.as_ref() {
+            report.imports.extend(ctx.imports_from_filefacts());
+        }
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,

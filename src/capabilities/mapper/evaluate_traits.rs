@@ -432,9 +432,9 @@ impl super::CapabilityMapper {
         // traits match its fields by reparsing the content. Skipping it would
         // blind us to sub-100-byte namespace-squatting manifests — exactly the
         // supply-chain shape worth flagging — so never short-circuit them.
-        let is_structured_manifest = crate::composite_rules::evaluators::kv::structured_format_from_file_type(
-            &file_type,
-        ) != crate::composite_rules::evaluators::kv::StructuredFormat::Unknown;
+        let is_structured_manifest =
+            crate::composite_rules::evaluators::kv::structured_format_from_file_type(&file_type)
+                != crate::composite_rules::evaluators::kv::StructuredFormat::Unknown;
         if !dependent_only
             && !has_any_matches
             && !has_strings

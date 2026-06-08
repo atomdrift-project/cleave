@@ -93,26 +93,33 @@ impl<'a> AnalysisContext<'a> {
     /// Project filefacts Import symbols into cleave's import representation.
     #[must_use]
     pub fn imports_from_filefacts(&self) -> Vec<Import> {
-        self.parsed
+        let mut imports = Vec::new();
+        for sym in self
+            .parsed
             .symbols()
             .iter_kind(filefacts::SymbolKind::Import)
-            .filter_map(|s| match s {
+        {
+            let Some(import) = (match sym {
                 filefacts::Symbol::Import {
                     name,
                     library,
                     offset,
                     alias,
                     ..
-                } => Some(
-                    match offset {
-                        Some(off) => Import::with_offset(name, library.clone(), *off),
-                        None => Import::new(name, library.clone()),
-                    }
-                    .with_alias(alias.clone()),
-                ),
+                } => Some(project_filefacts_import(
+                    name,
+                    library,
+                    *offset,
+                    alias.clone(),
+                )),
                 _ => None,
-            })
-            .collect()
+            }) else {
+                continue;
+            };
+            extend_with_owner_qualified_import(&mut imports, &import);
+            imports.push(import);
+        }
+        imports
     }
 
     /// Project filefacts Export symbols into cleave's export representation.
@@ -164,6 +171,47 @@ impl<'a> AnalysisContext<'a> {
             .iter_kind(filefacts::SymbolKind::Function)
             .filter_map(project_filefacts_function)
             .collect()
+    }
+}
+
+fn project_filefacts_import(
+    name: &str,
+    library: &Option<String>,
+    offset: Option<u64>,
+    alias: Option<String>,
+) -> Import {
+    match offset {
+        Some(off) => Import::with_offset(name, library.clone(), off),
+        None => Import::new(name, library.clone()),
+    }
+    .with_alias(alias)
+}
+
+fn extend_with_owner_qualified_import(imports: &mut Vec<Import>, import: &Import) {
+    let Some(owner) = import.library.as_deref() else {
+        return;
+    };
+    if !is_jvm_internal_owner(owner) {
+        return;
+    }
+    let qualified = format!("{owner}.{}", import.symbol);
+    let mut synthetic = match import.offset.as_deref().and_then(parse_hex_offset) {
+        Some(off) => Import::with_offset(qualified, import.library.clone(), off),
+        None => Import::new(qualified, import.library.clone()),
+    };
+    synthetic.alias = import.alias.clone();
+    imports.push(synthetic);
+}
+
+fn is_jvm_internal_owner(owner: &str) -> bool {
+    owner.contains('/') && !owner.contains('\\') && !owner.contains(' ')
+}
+
+fn parse_hex_offset(s: &str) -> Option<u64> {
+    if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        u64::from_str_radix(hex, 16).ok()
+    } else {
+        s.parse().ok()
     }
 }
 
@@ -245,4 +293,55 @@ fn flags_to_permissions(flags: &[String]) -> Option<String> {
         if w { 'w' } else { '-' },
         if x { 'x' } else { '-' }
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::*;
+
+    #[test]
+    fn imports_include_owner_qualified_jvm_method_refs() {
+        let path = Path::new(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/java/Suspicious.class"
+        ));
+        let bytes = std::fs::read(path).expect("read Java class fixture");
+        let ctx = AnalysisContext::open(path, &bytes).expect("parse Java class fixture");
+
+        let imports = ctx.imports_from_filefacts();
+        let symbols: std::collections::BTreeSet<&str> =
+            imports.iter().map(|i| i.symbol.as_str()).collect();
+
+        assert!(
+            symbols.contains("exec"),
+            "plain method import should remain"
+        );
+        assert!(
+            symbols.contains("java/lang/Runtime.exec"),
+            "Runtime.exec should be owner-qualified for bytecode traits"
+        );
+        assert!(
+            symbols.contains("java/lang/ProcessBuilder.start"),
+            "ProcessBuilder.start should be owner-qualified for bytecode traits"
+        );
+        assert!(
+            symbols.contains("javax/crypto/Cipher.getInstance"),
+            "JVM-style owners outside java/ should also qualify"
+        );
+    }
+
+    #[test]
+    fn owner_qualification_is_limited_to_jvm_internal_names() {
+        let mut imports = Vec::new();
+        let libc = Import::new("printf", Some("libc.so.6".to_string()));
+
+        extend_with_owner_qualified_import(&mut imports, &libc);
+
+        assert!(
+            imports.is_empty(),
+            "native shared-library imports should not gain synthetic dotted symbols"
+        );
+    }
 }

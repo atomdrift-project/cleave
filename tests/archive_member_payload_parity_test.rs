@@ -59,27 +59,28 @@ fn report_encoded_payload_count(r: &AnalysisReport) -> usize {
     top + members
 }
 
-fn write_tar_gz(path: &std::path::Path, member_name: &str, bytes: &[u8]) {
-    let f = std::fs::File::create(path).unwrap();
+fn write_tar_gz(path: &std::path::Path, member_name: &str, bytes: &[u8]) -> std::io::Result<()> {
+    let f = std::fs::File::create(path)?;
     let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
     let mut tar = tar::Builder::new(enc);
     let mut header = tar::Header::new_gnu();
     header.set_size(bytes.len() as u64);
     header.set_mode(0o644);
     header.set_cksum();
-    tar.append_data(&mut header, member_name, bytes).unwrap();
-    tar.into_inner().unwrap().finish().unwrap();
+    tar.append_data(&mut header, member_name, bytes)?;
+    tar.into_inner()?.finish()?;
+    Ok(())
 }
 
 #[test]
-fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() {
-    let dir = tempfile::tempdir().unwrap();
+fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
     let js = base64_payload_js();
 
     // Baseline: the file standalone must surface a base64 encoded-payload finding.
     let js_path = dir.path().join("index.js");
-    std::fs::write(&js_path, &js).unwrap();
-    let standalone = analyze_file(&js_path, &opts()).expect("standalone analyze");
+    std::fs::write(&js_path, &js)?;
+    let standalone = analyze_file(&js_path, &opts())?;
     let standalone_hits = report_encoded_payload_count(&standalone);
     assert!(
         standalone_hits > 0,
@@ -89,8 +90,8 @@ fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() {
 
     // The SAME file inside a .tar.gz must surface the same detection on the member.
     let tgz_path = dir.path().join("pkg.tar.gz");
-    write_tar_gz(&tgz_path, "package/index.js", &js);
-    let archive = analyze_file(&tgz_path, &opts()).expect("archive analyze");
+    write_tar_gz(&tgz_path, "package/index.js", &js)?;
+    let archive = analyze_file(&tgz_path, &opts())?;
     let member_hits: usize = archive
         .files
         .iter()
@@ -104,21 +105,23 @@ fn base64_encoded_payload_detected_in_archive_member_same_as_standalone() {
          archive members.",
         archive.files.len()
     );
+
+    Ok(())
 }
 
 #[test]
-fn archive_member_max_criticality_matches_standalone() {
+fn archive_member_max_criticality_matches_standalone() -> anyhow::Result<()> {
     // Beyond the encoded-payload finding itself, the recursive decoded-payload
     // analysis contributes traits/findings that raise the member's peak
     // criticality. Pin that the member doesn't grade strictly weaker than the
     // same file standalone (the concrete symptom: an npm stealer scoring
     // max-crit 5 alone but only 4 inside its tarball).
-    let dir = tempfile::tempdir().unwrap();
+    let dir = tempfile::tempdir()?;
     let js = base64_payload_js();
 
     let js_path = dir.path().join("index.js");
-    std::fs::write(&js_path, &js).unwrap();
-    let standalone = analyze_file(&js_path, &opts()).expect("standalone analyze");
+    std::fs::write(&js_path, &js)?;
+    let standalone = analyze_file(&js_path, &opts())?;
     let standalone_max = standalone
         .findings
         .iter()
@@ -127,8 +130,8 @@ fn archive_member_max_criticality_matches_standalone() {
         .unwrap_or(0);
 
     let tgz_path = dir.path().join("pkg.tar.gz");
-    write_tar_gz(&tgz_path, "package/index.js", &js);
-    let archive = analyze_file(&tgz_path, &opts()).expect("archive analyze");
+    write_tar_gz(&tgz_path, "package/index.js", &js)?;
+    let archive = analyze_file(&tgz_path, &opts())?;
     let member_max = archive
         .files
         .iter()
@@ -143,4 +146,6 @@ fn archive_member_max_criticality_matches_standalone() {
          the same file standalone ({standalone_max}) — decoded-payload analysis \
          is missing on the member path."
     );
+
+    Ok(())
 }

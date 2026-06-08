@@ -331,3 +331,9 @@ opt-level = 3
 [profile.dev.package.aho-corasick]
 opt-level = 3
 
+# Local development override: consume the in-tree filefacts checkout so new
+# package-type FileTypes (gem, apk_android/apk_alpine, pkg_macos) are visible
+# without a codeberg publish. Remove before committing.
+[patch."https://codeberg.org/atomdrift/filefacts.git"]
+filefacts = { path = "../filefacts" }
+

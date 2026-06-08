@@ -65,6 +65,40 @@ magnitude slower.
 | `--no-validate` | off | skip the gate (structure only; unsafe) |
 | `--sign` / `--identity` | off | cosign-sign the manifest |
 
+## Full release: `make publish-traits`
+
+The reliable end-to-end release (requires `IDENTITY=<signer>`):
+
+```sh
+make publish-traits IDENTITY=releaser@<project>.iam.gserviceaccount.com
+```
+
+It chains, aborting on any failure:
+1. **`gen-manifest ENGINE= VERSIONS=3`** — compat-tests `VERSIONS` versions
+   *including HEAD*: builds each of the last `VERSIONS-1` release tags' own engines
+   and walks traits commits back until that engine's `validate` passes (the real
+   compat test), and validates HEAD for `latest`. Signs the manifest.
+2. **`check-manifest`** — pre-publish gate: manifest parses, every referenced
+   artifact is present with a matching sha256, signature exists, and `cosign
+   verify-blob` confirms the signature is valid for `IDENTITY`.
+3. **`publish-cleave`** — uploads bundles → manifest → signature to R2.
+
+`VERSIONS=3` (default) = HEAD + the last 2 release tags; raise it later (→5).
+
+### Upgrade signal
+
+Releases whose validated pointer is behind `latest` are listed in an `[upgrade]`
+table (value = the latest commit they can't use). A client whose version appears
+there should warn the user that newer traits exist but require upgrading cleave:
+
+```toml
+latest = "76693311d"
+[stable]
+"2.0.0-rc.4" = "4633188fb"
+[upgrade]
+"2.0.0-rc.4" = "76693311d"   # rc.4 is behind; newer traits need a newer cleave
+```
+
 ## Publishing to R2
 
 `make gen-manifest` writes `dist/` (bundles + `versions.toml`); `make publish-cleave`

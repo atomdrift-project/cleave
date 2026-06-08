@@ -543,6 +543,19 @@ impl FileTypeExt for FileType {
             FileType::TarXz => "tar.xz".to_string(),
             FileType::TarZst => "tar.zst".to_string(),
             FileType::SevenZ => "7z".to_string(),
+            // Package types whose snake_case serialization the Debug-lowercase
+            // fallback can't reproduce (it drops the underscore). These strings
+            // are the downstream contract: litmus routes on them and collimator
+            // tokenizes them, so they must match filefacts's serde form exactly.
+            FileType::Gem => "gem".to_string(),
+            FileType::ApkAndroid => "apk_android".to_string(),
+            FileType::ApkAlpine => "apk_alpine".to_string(),
+            FileType::PkgMacos => "pkg_macos".to_string(),
+            FileType::PkgFreebsd => "pkg_freebsd".to_string(),
+            FileType::PkgArch => "pkg_arch".to_string(),
+            // Npm/Crate/Conda/Egg/Nupkg/Ipa/Vsix are single words whose
+            // Debug-lowercase form already matches their snake_case serde token,
+            // so they fall through to the default arm below.
             FileType::PythonBytecode => "python-bytecode".to_string(),
             FileType::PackageLockJson => "package-lock.json".to_string(),
             FileType::Json => "json".to_string(),
@@ -615,10 +628,22 @@ impl FileTypeExt for FileType {
             | FileType::Bz2
             | FileType::Xz
             | FileType::Zst
-            | FileType::Pkg
+            | FileType::PkgMacos
             | FileType::Cab => {
                 vec!["archive"]
             }
+            FileType::Gem => vec!["gem", "archive"],
+            FileType::ApkAndroid => vec!["apk", "android", "archive"],
+            FileType::ApkAlpine => vec!["apk", "alpine", "archive"],
+            FileType::Npm => vec!["npm", "tgz", "archive"],
+            FileType::Crate => vec!["crate", "rust", "archive"],
+            FileType::Conda => vec!["conda", "archive"],
+            FileType::Egg => vec!["egg", "python", "archive"],
+            FileType::Nupkg => vec!["nupkg", "nuget", "archive"],
+            FileType::Ipa => vec!["ipa", "ios", "archive"],
+            FileType::Vsix => vec!["vsix", "vscode", "archive"],
+            FileType::PkgFreebsd => vec!["pkg", "freebsd", "archive"],
+            FileType::PkgArch => vec!["pkg", "arch", "archive"],
             FileType::SevenZ => vec!["7z", "archive"],
             FileType::Rar => vec!["rar", "archive"],
             FileType::Deb => vec!["deb", "archive"],

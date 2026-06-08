@@ -204,17 +204,31 @@ TRAITS ?= ../cleave-traits
 COMMIT ?= HEAD
 CHANNEL ?= beta
 DIST ?= dist
-RELEASES ?= 2
-COMMITS ?= 10
-SOAK_DAYS ?= 7
+# VERSIONS = total versions to compat-test, INCLUDING HEAD (validated for `latest`).
+# 3 = HEAD + the last 2 release tags. RELEASES (tag count) is derived as VERSIONS-1.
+VERSIONS ?= 3
+RELEASES ?= $(shell expr $(VERSIONS) - 1)
+COMMITS ?= 100
+# No soak for now (stable = newest compatible commit). A soak window would starve
+# a release whose only compatible traits are recent (e.g. rc.4 → a 1-day-old commit).
+SOAK_DAYS ?= 0
+CHANNELS ?= stable
 ARTIFACT_PREFIX ?= traits/
-gen-manifest: release ## Auto-generate versions.toml from recent release tags + traits commits ([RELEASES=2] [COMMITS=10] [SOAK_DAYS=7] [SIGN=1 IDENTITY=...])
+# ENGINE set  → validate every release key with this ONE binary (single-engine mode).
+# ENGINE empty → build each release tag's own engine and validate per-version (the
+#                true cross-version matrix; only works for post-decoupling tags).
+ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
+# HEAD_ENGINE validates the `latest` pointer (newest bundle that works for the
+# current build); it's the working-tree binary, so always the local release build.
+HEAD_ENGINE ?= ./$(CARGO_TARGET)/release/$(BINARY)
+gen-manifest: release ## Auto-generate versions.toml ([RELEASES=5] [COMMITS=10] [SOAK_DAYS=7] [ENGINE=path|empty] [SIGN=1 IDENTITY=...])
 	cd tools/manifest-gen && GOWORK=off go build -o manifest-gen .
 	tools/manifest-gen/manifest-gen \
-	  --traits "$(TRAITS)" --repo . \
-	  --engine ./$(CARGO_TARGET)/release/$(BINARY) --out "$(DIST)" \
+	  --traits "$(TRAITS)" --repo . --out "$(DIST)" \
+	  $(if $(ENGINE),--engine "$(ENGINE)",) \
+	  --head-engine "$(HEAD_ENGINE)" \
 	  --releases $(RELEASES) --commits $(COMMITS) --soak-days $(SOAK_DAYS) \
-	  --artifact-prefix "$(ARTIFACT_PREFIX)" \
+	  --channels "$(CHANNELS)" --artifact-prefix "$(ARTIFACT_PREFIX)" \
 	  $(if $(SIGN),--sign --identity "$(IDENTITY)",)
 
 # Public R2 bucket layout: <remote>/<R2_CLEAVE>/versions.toml + <R2_CLEAVE>/traits/<bundles>
@@ -237,6 +251,27 @@ publish-cleave: ## Upload dist/ bundles + versions.toml to R2 (artifacts FIRST, 
 	@echo "✓ published to $(R2_REMOTE)/$(R2_CLEAVE)/"
 
 release-cleave: gen-manifest publish-cleave ## Generate the manifest and publish it to R2 in one step
+
+ISSUER ?= https://accounts.google.com
+check-manifest: ## Pre-publish gate: manifest parses, artifacts present + sha match, signature verifies
+	python3 tools/manifest-gen/check-manifest.py "$(DIST)"
+	@if [ -n "$(IDENTITY)" ]; then \
+	  echo "→ verifying signature with cosign ($(IDENTITY))"; \
+	  cosign verify-blob --new-bundle-format \
+	    --bundle "$(DIST)/versions.toml.sigstore.json" \
+	    --certificate-identity "$(IDENTITY)" \
+	    --certificate-oidc-issuer "$(ISSUER)" \
+	    "$(DIST)/versions.toml" && echo "✓ signature verifies for $(IDENTITY)"; \
+	else echo "⚠ IDENTITY unset — skipping cosign signature verification"; fi
+
+publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases → sign → verify → upload to R2 ([VERSIONS=3] IDENTITY=<signer>)
+	@[ -n "$(IDENTITY)" ] || { echo "publish-traits: IDENTITY=<signer> required (e.g. releaser@<project>.iam.gserviceaccount.com)"; exit 1; }
+	@command -v rclone >/dev/null || { echo "publish-traits: rclone not found"; exit 1; }
+	@command -v cosign >/dev/null || { echo "publish-traits: cosign not found"; exit 1; }
+	$(MAKE) gen-manifest ENGINE= VERSIONS=$(VERSIONS) CHANNELS=stable SIGN=1 IDENTITY="$(IDENTITY)"
+	$(MAKE) check-manifest IDENTITY="$(IDENTITY)"
+	$(MAKE) publish-cleave
+	@echo "✓ publish-traits complete: compat-tested HEAD + last $(shell expr $(VERSIONS) - 1) release(s), signed, verified, uploaded"
 
 update-manifest: release ## Build + validate + render a trait-update manifest (RELEASE=x.y.z [CHANNEL=beta] [COMMIT=ref] [SIGN=1 IDENTITY=...])
 	@[ -n "$(RELEASE)" ] || { echo "RELEASE=x.y.z required"; exit 1; }

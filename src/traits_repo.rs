@@ -122,6 +122,22 @@ pub fn try_resolve() -> Result<PathBuf, String> {
     ))
 }
 
+/// Directory the R2 updater should install into: explicit override, a workspace
+/// `traits/` checkout if present, else the platform data dir. Unlike
+/// `resolve_current_traits_dir` it's public and doesn't require the dir to exist.
+#[allow(dead_code)] // Used by binary target (update-rules)
+#[must_use]
+pub fn install_target() -> PathBuf {
+    if let Some(explicit) = explicit_traits_dir() {
+        return PathBuf::from(explicit);
+    }
+    let local = PathBuf::from("traits");
+    if has_traits(&local) {
+        return local;
+    }
+    default_traits_dir()
+}
+
 /// Platform-specific data directory for cleave traits.
 fn default_traits_dir() -> PathBuf {
     dirs::data_dir()
@@ -360,6 +376,10 @@ pub fn pin(commit: &str) -> Result<(), String> {
 #[allow(dead_code)] // Used by binary target
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();
+    // R2-installed trees have no .git; the commit is in the sidecar.
+    if let Some(installed) = crate::rule_update::installed(&traits_dir) {
+        return Some(installed.commit.chars().take(9).collect());
+    }
     short_head(&traits_dir)
 }
 

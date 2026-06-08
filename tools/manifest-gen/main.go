@@ -14,6 +14,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
@@ -38,6 +39,7 @@ type artifact struct {
 
 type config struct {
 	traits, repo, engineOverride, out string
+	headEngine                        string
 	artifactPrefix                    string
 	nReleases, nCommits               int
 	soakDays, validDays               int
@@ -51,6 +53,7 @@ func main() {
 	flag.StringVar(&c.traits, "traits", "../cleave-traits", "path to the cleave-traits git repo")
 	flag.StringVar(&c.repo, "repo", ".", "path to the cleave (engine) git repo")
 	flag.StringVar(&c.engineOverride, "engine", "", "use this binary for ALL releases instead of building per tag (testing)")
+	flag.StringVar(&c.headEngine, "head-engine", "", "current/HEAD build used to validate the `latest` pointer (the newest bundle that works for HEAD); empty = no latest validation")
 	flag.StringVar(&c.out, "out", "dist", "output directory")
 	flag.StringVar(&c.artifactPrefix, "artifact-prefix", "",
 		"path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. \"traits/\")")
@@ -76,14 +79,14 @@ func main() {
 
 func run(c *config) {
 	tags := releaseTags(c.repo, c.nReleases) // manifest keys, newest first
-	if len(tags) == 0 {
-		fatal("no release tags in %s", c.repo)
+	if len(tags) == 0 && c.headEngine == "" {
+		fatal("no release tags in %s (and no --head-engine for a latest-only manifest)", c.repo)
 	}
 	commits := traitsCommits(c.traits, c.nCommits) // newest first
 	if len(commits) == 0 {
 		fatal("no commits in %s", c.traits)
 	}
-	floors := parseFloors(filepath.Join(c.out, "versions.toml")) // [channel][release]=key
+	floors, latestFloor := parseFloors(filepath.Join(c.out, "versions.toml")) // [channel][release]=key, + latest
 	memo := loadCache(c.out)
 	tarCache := map[string][]byte{}
 	cutoff := time.Now().UTC().AddDate(0, 0, -c.soakDays)
@@ -106,28 +109,52 @@ func run(c *config) {
 			logf("release %s: engine unbuildable — pointers frozen at prior", rel)
 			continue
 		}
+		// First pass: independent per-channel selection (newest passing commit,
+		// bounded below by that channel's floor; keep the floor if nothing newer
+		// qualifies — it's already known-good).
+		sel := map[string]string{}
 		for _, ch := range c.channels {
 			ch = strings.TrimSpace(ch)
 			floor := floors[ch][rel]
 			cand := commits[:floorIndex(commits, floor)] // strictly newer than the floor
-			sel := selectPointer(c, enginePath, rel, ch, cand, cutoff, tarCache, memo)
-			switch {
-			case sel != "":
-				// found a newer passing commit
-			case floor != "":
-				sel = floor // nothing newer qualified — keep the known-good floor
-			case ch == "stable":
-				sel = pointers["beta"][rel] // fresh manifest, no soaked commit yet
+			s := selectPointer(c, enginePath, rel, ch, cand, cutoff, tarCache, memo)
+			if s == "" {
+				s = floor
 			}
-			pointers[ch][rel] = sel
-			logf("  %s/%s -> %s (floor=%q, %d candidates)", rel, ch, orNone(sel), floor, len(cand))
+			sel[ch] = s
+			logf("  %s/%s -> %s (floor=%q, %d candidates)", rel, ch, orNone(s), floor, len(cand))
 		}
+		// Cross-channel fallback, applied after all channels are computed so it
+		// never depends on channel order: a fresh manifest with no soaked stable
+		// yet pins stable to whatever beta resolved to.
+		if s, ok := sel["stable"]; ok && s == "" {
+			sel["stable"] = sel["beta"]
+			logf("  %s/stable -> %s (fallback to beta)", rel, orNone(sel["stable"]))
+		}
+		for _, ch := range c.channels {
+			ch = strings.TrimSpace(ch)
+			pointers[ch][rel] = sel[ch]
+		}
+	}
+	// `latest` = the newest commit the HEAD (current) engine actually validates.
+	// We never assume the newest commit works for HEAD — we walk it back too,
+	// bounded by the prior latest floor.
+	latest := ""
+	if c.headEngine != "" {
+		cand := commits[:floorIndex(commits, latestFloor)]
+		latest = selectPointer(c, c.headEngine, "HEAD", "beta", cand, cutoff, tarCache, memo)
+		if latest == "" {
+			latest = latestFloor // nothing newer passed — keep the known-good floor
+		}
+		logf("  HEAD/latest -> %s (floor=%q, %d candidates)", orNone(latest), latestFloor, len(cand))
+	} else {
+		logf("  (no --head-engine: 'latest' left empty; HEAD/dev clients have no fallback)")
 	}
 	saveCache(c.out, memo)
 
-	arts := buildArtifacts(c, pointers, tarCache)
+	arts := buildArtifacts(c, pointers, latest, tarCache)
 	validUntil := time.Now().UTC().AddDate(0, 0, c.validDays).Format("2006-01-02T15:04:05Z")
-	manifest := render(validUntil, c.artifactPrefix, arts, tags, c.channels, pointers)
+	manifest := render(validUntil, latest, c.artifactPrefix, arts, tags, c.channels, pointers)
 	path := filepath.Join(c.out, "versions.toml")
 	if err := os.WriteFile(path, []byte(manifest), 0o644); err != nil {
 		fatal("write %s: %v", path, err)
@@ -135,9 +162,24 @@ func run(c *config) {
 	logf("rendered %s", path)
 
 	if c.sign {
-		logf("signing %s as %s (publishes identity to public logs)", path, c.identity)
-		exe("", "cosign", "sign-blob", "--new-bundle-format", "--yes",
+		// Pause when interactive so the operator triggers sigstore auth only when
+		// ready — the device/browser flow has a short TTL, and the build+validate
+		// phase above can take minutes.
+		if isInteractive() {
+			fmt.Fprintf(os.Stderr,
+				"\nReady to sign %s as %s.\nThis starts sigstore auth and PUBLISHES this identity to public transparency logs.\nPress Enter to sign (Ctrl-C to abort)... ",
+				path, c.identity)
+			_, _ = bufio.NewReader(os.Stdin).ReadString('\n')
+		}
+		logf("signing %s as %s", path, c.identity)
+		// Pass the terminal through so cosign uses the interactive browser flow
+		// (with a TTY) rather than the device-code flow.
+		cmd := exec.Command("cosign", "sign-blob", "--new-bundle-format", "--yes",
 			"--bundle", path+".sigstore.json", path)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			fatal("cosign sign-blob: %v", err)
+		}
 		logf("signed -> %s.sigstore.json (pin: %s)", path, c.identity)
 	}
 	logf("done.")
@@ -153,6 +195,7 @@ func selectPointer(c *config, engine, rel, ch string, cand []commit, cutoff time
 			continue // too fresh to be stable
 		}
 		ok := c.noValidate || validate(c.traits, engine, rel, cm, tarCache, memo)
+		logf("    %s/%s try %s (%s) -> %s", rel, ch, cm.short, cm.date, passWord(ok))
 		if ok {
 			return cm.short
 		}
@@ -192,15 +235,21 @@ func ensureEngine(c *config, rel string) (string, bool) {
 		return "", false
 	}
 	// Share a target dir across tag builds so dependency artifacts are reused.
+	// MUST be absolute: cargo runs with cwd=src (the temp checkout), so a relative
+	// CARGO_TARGET_DIR would resolve under the temp dir, not our output.
+	targetDir, err := filepath.Abs(filepath.Join(c.out, "engines", ".target"))
+	if err != nil {
+		fatal("resolve target dir: %v", err)
+	}
 	build := exec.Command("cargo", "build", "--release", "--bin", "cleave")
 	build.Dir = src
-	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+filepath.Join(c.out, "engines", ".target"))
+	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+targetDir)
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
 		logf("  build %s FAILED (old toolchain mismatch?) — skipping release", tag)
 		return "", false
 	}
-	binSrc := filepath.Join(c.out, "engines", ".target", "release", "cleave")
+	binSrc := filepath.Join(targetDir, "release", "cleave")
 	if err := os.MkdirAll(filepath.Dir(cached), 0o755); err != nil {
 		fatal("mkdir engine cache: %v", err)
 	}
@@ -213,7 +262,7 @@ func ensureEngine(c *config, rel string) (string, bool) {
 
 // buildArtifacts produces a reproducible artifact for every distinct commit any
 // pointer references (resolving keys that may predate the commit window).
-func buildArtifacts(c *config, pointers map[string]map[string]string, tarCache map[string][]byte) map[string]artifact {
+func buildArtifacts(c *config, pointers map[string]map[string]string, latest string, tarCache map[string][]byte) map[string]artifact {
 	want := map[string]bool{}
 	for _, byRel := range pointers {
 		for _, key := range byRel {
@@ -221,6 +270,9 @@ func buildArtifacts(c *config, pointers map[string]map[string]string, tarCache m
 				want[key] = true
 			}
 		}
+	}
+	if latest != "" {
+		want[latest] = true
 	}
 	arts := map[string]artifact{}
 	for key := range want {
@@ -351,10 +403,14 @@ func buildArtifact(traits, out string, c commit, tarCache map[string][]byte) art
 
 // --- manifest render + floor parse ------------------------------------------
 
-func render(validUntil, artifactPrefix string, arts map[string]artifact, tags, channels []string, pointers map[string]map[string]string) string {
+func render(validUntil, latest, artifactPrefix string, arts map[string]artifact, tags, channels []string, pointers map[string]map[string]string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "manifest_version = 1\n")
-	fmt.Fprintf(&b, "valid_until      = %s\n\n", validUntil)
+	fmt.Fprintf(&b, "valid_until      = %s\n", validUntil)
+	if latest != "" {
+		fmt.Fprintf(&b, "latest           = %q\n", latest)
+	}
+	b.WriteString("\n")
 
 	keys := make([]string, 0, len(arts))
 	for k := range arts {
@@ -379,17 +435,42 @@ func render(validUntil, artifactPrefix string, arts map[string]artifact, tags, c
 		}
 		b.WriteString("\n")
 	}
+
+	// [upgrade]: releases behind the NEWEST RELEASE's traits pointer — i.e. a newer
+	// released cleave supports rules this one can't. Measured relative to the newest
+	// RELEASE tag, never to `latest`/HEAD, so we never tell anyone to upgrade to an
+	// unreleased dev build. Value = the release version to upgrade to. The newest
+	// release is never flagged (nothing released is ahead of it).
+	if len(tags) > 1 {
+		newest := tags[0]
+		if newestPtr := pointers["stable"][newest]; newestPtr != "" {
+			var behind []string
+			for _, rel := range tags[1:] {
+				if k := pointers["stable"][rel]; k != "" && k != newestPtr {
+					behind = append(behind, rel)
+				}
+			}
+			if len(behind) > 0 {
+				b.WriteString("[upgrade]\n")
+				for _, rel := range behind {
+					fmt.Fprintf(&b, "%q = %q\n", rel, newest)
+				}
+				b.WriteString("\n")
+			}
+		}
+	}
 	return strings.TrimRight(b.String(), "\n") + "\n"
 }
 
 // parseFloors reads the current pointers from a prior versions.toml. Keys ARE
 // short commits in our scheme, so the pointer value is the floor commit; no
 // artifacts-table lookup needed. Hand-parses our own rigid format (no TOML dep).
-func parseFloors(path string) map[string]map[string]string {
+func parseFloors(path string) (map[string]map[string]string, string) {
 	floors := map[string]map[string]string{}
+	latestFloor := ""
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return floors
+		return floors, latestFloor
 	}
 	section := ""
 	for _, raw := range strings.Split(string(data), "\n") {
@@ -398,9 +479,15 @@ func parseFloors(path string) map[string]map[string]string {
 			section = line[1 : len(line)-1]
 			continue
 		}
-		// channel tables only (skip [artifacts.*] and the header)
-		if section == "" || strings.HasPrefix(section, "artifacts") {
+		// Top-level (pre-table) keys: capture `latest = "<key>"` as its floor.
+		if section == "" {
+			if lhs, rhs, ok := parseAssign(line); ok && lhs == "latest" {
+				latestFloor = rhs
+			}
 			continue
+		}
+		if strings.HasPrefix(section, "artifacts") {
+			continue // skip [artifacts.*]
 		}
 		rel, key, ok := parseAssign(line)
 		if !ok {
@@ -411,7 +498,7 @@ func parseFloors(path string) map[string]map[string]string {
 		}
 		floors[section][rel] = key
 	}
-	return floors
+	return floors, latestFloor
 }
 
 // parseAssign parses `"lhs" = "rhs"` into unquoted lhs, rhs.
@@ -484,20 +571,25 @@ func capture(dir, name string, args ...string) string {
 	return string(out)
 }
 
-func exe(dir, name string, args ...string) {
-	cmd := exec.Command(name, args...)
-	cmd.Dir = dir
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
-		fatal("%s %s: %v", name, strings.Join(args, " "), err)
-	}
-}
-
 func orNone(s string) string {
 	if s == "" {
 		return "(none)"
 	}
 	return s
+}
+
+// isInteractive reports whether stdin is a terminal (so a human is present to
+// complete the signing auth). Stdlib-only: no x/term dependency.
+func isInteractive() bool {
+	fi, err := os.Stdin.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+func passWord(ok bool) string {
+	if ok {
+		return "PASS"
+	}
+	return "fail"
 }
 
 func logf(format string, a ...any) { fmt.Fprintf(os.Stderr, format+"\n", a...) }

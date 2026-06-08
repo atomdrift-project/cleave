@@ -32,6 +32,7 @@ pub mod file_io;
 pub mod ip_validator;
 pub mod mem_profile;
 pub mod memory_tracker;
+pub mod rule_update;
 mod shared_resources;
 pub mod strings;
 pub mod test_rules;
@@ -1284,7 +1285,7 @@ pub(crate) fn process_encoded_payloads(
                 || payload.preview.contains("control character U+")
                 || is_benign_unicode_escape_payload(&payload)
                 || (payload.detected_type == FileType::Unknown
-                    && is_generated_python_codec_unicode_escape(&report))
+                    && is_generated_python_codec_unicode_escape(report))
             {
                 tracing::debug!(
                     "Skipping benign unicode-escape payload: {}",
@@ -1297,7 +1298,7 @@ pub(crate) fn process_encoded_payloads(
             && !payload.encoding_chain.is_empty()
             && payload.encoding_chain.iter().all(|e| e == "hex")
             && payload.detected_type == FileType::Unknown
-            && is_signed_python_extension(&report)
+            && is_signed_python_extension(report)
         {
             tracing::debug!(
                 "Skipping unknown hex payload in signed Python extension data tables: {}",
@@ -1324,7 +1325,7 @@ pub(crate) fn process_encoded_payloads(
             &file_type,
             &payload,
             &report.sections,
-            &report,
+            report,
         ) {
             tracing::debug!(
                 "Skipping unknown xor fragment in ELF metadata section: {}",

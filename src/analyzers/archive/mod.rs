@@ -46,7 +46,17 @@ const MAX_PATH_CORPUS_TOTAL_SIZE: u64 = 128 * 1024;
 fn is_zip_container(file_type: FileType) -> bool {
     matches!(
         file_type,
-        FileType::Zip | FileType::Jar | FileType::Whl | FileType::Crx | FileType::Xpi
+        FileType::Zip
+            | FileType::Jar
+            | FileType::Whl
+            | FileType::Crx
+            | FileType::Xpi
+            | FileType::ApkAndroid
+            | FileType::Conda
+            | FileType::Egg
+            | FileType::Nupkg
+            | FileType::Ipa
+            | FileType::Vsix
     )
 }
 
@@ -1108,12 +1118,22 @@ impl ArchiveAnalyzer {
         }
 
         match file_type {
-            FileType::Tar => tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard),
-            FileType::TarGz => tar::extract_tar_entries_safe(
-                flate2::read::GzDecoder::new(Cursor::new(data)),
-                dest_dir,
-                guard,
-            ),
+            // A gem is an uncompressed `ustar` tar (members: metadata.gz,
+            // data.tar.gz, checksums.yaml.gz); recursion descends into
+            // data.tar.gz for the installed files.
+            FileType::Tar | FileType::Gem => {
+                tar::extract_tar_entries_safe(Cursor::new(data), dest_dir, guard)
+            }
+            // Gzip-tar packages: Alpine `.apk`, npm `.tgz`, Rust `.crate` —
+            // same extraction as a generic gzip tar; recursion analyzes their
+            // members (package.json, Cargo.toml, installed files).
+            FileType::TarGz | FileType::ApkAlpine | FileType::Npm | FileType::Crate => {
+                tar::extract_tar_entries_safe(
+                    flate2::read::GzDecoder::new(Cursor::new(data)),
+                    dest_dir,
+                    guard,
+                )
+            }
             FileType::TarBz2 => tar::extract_tar_entries_safe(
                 bzip2::read::BzDecoder::new(Cursor::new(data)),
                 dest_dir,
@@ -1124,12 +1144,15 @@ impl ArchiveAnalyzer {
                 dest_dir,
                 guard,
             ),
-            FileType::TarZst => tar::extract_tar_entries_safe(
-                zstd::stream::read::Decoder::new(Cursor::new(data))
-                    .context("Failed to create zstd decoder")?,
-                dest_dir,
-                guard,
-            ),
+            // zstd-tar packages: generic `.tar.zst`, Arch and FreeBSD `.pkg*`.
+            FileType::TarZst | FileType::PkgArch | FileType::PkgFreebsd => {
+                tar::extract_tar_entries_safe(
+                    zstd::stream::read::Decoder::new(Cursor::new(data))
+                        .context("Failed to create zstd decoder")?,
+                    dest_dir,
+                    guard,
+                )
+            }
             FileType::Gz => decompress_to_file(
                 flate2::read::GzDecoder::new(Cursor::new(data)),
                 archive_path,
@@ -1159,7 +1182,18 @@ impl ArchiveAnalyzer {
                 data.len() as u64,
                 guard,
             ),
-            FileType::Zip | FileType::Jar | FileType::Whl | FileType::Xpi => {
+            // Zip-based packages: Android apk, conda, egg, nupkg, ipa, vsix —
+            // same extraction as the other zip family.
+            FileType::Zip
+            | FileType::Jar
+            | FileType::Whl
+            | FileType::Xpi
+            | FileType::ApkAndroid
+            | FileType::Conda
+            | FileType::Egg
+            | FileType::Nupkg
+            | FileType::Ipa
+            | FileType::Vsix => {
                 zip::extract_zip_from_data(data, dest_dir, guard, &self.zip_passwords)
             }
             FileType::Crx => zip::extract_crx_from_data(data, dest_dir, guard),
@@ -1172,7 +1206,7 @@ impl ArchiveAnalyzer {
             FileType::SevenZ => {
                 system_packages::extract_7z_from_data(data, dest_dir, guard, &self.zip_passwords)
             }
-            FileType::Pkg => system_packages::extract_pkg_from_reader(
+            FileType::PkgMacos => system_packages::extract_pkg_from_reader(
                 Cursor::new(data),
                 data.len() as u64,
                 dest_dir,
@@ -1950,7 +1984,8 @@ composite_rules:
 
         assert!(result.is_ok());
         let report = result.unwrap();
-        assert_eq!(report.target.file_type, "zip");
+        // A `.vsix` now carries its own ecosystem type (still extracted as a zip).
+        assert_eq!(report.target.file_type, "vsix");
         assert!(!report.archive_contents.is_empty());
 
         // Verify files were extracted and analyzed
@@ -3309,7 +3344,7 @@ traits:
     }
 
     #[test]
-    fn test_alpine_apk_uses_tar_gz_path() {
+    fn test_alpine_apk_detected_via_gzip_tar_path() {
         use flate2::Compression;
         use flate2::write::GzEncoder;
         use tar::Builder;
@@ -3348,7 +3383,9 @@ traits:
         #[allow(clippy::expect_used)]
         let report = analyzer.analyze(&apk_path).expect("analyze alpine apk");
 
-        assert_eq!(report.target.file_type, "tar.gz");
+        // Alpine `.apk` now carries its own ecosystem type (routed through the
+        // gzip-tar extraction path, which the member assertion below verifies).
+        assert_eq!(report.target.file_type, "apk_alpine");
         assert!(
             report
                 .files
@@ -3358,8 +3395,11 @@ traits:
             report.files.iter().map(|f| &f.path).collect::<Vec<_>>()
         );
         assert!(
-            report.structure.iter().any(|s| s.id == "archive/tar.gz"),
-            "expected tar.gz structural marker, got: {:?}",
+            report
+                .structure
+                .iter()
+                .any(|s| s.id == "archive/apk_alpine"),
+            "expected apk_alpine structural marker, got: {:?}",
             report.structure.iter().map(|s| &s.id).collect::<Vec<_>>()
         );
     }

@@ -753,22 +753,22 @@ impl ArchiveAnalyzer {
             // `payloads` was extracted above (empty when extract_payloads=false,
             // making this a no-op). `payloads` is moved — `input` (which
             // borrowed it) is no longer used after `analyze_input` above.
-            if !payloads.is_empty() {
-                if let (Some(mapper), Some(opts)) = (
+            if !payloads.is_empty()
+                && let (Some(mapper), Some(opts)) = (
                     self.capability_mapper.as_ref(),
                     self.analysis_options.as_ref(),
-                ) {
-                    crate::process_encoded_payloads(
-                        payloads,
-                        &mut report,
-                        logical_path,
-                        *file_type,
-                        (self.current_depth + 1) as u32,
-                        opts,
-                        mapper,
-                        self.yara_engine.as_ref(),
-                    );
-                }
+                )
+            {
+                crate::process_encoded_payloads(
+                    payloads,
+                    &mut report,
+                    logical_path,
+                    *file_type,
+                    (self.current_depth + 1) as u32,
+                    opts,
+                    mapper,
+                    self.yara_engine.as_ref(),
+                );
             }
 
             if let Some(ref yara_engine) = self.yara_engine {

@@ -239,13 +239,39 @@ pub(crate) fn validate_ipv4_string(ip_str: &str) -> Option<Ipv4Addr> {
     Some(Ipv4Addr::new(octets[0], octets[1], octets[2], octets[3]))
 }
 
+/// Returns true when the four-octet match at byte range `[start, end)` is part
+/// of a *longer* dotted-decimal sequence — for example an OID
+/// (`0.1.2.3.4.5.6.7.8.9`) or a five-plus-part version string (`1.2.3.4.5`).
+///
+/// The IP regex anchors on `\b`, and since `.` is a non-word character every
+/// `.` acts as a word boundary. A long run of dot-separated numbers therefore
+/// yields several overlapping four-octet windows, any one of which could parse
+/// as a routable IPv4 (e.g. `4.5.6.7` lifted out of the OID above). Such a
+/// window is not a standalone IPv4 literal and must not be reported as one.
+///
+/// A trailing or leading bare `.` that is *not* followed/preceded by another
+/// digit (sentence punctuation like `...45.33.32.156.`) is intentionally not
+/// treated as a continuation.
+fn embedded_in_dotted_run(bytes: &[u8], start: usize, end: usize) -> bool {
+    // Preceded by "<digit>." — a prior octet exists.
+    if start >= 2 && bytes[start - 1] == b'.' && bytes[start - 2].is_ascii_digit() {
+        return true;
+    }
+    // Followed by ".<digit>" — a trailing octet exists.
+    if end + 1 < bytes.len() && bytes[end] == b'.' && bytes[end + 1].is_ascii_digit() {
+        return true;
+    }
+    false
+}
+
 /// Check if a text string contains at least one structurally valid IPv4
 /// literal of any range.
 ///
 /// This is the entry point for the `is: valid_ip` condition modifier. It
 /// rejects malformed dotted-decimal runs (octets > 255, leading zeros, wrong
 /// part counts) that the bare `\d{1,3}` regex would otherwise accept — e.g.
-/// SVG path coordinates like `022.617.46.402`.
+/// SVG path coordinates like `022.617.46.402` — as well as four-octet windows
+/// lifted out of a longer dotted-decimal sequence (OIDs, version strings).
 #[must_use]
 pub(crate) fn contains_valid_ip(text: &str) -> bool {
     // Fast reject: no dots means no IPs possible
@@ -255,7 +281,11 @@ pub(crate) fn contains_valid_ip(text: &str) -> bool {
     let Some(pattern) = ip_pattern() else {
         return false;
     };
+    let bytes = text.as_bytes();
     for m in pattern.find_iter(text) {
+        if embedded_in_dotted_run(bytes, m.start(), m.end()) {
+            continue;
+        }
         if validate_ipv4_string(m.as_str()).is_some() {
             return true;
         }
@@ -312,7 +342,13 @@ pub(crate) fn contains_external_ip(text: &str) -> bool {
         return false;
     };
     // Use find_iter instead of captures_iter — we only need the full match
+    let bytes = text.as_bytes();
     for m in pattern.find_iter(text) {
+        // Skip four-octet windows lifted out of a longer dotted-decimal run
+        // (OIDs like `0.1.2.3.4.5.6.7.8.9`, version strings like `1.2.3.4.5`).
+        if embedded_in_dotted_run(bytes, m.start(), m.end()) {
+            continue;
+        }
         if validate_external_ip_string(m.as_str()).is_some() {
             return true;
         }
@@ -546,5 +582,24 @@ mod tests {
         // Valid IPs (no leading zeros) should be accepted
         assert!(contains_external_ip("70.11.49.4")); // Valid external IP
         assert!(contains_external_ip("25.1.31.1")); // Valid external IP
+    }
+
+    #[test]
+    fn test_embedded_dotted_run_rejected() {
+        // A four-octet window must not be lifted out of a longer dotted-decimal
+        // run such as an OID or a 5+-part version string. `4.5.6.7` is a valid
+        // external IP in isolation, but here it is part of the OID.
+        assert!(!contains_external_ip(
+            "ObjectIdentifier::new_unwrap(\"0.1.2.3.4.5.6.7.8.9\")"
+        ));
+        assert!(!contains_external_ip("4.5.6.7.8"));
+        assert!(!contains_external_ip("version 12.34.56.78.90"));
+        assert!(!contains_valid_ip("0.1.2.3.4.5.6.7.8.9"));
+
+        // A standalone IPv4 with trailing sentence punctuation is still found.
+        assert!(contains_external_ip("connect to 45.33.32.156."));
+        assert!(contains_external_ip("see 45.33.32.156, then continue"));
+        // Embedded windows must not mask a genuine standalone IP elsewhere.
+        assert!(contains_external_ip("oid 0.1.2.3.4.5, host 45.33.32.156"));
     }
 }

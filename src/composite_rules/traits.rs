@@ -2150,8 +2150,7 @@ impl CompositeTrait {
         // content script and its manifest/rules JSON). Without this, such a rule
         // would only ever evaluate on a single leaf and never see the pooled
         // cross-entry findings it was written for.
-        let pools_across_archive =
-            matches!(self.scope, Some(Scope::Outer) | Some(Scope::Archive));
+        let pools_across_archive = matches!(self.scope, Some(Scope::Outer) | Some(Scope::Archive));
         let file_type_match = self.r#for.contains(&FileType::All)
             || self.r#for.contains(&ctx.file_type)
             || ((ctx.file_type == FileType::All || ctx.file_type.is_archive())

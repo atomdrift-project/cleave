@@ -118,6 +118,10 @@ pub struct ContextLine {
     /// Rendered content: the clipped source text, or `"<hex pairs>  <ascii>"`.
     #[serde(rename = "t")]
     pub text: String,
+    /// True when `loc` is a byte offset (binary hex row, or minified one-liner)
+    /// rather than a 1-based line number — so renderers print it in hex.
+    #[serde(rename = "x", default, skip_serializing_if = "crate::types::is_false")]
+    pub hex: bool,
     /// Findings whose match falls on this line (deduped by id, severity-sorted).
     #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
@@ -453,6 +457,17 @@ impl Evidence {
 
         // Merge other's offsets
         self.offsets.extend(other.offsets);
+    }
+
+    /// Best byte offset for this evidence: the first concrete offset if the
+    /// matcher recorded one, else an offset parsed from the location string.
+    /// Used by the context-capture pass to anchor a content window.
+    #[must_use]
+    pub(crate) fn byte_offset(&self) -> Option<u64> {
+        self.offsets
+            .first()
+            .copied()
+            .or_else(|| self.parse_offset_from_location())
     }
 
     /// Try to parse a byte offset from the location string.

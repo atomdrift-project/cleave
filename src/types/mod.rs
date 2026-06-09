@@ -71,7 +71,9 @@ pub(crate) use file_analysis::{
 };
 
 #[allow(unused_imports)]
-pub use traits_findings::{Evidence, Finding, FindingKind, StructuralFeature, Trait, TraitKind};
+pub use traits_findings::{
+    ContextLine, Evidence, Finding, FindingKind, Note, StructuralFeature, Trait, TraitKind,
+};
 pub(crate) use traits_findings::{
     MAX_EVIDENCE_PER_TRAIT, deduplicate_evidence, truncate_evidence_value,
 };

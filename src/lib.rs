@@ -26,6 +26,7 @@ pub mod analysis_context;
 pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
+pub(crate) mod context;
 pub mod decoders;
 mod entropy;
 pub mod extractors;
@@ -2145,6 +2146,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // (diff, ML feature extraction, JSON viewers) want one logical finding
     // per id with merged evidence.
     report.dedupe_findings();
+
+    // Capture merged, render-ready context windows from the findings while the
+    // file bytes are still in scope. This is the LLM/output surface that
+    // replaces raw per-finding evidence; it rides the report into both caches.
+    crate::context::capture(&mut report, file_data, file_type);
 
     // Store result in per-file cache (cross-context: shared with archive member analysis)
     {

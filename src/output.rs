@@ -13,7 +13,7 @@
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
 use crate::malecule_bridge;
-use crate::types::{AnalysisReport, Criticality, FileAnalysis, Finding};
+use crate::types::{AnalysisReport, Criticality, FileAnalysis, Finding, Note};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
@@ -446,129 +446,162 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
     Ok(format!("{}\n", lines.join("\n")))
 }
 
-/// Format report as compact text for small LLMs.
+/// Format the report as compact, context-centric text for small LLMs.
 ///
-/// Output format:
+/// Reuses two conventions every model already knows: `grep -n -C2` for content
+/// (`N:` = a matched line, `N-` = surrounding context, `--` = a gap) and the
+/// compiler diagnostic (`# SEV id desc`) for findings. A location `N` is a
+/// 1-based line number for source, or a hex byte offset for binaries and
+/// minified one-liners. Findings with no positional anchor render as `.` lines.
+///
 /// ```text
-/// # tiny-v2 fields are tab-separated
-/// # @ path type size score
-/// # H|S|N|B|C|F id desc evidence
-/// @	path/to/file.exe	elf	1.2MB	142
-/// H	command-and-control/c2-beacon	C2 beacon pattern	hardcoded_ip_callback
-/// S	crypto/custom-encryption	Custom encryption loop	XOR_0x5a_loop
-/// N	net/socket	Network socket usage	connect
+/// # ctx: N: hit, N- context, -- gap, . no-loc; src text | hex ascii; trailer # H/S/N/B/C/F id desc
+/// evil.sh	sh 4.2KB 142
+/// 19- def run():
+/// 20: exec(base64.b64decode(p)) # H exec/eval-b64 decode+exec base64
+/// .        # N metadata/unsigned unsigned binary
 /// ```
-///
-/// One line per finding, sorted by criticality (highest first).
-/// Evidence is truncated to 48 chars. Files with no findings are omitted.
-#[allow(dead_code, clippy::tabs_in_doc_comments)] // Used by binary target; tabs in example are intentional (tab-separated format)
+#[allow(dead_code)] // Used by the binary target via --format tiny.
 pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
-    // Check if any file has findings worth showing before emitting the header.
-    let has_visible_findings = report
-        .files
-        .iter()
-        .any(|file| file.findings.iter().any(|f| tiny_should_show(f, file)));
-    if !has_visible_findings {
+    if !report.files.iter().any(file_has_output) {
         return String::new();
     }
 
     let mut out = String::with_capacity(4096);
     out.push_str(
-        "# tiny-v2: tab-separated; @ path type size score; H/S/N/B/C/F id desc evidence\n",
+        "# ctx: N: hit, N- context, -- gap, . no-loc; src text | hex ascii; trailer # H/S/N/B/C/F id desc\n",
     );
-    if let Some(summary) = &report.summary {
-        out.push_str(&format!("# score\t{}\n", summary.score));
-    }
 
     for file in &report.files {
-        // Include baseline and matched composites, but keep component findings
-        // only when a matched composite references them. Deduplicate by trait ID
-        // and merge a small evidence set to keep LLM context compact.
-        let mut findings = tiny_findings(file);
-
-        if findings.is_empty() {
+        if !file_has_output(file) {
             continue;
         }
 
-        // Sort by criticality descending, then by id for stability
-        findings.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
-
-        // File header: @ <path> <type> <size> <score>
-        let size = format_size(file.size);
-        out.push_str("@\t");
+        // File header: path \t type size score
         out.push_str(&tiny_field(&file.path));
         out.push('\t');
         out.push_str(&tiny_field(&file.file_type));
-        out.push('\t');
-        out.push_str(&size);
-        out.push('\t');
+        out.push(' ');
+        out.push_str(&format_size(file.size));
+        out.push(' ');
         out.push_str(&file.score.to_string());
         out.push('\n');
 
-        for f in &findings {
-            let letter = match f.crit {
-                Criticality::Hostile => 'H',
-                Criticality::Suspicious => 'S',
-                Criticality::Notable => 'N',
-                Criticality::Baseline => 'B',
-                Criticality::Component => 'C',
-                Criticality::Filtered => 'F',
-            };
-            out.push(letter);
-            out.push('\t');
-            out.push_str(&tiny_field(&f.id));
-            out.push('\t');
-            out.push_str(&tiny_field(&terse_description(&f.desc)));
-            out.push('\t');
-            out.push_str(&f.evidence);
-            out.push('\n');
-        }
+        let shown = shown_ids(file);
+        render_context_lines(&mut out, file, &shown);
+        render_no_anchor_findings(&mut out, file, &shown);
     }
 
     out
 }
 
-fn tiny_field(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Whether a file contributes anything to tiny output.
+fn file_has_output(file: &FileAnalysis) -> bool {
+    file.findings.iter().any(|f| tiny_should_show(f, file))
 }
 
-#[derive(Clone)]
-struct TinyFinding {
-    id: String,
-    desc: String,
-    crit: Criticality,
-    evidence: String,
+/// Finding ids in this file that should be shown.
+fn shown_ids(file: &FileAnalysis) -> HashSet<&str> {
+    file.findings
+        .iter()
+        .filter(|f| tiny_should_show(f, file))
+        .map(|f| f.id.as_str())
+        .collect()
 }
 
-fn tiny_findings(file: &FileAnalysis) -> Vec<TinyFinding> {
-    let mut by_id: HashMap<&str, TinyFinding> = HashMap::new();
-    let mut order: Vec<&str> = Vec::new();
+/// Emit the merged context: `grep -n -C2`-style lines with `# SEV id desc`
+/// trailers, `--` between non-contiguous windows.
+fn render_context_lines(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>) {
+    let mut prev: Option<u64> = None;
+    for line in &file.context {
+        let notes: Vec<&Note> = line
+            .notes
+            .iter()
+            .filter(|n| shown.contains(n.id.as_str()))
+            .collect();
 
-    for finding in file.findings.iter().filter(|f| tiny_should_show(f, file)) {
-        if let Some(existing) = by_id.get_mut(finding.id.as_str()) {
-            if finding.crit > existing.crit {
-                existing.crit = finding.crit;
+        // Consecutive units differ by 1 for source lines, 16 for hex rows;
+        // a larger jump is a gap between windows.
+        let step = if line.hex { 16 } else { 1 };
+        if prev.is_some_and(|p| line.loc > p.saturating_add(step)) {
+            out.push_str("--\n");
+        }
+        prev = Some(line.loc);
+
+        if line.hex {
+            out.push_str(&format!("{:x}", line.loc));
+        } else {
+            out.push_str(&line.loc.to_string());
+        }
+        out.push(if notes.is_empty() { '-' } else { ':' });
+        out.push(' ');
+        out.push_str(&line.text);
+
+        // First finding trails the content; any others get their own lines so
+        // the content is shown exactly once.
+        if let Some((first, rest)) = notes.split_first() {
+            out.push_str(" # ");
+            out.push_str(&note_str(first));
+            out.push('\n');
+            for n in rest {
+                out.push_str("# ");
+                out.push_str(&note_str(n));
+                out.push('\n');
             }
-            existing.evidence = tiny_merged_evidence(&existing.evidence, finding);
+        } else {
+            out.push('\n');
+        }
+    }
+}
+
+/// Emit shown findings that have no positional anchor (imports, metric/size
+/// thresholds, structural facts) as `.` lines.
+fn render_no_anchor_findings(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>) {
+    let anchored: HashSet<&str> = file
+        .context
+        .iter()
+        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
+        .collect();
+
+    let mut rest: Vec<&Finding> = file
+        .findings
+        .iter()
+        .filter(|f| shown.contains(f.id.as_str()) && !anchored.contains(f.id.as_str()))
+        .collect();
+    rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+
+    let mut seen = HashSet::new();
+    for f in rest {
+        if !seen.insert(f.id.as_str()) {
             continue;
         }
-
-        order.push(finding.id.as_str());
-        by_id.insert(
-            finding.id.as_str(),
-            TinyFinding {
-                id: finding.id.clone(),
-                desc: finding.desc.clone(),
-                crit: finding.crit,
-                evidence: tiny_evidence(finding),
-            },
-        );
+        out.push_str(". # ");
+        out.push(f.crit.letter());
+        out.push(' ');
+        out.push_str(&f.id);
+        if !f.desc.is_empty() {
+            out.push(' ');
+            out.push_str(&terse_description(&f.desc));
+        }
+        out.push('\n');
     }
+}
 
-    order
-        .into_iter()
-        .filter_map(|id| by_id.remove(id))
-        .collect()
+/// Render a note as `SEV id desc` (the part after `# `).
+fn note_str(n: &Note) -> String {
+    let mut s = String::new();
+    s.push(n.crit.letter());
+    s.push(' ');
+    s.push_str(&n.id);
+    if !n.desc.is_empty() {
+        s.push(' ');
+        s.push_str(&terse_description(&n.desc));
+    }
+    s
+}
+
+fn tiny_field(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
@@ -579,59 +612,6 @@ fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
     file.findings
         .iter()
         .any(|f| f.trait_refs.iter().any(|id| id == &finding.id))
-}
-
-fn tiny_evidence(finding: &Finding) -> String {
-    let mut seen = HashSet::new();
-    finding
-        .evidence
-        .iter()
-        .filter_map(|ev| {
-            let value = tiny_field(ev.value.trim());
-            if value.is_empty() {
-                return None;
-            }
-            let value = truncate_tiny_field(&value, 48);
-            seen.insert(value.clone()).then_some(value)
-        })
-        .take(3)
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
-fn tiny_merged_evidence(existing: &str, finding: &Finding) -> String {
-    let mut values: Vec<String> = existing
-        .split(',')
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect();
-    let mut seen: HashSet<String> = values.iter().cloned().collect();
-
-    for value in tiny_evidence(finding)
-        .split(',')
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-    {
-        if seen.insert(value.clone()) {
-            values.push(value);
-        }
-        if values.len() >= 3 {
-            break;
-        }
-    }
-
-    values.join(",")
-}
-
-fn truncate_tiny_field(value: &str, max_chars: usize) -> String {
-    if value.chars().count() <= max_chars {
-        return value.to_string();
-    }
-
-    let keep = max_chars.saturating_sub(3);
-    let mut truncated: String = value.chars().take(keep).collect();
-    truncated.push_str("...");
-    truncated
 }
 
 /// Format byte size as human-readable string (compact)

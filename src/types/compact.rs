@@ -76,6 +76,12 @@ pub struct CompactFile {
     #[serde(rename = "find")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<CompactTrait>,
+    /// Merged context: the matched content shown once, in file order, annotated
+    /// with the findings that touch it (notes reference findings by id). The
+    /// context-centric successor to per-finding `ev`/`loc` evidence.
+    #[serde(rename = "ctx")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<crate::types::ContextLine>,
     /// Dense filefacts-derived facts. This is command-complete for cleave's
     /// facts/value/metrics/sections/symbol commands, but not a lossless mirror
     /// of filefacts' researcher-facing JSON.
@@ -773,6 +779,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
         depth: file.depth,
         formula,
         findings: traits,
+        context: file.context.clone(),
         facts,
     }
 }

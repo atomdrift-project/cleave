@@ -475,3 +475,92 @@ fn clip(text: &str, col: Option<usize>, max: usize) -> String {
     }
     s
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Evidence, FindingKind, TargetInfo};
+
+    fn report(findings: Vec<Finding>) -> AnalysisReport {
+        let mut r = crate::types::AnalysisReport::new(TargetInfo {
+            path: "/t".to_string(),
+            file_type: "python".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        r.findings = findings;
+        r
+    }
+
+    fn finding(id: &str, crit: Criticality, offsets: &[u64]) -> Finding {
+        let mut f = Finding::new(id.to_string(), FindingKind::Capability, format!("{id} desc"), 0.9);
+        f.crit = crit;
+        f.evidence = offsets
+            .iter()
+            .map(|o| Evidence::new("m", "s", "match").with_offset(*o))
+            .collect();
+        f
+    }
+
+    fn line(ctx: &[ContextLine], loc: u64) -> Option<&ContextLine> {
+        ctx.iter().find(|c| c.loc == loc)
+    }
+
+    #[test]
+    fn source_lines_merge_and_collide() {
+        //                  0         1         2         3
+        //                  0123456789012345 6789012345678901 2345
+        let data = b"import os\nx = 1\ndata = decode(p)\nexec(data)\nend\n";
+        // offset 16 = line 3 ("data = ..."), offset 33 = line 4 ("exec(data)")
+        let mut r = report(vec![
+            finding("a/eval", Criticality::Hostile, &[16]),
+            finding("b/fs", Criticality::Suspicious, &[16]), // collision on line 3
+            finding("c/exec", Criticality::Notable, &[33]),  // line 4 — windows merge
+        ]);
+        capture(&mut r, data, FileType::Python);
+
+        // Two findings collide on line 3: one line, two notes.
+        assert!(matches!(line(&r.context, 3), Some(c) if c.notes.len() == 2));
+        assert_eq!(r.context.iter().filter(|c| c.loc == 3).count(), 1);
+        // Line 4 is its own hit; windows merged so there is no gap line missing.
+        assert!(matches!(line(&r.context, 4), Some(c) if c.notes.len() == 1));
+        // A context-only neighbour line carries no notes.
+        assert!(matches!(line(&r.context, 2), Some(c) if c.notes.is_empty()));
+    }
+
+    #[test]
+    fn composite_inherits_component_offset() {
+        let data = b"a\nb\nopen(f)\nexec(p)\nc\n"; // "open" line 3 (off 4), "exec" line 4 (off 11)
+        let mut comp = finding("comp/open", Criticality::Component, &[4]);
+        comp.desc = "open".to_string();
+        let mut composite = finding("obj/loader", Criticality::Suspicious, &[]);
+        composite.trait_refs = vec!["comp/open".to_string()];
+        let mut r = report(vec![comp, composite]);
+        capture(&mut r, data, FileType::Python);
+
+        // The composite (no evidence of its own) annotates the component's line
+        // via the trait_refs fallback; the referenced component shows too.
+        let l3 = line(&r.context, 3);
+        assert!(matches!(l3, Some(c) if c.notes.iter().any(|n| n.id == "obj/loader")));
+        assert!(matches!(l3, Some(c) if c.notes.iter().any(|n| n.id == "comp/open")));
+    }
+
+    #[test]
+    fn no_anchor_finding_yields_no_context() {
+        let data = b"hello world\n";
+        let mut r = report(vec![finding("meta/x", Criticality::Notable, &[])]);
+        capture(&mut r, data, FileType::Python);
+        assert!(r.context.is_empty());
+    }
+
+    #[test]
+    fn binary_renders_hex_rows() {
+        let data: Vec<u8> = (0u8..64).collect();
+        let mut r = report(vec![finding("bin/x", Criticality::Notable, &[16])]);
+        capture(&mut r, &data, FileType::Elf);
+        // Byte-offset mode: the hit row is hex-flagged and shows hex + ascii.
+        let hit = r.context.iter().find(|c| !c.notes.is_empty());
+        assert!(matches!(hit, Some(c) if c.hex && c.text.contains("  ")));
+    }
+}

@@ -59,15 +59,15 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
     (dir, stdout)
 }
 
-/// `tiny-v2` emits one finding per line, with the trait id in column 2:
-///   `H<TAB><id><TAB><desc><TAB><evidence>`
-/// Returns true if any non-comment line names the supplied trait id.
+/// The context-centric tiny format annotates findings as `# <SEV> <id> <desc>`,
+/// either trailing a matched line or on a standalone `.`/`#` line. Returns true
+/// if any annotation names the supplied trait id (token after the severity).
 fn finding_present(stdout: &str, trait_id: &str) -> bool {
     stdout.lines().any(|line| {
-        if line.starts_with('#') || line.starts_with('@') {
-            return false;
-        }
-        line.split('\t').nth(1).is_some_and(|id| id == trait_id)
+        line.rfind("# ")
+            .map(|i| &line[i + 2..])
+            .and_then(|note| note.split_whitespace().nth(1))
+            .is_some_and(|id| id == trait_id)
     })
 }
 

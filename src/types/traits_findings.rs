@@ -127,11 +127,33 @@ pub struct ContextLine {
     pub notes: Vec<Note>,
 }
 
+/// Serialize/deserialize a [`Criticality`] as its ordinal `0..=5`, matching the
+/// compact finding `crit` field and keeping context notes small.
+mod crit_ordinal {
+    use super::Criticality;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(c: &Criticality, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u8(*c as u8)
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Criticality, D::Error> {
+        Ok(match u8::deserialize(d)? {
+            0 => Criticality::Filtered,
+            1 => Criticality::Component,
+            3 => Criticality::Notable,
+            4 => Criticality::Suspicious,
+            5 => Criticality::Hostile,
+            _ => Criticality::Baseline,
+        })
+    }
+}
+
 /// A finding annotation on a [`ContextLine`] — one trait's match at this spot.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Note {
     /// Criticality of the annotating finding.
-    #[serde(rename = "c")]
+    #[serde(rename = "c", with = "crit_ordinal")]
     pub crit: Criticality,
     /// Finding identifier.
     #[serde(rename = "i")]

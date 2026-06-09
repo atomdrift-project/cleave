@@ -315,23 +315,23 @@ fn run_cleave_json(path: &Path) -> Value {
 }
 
 fn first_file(report: &Value) -> &Value {
-    report["fs"]
+    report["files"]
         .as_array()
         .and_then(|a| a.first())
         .expect("report has no files")
 }
 
 fn compact_values(file: &Value) -> &Value {
-    file.pointer("/ff/v")
-        .expect("compact v5 filefacts values missing")
+    file.pointer("/fact/val")
+        .expect("compact v7 filefacts values missing")
 }
 
 fn compact_metrics(file: &Value) -> HashMap<String, f64> {
     let mut out = HashMap::new();
     let groups = file
-        .pointer("/ff/m")
+        .pointer("/fact/met")
         .and_then(Value::as_object)
-        .expect("compact v5 filefacts metrics missing");
+        .expect("compact v7 filefacts metrics missing");
     for (group, fields) in groups {
         let Some(fields) = fields.as_object() else {
             continue;
@@ -346,11 +346,11 @@ fn compact_metrics(file: &Value) -> HashMap<String, f64> {
 }
 
 fn trait_ids(f: &Value) -> Vec<String> {
-    f["ts"]
+    f["find"]
         .as_array()
         .cloned()
         .unwrap_or_default()
         .into_iter()
-        .filter_map(|t| t["i"].as_str().map(str::to_owned))
+        .filter_map(|t| t["id"].as_str().map(str::to_owned))
         .collect()
 }

@@ -579,6 +579,12 @@ impl ArchiveAnalyzer {
             anyhow::bail!("Analysis cancelled");
         }
 
+        // Breadcrumb so a wedge dump can name which member this pool thread is
+        // analyzing. This is the universal per-member chokepoint (every archive
+        // path and the nested-archive recursion routes through it), so the top
+        // archive's members — fanned across the whole rayon pool — are all named.
+        let _breadcrumb = crate::breadcrumb::scope("member", relative_path);
+
         if let Some(reason) = self.archive_member_analysis_skip_reason(file_type) {
             tracing::debug!(
                 relative_path,
@@ -1659,11 +1665,6 @@ impl ArchiveAnalyzer {
         if self.is_cancelled() {
             return None;
         }
-
-        // Breadcrumb so a wedge dump can name which member this pool thread is
-        // analyzing — an archive's members run across the whole rayon pool, so
-        // the top-level phase alone can't localize a hang to a member.
-        let _breadcrumb = crate::breadcrumb::scope("member", member.relative_path.clone());
 
         let entry_path = self.format_entry_path(&member.relative_path);
         let archive_location = self.format_evidence_location(&member.relative_path);

@@ -268,6 +268,10 @@ publish-traits: ## FULL RELEASE: compat-test HEAD + last (VERSIONS-1) releases â
 	@[ -n "$(IDENTITY)" ] || { echo "publish-traits: IDENTITY=<signer> required (e.g. releaser@<project>.iam.gserviceaccount.com)"; exit 1; }
 	@command -v rclone >/dev/null || { echo "publish-traits: rclone not found"; exit 1; }
 	@command -v cosign >/dev/null || { echo "publish-traits: cosign not found"; exit 1; }
+	# manifest-gen reads the traits repo's LOCAL git log (no fetch), so the newest
+	# cleave-traits commit must already be checked out. Fast-forward to the remote
+	# tip and abort if it can't (diverged/dirty/offline) â€” never publish stale.
+	git -C "$(TRAITS)" pull --ff-only
 	$(MAKE) gen-manifest ENGINE= VERSIONS=$(VERSIONS) CHANNELS=stable SIGN=1 IDENTITY="$(IDENTITY)"
 	$(MAKE) check-manifest IDENTITY="$(IDENTITY)"
 	$(MAKE) publish-cleave

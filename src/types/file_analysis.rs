@@ -11,7 +11,7 @@ use super::binary::{Export, Function, Import, Section, StringInfo, SyscallInfo, 
 use super::core::Criticality;
 use super::filefacts_view::FilefactsView;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
-use super::traits_findings::{Finding, StructuralFeature, Trait};
+use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
 
 /// Path delimiter for archive members (e.g., "archive.zip!!inner/file.py")
 pub(crate) const ARCHIVE_DELIMITER: &str = "!!";
@@ -70,6 +70,12 @@ pub struct FileAnalysis {
     /// Findings for this file
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub findings: Vec<Finding>,
+
+    /// Merged, render-ready context: matched content shown once, in file
+    /// order, annotated with the findings that touch it. Replaces raw
+    /// per-finding evidence as the output surface.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context: Vec<ContextLine>,
 
     // === Verbose fields (omitted in minimal mode) ===
     /// Traits discovered in this file
@@ -180,6 +186,7 @@ impl FileAnalysis {
             counts: None,
             encoding: None,
             findings: Vec::new(),
+            context: Vec::new(),
             traits: Vec::new(),
             structure: Vec::new(),
             functions: Vec::new(),

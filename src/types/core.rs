@@ -10,7 +10,7 @@ use super::file_analysis::{FileAnalysis, ReportSummary};
 use super::filefacts_view::FilefactsView;
 use super::is_false;
 use super::paths_env::{DirectoryAccess, EnvVarInfo, PathInfo};
-use super::traits_findings::{Finding, StructuralFeature, Trait};
+use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
 use crate::malecule_bridge;
 
@@ -55,6 +55,20 @@ pub enum Criticality {
 }
 
 impl Criticality {
+    /// Single-letter tag used in compact/LLM output:
+    /// `H`ostile, `S`uspicious, `N`otable, `B`aseline, `C`omponent, `F`iltered.
+    #[must_use]
+    pub fn letter(self) -> char {
+        match self {
+            Self::Hostile => 'H',
+            Self::Suspicious => 'S',
+            Self::Notable => 'N',
+            Self::Baseline => 'B',
+            Self::Component => 'C',
+            Self::Filtered => 'F',
+        }
+    }
+
     /// Score weight for risk scoring: notable=1, suspicious=40, hostile=120
     #[must_use]
     pub fn score_weight(self) -> u32 {
@@ -94,6 +108,11 @@ pub struct AnalysisReport {
     /// Findings - interpretive conclusions based on traits (capabilities, threats, etc.)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub findings: Vec<Finding>,
+    /// Merged, render-ready context: matched content shown once, in file order,
+    /// annotated with the findings that touch it. The output surface that
+    /// replaces raw per-finding evidence. Populated by the context-capture pass.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub context: Vec<ContextLine>,
 
     /// Structural features (binary format properties, obfuscation markers)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -338,6 +357,7 @@ impl AnalysisReport {
             target,
             traits: Vec::new(),
             findings: Vec::new(),
+            context: Vec::new(),
             structure: Vec::new(),
             functions: Vec::new(),
             strings: Vec::new(),
@@ -1052,6 +1072,7 @@ impl AnalysisReport {
             .as_ref()
             .and_then(|a| a.first().cloned());
         file.findings = self.findings.clone();
+        file.context = self.context.clone();
         file.filefacts = self.filefacts.clone();
         file.filefacts_metrics = self.filefacts_metrics.clone();
         file.structure = self.structure.clone();
@@ -1096,6 +1117,7 @@ impl AnalysisReport {
 
         file.arch = arch;
         file.findings = self.findings;
+        file.context = self.context;
         file.filefacts = self.filefacts;
         file.filefacts_metrics = self.filefacts_metrics;
         file.structure = self.structure;

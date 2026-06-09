@@ -348,6 +348,7 @@ impl<'a> EvaluationContext<'a> {
 pub(crate) enum AnalysisWarning {
     AstTooDeep { max_depth: usize },
     AstParseError,
+    AstQueryLimited { limit: usize },
     PatternTruncated { pattern: String, limit: usize },
 }
 
@@ -359,6 +360,9 @@ impl std::fmt::Display for AnalysisWarning {
             }
             Self::AstParseError => {
                 write!(f, "AST has parse errors (results may be incomplete)")
+            }
+            Self::AstQueryLimited { limit } => {
+                write!(f, "AST query match limit hit (limit: {})", limit)
             }
             Self::PatternTruncated { pattern, limit } => {
                 write!(

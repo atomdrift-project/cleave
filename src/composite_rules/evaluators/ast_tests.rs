@@ -4,7 +4,7 @@
 //! Tests for AST-based condition evaluators.
 
 use super::*;
-use crate::composite_rules::context::EvaluationContext;
+use crate::composite_rules::context::{AnalysisWarning, EvaluationContext};
 use crate::composite_rules::types::FileType;
 use crate::types::{AnalysisReport, TargetInfo};
 
@@ -120,6 +120,40 @@ fn concurrent_query_new_is_deterministic() {
         std::collections::BTreeSet::from([Some(expected)]),
         "concurrent Query::new produced inconsistent match counts: {observed:?} \
          (expected every run to be Some({expected}))"
+    );
+}
+
+#[test]
+fn eval_ast_query_caps_total_captures() {
+    let mut source = String::new();
+    for i in 0..(AST_QUERY_CAPTURE_LIMIT + 100) {
+        source.push_str(&format!("a{i};\n"));
+    }
+    let report = create_test_report("/test/many-identifiers.js");
+    let parsed = parsed_for_test("many-identifiers.js", source.as_bytes());
+    let ctx =
+        create_test_context_with_ast(&report, &parsed, source.as_bytes(), FileType::JavaScript);
+
+    let result = eval_ast(
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some("(identifier) @id"),
+        false,
+        &ctx,
+    );
+
+    assert!(result.matched);
+    assert_eq!(result.match_count, AST_QUERY_CAPTURE_LIMIT);
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, AnalysisWarning::AstQueryLimited { limit } if *limit == AST_QUERY_CAPTURE_LIMIT)),
+        "expected AST query limit warning, got {:?}",
+        result.warnings
     );
 }
 

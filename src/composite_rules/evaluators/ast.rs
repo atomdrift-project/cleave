@@ -45,8 +45,15 @@ use streaming_iterator::StreamingIterator;
 /// compilation was tried and measured *wall-neutral* (the one-time compile
 /// warmup is small and amortized), so it's not worth the extra concurrency on
 /// this correctness-sensitive path.
-static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(FileType, String), Arc<tree_sitter::Query>>>> =
+static QUERY_CACHE: LazyLock<RwLock<FxHashMap<(String, String), Arc<tree_sitter::Query>>>> =
     LazyLock::new(|| RwLock::new(FxHashMap::default()));
+
+/// Must stay within tree-sitter's accepted `set_match_limit` range
+/// (`1..=65_536`). Keep the cap below the binding maximum so pathological
+/// queries truncate predictably instead of relying on binding/runtime behavior.
+const AST_QUERY_MATCH_LIMIT: u32 = 50_000;
+const AST_QUERY_BYTE_LIMIT: usize = 10 * 1024 * 1024;
+pub(crate) const AST_QUERY_CAPTURE_LIMIT: usize = 100_000;
 
 /// Clear the shared AST query cache.
 #[allow(dead_code)] // Called via clear_thread_local_caches
@@ -365,13 +372,16 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Compile the query, cached process-wide to avoid recompilation across files
     // and threads. The frequent case is a hit on the read-lock fast path. On a
     // miss we take the write lock and compile *while holding it*, double-checking
-    // first: each (file_type, query) compiles exactly once with no overlapping
+    // first: each (language, query) compiles exactly once with no overlapping
     // `Query::new`. CORRECTNESS-CRITICAL (see the QUERY_CACHE doc): compiling
     // outside the lock reintroduces finding drift; do not "optimize" it away.
     // (Verified 2026-05-31: per-key `OnceLock` concurrent compilation dropped a
     // trait 1/10 under contention — the separate pre-existing archive race must
     // be fixed before any compile-parallelization can be validated.)
-    let key = (ctx.file_type, query_str.to_string());
+    let key = (
+        ast_query_language_key(lang, ctx.file_type),
+        query_str.to_string(),
+    );
     let cached = QUERY_CACHE.read().get(&key).map(Arc::clone);
     let query = if let Some(q) = cached {
         q
@@ -394,10 +404,9 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     // Execute the query with safety limits
     let mut query_cursor = tree_sitter::QueryCursor::new();
 
-    // Set limits to prevent runaway queries on pathological inputs
-    // This prevents tree-sitter assertion failures on malformed files
-    query_cursor.set_match_limit(100_000); // Limit pattern matches
-    query_cursor.set_byte_range(0..source.len().min(10_000_000)); // Limit to first 10MB
+    // Set limits to prevent runaway queries on pathological inputs.
+    query_cursor.set_match_limit(AST_QUERY_MATCH_LIMIT);
+    query_cursor.set_byte_range(0..source.len().min(AST_QUERY_BYTE_LIMIT));
 
     let mut evidence = Vec::new();
 
@@ -421,6 +430,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     let cpu_start = thread_cpu_time();
     let deadline = ctx.deadline;
     let mut timed_out = false;
+    let mut capture_limited = false;
     // Break out of a runaway query on any of three signals: the per-rule CPU
     // budget, the wall-clock deadline, or cooperative cancellation (SIGTERM).
     // The progress callback fires mid-query, so a single pathological pattern
@@ -447,7 +457,7 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         query_cursor.matches_with_options(&query, tree.root_node(), source.as_bytes(), options);
     let mut buffer1: Vec<u8> = Vec::new();
     let mut buffer2: Vec<u8> = Vec::new();
-    while let Some(m) = matches.next() {
+    'matches: while let Some(m) = matches.next() {
         // Mirror the progress-callback guards between matches: cancellation and
         // the wall-clock deadline stop work promptly; the CPU budget marks a
         // genuine analysis-bomb timeout.
@@ -468,6 +478,10 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         }
 
         for capture in m.captures {
+            if match_count >= AST_QUERY_CAPTURE_LIMIT {
+                capture_limited = true;
+                break 'matches;
+            }
             if let Ok(text) = capture.node.utf8_text(source.as_bytes()) {
                 match_count += 1;
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
@@ -494,6 +508,15 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
     if timed_out {
         warnings.push(AnalysisWarning::AstTooDeep { max_depth: 0 });
     }
+    if query_cursor.did_exceed_match_limit() || capture_limited {
+        warnings.push(AnalysisWarning::AstQueryLimited {
+            limit: if capture_limited {
+                AST_QUERY_CAPTURE_LIMIT
+            } else {
+                AST_QUERY_MATCH_LIMIT as usize
+            },
+        });
+    }
     ConditionResult {
         matched: match_count > 0,
         evidence,
@@ -502,4 +525,14 @@ pub(crate) fn eval_ast_query<'a>(query_str: &str, ctx: &EvaluationContext<'a>) -
         precision: 2.0, // Tree-sitter queries are complex and specific
         matched_trait_ids: Vec::new(),
     }
+}
+
+fn ast_query_language_key(lang: &tree_sitter::Language, file_type: FileType) -> String {
+    format!(
+        "{}:{}:{}:{}:{file_type:?}",
+        lang.name().unwrap_or("<unnamed>"),
+        lang.abi_version(),
+        lang.node_kind_count(),
+        lang.field_count()
+    )
 }

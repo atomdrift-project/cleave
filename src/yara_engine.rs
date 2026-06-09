@@ -98,6 +98,21 @@ const MAX_PATTERN_MATCHES: usize = 8;
 /// Typically 1-3 tiers are scanned per file (cross-format + file-type family), so 4 is generous.
 const ENGINE_SCANNER_CACHE_SIZE: usize = 4;
 
+/// Payloads at least this large scan their YARA tiers in parallel; smaller ones
+/// scan sequentially (the rayon task overhead exceeds a tiny scan, and avoids a
+/// third nesting level under archive member fan-out). Tunable via
+/// `CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES`; `0` forces always-parallel.
+fn tier_parallel_min_bytes() -> usize {
+    const DEFAULT: usize = 256 * 1024;
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(DEFAULT)
+    })
+}
+
 // YARA panics indicate a broken scanner/rule state, not a recoverable per-file
 // condition. Once we catch one, continuing to scan every subsequent file just
 // repeats the same expensive unwind path and floods logs. Flip this breaker and
@@ -757,16 +772,29 @@ impl YaraEngine {
         // `tier_rules` materializes any not-yet-built tier on first touch (the
         // common cache-hit path); the per-tier `OnceLock` makes that safe under
         // this `par_iter` and across concurrent scans on other workers.
-        let all_raw: Vec<(YaraTier, u64, Result<Vec<RawRule>>)> = tiers_to_scan
-            .par_iter()
-            .filter_map(|tier| {
-                self.tier_rules(*tier).map(|rules| {
-                    let started = std::time::Instant::now();
-                    let result = Self::run_scanner(rules, data);
-                    (*tier, started.elapsed().as_millis() as u64, result)
-                })
+        //
+        // Small payloads scan their tiers sequentially. A tiny member's tier
+        // scan costs less than a rayon task's scheduling + steal exposure: under
+        // member-level fan-out this is a third nesting level that floods a
+        // saturated pool with micro-tasks, and any tier task that blocks in a
+        // join can steal an unrelated multi-second chunk onto its stack (observed:
+        // 2 KB members "taking" seconds of wall under load). Sequential tiers
+        // also keep one file's scans on one thread, so its scanner cache serves
+        // every tier without cross-thread churn. Tunable via
+        // `CLEAVE_YARA_TIER_PARALLEL_MIN_BYTES`.
+        let scan_one = |tier: &YaraTier| {
+            self.tier_rules(*tier).map(|rules| {
+                let started = std::time::Instant::now();
+                let result = Self::run_scanner(rules, data);
+                (*tier, started.elapsed().as_millis() as u64, result)
             })
-            .collect();
+        };
+        let all_raw: Vec<(YaraTier, u64, Result<Vec<RawRule>>)> =
+            if data.len() < tier_parallel_min_bytes() {
+                tiers_to_scan.iter().filter_map(scan_one).collect()
+            } else {
+                tiers_to_scan.par_iter().filter_map(scan_one).collect()
+            };
 
         let mut yara_matches = Vec::new();
         let mut inline_results: HashMap<String, Vec<Evidence>> = HashMap::new();

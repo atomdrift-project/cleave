@@ -178,6 +178,8 @@ fn run_version() {
         info.trait_count, info.composite_count
     );
     println!("yara    {} rules", info.yara_rules);
+    let total = info.trait_count + info.composite_count + info.yara_rules;
+    println!("total   {} rules", total);
 }
 
 fn run_update_rules(force: bool, check: bool, pin: Option<String>) -> Result<()> {

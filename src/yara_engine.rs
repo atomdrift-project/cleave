@@ -530,6 +530,9 @@ impl YaraEngine {
         // Cache-miss path: tiers are pre-filled above, so there is no backing
         // source to materialize lazily.
         self.source = TierSource::Compiled;
+        // Inline trait rules come from the traits dir, so fold them into the
+        // built-in tally for reporting.
+        let builtin_count = builtin_count + inline_count;
         self.rule_counts = (builtin_count, third_party_count);
         tracing::info!(
             elapsed_ms = compile_elapsed_ms,
@@ -1111,8 +1114,11 @@ impl YaraEngine {
         let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
+        // Count actual public rules, not files: a single .yar file holds many rules.
+        let mut rule_count = 0usize;
 
         for split in processed {
+            rule_count += split.contexts.len();
             rule_contexts.extend(split.contexts);
             for (tier, source) in split.tiers {
                 tier_sources
@@ -1127,7 +1133,7 @@ impl YaraEngine {
             tracing::info!("Built-in tier {:?}: {} source(s)", tier, count);
         }
 
-        (tier_sources, rule_contexts, rule_files.len())
+        (tier_sources, rule_contexts, rule_count)
     }
 
     /// Collect third-party YARA rule sources, classifying each rule into a tier.
@@ -1241,7 +1247,10 @@ impl YaraEngine {
 
         let mut tier_sources: HashMap<YaraTier, Vec<(String, String)>> = HashMap::new();
         let mut rule_contexts: HashMap<String, RuleContext> = HashMap::new();
-        let mut total = 0;
+        // `fragments` counts per-tier source splits (for diagnostics); `rule_count`
+        // counts actual public rules — a monolithic pack holds thousands per file.
+        let mut fragments = 0;
+        let mut rule_count = 0;
         let mut vt_skipped = 0;
         let mut disabled_count = 0;
         let mut tier_counts: HashMap<YaraTier, usize> = HashMap::new();
@@ -1256,6 +1265,7 @@ impl YaraEngine {
             }
             vt_skipped += p.vt_stripped;
             disabled_count += p.disabled_stripped;
+            rule_count += p.split.contexts.len();
             rule_contexts.extend(p.split.contexts);
 
             for (tier, tier_source) in p.split.tiers {
@@ -1263,7 +1273,7 @@ impl YaraEngine {
                     .entry(tier)
                     .or_default()
                     .push((p.namespace.clone(), tier_source));
-                total += 1;
+                fragments += 1;
                 *tier_counts.entry(tier).or_insert(0) += 1;
             }
         }
@@ -1273,14 +1283,14 @@ impl YaraEngine {
         }
         tracing::debug!(
             "Successfully added {} third-party YARA source(s) across {} tier(s)",
-            total,
+            fragments,
             tier_counts.len().max(1),
         );
 
         (
             tier_sources,
             rule_contexts,
-            total,
+            rule_count,
             vt_skipped,
             disabled_count,
         )
@@ -2378,7 +2388,7 @@ impl YaraEngine {
 /// Per-tier cache format v6.
 /// Layout: MAGIC(4) + VERSION(4) + manifest_len(8) + manifest_json + padding + tier_data...
 const CACHE_MAGIC: &[u8; 4] = b"YARC";
-const CACHE_VERSION: u32 = 13; // bumped for yara-x 1.15.0 TypeValue enum change
+const CACHE_VERSION: u32 = 14; // bumped: rule_counts now tally actual rules, not files/fragments
 const CACHE_HEADER_SIZE: usize = 4 + 4 + 8; // 16 bytes
 
 impl Default for YaraEngine {

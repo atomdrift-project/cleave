@@ -1082,6 +1082,7 @@ mod tests {
                 architectures: Some(vec!["x86_64".to_string()]),
             },
             findings,
+            context: vec![],
             traits: vec![],
             structure: vec![],
             functions: vec![],
@@ -1405,11 +1406,11 @@ mod tests {
 
         let output = format_tiny(&report);
 
-        assert!(output.contains("# tiny-v2"));
-        assert!(output.contains("@\t/test/sample.bin\tELF\t12KB\t"));
-        assert!(output.contains(
-            "N\tmicro-behaviors/process/create/shell::bash\tExecute shell commands\tbash with whitespace"
-        ));
+        // No capture pass ran here, so the finding has no context window and
+        // renders as a `.` no-anchor line.
+        assert!(output.contains("# ctx:"));
+        assert!(output.contains("/test/sample.bin\tELF 12KB"));
+        assert!(output.contains(". # N micro-behaviors/process/create/shell::bash"));
     }
 
     #[test]
@@ -1494,18 +1495,64 @@ mod tests {
 
         let output = format_tiny(&report);
 
-        assert!(output.contains("B\tmicro-behaviors/fs/read::open\tOpen file for reading\t"));
+        // No capture pass, so each shown finding is a `.` no-anchor line.
+        // Baseline shown (and deduped by id), the referenced component shown,
+        // the unreferenced component hidden, the matched composite shown.
+        assert!(output.contains(". # B micro-behaviors/fs/read::open"));
         assert_eq!(
-            output
-                .matches("B\tmicro-behaviors/fs/read::open\tOpen file for reading\t")
-                .count(),
+            output.matches(". # B micro-behaviors/fs/read::open").count(),
             1
         );
-        assert!(output.contains("B\tmicro-behaviors/fs/read::open\tOpen file for reading\tfopen"));
-        assert!(output.contains("C\tobjectives/execution/loader::fragment\tLoader fragment\t"));
+        assert!(output.contains(". # C objectives/execution/loader::fragment"));
         assert!(!output.contains("objectives/execution/loader::unused-fragment"));
-        assert!(output.contains(
-            "S\tobjectives/execution/loader::matched-composite\tMatched composite loader\t"
-        ));
+        assert!(output.contains(". # S objectives/execution/loader::matched-composite"));
+    }
+
+    #[test]
+    fn test_format_tiny_merges_and_annotates_context() {
+        // A file with merged context: two findings on one line (collision) and
+        // a context line between two hits.
+        use crate::types::{ContextLine, Note};
+        let report = create_test_report(
+            vec![Finding {
+                kind: FindingKind::Capability,
+                trait_refs: vec![],
+                id: "net/socket".to_string(),
+                desc: "socket usage".to_string(),
+                conf: 0.8,
+                crit: Criticality::Notable,
+                mbc: None,
+                attack: None,
+                evidence: vec![],
+                match_count: 0,
+                source_file: None,
+            }],
+            vec![],
+        );
+        // Inject context directly (the capture pass needs file bytes).
+        let mut report = report;
+        report.files[0].context = vec![
+            ContextLine {
+                loc: 4,
+                text: "ctx before".to_string(),
+                hex: false,
+                notes: vec![],
+            },
+            ContextLine {
+                loc: 5,
+                text: "s = socket()".to_string(),
+                hex: false,
+                notes: vec![Note {
+                    crit: Criticality::Notable,
+                    id: "net/socket".to_string(),
+                    desc: "socket usage".to_string(),
+                    off: 60,
+                    len: 8,
+                }],
+            },
+        ];
+        let output = format_tiny(&report);
+        assert!(output.contains("4- ctx before"));
+        assert!(output.contains("5: s = socket() # N net/socket"));
     }
 }

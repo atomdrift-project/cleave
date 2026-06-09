@@ -4,15 +4,15 @@ use tracing_subscriber::EnvFilter;
 pub(crate) fn get_parent_pid() -> u32 {
     #[cfg(target_os = "linux")]
     {
-        if let Ok(stat) = std::fs::read_to_string("/proc/self/stat") {
-            if let Some(close_paren) = stat.rfind(')') {
-                let after_comm = &stat[close_paren + 1..];
-                let fields: Vec<&str> = after_comm.split_whitespace().collect();
-                if fields.len() > 1 {
-                    if let Ok(ppid) = fields[1].parse::<u32>() {
-                        return ppid;
-                    }
-                }
+        if let Ok(stat) = std::fs::read_to_string("/proc/self/stat")
+            && let Some(close_paren) = stat.rfind(')')
+        {
+            let after_comm = &stat[close_paren + 1..];
+            let fields: Vec<&str> = after_comm.split_whitespace().collect();
+            if fields.len() > 1
+                && let Ok(ppid) = fields[1].parse::<u32>()
+            {
+                return ppid;
             }
         }
         0

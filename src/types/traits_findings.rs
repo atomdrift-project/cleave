@@ -89,6 +89,60 @@ fn is_zero_usize(n: &usize) -> bool {
     *n == 0
 }
 
+/// Check if a u32 value is zero (for skip_serializing_if)
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
+}
+
+// ========================================================================
+// Context Model — the LLM/output surface that replaces raw Evidence.
+//
+// A file's `context` is a merged, render-ready set of lines: the matched
+// content shown once, in file order, annotated with the findings that touch
+// it. Overlapping or adjacent match windows are merged (within and across
+// findings), so a line two traits share is stored once with two notes, and a
+// composite spanning regions just annotates several lines. Each note carries
+// the match Location (`off`) + Length (`len`), so the old per-match Evidence
+// (value/method) is synthesizable from the content slice if ever needed.
+// ========================================================================
+
+/// One rendered line of merged context: a source line (clipped) or a
+/// `hex  ascii` row for binaries. A line with no notes is pure context (`-`
+/// in tiny output); a line with notes is a hit (`:`).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ContextLine {
+    /// Anchor: 1-based line number for source, or byte offset for a degenerate
+    /// over-long line / a binary hex row.
+    #[serde(rename = "l")]
+    pub loc: u64,
+    /// Rendered content: the clipped source text, or `"<hex pairs>  <ascii>"`.
+    #[serde(rename = "t")]
+    pub text: String,
+    /// Findings whose match falls on this line (deduped by id, severity-sorted).
+    #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
+    pub notes: Vec<Note>,
+}
+
+/// A finding annotation on a [`ContextLine`] — one trait's match at this spot.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Note {
+    /// Criticality of the annotating finding.
+    #[serde(rename = "c")]
+    pub crit: Criticality,
+    /// Finding identifier.
+    #[serde(rename = "i")]
+    pub id: String,
+    /// Human-readable description (may be empty).
+    #[serde(rename = "d", default, skip_serializing_if = "String::is_empty")]
+    pub desc: String,
+    /// Exact byte offset of the match (the "Location").
+    #[serde(rename = "o")]
+    pub off: u64,
+    /// Match length in bytes (the "Length"); 0 when unknown.
+    #[serde(rename = "z", default, skip_serializing_if = "is_zero_u32")]
+    pub len: u32,
+}
+
 /// A finding - an interpretive conclusion based on traits
 /// Findings represent what we CONCLUDE from traits (capabilities, threats, behaviors)
 #[derive(Debug, Serialize, Deserialize, Clone, Default)]
@@ -116,8 +170,11 @@ pub struct Finding {
     /// Trait IDs that contributed to this finding (for aggregated findings)
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub trait_refs: Vec<String>,
-    /// Additional evidence (for findings not tied to specific traits)
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    /// Raw per-match evidence produced by the matchers. Internal transient:
+    /// it carries the offsets the context-capture pass consumes, then is
+    /// dropped from output — the merged `context` on the file is the surface
+    /// callers see. Never serialized.
+    #[serde(skip)]
     pub evidence: Vec<Evidence>,
     /// Total match count for density/frequency analysis (may exceed evidence.len())
     #[serde(skip_serializing_if = "is_zero_usize", default)]

@@ -1660,6 +1660,11 @@ impl ArchiveAnalyzer {
             return None;
         }
 
+        // Breadcrumb so a wedge dump can name which member this pool thread is
+        // analyzing — an archive's members run across the whole rayon pool, so
+        // the top-level phase alone can't localize a hang to a member.
+        let _breadcrumb = crate::breadcrumb::scope("member", member.relative_path.clone());
+
         let entry_path = self.format_entry_path(&member.relative_path);
         let archive_location = self.format_evidence_location(&member.relative_path);
         let entry_metadata = ArchiveEntry {

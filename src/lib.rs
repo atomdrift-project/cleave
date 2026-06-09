@@ -23,6 +23,7 @@ extern crate self as cleave;
 
 mod analysis_cache;
 pub mod analysis_context;
+pub mod breadcrumb;
 pub mod cache;
 pub mod cancellation;
 pub mod decoders;

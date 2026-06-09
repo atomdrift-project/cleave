@@ -190,7 +190,7 @@ pub(crate) fn analyze_sfx(
     let extraction_findings = extraction
         .inno_diagnostics
         .iter()
-        .map(|diagnostic| build_innoextract_finding(diagnostic))
+        .map(build_innoextract_finding)
         .collect();
 
     SfxResult {

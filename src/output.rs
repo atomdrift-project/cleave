@@ -456,7 +456,7 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 ///
 /// ```text
 /// # ctx: N: hit, N- context, -- gap, . no-loc; src text | hex ascii; trailer # H/S/N/B/C/F id desc
-/// evil.sh	sh 4.2KB 142
+/// evil.sh <TAB> sh 4.2KB 142
 /// 19- def run():
 /// 20: exec(base64.b64decode(p)) # H exec/eval-b64 decode+exec base64
 /// .        # N metadata/unsigned unsigned binary

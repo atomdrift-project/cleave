@@ -41,6 +41,8 @@ type config struct {
 	traits, repo, engineOverride, out string
 	headEngine                        string
 	artifactPrefix                    string
+	engineBin, traitsEnv              string
+	validateArgs                      []string
 	nReleases, nCommits               int
 	soakDays, validDays               int
 	channels                          []string
@@ -57,6 +59,11 @@ func main() {
 	flag.StringVar(&c.out, "out", "dist", "output directory")
 	flag.StringVar(&c.artifactPrefix, "artifact-prefix", "",
 		"path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. \"traits/\")")
+	flag.StringVar(&c.engineBin, "engine-bin", "cleave", "cargo bin name to build per tag (e.g. cleave, litmus)")
+	flag.StringVar(&c.traitsEnv, "traits-env", "CLEAVE_TRAITS_DIR",
+		"env var set to the extracted checkout when validating (cleave: CLEAVE_TRAITS_DIR; litmus: LITMUS_MODELS_DIR)")
+	validateArgs := flag.String("validate-args", "validate",
+		"engine subcommand+args used as the oracle (cleave: \"validate\"; litmus: \"validate --skip-traits\")")
 	flag.IntVar(&c.nReleases, "releases", 2, "recent engine release tags to key the manifest by")
 	flag.IntVar(&c.nCommits, "commits", 20, "recent traits commits to consider (the ceiling; the floor bounds the rest)")
 	flag.IntVar(&c.soakDays, "soak-days", 7, "stable lags beta by at least this many days")
@@ -67,6 +74,7 @@ func main() {
 	flag.StringVar(&c.identity, "identity", "", "expected signer identity (required with --sign)")
 	flag.Parse()
 	c.channels = strings.Split(*chans, ",")
+	c.validateArgs = strings.Fields(*validateArgs)
 
 	if c.sign && c.identity == "" {
 		fatal("--sign requires --identity")
@@ -194,7 +202,7 @@ func selectPointer(c *config, engine, rel, ch string, cand []commit, cutoff time
 		if ch == "stable" && cm.t.After(cutoff) {
 			continue // too fresh to be stable
 		}
-		ok := c.noValidate || validate(c.traits, engine, rel, cm, tarCache, memo)
+		ok := c.noValidate || validate(c, engine, rel, cm, tarCache, memo)
 		logf("    %s/%s try %s (%s) -> %s", rel, ch, cm.short, cm.date, passWord(ok))
 		if ok {
 			return cm.short
@@ -210,7 +218,7 @@ func ensureEngine(c *config, rel string) (string, bool) {
 		return c.engineOverride, true
 	}
 	tag := "v" + rel
-	cached := filepath.Join(c.out, "engines", tag, "cleave")
+	cached := filepath.Join(c.out, "engines", tag, c.engineBin)
 	if _, err := os.Stat(cached); err == nil {
 		return cached, true
 	}
@@ -241,7 +249,7 @@ func ensureEngine(c *config, rel string) (string, bool) {
 	if err != nil {
 		fatal("resolve target dir: %v", err)
 	}
-	build := exec.Command("cargo", "build", "--release", "--bin", "cleave")
+	build := exec.Command("cargo", "build", "--release", "--bin", c.engineBin)
 	build.Dir = src
 	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+targetDir)
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
@@ -249,7 +257,7 @@ func ensureEngine(c *config, rel string) (string, bool) {
 		logf("  build %s FAILED (old toolchain mismatch?) — skipping release", tag)
 		return "", false
 	}
-	binSrc := filepath.Join(targetDir, "release", "cleave")
+	binSrc := filepath.Join(targetDir, "release", c.engineBin)
 	if err := os.MkdirAll(filepath.Dir(cached), 0o755); err != nil {
 		fatal("mkdir engine cache: %v", err)
 	}
@@ -347,24 +355,24 @@ func floorIndex(commits []commit, floorKey string) int {
 
 // --- validation (memoized on tag+commit) ------------------------------------
 
-func validate(traits, engine, rel string, c commit, tarCache map[string][]byte, memo map[string]bool) bool {
+func validate(cfg *config, engine, rel string, c commit, tarCache map[string][]byte, memo map[string]bool) bool {
 	ck := rel + "\t" + c.full
 	if v, ok := memo[ck]; ok {
 		return v
 	}
-	tmp, err := os.MkdirTemp("", "traits-"+c.short+"-")
+	tmp, err := os.MkdirTemp("", "checkout-"+c.short+"-")
 	if err != nil {
 		fatal("mktemp: %v", err)
 	}
 	defer os.RemoveAll(tmp)
 
 	ex := exec.Command("tar", "-xf", "-", "-C", tmp)
-	ex.Stdin = bytes.NewReader(archive(traits, c, tarCache))
+	ex.Stdin = bytes.NewReader(archive(cfg.traits, c, tarCache))
 	if out, err := ex.CombinedOutput(); err != nil {
 		fatal("extract %s: %v\n%s", c.short, err, out)
 	}
-	cmd := exec.Command(engine, "validate")
-	cmd.Env = append(os.Environ(), "CLEAVE_TRAITS_DIR="+tmp)
+	cmd := exec.Command(engine, cfg.validateArgs...)
+	cmd.Env = append(os.Environ(), cfg.traitsEnv+"="+tmp)
 	ok := cmd.Run() == nil
 	memo[ck] = ok
 	return ok

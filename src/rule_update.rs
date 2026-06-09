@@ -245,6 +245,7 @@ fn sibling(parent: &Path, name: &str) -> PathBuf {
 }
 
 fn http_get(url: &str) -> Result<Vec<u8>, String> {
+    eprintln!("fetching {url}");
     let client = reqwest::blocking::Client::builder()
         .timeout(TIMEOUT)
         .build()

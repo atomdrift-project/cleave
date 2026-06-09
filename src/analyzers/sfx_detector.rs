@@ -69,8 +69,68 @@ impl SfxKind {
 pub(crate) struct SfxResult {
     /// Finding describing the detected SFX format.
     pub sfx_finding: Finding,
+    /// Findings describing extraction/parser diagnostics from external tools.
+    pub extraction_findings: Vec<Finding>,
     /// Analysis report from extracted contents, if extraction succeeded.
     pub archive_report: Option<AnalysisReport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InnoExtractDiagnosticKind {
+    UnexpectedLoaderRevision,
+    LoaderChecksumMismatch,
+    SetupDataVersionUndetermined,
+    GenericFailure,
+}
+
+impl InnoExtractDiagnosticKind {
+    fn id(self) -> &'static str {
+        match self {
+            Self::UnexpectedLoaderRevision => {
+                "file/sfx/inno-setup/extraction/unexpected-loader-revision"
+            }
+            Self::LoaderChecksumMismatch => {
+                "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
+            }
+            Self::SetupDataVersionUndetermined => {
+                "file/sfx/inno-setup/extraction/setup-data-version-undetermined"
+            }
+            Self::GenericFailure => "file/sfx/inno-setup/extraction-failed",
+        }
+    }
+
+    fn desc(self) -> &'static str {
+        match self {
+            Self::UnexpectedLoaderRevision => "Innoextract found unexpected setup loader revision",
+            Self::LoaderChecksumMismatch => "Innoextract found setup loader checksum mismatch",
+            Self::SetupDataVersionUndetermined => {
+                "Innoextract could not determine setup data version"
+            }
+            Self::GenericFailure => "Inno Setup extraction failed",
+        }
+    }
+
+    fn crit(self) -> Criticality {
+        match self {
+            Self::UnexpectedLoaderRevision | Self::LoaderChecksumMismatch => {
+                Criticality::Suspicious
+            }
+            Self::SetupDataVersionUndetermined | Self::GenericFailure => Criticality::Notable,
+        }
+    }
+
+    fn conf(self) -> f32 {
+        match self {
+            Self::GenericFailure => 0.86,
+            _ => 0.95,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct InnoExtractDiagnostic {
+    kind: InnoExtractDiagnosticKind,
+    message: String,
 }
 
 /// Detect NSIS or Inno Setup SFX markers in raw PE data.
@@ -124,13 +184,25 @@ pub(crate) fn analyze_sfx(
     };
     let marker_offset = memmem::find(data, marker);
 
-    let archive_report = try_extract(file_path, data, kind, capability_mapper, yara_engine);
-    let extracted = archive_report.is_some();
+    let extraction = try_extract(file_path, data, kind, capability_mapper, yara_engine);
+    let extracted = extraction.archive_report.is_some();
+
+    let extraction_findings = extraction
+        .inno_diagnostics
+        .iter()
+        .map(|diagnostic| build_innoextract_finding(diagnostic))
+        .collect();
 
     SfxResult {
         sfx_finding: build_finding(kind, extracted, marker_offset),
-        archive_report,
+        extraction_findings,
+        archive_report: extraction.archive_report,
     }
+}
+
+struct SfxExtraction {
+    archive_report: Option<AnalysisReport>,
+    inno_diagnostics: Vec<InnoExtractDiagnostic>,
 }
 
 fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -> Finding {
@@ -159,6 +231,27 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
     }
 }
 
+fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
+    Finding {
+        kind: FindingKind::Capability,
+        id: diagnostic.kind.id().to_string(),
+        desc: diagnostic.kind.desc().to_string(),
+        conf: diagnostic.kind.conf(),
+        crit: diagnostic.kind.crit(),
+        mbc: None,
+        attack: Some("T1027.009".to_string()),
+        evidence: vec![Evidence {
+            method: "innoextract".to_string(),
+            source: "sfx_detector".to_string(),
+            value: diagnostic.message.clone(),
+            ..Default::default()
+        }],
+        match_count: 1,
+        trait_refs: vec![],
+        source_file: None,
+    }
+}
+
 /// Try to extract the SFX contents using system tools.
 fn try_extract(
     file_path: &Path,
@@ -166,33 +259,59 @@ fn try_extract(
     kind: SfxKind,
     capability_mapper: Option<Arc<CapabilityMapper>>,
     yara_engine: Option<Arc<YaraEngine>>,
-) -> Option<AnalysisReport> {
+) -> SfxExtraction {
     // PyInstaller path: extract + analyze entirely in memory, no tmpdir.
     if kind == SfxKind::PyInstaller {
-        return analyze_pyinstaller_in_memory(data, file_path, capability_mapper, yara_engine);
+        return SfxExtraction {
+            archive_report: analyze_pyinstaller_in_memory(
+                data,
+                file_path,
+                capability_mapper,
+                yara_engine,
+            ),
+            inno_diagnostics: vec![],
+        };
     }
 
-    let tmp = tempfile::tempdir().ok()?;
+    let Some(tmp) = tempfile::tempdir().ok() else {
+        return SfxExtraction {
+            archive_report: None,
+            inno_diagnostics: vec![],
+        };
+    };
+
+    let mut inno_diagnostics = vec![];
     let extracted = match kind {
         SfxKind::Nsis => run_7z(file_path, tmp.path()),
         SfxKind::InnoSetup => {
             if tool_available("innoextract") {
-                run_innoextract(file_path, tmp.path())
+                let result = run_innoextract(file_path, tmp.path());
+                inno_diagnostics = result.diagnostics;
+                result.extracted
             } else {
                 false
             }
         }
         SfxKind::PyInstaller => {
             // Early return above ensures this is unreachable.
-            return None;
+            return SfxExtraction {
+                archive_report: None,
+                inno_diagnostics: vec![],
+            };
         }
     };
 
     if !extracted {
-        return None;
+        return SfxExtraction {
+            archive_report: None,
+            inno_diagnostics,
+        };
     }
 
-    analyze_dir(tmp.path(), file_path, capability_mapper, yara_engine)
+    SfxExtraction {
+        archive_report: analyze_dir(tmp.path(), file_path, capability_mapper, yara_engine),
+        inno_diagnostics,
+    }
 }
 
 fn analyze_pyinstaller_in_memory(
@@ -262,16 +381,90 @@ fn run_7z(src: &Path, out: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn run_innoextract(src: &Path, out: &Path) -> bool {
-    std::process::Command::new("innoextract")
+struct InnoExtractResult {
+    extracted: bool,
+    diagnostics: Vec<InnoExtractDiagnostic>,
+}
+
+fn run_innoextract(src: &Path, out: &Path) -> InnoExtractResult {
+    match std::process::Command::new("innoextract")
         .args(["--extract", "--output-dir"])
         .arg(out)
         .arg(src)
         .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+        .stderr(std::process::Stdio::piped())
+        .output()
+    {
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            InnoExtractResult {
+                extracted: output.status.success(),
+                diagnostics: classify_innoextract_diagnostics(&stderr),
+            }
+        }
+        Err(e) => InnoExtractResult {
+            extracted: false,
+            diagnostics: vec![InnoExtractDiagnostic {
+                kind: InnoExtractDiagnosticKind::GenericFailure,
+                message: format!("failed to run innoextract: {e}"),
+            }],
+        },
+    }
+}
+
+fn classify_innoextract_diagnostics(output: &str) -> Vec<InnoExtractDiagnostic> {
+    let mut diagnostics = vec![];
+    let lower = output.to_ascii_lowercase();
+
+    for (needle, kind) in [
+        (
+            "unexpected setup loader revision",
+            InnoExtractDiagnosticKind::UnexpectedLoaderRevision,
+        ),
+        (
+            "setup loader checksum mismatch",
+            InnoExtractDiagnosticKind::LoaderChecksumMismatch,
+        ),
+        (
+            "could not determine setup data version",
+            InnoExtractDiagnosticKind::SetupDataVersionUndetermined,
+        ),
+    ] {
+        if let Some(message) = matching_diagnostic_line(output, &lower, needle) {
+            diagnostics.push(InnoExtractDiagnostic { kind, message });
+        }
+    }
+
+    if diagnostics.is_empty() && !output.trim().is_empty() {
+        diagnostics.push(InnoExtractDiagnostic {
+            kind: InnoExtractDiagnosticKind::GenericFailure,
+            message: truncate_diagnostic(output.trim()),
+        });
+    }
+
+    diagnostics
+}
+
+fn matching_diagnostic_line(output: &str, lower_output: &str, needle: &str) -> Option<String> {
+    let start = lower_output.find(needle)?;
+    let line_start = output[..start].rfind('\n').map_or(0, |pos| pos + 1);
+    let line_end = output[start..]
+        .find('\n')
+        .map_or(output.len(), |pos| start + pos);
+    Some(truncate_diagnostic(output[line_start..line_end].trim()))
+}
+
+fn truncate_diagnostic(message: &str) -> String {
+    const MAX_DIAGNOSTIC_LEN: usize = 240;
+    if message.len() <= MAX_DIAGNOSTIC_LEN {
+        return message.to_string();
+    }
+
+    let mut end = MAX_DIAGNOSTIC_LEN;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}...", &message[..end])
 }
 
 /// Analyze the extracted directory directly with ArchiveAnalyzer.
@@ -367,5 +560,54 @@ mod tests {
         assert_eq!(finding.id, "file/sfx/inno-setup");
         assert!((finding.conf - 1.0).abs() < f32::EPSILON);
         assert!(finding.evidence[0].location.is_none());
+    }
+
+    #[test]
+    fn test_classify_innoextract_known_failures() {
+        let diagnostics = classify_innoextract_diagnostics(
+            "Warning: unexpected setup loader revision: 2\n\
+             Warning: setup loader checksum mismatch\n\
+             Error: could not determine setup data version\n",
+        );
+
+        let kinds: Vec<_> = diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                InnoExtractDiagnosticKind::UnexpectedLoaderRevision,
+                InnoExtractDiagnosticKind::LoaderChecksumMismatch,
+                InnoExtractDiagnosticKind::SetupDataVersionUndetermined,
+            ]
+        );
+    }
+
+    #[test]
+    fn test_classify_innoextract_generic_failure() {
+        let diagnostics = classify_innoextract_diagnostics("Error: unsupported Inno stream\n");
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].kind,
+            InnoExtractDiagnosticKind::GenericFailure
+        );
+        assert_eq!(diagnostics[0].message, "Error: unsupported Inno stream");
+    }
+
+    #[test]
+    fn test_build_innoextract_finding_criticality() {
+        let finding = build_innoextract_finding(&InnoExtractDiagnostic {
+            kind: InnoExtractDiagnosticKind::LoaderChecksumMismatch,
+            message: "setup loader checksum mismatch".to_string(),
+        });
+
+        assert_eq!(
+            finding.id,
+            "file/sfx/inno-setup/extraction/loader-checksum-mismatch"
+        );
+        assert_eq!(finding.crit, Criticality::Suspicious);
+        assert_eq!(finding.evidence[0].value, "setup loader checksum mismatch");
     }
 }

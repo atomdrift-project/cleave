@@ -1339,6 +1339,7 @@ impl PackageJsonAnalyzer {
             "eslint-config-prettier",
             "webpack",
             "webpack-bundle-analyzer",
+            "webpack-build-notifier",
             "webpack-cli",
             "webpack-dev-middleware",
             "webpack-dev-server",
@@ -1748,6 +1749,12 @@ mod tests {
     fn test_webpack_hot_middleware_is_not_suspicious() {
         let analyzer = PackageJsonAnalyzer::new();
         assert!(!analyzer.is_suspicious_package_name("webpack-hot-middleware"));
+    }
+
+    #[test]
+    fn test_webpack_build_notifier_is_not_suspicious() {
+        let analyzer = PackageJsonAnalyzer::new();
+        assert!(!analyzer.is_suspicious_package_name("webpack-build-notifier"));
     }
 
     #[test]

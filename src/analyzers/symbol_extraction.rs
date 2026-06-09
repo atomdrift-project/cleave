@@ -6,6 +6,10 @@
 use crate::analyzers::FileType;
 use crate::types::{AnalysisReport, Import};
 
+const MAX_DUNDER_IMPORT_ALIASES: usize = 1024;
+const MAX_TOTAL_CALL_SITES: usize = 20_000;
+const MAX_IDENTIFIER_DEPTH: usize = 256;
+
 /// Ingest the import list filefacts already produced from its
 /// per-language tree-sitter queries, then run Python `__import__`
 /// alias resolution on top — that pass is cleave-specific (it rewrites
@@ -66,6 +70,9 @@ fn collect_dunder_import_aliases<'a>(
     alias_map: &mut std::collections::HashMap<String, String>,
 ) {
     loop {
+        if alias_map.len() >= MAX_DUNDER_IMPORT_ALIASES {
+            return;
+        }
         let node = cursor.node();
 
         // Look for: assignment where RHS is __import__('module')
@@ -217,6 +224,9 @@ fn extract_calls<'a>(
     // Use iterative traversal with explicit depth tracking to avoid stack overflow
     // on maliciously crafted or minified files with extreme nesting
     loop {
+        if call_sites.len() >= MAX_TOTAL_CALL_SITES {
+            return;
+        }
         let node = cursor.node();
         let node_type = node.kind();
 
@@ -287,6 +297,17 @@ pub(crate) fn extract_function_name<'a>(
 
 /// Recursively extract a full identifier from member expressions (e.g., "os.Open")
 fn get_full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Option<String> {
+    get_full_identifier_bounded(node, source, 0)
+}
+
+fn get_full_identifier_bounded<'a>(
+    node: &tree_sitter::Node<'a>,
+    source: &[u8],
+    depth: usize,
+) -> Option<String> {
+    if depth > MAX_IDENTIFIER_DEPTH {
+        return None;
+    }
     let kind = node.kind();
 
     // Base case: simple identifiers
@@ -332,12 +353,20 @@ fn get_full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Optio
             .or_else(|| node.child(node.child_count().saturating_sub(1) as u32))?;
 
         if let (Some(obj_name), Some(mut prop_name)) = (
-            get_full_identifier(&object, source),
-            get_full_identifier(&property, source),
+            get_full_identifier_bounded(&object, source, depth + 1),
+            get_full_identifier_bounded(&property, source, depth + 1),
         ) {
             // Clean up property name if it's a string literal from a subscript
-            if prop_name.starts_with('"') || prop_name.starts_with('\'') {
-                prop_name = prop_name[1..prop_name.len() - 1].to_string();
+            if let Some(stripped) = prop_name
+                .strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .or_else(|| {
+                    prop_name
+                        .strip_prefix('\'')
+                        .and_then(|s| s.strip_suffix('\''))
+                })
+            {
+                prop_name = stripped.to_string();
             }
             return Some(format!("{}.{}", obj_name, prop_name));
         }
@@ -345,7 +374,12 @@ fn get_full_identifier<'a>(node: &tree_sitter::Node<'a>, source: &[u8]) -> Optio
 
     // Fallback: if it's a call, try to get the function name
     if kind.contains("call") || kind.contains("invocation") {
-        return extract_function_name(node, source);
+        let callee = node
+            .child_by_field_name("function")
+            .or_else(|| node.child_by_field_name("callee"))
+            .or_else(|| node.child_by_field_name("method"))
+            .or_else(|| node.child(0))?;
+        return get_full_identifier_bounded(&callee, source, depth + 1);
     }
 
     None
@@ -360,6 +394,7 @@ mod tests {
 
     fn parse_for_test<'a>(code: &'a str, file_type: &FileType) -> filefacts::ParsedFile<'a> {
         let hint = match file_type {
+            FileType::JavaScript => "test.js",
             FileType::Ruby => "test.rb",
             FileType::Python => "test.py",
             FileType::Go => "test.go",
@@ -627,5 +662,54 @@ func main() {
             "Missing os/exec import"
         );
         assert!(import_symbols.contains(&"fmt"), "Missing fmt import");
+    }
+
+    #[test]
+    fn call_site_extraction_caps_total_unique_calls() {
+        let mut code = String::new();
+        for i in 0..(MAX_TOTAL_CALL_SITES + 500) {
+            code.push_str(&format!("f{i}();\n"));
+        }
+
+        let parsed = parse_for_test(&code, &FileType::JavaScript);
+        let tree = parsed.source_ast().expect("source_ast").tree;
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/test/file.js".to_string(),
+            file_type: "javascript".to_string(),
+            size_bytes: code.len() as u64,
+            sha256: "test".to_string(),
+            architectures: None,
+        });
+
+        extract_symbols_from_tree(tree, &code, &["call_expression"], &mut report);
+
+        assert_eq!(report.imports.len(), MAX_TOTAL_CALL_SITES);
+        assert!(report.imports.iter().any(|i| i.symbol == "f0"));
+        assert!(
+            !report
+                .imports
+                .iter()
+                .any(|i| i.symbol == format!("f{}", MAX_TOTAL_CALL_SITES + 1))
+        );
+    }
+
+    #[test]
+    fn deep_member_identifier_resolution_is_bounded() {
+        let mut code = String::from("root");
+        for i in 0..(MAX_IDENTIFIER_DEPTH + 20) {
+            code.push_str(&format!(".p{i}"));
+        }
+        code.push_str("();\n");
+
+        let parsed = parse_for_test(&code, &FileType::JavaScript);
+        let tree = parsed.source_ast().expect("source_ast").tree;
+        let root = tree.root_node();
+        let call = root
+            .named_child(0)
+            .and_then(|n| n.named_child(0))
+            .expect("call expression");
+
+        assert_eq!(call.kind(), "call_expression");
+        assert!(extract_function_name(&call, code.as_bytes()).is_none());
     }
 }

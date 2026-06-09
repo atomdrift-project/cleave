@@ -1012,6 +1012,7 @@ impl PEAnalyzer {
                 self.yara_engine.clone(),
             );
             report.findings.push(sfx_result.sfx_finding);
+            report.findings.extend(sfx_result.extraction_findings);
             if let Some(archive_report) = sfx_result.archive_report {
                 embedded_archive_count = embedded_archive_count.saturating_add(1);
                 report.findings.extend(archive_report.findings);

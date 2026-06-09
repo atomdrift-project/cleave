@@ -461,8 +461,7 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 /// 20: exec(base64.b64decode(p)) # H exec/eval-b64 decode+exec base64
 /// .        # N metadata/unsigned unsigned binary
 /// ```
-#[allow(dead_code)] // Used by the binary target via --format tiny.
-pub(crate) fn format_tiny(report: &AnalysisReport) -> String {
+pub fn format_tiny(report: &AnalysisReport) -> String {
     if !report.files.iter().any(file_has_output) {
         return String::new();
     }

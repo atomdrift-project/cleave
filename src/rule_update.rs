@@ -210,7 +210,8 @@ fn install(dir: &Path, artifact: &Artifact, source: &str) -> Result<(), String> 
     let _ = std::fs::remove_dir_all(&staging);
     std::fs::create_dir_all(&staging).map_err(|e| format!("create staging: {e}"))?;
 
-    let decoder = xz2::read::XzDecoder::new(Cursor::new(&bytes));
+    let decoder = zstd::stream::read::Decoder::new(Cursor::new(&bytes))
+        .map_err(|e| format!("opening zstd stream: {e}"))?;
     tar::Archive::new(decoder)
         .unpack(&staging)
         .map_err(|e| format!("extracting {}: {e}", artifact.file))?;

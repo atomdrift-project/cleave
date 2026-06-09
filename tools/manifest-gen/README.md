@@ -14,7 +14,7 @@ release tags and the last few `cleave-traits` commits, gating each pointer on
    Results are memoized in `<out>/.validate-cache.tsv` on `(engineVer, commit)`.
 3. **beta** = newest commit that passes. **stable** = newest passing commit at
    least `--soak-days` old (time-based soak; falls back to beta if none).
-4. Builds reproducible artifacts (`git archive` → `xz -T1`, committed tree only)
+4. Builds reproducible artifacts (`git archive` → `zstd -19`, committed tree only)
    and computes sha256 in-process.
 5. Renders `versions.toml`; with `--sign`, cosign-signs it.
 
@@ -108,7 +108,7 @@ signature). `make release-cleave` does both. Public bucket layout:
 ```
 <remote>/cleave/versions.toml                  # manifest (Cache-Control: max-age=60)
 <remote>/cleave/versions.toml.sigstore.json    # signature
-<remote>/cleave/traits/<date>-<commit>.tar.xz  # bundles (immutable, cache forever)
+<remote>/cleave/traits/<date>-<commit>.tar.zst # bundles (immutable, cache forever)
 ```
 
 The manifest's `file` field is `traits/<name>` (via `--artifact-prefix traits/`),

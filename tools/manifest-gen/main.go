@@ -386,15 +386,16 @@ func archive(traits string, c commit, tarCache map[string][]byte) []byte {
 }
 
 func buildArtifact(traits, out string, c commit, tarCache map[string][]byte) artifact {
-	xz := exec.Command("xz", "-9", "-T1", "-c")
-	xz.Stdin = bytes.NewReader(archive(traits, c, tarCache))
+	// zstd (single-thread = deterministic) for parity with litmus/azoth bundles.
+	z := exec.Command("zstd", "-19", "-c")
+	z.Stdin = bytes.NewReader(archive(traits, c, tarCache))
 	var buf bytes.Buffer
-	xz.Stdout, xz.Stderr = &buf, os.Stderr
-	if err := xz.Run(); err != nil {
-		fatal("xz %s: %v", c.short, err)
+	z.Stdout, z.Stderr = &buf, os.Stderr
+	if err := z.Run(); err != nil {
+		fatal("zstd %s: %v", c.short, err)
 	}
 	sum := sha256.Sum256(buf.Bytes())
-	file := fmt.Sprintf("%s-%s.tar.xz", c.date, c.short)
+	file := fmt.Sprintf("%s-%s.tar.zst", c.date, c.short)
 	if err := os.WriteFile(filepath.Join(out, file), buf.Bytes(), 0o644); err != nil {
 		fatal("write %s: %v", file, err)
 	}

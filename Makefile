@@ -238,7 +238,7 @@ publish-cleave: ## Upload dist/ bundles + versions.toml to R2 (artifacts FIRST, 
 	@command -v rclone >/dev/null || { echo "rclone not found"; exit 1; }
 	@[ -f "$(DIST)/versions.toml" ] || { echo "no $(DIST)/versions.toml — run 'make gen-manifest' first"; exit 1; }
 	@echo "→ bundles (immutable, cache forever)"
-	rclone copy "$(DIST)" "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --include "*.tar.xz" \
+	rclone copy "$(DIST)" "$(R2_REMOTE)/$(R2_CLEAVE)/traits/" --include "*.tar.zst" \
 	  --header-upload "Cache-Control: public, max-age=31536000, immutable" --progress
 	@echo "→ manifest (short cache so polls see updates)"
 	rclone copyto "$(DIST)/versions.toml" "$(R2_REMOTE)/$(R2_CLEAVE)/versions.toml" \

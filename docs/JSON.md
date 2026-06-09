@@ -16,46 +16,46 @@ For the library that produces these reports, see
 Consumers should treat unknown versions as a hard error.
 
 
-## Compact JSON v6
+## Compact JSON v7
 
-The CLI `--json` output uses compact schema v6. The top-level object is:
+The CLI `--json` output uses compact schema v7. The top-level object is:
 
 | JSON | Type | Meaning |
 | ---- | ---- | ------- |
-| `v` | string | Compact schema version, currently `"6"`. |
-| `fs` | array | Per-file compact records. |
+| `v` | string | Compact schema version, currently `"7"`. |
+| `files` | array | Per-file compact records. |
 
 Byte offsets in the compact report carry no `0x` prefix, and each context uses
 its slimmest valid-JSON encoding:
 
-- `ff` tuple offsets are **bare integers** (`["__text", 1816, …]`). A standalone
+- `fact` tuple offsets are **bare integers** (`["__text", 1816, …]`). A standalone
   JSON integer is smaller than a quoted hex string — the two `"` cost more than
   hex saves in digits — so numbers win here.
-- A trait's evidence locations (`el`) are **single strings** of the form
-  `"<fs-id>:<offset>"` (e.g. `"7:3718c0"`). The offset is already inside a
+- A trait's evidence locations (`loc`) are **single strings** of the form
+  `"<file-id>:<offset>"` (e.g. `"7:3718c0"`). The offset is already inside a
   string, so hex is the compact choice there (fewer digits, no extra quotes).
 
 (The verbose `Trait`/`Function`/`Section` types further down still use
 `0x`-prefixed hex strings; that representation is unchanged.)
 
-Each `fs[]` entry keeps cleave verdict data at the file level and packs filefacts data under `ff`. The `ff` object is intentionally not a lossless mirror of the full report; it is the dense, ML/UI-oriented fact surface.
+Each `files[]` entry keeps cleave verdict data at the file level and packs filefacts data under `fact`. The `fact` object is intentionally not a lossless mirror of the full report; it is the dense, ML/UI-oriented fact surface.
 
-| `ff` key | Meaning |
-| -------- | ------- |
+| `fact` key | Meaning |
+| ---------- | ------- |
 | `id` | File identity/type from filefacts, such as `pe`, `elf`, `macho`, `js`, or `zip`. |
-| `m` | Metrics grouped by prefix: `{"binary":{"overall_entropy":7.12}}` instead of flat `binary.overall_entropy`. |
-| `v` | Residual values only. Typed fact families are not duplicated here. |
-| `s` | Strings as `[offset, encoding, value]`. |
-| `i` | Imports as `[library, symbol]` or `[library, symbol, offset]`. |
-| `x` | Exports as `[symbol]` or `[symbol, offset]`. |
+| `met` | Metrics grouped by prefix: `{"binary":{"overall_entropy":7.12}}` instead of flat `binary.overall_entropy`. |
+| `val` | Residual values only. Typed fact families are not duplicated here. |
+| `str` | Strings as `[offset, encoding, value]`. |
+| `imp` | Imports as `[library, symbol]` or `[library, symbol, offset]`. |
+| `exp` | Exports as `[symbol]` or `[symbol, offset]`. |
 | `fn` | Functions as `[name]`, `[name, offset]`, or `[name, offset, kind]`. |
-| `sc` | Sections as `[name, file_offset, file_size, entropy, flags]`. |
-| `ct` | Source AST call targets. |
-| `mc` | Source AST member chains. |
-| `ca` | Source AST string call arguments as `[callee, value]`. |
-| `er` | Recoverable parse errors as `[kind, stage]`. |
+| `sec` | Sections as `[name, file_offset, file_size, entropy, flags]`. |
+| `tgt` | Source AST call targets. |
+| `mbr` | Source AST member chains. |
+| `arg` | Source AST string call arguments as `[callee, value]`. |
+| `err` | Recoverable parse errors as `[kind, stage]`. |
 
-The important invariant is that `ff.v` is residual. If a fact has a typed family (`s`, `i`, `x`, `fn`, `sc`, `ct`, `mc`, `ca`, or `er`), it must not also be emitted under `ff.v` by default.
+The important invariant is that `fact.val` is residual. If a fact has a typed family (`str`, `imp`, `exp`, `fn`, `sec`, `tgt`, `mbr`, `arg`, or `err`), it must not also be emitted under `fact.val` by default.
 
 ## Top-level shape
 

@@ -260,6 +260,23 @@ fn member_window_bytes() -> usize {
         .saturating_mul(1024 * 1024)
 }
 
+/// Minimum batch size at which a *nested* archive's members fan out across the
+/// rayon pool; smaller batches run serially on the analysis's own task. The
+/// member window caps batches at [`member_window_count`] (256), so member-heavy
+/// nested archives hit this threshold window after window while small wheels
+/// and condas never do. Tunable via `CLEAVE_NESTED_PARALLEL_MIN_MEMBERS`.
+fn nested_parallel_min_members() -> usize {
+    const DEFAULT: usize = 64;
+    static MIN: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *MIN.get_or_init(|| {
+        std::env::var("CLEAVE_NESTED_PARALLEL_MIN_MEMBERS")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(DEFAULT)
+    })
+}
+
 /// Maximum members held in one window. Caps the per-window report transient
 /// (each window's `par_iter` collects this many full reports before folding)
 /// independent of member size; tunable via `CLEAVE_MEMBER_WINDOW_COUNT`.
@@ -287,7 +304,6 @@ struct MemberWindow<'a> {
     window_bytes: usize,
     budget_bytes: usize,
     max_count: usize,
-    parallel: bool,
     total: usize,
     slow_log_label: &'static str,
 }
@@ -301,7 +317,6 @@ impl<'a> MemberWindow<'a> {
             window_bytes: 0,
             budget_bytes: member_window_bytes(),
             max_count: member_window_count(),
-            parallel: analyzer.members_run_parallel(),
             total: 0,
             slow_log_label,
         }
@@ -324,7 +339,8 @@ impl<'a> MemberWindow<'a> {
         }
         let analyzer = self.analyzer;
         let label = self.slow_log_label;
-        let results = par_filter_map_members(&self.window, self.parallel, |member| {
+        let parallel = analyzer.members_run_parallel(self.window.len());
+        let results = par_filter_map_members(&self.window, parallel, |member| {
             analyzer.analyze_one_member(member, label)
         });
         for result in results {
@@ -559,12 +575,43 @@ impl ArchiveAnalyzer {
     /// spare, and litmus bounds the memory of *concurrent* top-level analyses
     /// with its admission controller, not by streaming one member at a time.
     ///
-    /// Nested archives (`depth >= 1`) run members serially: they already execute
-    /// inside a parallel member task, so a second fan-out level only deepens
-    /// rayon nesting (deadlock pressure on small pools) and inflates per-member
-    /// in-flight memory without exposing usable parallelism.
-    fn members_run_parallel(&self) -> bool {
-        self.current_depth == 0
+    /// Whether a batch of `member_count` members runs parallel at this depth.
+    ///
+    /// Depth 0 always fans out. Nested archives (`depth >= 1`) fan out only for
+    /// member-heavy batches; small ones stay serial. Both halves are measured:
+    ///
+    /// - Member-heavy nested archives are the real-world long poles — the most
+    ///   member-dense packages are containers-in-containers (src.rpm → tar,
+    ///   deb → data.tar, conda → tar.zst), and serial members ran a 10k-member
+    ///   tar.xz inside an rpm on ONE thread for 477 s while >70 cores idled.
+    ///   Worse, any thread that work-stole that indivisible serial chunk
+    ///   stalled its own analysis for the full duration (LIFO stacking).
+    ///   Fanning these out drains the long pole and shrinks the largest
+    ///   stealable unit to one member.
+    /// - Small nested archives (wheels, condas — dozens of members) gain
+    ///   nothing from fan-out and pay for it: unconditional nested parallelism
+    ///   measured +11% wall on the mixed realworld benchmark, consistent with
+    ///   scheduling overhead plus per-thread YARA scanner-cache thrash when
+    ///   mixed member types spread across every pool thread.
+    ///
+    /// The historical reason nested was *always* serial — deadlock pressure on
+    /// litmus's tiny 4-thread per-slot pools — is gone: on the shared
+    /// process-global pool work-stealing joins cannot deadlock, the `stacker`
+    /// red-zone absorbs stolen-frame stack compounding, and the member window
+    /// bounds in-flight bytes. `CLEAVE_NESTED_PARALLEL_MIN_MEMBERS` tunes the
+    /// crossover; `CLEAVE_SERIAL_NESTED_MEMBERS=1` forces the old always-serial
+    /// behavior for A/B runs.
+    fn members_run_parallel(&self, member_count: usize) -> bool {
+        if self.current_depth == 0 {
+            return true;
+        }
+        static SERIAL_NESTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *SERIAL_NESTED.get_or_init(|| {
+            std::env::var("CLEAVE_SERIAL_NESTED_MEMBERS").is_ok_and(|v| v == "1")
+        }) {
+            return false;
+        }
+        member_count >= nested_parallel_min_members()
     }
 
     fn analyze_extracted_member(
@@ -1309,7 +1356,7 @@ impl ArchiveAnalyzer {
                 Some(yara_filetypes.as_slice())
             };
             let yara_results =
-                par_filter_map_members(&class_members, self.members_run_parallel(), |member| {
+                par_filter_map_members(&class_members, self.members_run_parallel(class_members.len()), |member| {
                     if self.is_cancelled() {
                         return None;
                     }
@@ -1606,7 +1653,7 @@ impl ArchiveAnalyzer {
         );
 
         let results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(members, self.members_run_parallel(), |member| {
+            par_filter_map_members(members, self.members_run_parallel(members.len()), |member| {
                 self.analyze_one_member(member, slow_log_label)
             });
 
@@ -1639,7 +1686,7 @@ impl ArchiveAnalyzer {
         );
 
         let results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(members, self.members_run_parallel(), |member| {
+            par_filter_map_members(members, self.members_run_parallel(members.len()), |member| {
                 self.analyze_one_member(member, slow_log_label)
             });
 
@@ -1968,7 +2015,7 @@ impl ArchiveAnalyzer {
             // reaper on small pools.
             let yara_results = par_filter_map_members(
                 &class_files,
-                self.members_run_parallel(),
+                self.members_run_parallel(class_files.len()),
                 |entry| {
                     if self.is_cancelled() {
                         return None;
@@ -2089,7 +2136,7 @@ impl ArchiveAnalyzer {
             .unwrap_or(report.target.path.as_str());
 
         let member_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&classes_to_analyze, self.members_run_parallel(), |entry| {
+            par_filter_map_members(&classes_to_analyze, self.members_run_parallel(classes_to_analyze.len()), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2300,7 +2347,7 @@ impl ArchiveAnalyzer {
         );
 
         let non_class_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&non_class_files, self.members_run_parallel(), |entry| {
+            par_filter_map_members(&non_class_files, self.members_run_parallel(non_class_files.len()), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2580,7 +2627,7 @@ impl ArchiveAnalyzer {
             "Starting parallel archive member analysis"
         );
         let generic_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&files, self.members_run_parallel(), |entry| {
+            par_filter_map_members(&files, self.members_run_parallel(files.len()), |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;

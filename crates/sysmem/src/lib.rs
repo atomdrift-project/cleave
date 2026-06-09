@@ -56,18 +56,21 @@ pub fn current_rss() -> Option<u64> {
 
 /// Memory pressure limit based on system RAM:
 /// - ≤ 8 GiB: total − 512 MiB
-/// - > 8 GiB: total − 1.5 GiB
-/// - capped at 32 GiB
+/// - > 8 GiB: 85% of total
+///
+/// 85% matches litmus's worker RSS policy so the two never disagree about what
+/// "too much" means. There is deliberately no absolute cap: an earlier 32 GiB
+/// ceiling flooded large hosts (which legitimately use 100 GB+ across a big
+/// worker fleet) with false "High memory usage" warnings while enforcing
+/// nothing.
 #[must_use]
 pub fn memory_limit() -> u64 {
-    const MAX: u64 = 32 * GB;
     let total = total_memory().unwrap_or(16 * GB);
-    let limit = if total <= 8 * GB {
+    if total <= 8 * GB {
         total.saturating_sub(GB / 2)
     } else {
-        total.saturating_sub(GB + GB / 2)
-    };
-    limit.min(MAX)
+        total / 100 * 85
+    }
 }
 
 /// Warning threshold: 512 MiB below [`memory_limit`].
@@ -1025,18 +1028,16 @@ cpu_info:5:cpu_info5:state\ton-line
 
     #[test]
     fn memory_limit_matches_policy() {
-        const MAX: u64 = 32 * GB;
         if let Some(total) = total_memory() {
             let expected = if total <= 8 * GB {
                 total.saturating_sub(GB / 2)
             } else {
-                total.saturating_sub(GB + GB / 2)
-            }
-            .min(MAX);
+                total / 100 * 85
+            };
             assert_eq!(memory_limit(), expected);
         } else {
-            // fallback total is 16 GB → 16 − 1.5 = 14.5 GB
-            assert_eq!(memory_limit(), 14 * GB + GB / 2);
+            // fallback total is 16 GB → 85% = 13.6 GB
+            assert_eq!(memory_limit(), 16 * GB / 100 * 85);
         }
     }
 

@@ -85,6 +85,9 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
 
     // Try to extract symbols if it's a binary file
     if let Ok(file_type) = detect_file_type(path) {
+        // The matched arm reuses `file_type` by value (macOS nm path), so this
+        // can't collapse into the outer `if let` without losing the binding.
+        #[allow(clippy::collapsible_match)]
         match file_type {
             FileType::Elf | FileType::MachO | FileType::Pe => {
                 // macOS specific optimization: use nm -u -m for highly accurate import library mappings

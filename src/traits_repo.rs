@@ -1,19 +1,17 @@
-//! Manages the external traits repository (clone, update, resolve).
+//! Locates the traits directory and installs/updates it from the R2 bundle.
 //!
-//! Traits (detection rules) live in a separate git repository. This module
-//! handles locating, auto-cloning, and updating that repository so users
-//! don't need to manage it manually.
+//! Traits (detection rules) are distributed as signed `.tar.zst` bundles from
+//! the update bucket — see [`crate::rule_update`], which `cleave update-rules`
+//! drives. This module only handles *resolution* (where traits live) and the
+//! first-run bootstrap install. No git.
 //!
 //! Resolution order:
-//! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var
-//! 2. Platform data directory (auto-cloned from upstream)
+//! 1. `--traits-dir` CLI flag / `CLEAVE_TRAITS_DIR` env var / API override
+//! 2. Workspace-local `traits/` checkout
+//! 3. Platform data directory (bootstrapped from the bundle if missing)
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{OnceLock, RwLock};
-
-const TRAITS_REPO_URL: &str = "https://codeberg.org/atomdrift/cleave-traits.git";
-const STALENESS_DAYS: u64 = 30;
 
 /// Process-wide override for the traits directory.
 ///
@@ -52,7 +50,7 @@ fn explicit_traits_dir() -> Option<String> {
     std::env::var("CLEAVE_TRAITS_DIR").ok()
 }
 
-/// Resolve the traits directory, auto-cloning if necessary.
+/// Resolve the traits directory, installing from the bundle if necessary.
 ///
 /// Returns the path to a usable traits directory, or an error if traits cannot
 /// be obtained.
@@ -75,26 +73,24 @@ pub fn resolve_and_ensure() -> Result<PathBuf, String> {
         return Ok(local_dir);
     }
 
-    // 3. Platform data directory — auto-clone if missing
+    // 3. Platform data directory — bootstrap-install from the bundle if missing.
     let data_dir = default_traits_dir();
     if has_traits(&data_dir) {
         tracing::debug!("Using traits from data directory: {}", data_dir.display());
-        check_staleness(&data_dir);
         return Ok(data_dir);
     }
-    if let Err(e) = clone_repo(&data_dir) {
+    if let Err(e) = crate::rule_update::update(&data_dir, false) {
         return Err(format!(
-            "Failed to clone traits repository: {e}\n\nEnsure 'git' is installed, or manually clone:\n  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"",
-            data_dir.display()
+            "Failed to install traits from the update bucket: {e}\n\nRun 'cleave update-rules' to install."
         ));
     }
     Ok(data_dir)
 }
 
-/// Resolve the traits directory without auto-cloning or process::exit.
+/// Resolve the traits directory without bootstrapping or process::exit.
 ///
 /// Same resolution order as `resolve_and_ensure()` but returns an error
-/// instead of exiting. Used by hot-reload paths where killing the server
+/// instead of installing. Used by hot-reload paths where killing the server
 /// on a bad traits path is unacceptable.
 #[allow(dead_code)] // Used by library target (shared_resources reload)
 pub fn try_resolve() -> Result<PathBuf, String> {
@@ -122,7 +118,7 @@ pub fn try_resolve() -> Result<PathBuf, String> {
     ))
 }
 
-/// Directory the R2 updater should install into: explicit override, a workspace
+/// Directory the updater should install into: explicit override, a workspace
 /// `traits/` checkout if present, else the platform data dir. Unlike
 /// `resolve_current_traits_dir` it's public and doesn't require the dir to exist.
 #[allow(dead_code)] // Used by binary target (update-rules)
@@ -155,235 +151,15 @@ fn has_traits(path: &Path) -> bool {
             || path.join("metadata").is_dir())
 }
 
-/// Clone the traits repo into the target directory.
-fn clone_repo(target: &Path) -> std::io::Result<()> {
-    check_git_available()?;
-
-    // Ensure parent directory exists
-    if let Some(parent) = target.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let output = Command::new("git")
-        .args(["clone", "--depth", "1", TRAITS_REPO_URL])
-        .arg(target)
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(std::io::Error::other(stderr.to_string()));
-    }
-    Ok(())
-}
-
-/// Update the traits repo (git pull or force reset).
-#[allow(dead_code)] // Used by binary target
-pub fn update(force: bool) -> Result<(), String> {
-    let traits_dir = resolve_current_traits_dir();
-
-    if !traits_dir.exists() || !is_git_repo(&traits_dir) {
-        eprintln!(
-            "Traits not found at {}. Cloning from {TRAITS_REPO_URL}...",
-            traits_dir.display()
-        );
-        clone_repo(&traits_dir).map_err(|e| {
-            format!(
-                "Failed to clone traits repository: {e}\n\nEnsure 'git' is installed, or manually clone:\n  git clone --depth 1 {TRAITS_REPO_URL} \"{}\"",
-                traits_dir.display()
-            )
-        })?;
-        eprintln!("Traits installed to {}", traits_dir.display());
-        return Ok(());
-    }
-
-    let before = short_head(&traits_dir).unwrap_or_default();
-
-    // When `cleave.toml` pins a ref for this release line, track it explicitly:
-    // fetch that ref and hard-reset, so a release stays on its branch (e.g.
-    // `2.0`) instead of drifting onto the remote's default branch.
-    let manifest_ref = crate::update_check::traits_ref();
-    let output = if let Some(reference) = manifest_ref.as_deref().filter(|r| !r.is_empty()) {
-        eprintln!("Updating traits (ref={reference})...");
-        let fetch = Command::new("git")
-            .args([
-                "-C",
-                &traits_dir.to_string_lossy(),
-                "fetch",
-                "origin",
-                reference,
-            ])
-            .output()
-            .map_err(|e| format!("git fetch failed: {e}"))?;
-        if !fetch.status.success() {
-            return Err(format!(
-                "git fetch failed: {}",
-                String::from_utf8_lossy(&fetch.stderr)
-            ));
-        }
-        Command::new("git")
-            .args([
-                "-C",
-                &traits_dir.to_string_lossy(),
-                "reset",
-                "--hard",
-                "FETCH_HEAD",
-            ])
-            .output()
-            .map_err(|e| format!("git reset failed: {e}"))?
-    } else if force {
-        eprintln!("Force-updating traits from upstream...");
-        let fetch = Command::new("git")
-            .args(["-C", &traits_dir.to_string_lossy(), "fetch", "origin"])
-            .output()
-            .map_err(|e| format!("git fetch failed: {e}"))?;
-        if !fetch.status.success() {
-            return Err(format!(
-                "git fetch failed: {}",
-                String::from_utf8_lossy(&fetch.stderr)
-            ));
-        }
-        Command::new("git")
-            .args([
-                "-C",
-                &traits_dir.to_string_lossy(),
-                "reset",
-                "--hard",
-                "origin/HEAD",
-            ])
-            .output()
-            .map_err(|e| format!("git reset failed: {e}"))?
-    } else {
-        eprintln!("Updating traits...");
-        Command::new("git")
-            .args(["-C", &traits_dir.to_string_lossy(), "pull", "--ff-only"])
-            .output()
-            .map_err(|e| format!("git pull failed: {e}"))?
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Update failed: {stderr}"));
-    }
-
-    let after = short_head(&traits_dir).unwrap_or_default();
-    if before == after {
-        eprintln!("Already up to date ({after}).");
-    } else {
-        eprintln!("Updated: {before} -> {after}");
-        // Show summary of changes
-        if let Ok(diff_output) = Command::new("git")
-            .args([
-                "-C",
-                &traits_dir.to_string_lossy(),
-                "diff",
-                "--stat",
-                &format!("{before}..{after}"),
-            ])
-            .output()
-            && diff_output.status.success()
-        {
-            let summary = String::from_utf8_lossy(&diff_output.stdout);
-            if !summary.is_empty() {
-                eprint!("{summary}");
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Check for updates without applying them.
-#[allow(dead_code)] // Used by binary target
-pub fn check_updates() -> Result<(), String> {
-    let traits_dir = resolve_current_traits_dir();
-    if !is_git_repo(&traits_dir) {
-        return Err(format!(
-            "Traits directory is not a git repository: {}",
-            traits_dir.display()
-        ));
-    }
-
-    let fetch = Command::new("git")
-        .args(["-C", &traits_dir.to_string_lossy(), "fetch", "--dry-run"])
-        .output()
-        .map_err(|e| format!("git fetch failed: {e}"))?;
-
-    let local = short_head(&traits_dir).unwrap_or_default();
-
-    // Check if we're behind
-    let status = Command::new("git")
-        .args([
-            "-C",
-            &traits_dir.to_string_lossy(),
-            "status",
-            "-uno",
-            "--porcelain=v2",
-            "--branch",
-        ])
-        .output()
-        .map_err(|e| format!("git status failed: {e}"))?;
-
-    if fetch.status.success() {
-        let stderr = String::from_utf8_lossy(&fetch.stderr);
-        if stderr.trim().is_empty() {
-            eprintln!("Traits are up to date ({local}).");
-        } else {
-            eprintln!("Updates available (current: {local}). Run 'cleave update-rules' to update.");
-        }
-    }
-
-    // Show age
-    if let Some(days) = days_since_last_commit(&traits_dir) {
-        eprintln!("Last updated: {days} day(s) ago.");
-    }
-
-    let _ = status; // used for the fetch above
-    Ok(())
-}
-
-/// Pin traits to a specific commit.
-#[allow(dead_code)] // Used by binary target
-pub fn pin(commit: &str) -> Result<(), String> {
-    let traits_dir = resolve_current_traits_dir();
-    if !is_git_repo(&traits_dir) {
-        return Err(format!(
-            "Traits directory is not a git repository: {}",
-            traits_dir.display()
-        ));
-    }
-
-    // Fetch to make sure we have the commit
-    let _ = Command::new("git")
-        .args(["-C", &traits_dir.to_string_lossy(), "fetch", "origin"])
-        .output();
-
-    let output = Command::new("git")
-        .args(["-C", &traits_dir.to_string_lossy(), "checkout", commit])
-        .output()
-        .map_err(|e| format!("git checkout failed: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to pin to {commit}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-    eprintln!("Traits pinned to {commit}.");
-    Ok(())
-}
-
-/// Get the short commit hash of the current traits HEAD.
+/// Get the installed traits commit (short), from the bundle's sidecar.
 #[must_use]
 #[allow(dead_code)] // Used by binary target
 pub fn version() -> Option<String> {
     let traits_dir = resolve_current_traits_dir();
-    // R2-installed trees have no .git; the commit is in the sidecar.
-    if let Some(installed) = crate::rule_update::installed(&traits_dir) {
-        return Some(installed.commit.chars().take(9).collect());
-    }
-    short_head(&traits_dir)
+    crate::rule_update::installed(&traits_dir).map(|i| i.commit.chars().take(9).collect())
 }
 
-/// Resolve the traits directory that is currently in use (without auto-cloning).
+/// Resolve the traits directory that is currently in use (without bootstrapping).
 fn resolve_current_traits_dir() -> PathBuf {
     if let Some(explicit) = explicit_traits_dir() {
         return PathBuf::from(explicit);
@@ -393,76 +169,6 @@ fn resolve_current_traits_dir() -> PathBuf {
         return local_dir;
     }
     default_traits_dir()
-}
-
-/// Print a staleness warning if traits haven't been updated recently.
-fn check_staleness(path: &Path) {
-    if let Some(days) = days_since_last_commit(path)
-        && days > STALENESS_DAYS
-    {
-        eprintln!(
-            "Note: Traits last updated {days} days ago. Run 'cleave update-rules' to refresh."
-        );
-    }
-}
-
-/// Get days since the last git commit in a directory.
-fn days_since_last_commit(path: &Path) -> Option<u64> {
-    let output = Command::new("git")
-        .args(["-C", &path.to_string_lossy(), "log", "-1", "--format=%ct"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let timestamp: i64 = String::from_utf8_lossy(&output.stdout)
-        .trim()
-        .parse()
-        .ok()?;
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .ok()?
-        .as_secs() as i64;
-
-    let days = (now - timestamp) / 86400;
-    Some(days.max(0) as u64)
-}
-
-/// Get the short HEAD commit hash.
-fn short_head(path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &path.to_string_lossy(),
-            "rev-parse",
-            "--short",
-            "HEAD",
-        ])
-        .output()
-        .ok()?;
-
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
-}
-
-fn is_git_repo(path: &Path) -> bool {
-    path.join(".git").exists()
-}
-
-fn check_git_available() -> std::io::Result<()> {
-    Command::new("git").arg("--version").output().map_err(|e| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            format!("git is not installed or not in PATH: {e}"),
-        )
-    })?;
-    Ok(())
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@
 
 #[allow(unused_imports)] // Used by binary target via format_human_single
 use crate::malecule_bridge;
-use crate::types::{AnalysisReport, Criticality, FileAnalysis, Finding, Note};
+use crate::types::{AnalysisReport, ContextLine, Criticality, FileAnalysis, Finding, Note};
 use anyhow::Result;
 use colored::Colorize;
 use std::collections::{HashMap, HashSet};
@@ -131,7 +131,7 @@ fn risk_indicator(crit: &Criticality) -> colored::ColoredString {
     match crit {
         Criticality::Filtered => "   ".normal(),
         Criticality::Component => "  ·".dimmed(),
-        Criticality::Baseline => theme::paint_baseline("  •"),
+        Criticality::Baseline => theme::paint_baseline("  ·"),
         Criticality::Notable => theme::paint_notable("  •"),
         Criticality::Suspicious => theme::paint_suspicious(" ••"),
         Criticality::Hostile => theme::paint_hostile("•••"),
@@ -461,281 +461,516 @@ pub(crate) fn format_jsonl(report: &AnalysisReport) -> Result<String> {
 /// 20: exec(base64.b64decode(p)) # H exec/eval-b64 decode+exec base64
 /// .        # N metadata/unsigned unsigned binary
 /// ```
-pub fn format_tiny(report: &AnalysisReport) -> String {
-    if !report.files.iter().any(file_has_output) {
+/// Options for the context view, shared by cleave's terminal output and
+/// litmus's `--format tiny`. Both render the same way; only the knobs differ.
+#[derive(Clone, Copy, Debug)]
+pub struct TinyOpts {
+    /// Max findings shown per file, ranked by `crit × conf` (highest first).
+    pub top_n: usize,
+    /// Hide findings below this criticality.
+    pub min_crit: Criticality,
+    /// Lines of context per hit (hit ± `(n-1)/2`). `None` keeps the full
+    /// captured window.
+    pub context_lines: Option<usize>,
+    /// Show only each trait's first (primary) match, not all of them.
+    pub first_match_only: bool,
+    /// Rich header (`path  type • formula` + rule) vs the minimal
+    /// `path\ttype size score` line plus the `# ctx:` legend.
+    pub rich_header: bool,
+}
+
+impl TinyOpts {
+    /// cleave's default terminal view: top 20, notable+, 3-line windows, one
+    /// match per trait.
+    #[must_use]
+    pub fn terminal() -> Self {
+        Self {
+            top_n: 20,
+            min_crit: Criticality::Notable,
+            context_lines: Some(3),
+            first_match_only: true,
+            rich_header: true,
+        }
+    }
+
+    /// cleave's `--format tiny` (LLM) view: same selection, minimal header.
+    #[must_use]
+    pub fn tiny() -> Self {
+        Self {
+            rich_header: false,
+            ..Self::terminal()
+        }
+    }
+}
+
+/// Render the report as a colored, context-centric view per `opts`. Color is
+/// auto-disabled when stdout isn't a terminal (so `… | llm` stays plain text);
+/// in that plain mode a `---^` arrow marks each match instead of bold/color.
+pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
+    let files: Vec<&FileAnalysis> = report.files.iter().filter(|f| file_has_output(f)).collect();
+    if files.is_empty() {
         return String::new();
     }
+    let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
+    let term_width = terminal_width();
 
     let mut out = String::with_capacity(4096);
-    out.push_str(
-        "# ctx: N: hit, N- context, -- gap, . no-loc; src text | hex ascii; trailer # H/S/N/B/C/F id desc\n",
-    );
-
-    for file in &report.files {
-        if !file_has_output(file) {
+    let mut emitted = false;
+    for file in files {
+        let selected = select_ids(file, opts);
+        if selected.is_empty() {
             continue;
         }
-
-        // File header: path \t type size score
-        out.push_str(&tiny_field(&file.path));
-        out.push('\t');
-        out.push_str(&tiny_field(&file.file_type));
-        out.push(' ');
-        out.push_str(&format_size(file.size));
-        out.push(' ');
-        out.push_str(&file.score.to_string());
-        out.push('\n');
-
-        let shown = shown_ids(file);
-        render_context_lines(&mut out, file, &shown);
-        render_no_anchor_findings(&mut out, file, &shown);
+        if emitted {
+            out.push('\n'); // blank line between file entries
+        }
+        emitted = true;
+        if opts.rich_header {
+            rich_header(&mut out, file, term_width);
+        } else {
+            minimal_header(&mut out, file);
+        }
+        render_context(&mut out, file, &selected, opts, colorize);
+        render_no_anchor(&mut out, file, &selected, opts, colorize);
     }
-
+    // Trailing blank line so consecutive file entries are separated — both
+    // archive members (looped above) and separate per-file outputs streamed by
+    // a directory scan (each its own `format_context` call).
+    if emitted {
+        out.push('\n');
+    }
     out
 }
 
-/// Whether a file contributes anything to tiny output.
+/// The LLM `--format tiny` view.
+pub fn format_tiny(report: &AnalysisReport) -> String {
+    format_context(report, &TinyOpts::tiny())
+}
+
+/// Whether a file contributes anything to the context view.
 fn file_has_output(file: &FileAnalysis) -> bool {
     file.findings.iter().any(|f| tiny_should_show(f, file))
 }
 
-/// Finding ids in this file that should be shown.
-fn shown_ids(file: &FileAnalysis) -> HashSet<&str> {
-    file.findings
-        .iter()
-        .filter(|f| tiny_should_show(f, file))
-        .map(|f| f.id.as_str())
-        .collect()
+/// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
+/// floored at `min_crit` (after the usual component/filtered gating).
+fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
+    let mut scored: HashMap<&str, f32> = HashMap::new();
+    for f in &file.findings {
+        if f.crit < opts.min_crit || !tiny_should_show(f, file) {
+            continue;
+        }
+        let score = f.conf * f32::from(f.crit as u8);
+        scored
+            .entry(f.id.as_str())
+            .and_modify(|s| *s = s.max(score))
+            .or_insert(score);
+    }
+    let mut ranked: Vec<(&str, f32)> = scored.into_iter().collect();
+    ranked.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+    ranked.truncate(opts.top_n);
+    ranked.into_iter().map(|(id, _)| id).collect()
+}
+
+/// Minimal `path\ttype size score` header for the tiny/LLM view.
+fn minimal_header(out: &mut String, file: &FileAnalysis) {
+    out.push_str(&tiny_field(&file.path));
+    out.push('\t');
+    out.push_str(&tiny_field(&file.file_type));
+    out.push(' ');
+    out.push_str(&format_size(file.size));
+    out.push(' ');
+    out.push_str(&file.score.to_string());
+    out.push('\n');
 }
 
 /// Emit the merged context: `grep -n -C2`-style lines with `# SEV id desc`
 /// trailers, `--` between non-contiguous windows.
-fn render_context_lines(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>) {
-    let mut prev: Option<u64> = None;
-    for line in &file.context {
-        let notes: Vec<&Note> = line
-            .notes
-            .iter()
-            .filter(|n| shown.contains(n.id.as_str()))
-            .collect();
+fn render_context(
+    out: &mut String,
+    file: &FileAnalysis,
+    selected: &[&str],
+    opts: &TinyOpts,
+    colorize: bool,
+) {
+    let radius = opts.context_lines.map_or(2u64, |n| (n.saturating_sub(1) / 2) as u64);
+    let hex_file = file.context.first().is_some_and(|l| l.hex);
+    let unit = if hex_file { crate::context::HEX_STRIDE } else { 1 };
+    let span = radius.saturating_mul(unit);
 
-        // Consecutive units differ by 1 for source lines, one hex stride for
-        // hex rows; a larger jump is a gap between windows.
-        let step = if line.hex { crate::context::HEX_STRIDE } else { 1 };
-        if prev.is_some_and(|p| line.loc > p.saturating_add(step)) {
-            out.push_str("--\n");
+    // Each selected trait's match locations, in file order.
+    let mut locs_by_id: HashMap<&str, Vec<u64>> = HashMap::new();
+    for line in &file.context {
+        for n in &line.notes {
+            if selected.contains(&n.id.as_str()) {
+                let locs = locs_by_id.entry(n.id.as_str()).or_default();
+                if locs.last() != Some(&line.loc) {
+                    locs.push(line.loc);
+                }
+            }
+        }
+    }
+
+    // Pick where each trait is shown. In rank order (highest crit×conf first),
+    // a trait takes its first match whose ±window doesn't overlap a window a
+    // higher-ranked trait already claimed; failing that, its first match.
+    let mut shown_at: HashMap<u64, Vec<&str>> = HashMap::new();
+    let mut claimed: Vec<(u64, u64)> = Vec::new();
+    for &id in selected {
+        let Some(locs) = locs_by_id.get(id) else {
+            continue;
+        };
+        let picks: Vec<u64> = if opts.first_match_only {
+            let pick = locs
+                .iter()
+                .copied()
+                .find(|&loc| {
+                    let (lo, hi) = (loc.saturating_sub(span), loc.saturating_add(span));
+                    !claimed.iter().any(|&(c0, c1)| lo <= c1 && c0 <= hi)
+                })
+                .or_else(|| locs.first().copied());
+            pick.into_iter().collect()
+        } else {
+            locs.clone()
+        };
+        for loc in picks {
+            shown_at.entry(loc).or_default().push(id);
+            claimed.push((loc.saturating_sub(span), loc.saturating_add(span)));
+        }
+    }
+    if shown_at.is_empty() {
+        return;
+    }
+    let hits: Vec<u64> = shown_at.keys().copied().collect();
+    let marker = comment_marker(&file.file_type);
+    // A row is shown when it falls inside some featured trait's window.
+    let in_window = |loc: u64| hits.iter().any(|&h| loc.abs_diff(h) <= span);
+    // Highlight (and below, annotate) *every* match that lands in a shown window,
+    // not only the featured traits. A lesser match sharing the window — a
+    // component or baseline trait just ahead of or behind the feature — is
+    // flagged at its own level instead of rendering as blank context.
+    let mut spans: Vec<(u64, u64, Criticality)> = Vec::new();
+    for l in &file.context {
+        if in_window(l.loc) {
+            for n in &l.notes {
+                spans.push((n.off, n.off + u64::from(n.len.max(1)), n.crit));
+            }
+        }
+    }
+    let loc_width = file
+        .context
+        .iter()
+        .map(|l| {
+            if l.hex {
+                format!("{:x}", l.loc).len()
+            } else {
+                l.loc.to_string().len()
+            }
+        })
+        .max()
+        .unwrap_or(1);
+
+    let mut prev: Option<u64> = None;
+    let mut prev_rendered = false;
+    // A row's second-strongest trait "flows" onto the next row, but only if that
+    // row has no comment of its own; otherwise it's dropped (it's lower-rank than
+    // what the next row already shows).
+    let mut pending: Option<&Note> = None;
+    for line in &file.context {
+        // A hex continuation row (unmatched, ends in `…`) only appears when it
+        // actually trails a rendered run — never on its own, so it can't lead a
+        // window as an orphan.
+        let is_cont = line.hex && line.notes.is_empty();
+        let show = if is_cont {
+            prev_rendered
+        } else {
+            in_window(line.loc)
+        };
+        if !show {
+            prev_rendered = false;
+            pending = None; // don't carry a flowed comment across a hidden gap
+            continue; // outside every shown window
+        }
+        // Show every match on this row, so context bytes carrying a lesser trait
+        // are highlighted rather than left blank.
+        let notes: Vec<&Note> = line.notes.iter().collect();
+        let mut ranked = notes.clone();
+        ranked.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+        let own_top = ranked.first().copied();
+        // This row's comment: its own strongest trait, else a comment flowed from
+        // the previous row (`↖`). The next-strongest own trait flows onward.
+        let comment = match own_top {
+            Some(top) => Some((top, false)),
+            None => pending.map(|n| (n, true)),
+        };
+        pending = if own_top.is_some() {
+            ranked.get(1).copied()
+        } else {
+            None
+        };
+
+        // Source uses `⋯`/`--` between non-adjacent windows; hex marks the break
+        // with the trailing `…` continuation row instead.
+        if !hex_file && prev.is_some_and(|p| line.loc > p.saturating_add(unit)) {
+            if colorize {
+                // Indent the gap glyph under the content column (gutter 3 + space
+                // + loc + 2 spaces) so it falls beneath the code.
+                out.push_str(&" ".repeat(loc_width + 6));
+                out.push_str(&"⋯".bright_black().to_string());
+                out.push('\n');
+            } else {
+                out.push_str("--\n");
+            }
         }
         prev = Some(line.loc);
+        prev_rendered = true;
+        render_line(out, line, &notes, comment, marker, loc_width, &spans, colorize);
+    }
+}
 
-        if line.hex {
-            out.push_str(&format!("{:x}", line.loc));
-        } else {
-            out.push_str(&line.loc.to_string());
-        }
-        out.push(if notes.is_empty() { '-' } else { ':' });
+/// Line-comment marker for the sample's language; `//` for binary and anything
+/// C-family, so the annotation reads like a comment the analyst wrote.
+fn comment_marker(file_type: &str) -> &'static str {
+    match file_type {
+        "python" | "shell" | "bash" | "ruby" | "perl" | "r" | "powershell" | "yaml" | "toml"
+        | "makefile" | "dockerfile" | "systemd" | "desktop" | "text" | "ini" | "properties" => "#",
+        "lua" | "sql" | "haskell" | "applescript" | "vbs" | "vba" => "--",
+        _ => "//",
+    }
+}
+
+
+/// Column the trailing comment soft-aligns to (from the start of the content).
+const COMMENT_COL: usize = 46;
+
+/// Text width of a full hex row (`hex_ascii` output for `HEX_STRIDE` bytes):
+/// `n` pairs of `"XX "` + a separator space + `n` ascii chars. Hex comments pad
+/// to this column so they all align like a hex editor's annotation gutter.
+fn hex_comment_col() -> usize {
+    let n = crate::context::HEX_STRIDE as usize;
+    n * 3 + 1 + n
+}
+
+/// Render one context line. Colored: a `●` severity gutter, right-aligned line
+/// number, the code with its match highlighted, and the line's top trait as a
+/// comment in the sample's language. Plain: grep-style with a `---^` arrow.
+fn render_line(
+    out: &mut String,
+    line: &ContextLine,
+    notes: &[&Note],
+    comment: Option<(&Note, bool)>, // (trait, is_flow) — is_flow → `↖` pointing at the row above
+    marker: &str,
+    loc_width: usize,
+    spans: &[(u64, u64, Criticality)],
+    colorize: bool,
+) {
+    let base = line.addr.unwrap_or(line.loc);
+    // Gutter dots reflect the row's own strongest match (a flowed comment points
+    // at a match on a different row, so it doesn't drive this row's gutter).
+    let gutter_top = notes
+        .iter()
+        .copied()
+        .max_by_key(|n| (n.crit, std::cmp::Reverse(n.off)));
+    let loc_str = if line.hex {
+        format!("{:x}", line.loc)
+    } else {
+        line.loc.to_string()
+    };
+
+    if colorize {
+        // 1–3 dots by severity (`•••`/` ••`/`  •`) so the level reads even on a
+        // monochrome display, where color alone wouldn't.
+        let gutter = gutter_top.map_or_else(
+            || "   ".to_string(),
+            |n| risk_indicator(&n.crit).to_string(),
+        );
+        out.push_str(&gutter);
         out.push(' ');
-        out.push_str(&line.text);
-
-        // For source lines the first finding trails the content (compact); for
-        // wide hex rows it goes on its own line so the row stays within ~80
-        // columns. Remaining findings always get their own `# …` lines.
-        let (trailing, standalone) = if line.hex {
-            (None, notes.as_slice())
+        out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
+        out.push_str("  ");
+        if line.hex {
+            if notes.is_empty() {
+                // Continuation / pure-context hex row: nothing of its own to
+                // highlight, and its `…` tokens aren't parseable as hex pairs.
+                out.push_str(&line.text.bright_black().to_string());
+            } else {
+                out.push_str(&paint_hex(&line.text, line.loc, spans));
+            }
         } else {
-            notes
-                .split_first()
-                .map_or((None, [].as_slice()), |(f, r)| (Some(*f), r))
-        };
-        if let Some(first) = trailing {
-            out.push_str(" # ");
-            out.push_str(&note_str(first));
+            out.push_str(&paint_content(&line.text, base, notes));
+        }
+        if let Some((n, is_flow)) = comment {
+            // Hex comments align to a fixed column (a full row's width) so every
+            // annotation lines up like a hex editor; source soft-aligns.
+            let target = if line.hex { hex_comment_col() } else { COMMENT_COL };
+            let pad = target.saturating_sub(line.text.chars().count()).max(2);
+            let (r, g, b) = crit_rgb(n.crit);
+            let lead = if is_flow {
+                format!("{marker} ↖")
+            } else {
+                marker.to_string()
+            };
+            out.push_str(&" ".repeat(pad));
+            out.push_str(&lead.truecolor(r, g, b).to_string()); // marker tinted by severity
+            out.push(' ');
+            out.push_str(&terse_description(&n.desc).bright_white().to_string());
         }
         out.push('\n');
-        for n in standalone {
-            out.push_str("# ");
-            out.push_str(&note_str(n));
+        return;
+    }
+
+    // Plain (piped / LLM): grep-style, language comment with the severity letter,
+    // and a `---^` arrow under the match.
+    out.push_str(&loc_str);
+    out.push(if notes.is_empty() { '-' } else { ':' });
+    out.push(' ');
+    out.push_str(&line.text);
+    if let Some((n, is_flow)) = comment {
+        let arrow = if is_flow { "↖ " } else { "" };
+        out.push_str(&format!(
+            " {marker} {arrow}{} {}",
+            n.crit.letter(),
+            terse_description(&n.desc)
+        ));
+    }
+    out.push('\n');
+    if !line.hex && !notes.is_empty() {
+        let prefix = loc_str.chars().count() + 2; // loc + sep + space
+        if let Some(arrow) = arrow_line(&line.text, base, notes, prefix) {
+            out.push_str(&arrow);
             out.push('\n');
         }
     }
 }
 
-/// Emit shown findings that have no positional anchor (imports, metric/size
-/// thresholds, structural facts) as `.` lines.
-fn render_no_anchor_findings(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>) {
-    let anchored: HashSet<&str> = file
-        .context
-        .iter()
-        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
-        .collect();
+/// The theme's truecolor for a criticality — the brand severity palette (coral /
+/// gold / azure / forest / gray). The line body is painted in this hue regular,
+/// the matched evidence the same hue bold.
+fn crit_rgb(crit: Criticality) -> (u8, u8, u8) {
+    match crit {
+        Criticality::Hostile => crate::theme::HOSTILE_RGB,
+        Criticality::Suspicious => crate::theme::SUSPICIOUS_RGB,
+        Criticality::Notable => crate::theme::NOTABLE_RGB,
+        Criticality::Baseline => crate::theme::BASELINE_RGB,
+        _ => crate::theme::COMPONENT_RGB,
+    }
+}
 
-    // Only Notable+ findings are worth listing without context — baseline
-    // imports ("uses readdir") are pure noise in an LLM/triage view.
-    let mut rest: Vec<&Finding> = file
-        .findings
+/// Paint `text` with the theme severity painter (hostile/suspicious bold).
+fn paint_by_crit(crit: Criticality, text: &str) -> colored::ColoredString {
+    match crit {
+        Criticality::Hostile => crate::theme::paint_hostile(text),
+        Criticality::Suspicious => crate::theme::paint_suspicious(text),
+        Criticality::Notable => crate::theme::paint_notable(text),
+        Criticality::Baseline => crate::theme::paint_baseline(text),
+        _ => crate::theme::paint_component(text),
+    }
+}
+
+/// Color a source content line: a context-only line is dim grey; on a hit line
+/// only the matched evidence is highlighted (severity hue, bold) and the rest of
+/// the code stays the terminal's default color, so it reads naturally.
+fn paint_content(text: &str, base: u64, notes: &[&Note]) -> String {
+    if notes.is_empty() {
+        return text.bright_black().to_string(); // context line: quiet gray
+    }
+    let mut spans: Vec<(usize, usize, Criticality)> = notes
         .iter()
-        .filter(|f| {
-            f.crit >= Criticality::Notable
-                && shown.contains(f.id.as_str())
-                && !anchored.contains(f.id.as_str())
+        .filter_map(|n| {
+            let start = usize::try_from(n.off.checked_sub(base)?).ok()?;
+            let end = start.checked_add(n.len as usize)?;
+            text.get(start..end).map(|_| (start, end, n.crit))
         })
         .collect();
-    rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+    spans.sort_unstable_by_key(|&(s, _, _)| s);
 
-    let mut seen = HashSet::new();
-    for f in rest {
-        if !seen.insert(f.id.as_str()) {
+    let mut buf = String::new();
+    let mut pos = 0;
+    for (start, end, crit) in spans {
+        if start < pos {
             continue;
         }
-        out.push_str(". # ");
-        out.push(f.crit.letter());
-        out.push(' ');
-        out.push_str(&f.id);
-        if !f.desc.is_empty() {
-            out.push(' ');
-            out.push_str(&terse_description(&f.desc));
+        if let Some(pre) = text.get(pos..start) {
+            buf.push_str(pre); // default color
         }
-        out.push('\n');
+        if let Some(ev) = text.get(start..end) {
+            let (er, eg, eb) = crit_rgb(crit);
+            buf.push_str(&ev.truecolor(er, eg, eb).bold().to_string());
+        }
+        pos = end;
     }
+    buf.push_str(text.get(pos..).unwrap_or(""));
+    buf
 }
 
-/// Render a note as `SEV id desc` (the part after `# `).
-fn note_str(n: &Note) -> String {
-    let mut s = String::new();
-    s.push(n.crit.letter());
-    s.push(' ');
-    s.push_str(&n.id);
-    if !n.desc.is_empty() {
-        s.push(' ');
-        s.push_str(&terse_description(&n.desc));
-    }
-    s
-}
-
-fn tiny_field(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// Format the report for the terminal: the same context-centric layout as
-/// [`format_tiny`], but colored — the matched evidence is **bold** and each
-/// finding is tinted by criticality.
-#[allow(dead_code)] // Used by the binary target via the default Terminal format.
-pub(crate) fn format_terminal_ctx(report: &AnalysisReport) -> String {
-    let mut out = String::new();
-    let term_width = terminal_width();
-
-    for file in &report.files {
-        if !file_has_output(file) {
-            continue;
-        }
-
-        // File header: path  type • formula, then a rule.
-        let formula_findings = filter_findings_for_formula(&file.findings);
-        let formula = malecule_bridge::formula_from_findings(&formula_findings);
-        let file_type_display = display_file_type(&file.file_type);
-        let type_formula = if formula.is_empty() {
-            file_type_display
-        } else {
-            format!("{file_type_display} • {formula}")
-        };
-        let indent = "  ".repeat(file.depth as usize);
-        let display_path = if file.depth > 0 {
-            file.path
-                .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
-                .next()
-                .or_else(|| {
-                    file.path
-                        .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
-                        .next()
-                })
-                .unwrap_or(&file.path)
-        } else {
-            &file.path
-        };
-        out.push_str(&format!(
-            "{indent}{}  {}\n",
-            display_path.bright_white().bold(),
-            type_formula.bright_black()
-        ));
-        out.push_str(&format!(
-            "{indent}{}\n",
-            file_rule(term_width.saturating_sub(indent.len()))
-        ));
-
-        let shown = shown_ids(file);
-        render_ctx_terminal(&mut out, file, &shown, &indent);
-        render_no_anchor_terminal(&mut out, file, &shown, &indent);
-        out.push('\n');
-    }
-
-    out
-}
-
-/// Colored grep-style context: `N:`/`N-` lines, bold evidence, `--` gaps.
-fn render_ctx_terminal(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>, indent: &str) {
-    let mut prev: Option<u64> = None;
-    for line in &file.context {
-        let notes: Vec<&Note> = line
-            .notes
-            .iter()
-            .filter(|n| shown.contains(n.id.as_str()))
-            .collect();
-
-        let step = if line.hex { crate::context::HEX_STRIDE } else { 1 };
-        if prev.is_some_and(|p| line.loc > p.saturating_add(step)) {
-            out.push_str(&format!("{indent}{}\n", "--".bright_black()));
-        }
-        prev = Some(line.loc);
-
-        let loc = if line.hex {
-            format!("{:x}", line.loc)
-        } else {
-            line.loc.to_string()
-        };
-        let sep = if notes.is_empty() { '-' } else { ':' };
-        let base = line.addr.unwrap_or(line.loc);
-        let content = highlight_evidence(&line.text, base, line.hex, &notes);
-        out.push_str(&format!("{indent}{}{sep} {content}", loc.bright_black()));
-
-        // Source lines trail the first finding; wide hex rows put all findings
-        // on their own lines.
-        let (trailing, standalone) = if line.hex {
-            (None, notes.as_slice())
-        } else {
-            notes
-                .split_first()
-                .map_or((None, [].as_slice()), |(f, r)| (Some(*f), r))
-        };
-        if let Some(first) = trailing {
-            out.push(' ');
-            out.push_str(&styled_note(first));
-        }
-        out.push('\n');
-        for n in standalone {
-            out.push_str(&format!("{indent}    {}\n", styled_note(n)));
+/// Color a hex|ascii row: dim grey, with the matched bytes (both the hex pairs
+/// and their ascii) highlighted in the severity hue. `spans` are absolute byte
+/// ranges, so a match that wraps across rows lights up its slice in each row.
+/// Layout (from `hex_ascii`): `N` bytes as `"XX "` (3 chars each), a space, then
+/// `N` ascii chars — so byte `i`'s hex is at `3i..3i+2` and its ascii at `3N+1+i`.
+fn paint_hex(text: &str, row_base: u64, spans: &[(u64, u64, Criticality)]) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let n = chars.len().saturating_sub(1) / 4; // bytes in this row
+    let mut style: Vec<Option<Criticality>> = vec![None; chars.len()];
+    for i in 0..n {
+        let off = row_base + i as u64;
+        if let Some(&(_, _, crit)) = spans.iter().find(|&&(lo, hi, _)| lo <= off && off < hi) {
+            for pos in [3 * i, 3 * i + 1, 3 * n + 1 + i] {
+                if let Some(slot) = style.get_mut(pos) {
+                    *slot = Some(crit);
+                }
+            }
         }
     }
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let cur = style[i];
+        let mut j = i;
+        while j < chars.len() && style[j] == cur {
+            j += 1;
+        }
+        let seg: String = chars[i..j].iter().collect();
+        match cur {
+            Some(crit) => {
+                let (r, g, b) = crit_rgb(crit);
+                buf.push_str(&seg.truecolor(r, g, b).bold().to_string());
+            }
+            None => buf.push_str(&seg.bright_black().to_string()),
+        }
+        i = j;
+    }
+    buf
 }
 
-/// Colored `.` lines for shown findings with no positional anchor.
-fn render_no_anchor_terminal(
+/// Emit selected findings that have *no anchorable location at all* (metric /
+/// size / structural facts) as `.` lines. Findings that have an offset but lost
+/// the overlap dedup are not re-listed here — they're subsumed by their winner.
+fn render_no_anchor(
     out: &mut String,
     file: &FileAnalysis,
-    shown: &HashSet<&str>,
-    indent: &str,
+    selected: &[&str],
+    opts: &TinyOpts,
+    colorize: bool,
 ) {
     let anchored: HashSet<&str> = file
         .context
         .iter()
         .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
         .collect();
-    // Only Notable+ findings are worth listing without context.
+    let sel: HashSet<&str> = selected.iter().copied().collect();
+
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
         .filter(|f| {
-            f.crit >= Criticality::Notable
-                && shown.contains(f.id.as_str())
+            f.crit >= opts.min_crit
+                && sel.contains(f.id.as_str())
                 && !anchored.contains(f.id.as_str())
+                // (a) drop overlap-dedup losers: they *have* an offset but were
+                // collapsed into a higher trait's window. Only genuinely
+                // location-less findings remain.
+                && !f.evidence.iter().any(|e| e.byte_offset().is_some())
         })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
@@ -745,75 +980,128 @@ fn render_no_anchor_terminal(
         if !seen.insert(f.id.as_str()) {
             continue;
         }
-        let mut body = String::new();
-        body.push(f.crit.letter());
-        body.push(' ');
-        body.push_str(&f.id);
-        if !f.desc.is_empty() {
-            body.push(' ');
-            body.push_str(&terse_description(&f.desc));
+        let desc = terse_description(&f.desc);
+        if colorize {
+            // Dots gutter for severity, then the description in bright white —
+            // consistent with anchored lines, just with no location.
+            out.push_str(&format!(
+                "{}  {} {}\n",
+                risk_indicator(&f.crit),
+                "#".bright_black(),
+                desc.bright_white()
+            ));
+        } else {
+            out.push_str(&format!(". # {} {desc}\n", f.crit.letter()));
         }
-        out.push_str(&format!(
-            "{indent}{} {}\n",
-            ".".bright_black(),
-            paint_by_crit(f.crit, &body)
-        ));
     }
 }
 
-/// Bold each note's matched span within the source line. Hex/minified rows and
-/// spans that fall outside the rendered (possibly clipped) text stay unstyled.
-fn highlight_evidence(text: &str, base: u64, hex: bool, notes: &[&Note]) -> String {
-    if notes.is_empty() || hex {
-        return text.to_string();
+fn tiny_field(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// cleave's default terminal view: colored, top-20, notable+, 3-line windows.
+pub(crate) fn format_terminal_ctx(report: &AnalysisReport) -> String {
+    format_context(report, &TinyOpts::terminal())
+}
+
+/// Rich file header: `path  type • formula` then a full-width rule.
+fn rich_header(out: &mut String, file: &FileAnalysis, term_width: usize) {
+    let formula_findings = filter_findings_for_formula(&file.findings);
+    let formula = malecule_bridge::formula_from_findings(&formula_findings);
+    let file_type_display = display_file_type(&file.file_type);
+    let type_formula = if formula.is_empty() {
+        file_type_display
+    } else {
+        format!("{file_type_display} • {formula}")
+    };
+    let display_path = if file.depth > 0 {
+        file.path
+            .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
+            .next()
+            .or_else(|| {
+                file.path
+                    .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
+                    .next()
+            })
+            .unwrap_or(&file.path)
+    } else {
+        &file.path
+    };
+    let counts = severity_legend(file);
+    out.push_str(&format!(
+        "{}  {}{}\n",
+        display_path.bright_white().bold(),
+        type_formula.bright_black(),
+        counts,
+    ));
+    out.push_str(&format!("{}\n", file_rule(term_width)));
+}
+
+/// A compact, colored severity tally for the header: `  3H 2S 4N`, counting each
+/// distinct shown finding once. Empty tiers are omitted.
+fn severity_legend(file: &FileAnalysis) -> String {
+    let (mut hostile, mut susp, mut notable) = (0u32, 0u32, 0u32);
+    let mut seen = HashSet::new();
+    for f in &file.findings {
+        if !tiny_should_show(f, file) || !seen.insert(f.id.as_str()) {
+            continue;
+        }
+        match f.crit {
+            Criticality::Hostile => hostile += 1,
+            Criticality::Suspicious => susp += 1,
+            Criticality::Notable => notable += 1,
+            _ => {}
+        }
     }
-    let mut spans: Vec<(usize, usize)> = notes
+    let mut parts: Vec<String> = Vec::new();
+    if hostile > 0 {
+        parts.push(paint_by_crit(Criticality::Hostile, &format!("{hostile}H")).to_string());
+    }
+    if susp > 0 {
+        parts.push(paint_by_crit(Criticality::Suspicious, &format!("{susp}S")).to_string());
+    }
+    if notable > 0 {
+        parts.push(paint_by_crit(Criticality::Notable, &format!("{notable}N")).to_string());
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("   {}", parts.join(" "))
+    }
+}
+
+/// Build a `---^` pointer line: a caret under where each note's match starts in
+/// `text` (a short `---` shaft leading into it), offset by the line's `prefix`
+/// width. Returns `None` when no match maps into the rendered text.
+fn arrow_line(text: &str, base: u64, notes: &[&Note], prefix: usize) -> Option<String> {
+    let mut cols: Vec<usize> = notes
         .iter()
         .filter_map(|n| {
-            let start = usize::try_from(n.off.checked_sub(base)?).ok()?;
-            let end = start.checked_add(n.len as usize)?;
-            // Only bold when the span lands on char boundaries within the text.
-            text.get(start..end).map(|_| (start, end))
+            let byte_col = usize::try_from(n.off.checked_sub(base)?).ok()?;
+            // Char column so the caret aligns under multi-byte text.
+            text.get(..byte_col)
+                .map(|pre| prefix + pre.chars().count())
         })
         .collect();
-    spans.sort_unstable();
-
-    let mut s = String::new();
-    let mut pos = 0;
-    for (start, end) in spans {
-        if start < pos {
-            continue; // overlapping span already covered
-        }
-        if let Some(pre) = text.get(pos..start) {
-            s.push_str(pre);
-        }
-        if let Some(ev) = text.get(start..end) {
-            s.push_str(&ev.bold().to_string());
-        }
-        pos = end;
+    if cols.is_empty() {
+        return None;
     }
-    s.push_str(text.get(pos..).unwrap_or(""));
-    s
-}
+    cols.sort_unstable();
+    cols.dedup();
 
-/// `# <SEV id desc>` with the body tinted by criticality.
-fn styled_note(n: &Note) -> String {
-    format!(
-        "{} {}",
-        "#".bright_black(),
-        paint_by_crit(n.crit, &note_str(n))
-    )
-}
-
-/// Paint text in the palette color for a criticality.
-fn paint_by_crit(crit: Criticality, text: &str) -> colored::ColoredString {
-    match crit {
-        Criticality::Hostile => crate::theme::paint_hostile(text),
-        Criticality::Suspicious => crate::theme::paint_suspicious(text),
-        Criticality::Notable => crate::theme::paint_notable(text),
-        Criticality::Component => crate::theme::paint_component(text),
-        _ => crate::theme::paint_baseline(text),
+    let mut buf = vec![' '; cols.last().copied().unwrap_or(0) + 1];
+    for c in cols {
+        buf[c] = '^';
+        // Draw up to three `-` of shaft to the left, stopping at any marker.
+        for d in 1..=3 {
+            match c.checked_sub(d) {
+                Some(i) if buf[i] == ' ' => buf[i] = '-',
+                _ => break,
+            }
+        }
     }
+    Some(buf.into_iter().collect())
 }
 
 fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {

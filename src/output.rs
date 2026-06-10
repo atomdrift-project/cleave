@@ -568,10 +568,16 @@ fn render_no_anchor_findings(out: &mut String, file: &FileAnalysis, shown: &Hash
         .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
         .collect();
 
+    // Only Notable+ findings are worth listing without context — baseline
+    // imports ("uses readdir") are pure noise in an LLM/triage view.
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
-        .filter(|f| shown.contains(f.id.as_str()) && !anchored.contains(f.id.as_str()))
+        .filter(|f| {
+            f.crit >= Criticality::Notable
+                && shown.contains(f.id.as_str())
+                && !anchored.contains(f.id.as_str())
+        })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -722,10 +728,15 @@ fn render_no_anchor_terminal(
         .iter()
         .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
         .collect();
+    // Only Notable+ findings are worth listing without context.
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
-        .filter(|f| shown.contains(f.id.as_str()) && !anchored.contains(f.id.as_str()))
+        .filter(|f| {
+            f.crit >= Criticality::Notable
+                && shown.contains(f.id.as_str())
+                && !anchored.contains(f.id.as_str())
+        })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
 
@@ -1696,15 +1707,11 @@ mod tests {
 
         let output = format_tiny(&report);
 
-        // No capture pass, so each shown finding is a `.` no-anchor line.
-        // Baseline shown (and deduped by id), the referenced component shown,
-        // the unreferenced component hidden, the matched composite shown.
-        assert!(output.contains(". # B micro-behaviors/fs/read::open"));
-        assert_eq!(
-            output.matches(". # B micro-behaviors/fs/read::open").count(),
-            1
-        );
-        assert!(output.contains(". # C objectives/execution/loader::fragment"));
+        // No capture pass, so findings render as `.` no-anchor lines — but only
+        // Notable+ ones. The Baseline reads and both Components are filtered out;
+        // only the matched composite (Suspicious) survives.
+        assert!(!output.contains("micro-behaviors/fs/read::open"));
+        assert!(!output.contains("objectives/execution/loader::fragment"));
         assert!(!output.contains("objectives/execution/loader::unused-fragment"));
         assert!(output.contains(". # S objectives/execution/loader::matched-composite"));
     }
@@ -1751,6 +1758,7 @@ mod tests {
                     desc: "socket usage".to_string(),
                     off: 60,
                     len: 8,
+                    conf: 0.8,
                 }],
             },
         ];

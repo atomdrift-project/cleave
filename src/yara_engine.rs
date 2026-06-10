@@ -876,9 +876,9 @@ impl YaraEngine {
     /// Hard wall-clock limit for a single YARA scan. If yara-x's internal
     /// timeout fails to fire (e.g. stuck in a tight matching loop), this
     /// outer guard ensures the rayon thread is freed. Must be longer than the
-    /// yara-x `set_timeout` value (15 min) to let the cooperative timeout fire
+    /// yara-x `set_timeout` value (20 min) to let the cooperative timeout fire
     /// first in normal cases.
-    const YARA_WALL_CLOCK_LIMIT: std::time::Duration = std::time::Duration::from_secs(960);
+    const YARA_WALL_CLOCK_LIMIT: std::time::Duration = std::time::Duration::from_secs(1260);
 
     /// Run a YARA scanner against data and collect raw match results.
     ///
@@ -902,7 +902,7 @@ impl YaraEngine {
                 let rules_static: &'static yara_x::Rules =
                     unsafe { &*(rules as *const yara_x::Rules) };
                 let mut s = yara_x::Scanner::new(rules_static);
-                s.set_timeout(Duration::from_secs(900));
+                s.set_timeout(Duration::from_secs(1200));
                 // Cap per-pattern matches at the same limit cleave collects.
                 // yara-x's default is 1,000,000 — a pathological high-match
                 // pattern would otherwise store that many `Match` structs in

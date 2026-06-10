@@ -23,9 +23,9 @@ use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
 use std::time::{Duration, Instant};
 
-/// Hard deadline for a single rule evaluation (30 seconds).
+/// Hard deadline for a single rule evaluation (45 seconds).
 /// When exceeded, evaluation is interrupted and a timeout finding is emitted.
-const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(30);
+const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(45);
 
 /// Debug log threshold for rule evaluation (500ms).
 /// Rules exceeding this emit an info-level log.

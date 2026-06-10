@@ -145,7 +145,7 @@ impl UPXDecompressor {
             let _ = stderr_tx.send(buf);
         });
 
-        let timeout = std::time::Duration::from_secs(60);
+        let timeout = std::time::Duration::from_secs(120);
         let start = std::time::Instant::now();
         let status = loop {
             if let Some(status) = child.try_wait()? {

@@ -350,7 +350,7 @@ impl super::CapabilityMapper {
         )
         .with_section_map(cache.section_map)
         .with_cached_evidence(Some(cache.cached_evidence))
-        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(30))
+        .with_deadline(std::time::Instant::now() + std::time::Duration::from_secs(90))
         .with_slow_rule_ms(self.slow_rule_ms);
 
         if let Some(flag) = cancellation {

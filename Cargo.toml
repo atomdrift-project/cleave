@@ -332,7 +332,3 @@ opt-level = 3
 opt-level = 3
 
 
-# Local filefacts during the symbol-offset work (emit import name offsets).
-# Remove once the change is released and the git dep is bumped.
-[patch."https://codeberg.org/atomdrift/filefacts.git"]
-filefacts = { path = "../filefacts" }

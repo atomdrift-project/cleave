@@ -192,6 +192,11 @@ impl<'a> LineIndex<'a> {
         self.starts.len()
     }
 
+    /// Byte offset where line `i` (0-based) begins.
+    fn byte_start(&self, i: u64) -> u64 {
+        self.starts.get(i as usize).copied().unwrap_or(0) as u64
+    }
+
     /// 0-based line index containing byte `off`.
     fn line_of(&self, off: u64) -> usize {
         let off = off as usize;
@@ -252,6 +257,7 @@ fn render_line_segment(index: &LineIndex<'_>, seg: &Segment) -> Vec<ContextLine>
             let hit_col = notes.first().map(|n| n.off as usize);
             ContextLine {
                 loc: line + 1, // 1-based for humans
+                addr: Some(index.byte_start(line)),
                 text: index.render(line as usize, hit_col),
                 hex: false,
                 notes,
@@ -313,6 +319,7 @@ fn render_hex_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
         };
         out.push(ContextLine {
             loc: row,
+            addr: None, // loc is already the byte offset
             text: hex_ascii(bytes),
             hex: true,
             notes: seg.notes_at(row),
@@ -334,6 +341,7 @@ fn render_text_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
     let col = notes.first().map(|n| (n.off as usize).saturating_sub(start));
     vec![ContextLine {
         loc: seg.lo,
+        addr: None, // loc is already the byte offset
         text: clip(&text, col, LINE_CLIP),
         hex: true,
         notes,

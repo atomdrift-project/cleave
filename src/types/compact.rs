@@ -20,9 +20,6 @@ const MAX_IMPORTS: usize = 4096;
 /// Maximum chars per string value
 const MAX_STRING_CHARS: usize = 128;
 
-/// Maximum chars per evidence value
-const MAX_EVIDENCE_CHARS: usize = 128;
-
 /// Default confidence value (omitted from output)
 const DEFAULT_CONF: f32 = 0.5;
 
@@ -115,30 +112,10 @@ pub struct CompactTrait {
     #[serde(rename = "atk")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack: Option<String>,
-    /// Evidence values (flattened from Evidence structs)
-    #[serde(rename = "ev")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub evidence: Vec<String>,
-    /// Evidence locations parallel to `evidence`. Populated when archive roll-up
-    /// has attributed a finding to a specific member. The two vecs always
-    /// share a length when this is present, so downstream consumers can pair
-    /// `evidence[i]` with `locations[i]`. Skipped entirely when no location is
-    /// known for any entry.
-    ///
-    /// As of report `v: "7"`, an archive-member location is compacted to
-    /// `"<file-id>[:<offset>]"` — `file-id` indexes the report's `files[]` array, so
-    /// the (often long, repeated) member path is resolved once via `files[id]`
-    /// rather than embedded in every entry. Byte offsets are emitted as bare
-    /// hex (no `0x` prefix) to keep the JSON slim; the `0x` is redundant in this
-    /// always-hex position. A member that can't be resolved to a `files[]` entry
-    /// (un-extracted nested archive) keeps its `archive:<path>` string, so a
-    /// single `el` array may mix both forms — consumers tell them apart by the
-    /// leading character: a digit is an id, `archive:` a path. (Cleave's own
-    /// internal `Evidence.location` strings keep the `0x` prefix; the slimming
-    /// happens only here, at the JSON boundary.)
-    #[serde(rename = "loc")]
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub locations: Vec<String>,
+    // Per-trait evidence (`ev`/`loc`) was removed in favour of the per-file
+    // `ctx` block: the matched content is shown once, in context, and each
+    // context note references the finding by `id`. Highlight a match via
+    // `note.off - line_addr .. + note.len`.
 }
 
 /// A string in compact tuple form
@@ -600,44 +577,16 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
     let mut trait_order: Vec<&str> = Vec::new();
 
     for finding in &file.findings {
-        // Pair each evidence value with its location. Empty-value evidence
-        // is dropped, but a present value with no location keeps "" as its
-        // location placeholder so the e/el vectors stay aligned by index.
-        let pairs: Vec<(String, String)> = finding
-            .evidence
-            .iter()
-            .filter(|e| !e.value.is_empty())
-            .map(|e| {
-                (
-                    truncate_at_boundary(&e.value, MAX_EVIDENCE_CHARS).to_string(),
-                    e.location.clone().unwrap_or_default(),
-                )
-            })
-            .collect();
-
+        // Dedup findings by id, keeping the highest criticality. The matched
+        // content now lives once in the file-level `ctx` block; each context
+        // note references the finding by id, so no per-trait evidence here.
         if let Some(existing) = trait_map.get_mut(finding.id.as_str()) {
-            // Dedup on the (value, location) pair so identical matches from
-            // the same place collapse, but the same value matched in two
-            // different members produces two entries.
-            for (val, loc) in pairs {
-                let already = existing
-                    .evidence
-                    .iter()
-                    .zip(existing.locations.iter())
-                    .any(|(v, l)| v == &val && l == &loc);
-                if !already {
-                    existing.evidence.push(val);
-                    existing.locations.push(loc);
-                }
-            }
-            // Keep highest criticality
             let new_crit = crit_to_int(finding.crit);
             if new_crit > existing.criticality {
                 existing.criticality = new_crit;
             }
         } else {
             trait_order.push(&finding.id);
-            let (evidence, locations): (Vec<_>, Vec<_>) = pairs.into_iter().unzip();
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
@@ -647,20 +596,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
                     confidence: finding.conf,
                     mbc: finding.mbc.clone(),
                     attack: finding.attack.clone(),
-                    evidence,
-                    locations,
                 },
             );
-        }
-    }
-
-    // Drop `el` entirely when no location is known for any entry. Keeps
-    // the JSON output unchanged for findings that never went through an
-    // archive roll-up, and lets `skip_serializing_if = "Vec::is_empty"`
-    // omit the field on those traits.
-    for trait_entry in trait_map.values_mut() {
-        if trait_entry.locations.iter().all(String::is_empty) {
-            trait_entry.locations.clear();
         }
     }
 
@@ -791,8 +728,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
 /// for the binary crate's JSON output path.
 #[must_use]
 pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
-    let mut compact_files: Vec<CompactFile> = files.iter().map(convert_file).collect();
-    rewrite_evidence_locations(&mut compact_files);
+    let compact_files: Vec<CompactFile> = files.iter().map(convert_file).collect();
     let traits_version =
         crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport {
@@ -800,101 +736,6 @@ pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> Compa
         traits_version,
         files: compact_files,
     }
-}
-
-/// Rewrite archive-attributed `el` evidence locations from the verbose
-/// `archive:<member-path>[:<offset>]` form to a compact `<file-id>[:<offset>]`
-/// form, where `<file-id>` indexes the report's `files[]` array. The member path
-/// (often a long `<sha>.<type>` name) repeats across every match in a file; the
-/// id collapses it to a digit or two, and consumers resolve the path once via
-/// `files[id]`. The offset — the genuinely per-match part — is preserved verbatim.
-///
-/// Only `archive:`-prefixed entries whose member resolves to a known `files[]`
-/// file are rewritten; everything else (plain `offset:` locations, semantic
-/// labels, or members we can't resolve, e.g. un-extracted nested archives) is
-/// left untouched, so the encoding degrades gracefully and stays mixed-safe.
-fn rewrite_evidence_locations(files: &mut [CompactFile]) {
-    // Map each file's terminal path segment (after the last `!!` archive
-    // delimiter) to its id. This mirrors how the report's consumers key files
-    // for display, so the id we emit selects the same file they would have.
-    // Owned keys so the immutable borrow ends before we mutate `files` below.
-    let mut id_by_segment: HashMap<String, u32> = HashMap::with_capacity(files.len());
-    for file in files.iter() {
-        let segment = file.path.rsplit("!!").next().unwrap_or(&file.path);
-        id_by_segment.insert(segment.to_string(), file.id);
-    }
-
-    for file in files.iter_mut() {
-        for trait_entry in &mut file.findings {
-            for loc in &mut trait_entry.locations {
-                *loc = normalize_el_location(loc, &id_by_segment);
-            }
-        }
-    }
-}
-
-/// Compact one `el` entry for slim JSON. Two transforms, both keep the entry
-/// usable while shrinking it:
-///   * resolve an `archive:<member>` location to its `files[]` id, so the long
-///     (and repeated) member path becomes a one/two-digit index; and
-///   * drop the redundant `0x` prefix from the trailing byte offset, since
-///     offsets are unambiguously hex in this position.
-///
-/// The member path is preserved verbatim when it can't be resolved to a file
-/// (un-extracted nested archives, etc.). Non-`archive:` locations are returned
-/// unchanged apart from the `0x`-strip on a pure byte-offset; positional
-/// `row:col` locations carry no `0x` and pass through.
-fn normalize_el_location(loc: &str, id_by_segment: &HashMap<String, u32>) -> String {
-    if let Some(rest) = loc.strip_prefix("archive:") {
-        let (member, offset) = split_member_offset(rest);
-        let offset = strip_offset_0x(offset);
-        return match id_by_segment.get(member) {
-            Some(id) => format!("{id}{offset}"),
-            None => format!("archive:{member}{offset}"),
-        };
-    }
-    // Pure byte-offset locations (`offset:0x..`, `0x..`) also shed the prefix.
-    if loc.starts_with("offset:") || loc.starts_with("0x") || loc.starts_with("0X") {
-        return strip_offset_0x(loc);
-    }
-    loc.to_string()
-}
-
-/// Split an archive member location into `(member, offset_suffix)`, where
-/// `offset_suffix` keeps its leading `:` (`":0x3718c0"`, `":offset:0x10"`) or
-/// is empty. The offset is the trailing hex token; member paths don't contain
-/// `:`. Mirrors the offset shapes produced across the analyzers.
-fn split_member_offset(s: &str) -> (&str, &str) {
-    if let Some(idx) = s.rfind(":offset:") {
-        return (&s[..idx], &s[idx..]);
-    }
-    if let Some(idx) = s.rfind(':') {
-        let suffix = &s[idx + 1..];
-        let hex = suffix
-            .strip_prefix("0x")
-            .or_else(|| suffix.strip_prefix("0X"))
-            .unwrap_or(suffix);
-        if !hex.is_empty() && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return (&s[..idx], &s[idx..]);
-        }
-    }
-    (s, "")
-}
-
-/// Drop a `0x`/`0X` prefix from the hex offset that follows the final `:` of a
-/// location (or the whole string when it has no `:`). Leaves an already-bare
-/// offset and the non-offset head untouched: `":0x3718c0"` → `":3718c0"`,
-/// `"offset:0x10"` → `"offset:10"`, `"0x10"` → `"10"`.
-fn strip_offset_0x(s: &str) -> String {
-    let (head, tail) = match s.rfind(':') {
-        Some(i) => s.split_at(i + 1),
-        None => ("", s),
-    };
-    let tail = tail
-        .strip_prefix("0x")
-        .or_else(|| tail.strip_prefix("0X"))
-        .unwrap_or(tail);
-    format!("{head}{tail}")
 }
 
 impl AnalysisReport {
@@ -987,149 +828,6 @@ mod formula_tests {
             !formula.contains("Md"),
             "did not expect Md (metadata/Baseline) in `{formula}`",
         );
-    }
-
-    /// Evidence locations populated by the archive roll-up must survive
-    /// the compact conversion. This was previously dropped — the bug
-    /// surfaced as archive-level rootkit traits with no way to attribute
-    /// back to the inner file that matched. Here the attributed members are
-    /// not present as `files[]` entries, so they exercise the graceful fallback:
-    /// the verbose `archive:<path>` string is kept verbatim.
-    #[test]
-    fn evidence_location_preserved_in_compact() {
-        let mut f = finding("well-known/malware/rootkit/x", Criticality::Suspicious, 0.9);
-        f.evidence = vec![
-            Evidence {
-                method: "text".into(),
-                source: "yara".into(),
-                value: "package assets".into(),
-                location: Some("archive:k8s.io/kops/.../assets.go".into()),
-                ..Default::default()
-            },
-            // Same value matched in a different member — should round-trip
-            // as two parallel entries, not collapsed to one.
-            Evidence {
-                method: "text".into(),
-                source: "yara".into(),
-                value: "package assets".into(),
-                location: Some("archive:k8s.io/kops/.../other.go".into()),
-                ..Default::default()
-            },
-        ];
-
-        let compact = compact_from_files(&[file_with(vec![f])]);
-        #[allow(clippy::expect_used)]
-        let t = compact
-            .files
-            .iter()
-            .flat_map(|cf| cf.findings.iter())
-            .find(|t| t.id.ends_with("/x"))
-            .expect("trait survived compact conversion");
-        assert_eq!(
-            t.evidence.len(),
-            2,
-            "both evidence values kept (different locations)"
-        );
-        assert_eq!(
-            t.locations.len(),
-            t.evidence.len(),
-            "locations are parallel to evidence"
-        );
-        assert!(t.locations.iter().any(|l| l.contains("assets.go")));
-        assert!(t.locations.iter().any(|l| l.contains("other.go")));
-    }
-
-    /// Traits with no location info on any evidence must omit `el`
-    /// entirely so older consumers see the same JSON shape.
-    #[test]
-    fn evidence_location_absent_when_unknown() {
-        let f = finding("objectives/c2/http/beacon", Criticality::Notable, 0.9);
-        let compact = compact_from_files(&[file_with(vec![f])]);
-        #[allow(clippy::expect_used)]
-        let t = compact
-            .files
-            .iter()
-            .flat_map(|cf| cf.findings.iter())
-            .find(|t| t.id.contains("beacon"))
-            .expect("trait survived compact conversion");
-        assert!(
-            t.locations.is_empty(),
-            "el should stay empty when no location is known"
-        );
-    }
-
-    /// When the attributed member IS a `files[]` entry, its (repeated, often
-    /// long) path collapses to the file's index, with the per-match offset
-    /// preserved: `archive:<member>:<offset>` → `"<id>:<offset>"`.
-    #[test]
-    fn evidence_location_rewritten_to_fs_index() {
-        let member_name = "0a8ab3d16b12d3a453ee5a3208fe04744ad54514.macho";
-        let mut container =
-            FileAnalysis::new(0, "bundle.tar".into(), "archive".into(), "sha0".into(), 10);
-        let mut f = finding("well-known/malware/rootkit/x", Criticality::Hostile, 0.9);
-        f.evidence = vec![
-            Evidence {
-                method: "sym".into(),
-                source: "yara".into(),
-                value: "a".into(),
-                location: Some(format!("archive:{member_name}:0x3718c0")),
-                ..Default::default()
-            },
-            Evidence {
-                method: "sym".into(),
-                source: "yara".into(),
-                value: "b".into(),
-                location: Some(format!("archive:{member_name}:0x10025a5c4")),
-                ..Default::default()
-            },
-        ];
-        container.findings = vec![f];
-
-        // The member is files[1]; its terminal `!!` segment equals member_name.
-        let member = FileAnalysis::new(
-            1,
-            format!("bundle.tar!!{member_name}"),
-            "macho".into(),
-            "sha1".into(),
-            5,
-        );
-
-        let compact = compact_from_files(&[container, member]);
-        #[allow(clippy::expect_used)]
-        let t = compact
-            .files
-            .iter()
-            .flat_map(|cf| cf.findings.iter())
-            .find(|t| t.id.ends_with("/x"))
-            .expect("trait survived compact conversion");
-        assert_eq!(
-            t.locations,
-            vec!["1:3718c0".to_string(), "1:10025a5c4".to_string()],
-            "member path collapses to file id; offset loses its 0x prefix"
-        );
-
-        // An un-resolvable member (not a files[] entry) keeps its path, but the
-        // offset is still slimmed to bare hex.
-        let mut lonely =
-            FileAnalysis::new(0, "bundle.tar".into(), "archive".into(), "sha0".into(), 10);
-        let mut g = finding("well-known/malware/rootkit/y", Criticality::Hostile, 0.9);
-        g.evidence = vec![Evidence {
-            method: "sym".into(),
-            source: "yara".into(),
-            value: "a".into(),
-            location: Some("archive:not-in-fs.macho:0x10".into()),
-            ..Default::default()
-        }];
-        lonely.findings = vec![g];
-        let compact = compact_from_files(&[lonely]);
-        #[allow(clippy::expect_used)]
-        let t = compact
-            .files
-            .iter()
-            .flat_map(|cf| cf.findings.iter())
-            .find(|t| t.id.ends_with("/y"))
-            .expect("trait survived compact conversion");
-        assert_eq!(t.locations, vec!["archive:not-in-fs.macho:10".to_string()]);
     }
 
     /// Findings below the 0.65 confidence floor must not contribute, even

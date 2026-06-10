@@ -1605,7 +1605,7 @@ dependencies = [
 
 [[package]]
 name = "filefacts"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#e4a8f224f2a0f4b842f0c9d8fb753c97462947e7"
+version = "0.9.5"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -5066,7 +5066,6 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#e4a8f224f2a0f4b842f0c9d8fb753c97462947e7"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -5267,9 +5266,9 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "ts-parser-perl"
-version = "1.1.1"
+version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1cdfbd0107c247ba38048d655fb630ef9a049726a64cd8022c504eac22fdeeaa"
+checksum = "dff62b91624001556debd009c28ec603c795df8dce96613705c78a4f691672f4"
 dependencies = [
  "cc",
  "tree-sitter-language",

@@ -1606,7 +1606,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "0.9.5"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#a95c4c58400846f2e6d7dc7c1f9de5930b1b665f"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#e4a8f224f2a0f4b842f0c9d8fb753c97462947e7"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -4412,7 +4412,7 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.6.0"
-source = "git+https://codeberg.org/atomdrift/stng.git#3a109cf15a4ae09f323b3bce773024451f172fe6"
+source = "git+https://codeberg.org/atomdrift/stng.git#5b274a1ab56d1f11eb7d7b38b3d9aef88640fe0c"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5067,7 +5067,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
-source = "git+https://codeberg.org/atomdrift/filefacts.git#a95c4c58400846f2e6d7dc7c1f9de5930b1b665f"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#e4a8f224f2a0f4b842f0c9d8fb753c97462947e7"
 dependencies = [
  "cc",
  "tree-sitter",
@@ -6465,18 +6465,18 @@ dependencies = [
 
 [[package]]
 name = "zerocopy"
-version = "0.8.50"
+version = "0.8.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b065d4f0e55f82fae73202e189638116a87c55ab6b8e6c2721e13dd9d854ad1"
+checksum = "ce1022995ff5ff5d841ad7d994facc23098cd40152f2c1d11cd607c6f530653f"
 dependencies = [
  "zerocopy-derive",
 ]
 
 [[package]]
 name = "zerocopy-derive"
-version = "0.8.50"
+version = "0.8.52"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b631b19d36a892ab55420c92dbc83ccd79274f25be714855d3074aa71cab639"
+checksum = "1ae7f38b72ec2a254e2b87ef277cf2cd4fb97cbebf944faa6f33354da0867930"
 dependencies = [
  "proc-macro2",
  "quote",

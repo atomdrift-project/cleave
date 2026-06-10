@@ -1539,12 +1539,14 @@ mod tests {
         report.files[0].context = vec![
             ContextLine {
                 loc: 4,
+                addr: Some(40),
                 text: "ctx before".to_string(),
                 hex: false,
                 notes: vec![],
             },
             ContextLine {
                 loc: 5,
+                addr: Some(55),
                 text: "s = socket()".to_string(),
                 hex: false,
                 notes: vec![Note {

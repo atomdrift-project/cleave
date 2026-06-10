@@ -115,6 +115,12 @@ pub struct ContextLine {
     /// over-long line / a binary hex row.
     #[serde(rename = "l")]
     pub loc: u64,
+    /// Byte offset of this line's content start. Present only for source lines,
+    /// where `loc` is a line number; for hex/minified lines `loc` is already the
+    /// byte offset, so this is omitted (consumers use `addr.unwrap_or(loc)`).
+    /// A finding's highlight is `note.off - line_addr .. + note.len`.
+    #[serde(rename = "a", default, skip_serializing_if = "Option::is_none")]
+    pub addr: Option<u64>,
     /// Rendered content: the clipped source text, or `"<hex pairs>  <ascii>"`.
     #[serde(rename = "t")]
     pub text: String,

@@ -29,6 +29,9 @@ const LINE_CLIP: usize = 120;
 const HEX_ROW: u64 = 22;
 /// Bytes per binary hex window: 4 rows.
 const HEX_WINDOW: u64 = HEX_ROW * 4;
+/// Bytes shown ahead of the matched bytes on the leading hex row, so the match
+/// sits a fixed distance in rather than at a grid-aligned column.
+const HEX_LEAD: u64 = 8;
 
 /// Byte stride between consecutive hex rows — the renderer uses it to tell a
 /// contiguous window from a gap (`--`).
@@ -284,8 +287,12 @@ fn capture_byte_slices(
         for (off, len) in finding_anchors(finding, by_id) {
             let (lo, hi, at) = match render {
                 Render::Hex => {
-                    let lo = off.saturating_sub(HEX_WINDOW / 2) / HEX_ROW * HEX_ROW;
-                    ((lo).min(total), (lo + HEX_WINDOW).min(total), off / HEX_ROW * HEX_ROW)
+                    // This window only groups nearby matches into one segment (so
+                    // their notes dedup together); `render_hex_segment` lays out the
+                    // actual rows per match, each leading by `HEX_LEAD`. `at` is the
+                    // raw match offset.
+                    let lo = off.saturating_sub(HEX_LEAD);
+                    (lo, (lo + HEX_WINDOW).min(total), off)
                 }
                 Render::Text => {
                     let lo = off.saturating_sub(MINIFIED_HALF);
@@ -307,25 +314,95 @@ fn capture_byte_slices(
     })
 }
 
-/// Render a merged byte segment as hex|ascii rows; notes land on the row that
-/// contains their match offset.
+/// Render a merged byte segment as fixed-width hex|ascii rows, like a hex editor.
+/// A *window* leads its first match by [`HEX_LEAD`] bytes then steps contiguously
+/// by [`HEX_ROW`]; matches less than a row apart keep the run flowing (no repeated
+/// bytes), and a ≥1-row gap breaks it with a `…` continuation row. Each match is
+/// annotated on the row holding the majority of its bytes; a match still wraps
+/// (highlighted) onto the next row when it runs past a row's end.
 fn render_hex_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
-    let mut out = Vec::new();
-    let mut row = seg.lo / HEX_ROW * HEX_ROW;
-    while row < seg.hi {
-        let start = row as usize;
-        let end = (start + HEX_ROW as usize).min(data.len());
-        let Some(bytes) = data.get(start..end.max(start)) else {
+    let total = data.len() as u64;
+    let mut offs: Vec<u64> = seg.notes.iter().map(|(p, _)| *p).collect();
+    offs.sort_unstable();
+    offs.dedup();
+    if offs.is_empty() {
+        return Vec::new();
+    }
+
+    // Lay out the rows: `(row_start, gap_after)` where `gap_after` flags a `…`
+    // continuation row before the next window.
+    let mut layout: Vec<(u64, bool)> = Vec::new();
+    let mut i = 0usize;
+    let mut row = offs[0].saturating_sub(HEX_LEAD);
+    loop {
+        let row_end = row + HEX_ROW;
+        while i < offs.len() && offs[i] < row_end {
+            i += 1; // matches covered by this row
+        }
+        if i >= offs.len() {
+            layout.push((row, false));
             break;
-        };
+        }
+        // Continue the run smoothly when the next match is < one row past this
+        // row's end; otherwise break with a `…` row and lead the next match by 8.
+        if offs[i] - row_end < HEX_ROW {
+            layout.push((row, false));
+            row = row_end;
+        } else {
+            layout.push((row, true));
+            row = offs[i].saturating_sub(HEX_LEAD);
+        }
+    }
+
+    // Assign each match to the row holding the majority of its bytes.
+    let row_for = |off: u64, len: u64| -> u64 {
+        layout
+            .iter()
+            .map(|&(r, _)| r)
+            .max_by_key(|&r| {
+                let lo = off.max(r);
+                let hi = (off + len).min(r + HEX_ROW);
+                hi.saturating_sub(lo)
+            })
+            .unwrap_or(off.saturating_sub(HEX_LEAD))
+    };
+    let mut row_notes: std::collections::BTreeMap<u64, Vec<Note>> =
+        std::collections::BTreeMap::new();
+    for (off, note) in &seg.notes {
+        let r = row_for(*off, u64::from(note.len.max(1)));
+        row_notes.entry(r).or_default().push(note.clone());
+    }
+
+    let mut out: Vec<ContextLine> = Vec::new();
+    for &(r, gap_after) in &layout {
+        if r >= total {
+            continue;
+        }
+        let mut notes = row_notes.remove(&r).unwrap_or_default();
+        dedup_notes(&mut notes);
+        let end = (r + HEX_ROW).min(total);
         out.push(ContextLine {
-            loc: row,
+            loc: r,
             addr: None, // loc is already the byte offset
-            text: hex_ascii(bytes),
+            text: hex_ascii(&data[r as usize..end as usize]),
             hex: true,
-            notes: seg.notes_at(row),
+            notes,
         });
-        row += HEX_ROW;
+        if gap_after {
+            // One full-width unmatched row ending in `…` marks the skip to the
+            // next window, in place of a blank gap line.
+            let cstart = r + HEX_ROW;
+            let cend = (cstart + HEX_ROW).min(total);
+            if cstart < cend {
+                out.push(ContextLine {
+                    loc: cstart,
+                    addr: None,
+                    text: hex_ascii_cont(&data[cstart as usize..cend as usize]),
+                    hex: true,
+                    notes: Vec::new(),
+                });
+            }
+        }
     }
     out
 }
@@ -363,6 +440,36 @@ fn hex_ascii(bytes: &[u8]) -> String {
             '.'
         });
     }
+    hex
+}
+
+/// Like [`hex_ascii`] but the final byte slot (hex) and final ascii char are a
+/// `…` continuation marker — full width, so the row aligns with the grid. Marks
+/// an unmatched trailing row that continues beyond the shown window.
+fn hex_ascii_cont(bytes: &[u8]) -> String {
+    let n = HEX_ROW as usize;
+    let keep = bytes.len().min(n - 1); // last slot is reserved for `…`
+    let shown = &bytes[..keep];
+    let mut hex = String::with_capacity(n * 4);
+    for b in shown {
+        hex.push_str(&format!("{b:02x} "));
+    }
+    for _ in keep..(n - 1) {
+        hex.push_str("   "); // blank unshown slots, 3 cols each
+    }
+    hex.push_str("…  "); // final slot: `…` padded to 3 cols like "XX "
+    hex.push(' '); // second separator space (matches hex_ascii)
+    for b in shown {
+        hex.push(if b.is_ascii_graphic() || *b == b' ' {
+            *b as char
+        } else {
+            '.'
+        });
+    }
+    for _ in keep..(n - 1) {
+        hex.push(' ');
+    }
+    hex.push('…'); // final ascii char
     hex
 }
 

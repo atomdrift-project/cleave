@@ -365,10 +365,27 @@ pub struct Section {
 #[inline]
 #[must_use]
 pub(crate) fn normalize_symbol(symbol: &str) -> String {
-    symbol
-        .trim_start_matches('_')
-        .trim_start_matches('_')
-        .to_string()
+    symbol.trim_start_matches('_').to_string()
+}
+
+/// Advance a hex/decimal offset string by `by` bytes, preserving `0x` form.
+/// Used to keep a symbol's offset pointing at its first byte after
+/// `normalize_symbol` strips leading underscores from the name. Returns the
+/// input unchanged if it can't be parsed.
+#[must_use]
+fn advance_hex_offset(offset: &str, by: u64) -> String {
+    if by == 0 {
+        return offset.to_string();
+    }
+    let parsed = offset
+        .strip_prefix("0x")
+        .or_else(|| offset.strip_prefix("0X"))
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+        .or_else(|| offset.parse::<u64>().ok());
+    match parsed {
+        Some(v) => format!("0x{:x}", v.saturating_add(by)),
+        None => offset.to_string(),
+    }
 }
 
 /// An imported symbol (function or variable from an external library)
@@ -410,10 +427,17 @@ impl Import {
         library: Option<String>,
         byte_offset: u64,
     ) -> Self {
+        let raw = symbol.into();
+        let symbol = normalize_symbol(&raw);
+        // `normalize_symbol` drops leading underscores from the *name*; advance
+        // the offset by the same count so it still points at the normalized
+        // name's first byte (e.g. `_exit`@N → `exit`@N+1), keeping the byte span
+        // and the name in sync for highlighting.
+        let stripped = (raw.len().saturating_sub(symbol.len())) as u64;
         Self {
-            symbol: normalize_symbol(&symbol.into()),
+            symbol,
             library,
-            offset: Some(format!("0x{byte_offset:x}")),
+            offset: Some(format!("0x{:x}", byte_offset.saturating_add(stripped))),
             alias: None,
         }
     }
@@ -444,8 +468,13 @@ pub struct Export {
 impl Export {
     /// Create a new Export with normalized symbol name
     pub fn new(symbol: impl Into<String>, offset: Option<String>) -> Self {
+        let raw = symbol.into();
+        let symbol = normalize_symbol(&raw);
+        // Keep the offset aligned with the normalized name (see `Import::with_offset`).
+        let stripped = (raw.len().saturating_sub(symbol.len())) as u64;
+        let offset = offset.map(|o| advance_hex_offset(&o, stripped));
         Self {
-            symbol: normalize_symbol(&symbol.into()),
+            symbol,
             offset,
             forward_to: None,
         }

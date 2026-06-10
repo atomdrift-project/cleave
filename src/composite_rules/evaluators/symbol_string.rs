@@ -761,11 +761,20 @@ pub(crate) fn eval_text<'a, 'b>(
                 match_count += 1;
                 // Allocate the evidence string only when actually storing it.
                 if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+                    // `match_value` is a subslice of the string for word/regex
+                    // matches (e.g. `.dll` inside `name.dll`); offset it within
+                    // the string so the location points at the match, not the
+                    // enclosing string's start.
+                    let within = (match_value.as_ptr() as usize)
+                        .saturating_sub(string_info.value.as_ptr() as usize)
+                        as u64;
                     evidence.push(Evidence {
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
                         value: truncate_evidence_value(match_value),
-                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        location: string_info
+                            .offset
+                            .map(|o| format!("{:#x}", o.saturating_add(within))),
                         ..Default::default()
                     });
                 }

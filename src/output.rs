@@ -519,9 +519,9 @@ fn render_context_lines(out: &mut String, file: &FileAnalysis, shown: &HashSet<&
             .filter(|n| shown.contains(n.id.as_str()))
             .collect();
 
-        // Consecutive units differ by 1 for source lines, 16 for hex rows;
-        // a larger jump is a gap between windows.
-        let step = if line.hex { 16 } else { 1 };
+        // Consecutive units differ by 1 for source lines, one hex stride for
+        // hex rows; a larger jump is a gap between windows.
+        let step = if line.hex { crate::context::HEX_STRIDE } else { 1 };
         if prev.is_some_and(|p| line.loc > p.saturating_add(step)) {
             out.push_str("--\n");
         }
@@ -536,18 +536,24 @@ fn render_context_lines(out: &mut String, file: &FileAnalysis, shown: &HashSet<&
         out.push(' ');
         out.push_str(&line.text);
 
-        // First finding trails the content; any others get their own lines so
-        // the content is shown exactly once.
-        if let Some((first, rest)) = notes.split_first() {
+        // For source lines the first finding trails the content (compact); for
+        // wide hex rows it goes on its own line so the row stays within ~80
+        // columns. Remaining findings always get their own `# …` lines.
+        let (trailing, standalone) = if line.hex {
+            (None, notes.as_slice())
+        } else {
+            notes
+                .split_first()
+                .map_or((None, [].as_slice()), |(f, r)| (Some(*f), r))
+        };
+        if let Some(first) = trailing {
             out.push_str(" # ");
             out.push_str(&note_str(first));
-            out.push('\n');
-            for n in rest {
-                out.push_str("# ");
-                out.push_str(&note_str(n));
-                out.push('\n');
-            }
-        } else {
+        }
+        out.push('\n');
+        for n in standalone {
+            out.push_str("# ");
+            out.push_str(&note_str(n));
             out.push('\n');
         }
     }

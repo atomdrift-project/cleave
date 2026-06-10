@@ -23,10 +23,19 @@ const MAX_MATCHES: usize = 4;
 const MIN_HEIGHTS: [u32; MAX_MATCHES] = [5, 3, 2, 1];
 /// Max rendered characters for a source line (clipped, `…`-elided).
 const LINE_CLIP: usize = 120;
-/// Bytes of context per match window for binaries / minified one-liners.
-const BYTE_WINDOW: u64 = 192;
-/// Bytes per hex|ascii row.
-const HEX_ROW: u64 = 16;
+/// Bytes per hex|ascii row, sized so a row fills ~100 columns (option a):
+/// `offset + 22·"XX " + 22 ascii ≈ 98`. Wider rows = longer string fragments
+/// per line, which is what an LLM reads.
+const HEX_ROW: u64 = 22;
+/// Bytes per binary hex window: 4 rows.
+const HEX_WINDOW: u64 = HEX_ROW * 4;
+
+/// Byte stride between consecutive hex rows — the renderer uses it to tell a
+/// contiguous window from a gap (`--`).
+pub(crate) const HEX_STRIDE: u64 = HEX_ROW;
+/// Half-width (bytes) of a minified one-liner slice; the rendered slice is then
+/// clipped to [`LINE_CLIP`] characters, so this just needs to exceed it.
+const MINIFIED_HALF: u64 = 80;
 /// A file whose average line exceeds this is treated as minified: line numbers
 /// are meaningless, so matches anchor by byte offset and render as clipped
 /// slices instead of numbered lines.
@@ -268,12 +277,12 @@ fn capture_byte_slices(
         for (off, len) in finding_anchors(finding, by_id) {
             let (lo, hi, at) = match render {
                 Render::Hex => {
-                    let lo = off.saturating_sub(BYTE_WINDOW / 2) / HEX_ROW * HEX_ROW;
-                    ((lo).min(total), (lo + BYTE_WINDOW).min(total), off / HEX_ROW * HEX_ROW)
+                    let lo = off.saturating_sub(HEX_WINDOW / 2) / HEX_ROW * HEX_ROW;
+                    ((lo).min(total), (lo + HEX_WINDOW).min(total), off / HEX_ROW * HEX_ROW)
                 }
                 Render::Text => {
-                    let lo = off.saturating_sub(BYTE_WINDOW / 3);
-                    (lo, (off + BYTE_WINDOW / 3).min(total), off)
+                    let lo = off.saturating_sub(MINIFIED_HALF);
+                    (lo, (off + MINIFIED_HALF).min(total), off)
                 }
             };
             windows.push(Window {
@@ -296,7 +305,7 @@ fn capture_byte_slices(
 fn render_hex_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
     let mut out = Vec::new();
     let mut row = seg.lo / HEX_ROW * HEX_ROW;
-    while row <= seg.hi {
+    while row < seg.hi {
         let start = row as usize;
         let end = (start + HEX_ROW as usize).min(data.len());
         let Some(bytes) = data.get(start..end.max(start)) else {

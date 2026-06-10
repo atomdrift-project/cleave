@@ -173,6 +173,11 @@ pub struct Note {
     /// Match length in bytes (the "Length"); 0 when unknown.
     #[serde(rename = "z", default, skip_serializing_if = "is_zero_u32")]
     pub len: u32,
+    /// Finding confidence — internal only (used to rank overlapping matches:
+    /// the highest `conf × crit` wins). Not serialized; the finding's `conf`
+    /// already lives in the `find[]` array, keyed by `id`.
+    #[serde(skip)]
+    pub conf: f32,
 }
 
 /// A finding - an interpretive conclusion based on traits

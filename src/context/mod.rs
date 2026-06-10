@@ -162,6 +162,7 @@ fn note_for(finding: &Finding, off: u64, len: u32) -> Note {
         desc: finding.desc.clone(),
         off,
         len,
+        conf: finding.conf,
     }
 }
 
@@ -399,12 +400,38 @@ impl Segment {
     }
 }
 
-/// Dedup notes by finding id (keep highest crit), then sort by severity desc,
-/// id asc — stable, deterministic output.
+/// Reduce a line's notes to the set worth showing:
+/// 1. dedup by finding id (keep highest crit);
+/// 2. dedup overlapping byte spans — two traits matching the same location are
+///    redundant, so keep the strongest (`conf × crit`), greedily;
+/// 3. order by severity desc, id asc — stable, deterministic output.
 fn dedup_notes(notes: &mut Vec<Note>) {
     notes.sort_unstable_by(|a, b| a.id.cmp(&b.id).then_with(|| b.crit.cmp(&a.crit)));
     notes.dedup_by(|a, b| a.id == b.id);
-    notes.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+
+    // Strongest-first, then keep a note only if it doesn't overlap a kept one.
+    notes.sort_unstable_by(|a, b| note_score(b).total_cmp(&note_score(a)));
+    let mut kept: Vec<Note> = Vec::with_capacity(notes.len());
+    for n in notes.drain(..) {
+        if !kept.iter().any(|k| spans_overlap(k, &n)) {
+            kept.push(n);
+        }
+    }
+    kept.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+    *notes = kept;
+}
+
+/// Rank for overlap resolution: confidence weighted by criticality level.
+fn note_score(n: &Note) -> f32 {
+    n.conf * f32::from(n.crit as u8)
+}
+
+/// Whether two notes' `[off, off+len)` byte spans overlap (a zero-length match
+/// is treated as one byte so two at the same offset still collapse).
+fn spans_overlap(a: &Note, b: &Note) -> bool {
+    let a_end = a.off + u64::from(a.len.max(1));
+    let b_end = b.off + u64::from(b.len.max(1));
+    a.off < b_end && b.off < a_end
 }
 
 /// Sort windows by start, merge overlapping/adjacent ones into [`Segment`]s, and
@@ -531,13 +558,13 @@ mod tests {
         let data = b"import os\nx = 1\ndata = decode(p)\nexec(data)\nend\n";
         // offset 16 = line 3 ("data = ..."), offset 33 = line 4 ("exec(data)")
         let mut r = report(vec![
-            finding("a/eval", Criticality::Hostile, &[16]),
-            finding("b/fs", Criticality::Suspicious, &[16]), // collision on line 3
+            finding("a/eval", Criticality::Hostile, &[16]), // "data" on line 3
+            finding("b/fs", Criticality::Suspicious, &[23]), // "decode" on line 3 — distinct span
             finding("c/exec", Criticality::Notable, &[33]),  // line 4 — windows merge
         ]);
         capture(&mut r, data, FileType::Python);
 
-        // Two findings collide on line 3: one line, two notes.
+        // Two findings at distinct spans on line 3: one line, two notes.
         assert!(matches!(line(&r.context, 3), Some(c) if c.notes.len() == 2));
         assert_eq!(r.context.iter().filter(|c| c.loc == 3).count(), 1);
         // Line 4 is its own hit; windows merged so there is no gap line missing.
@@ -557,10 +584,25 @@ mod tests {
         capture(&mut r, data, FileType::Python);
 
         // The composite (no evidence of its own) annotates the component's line
-        // via the trait_refs fallback; the referenced component shows too.
+        // via the trait_refs fallback. Both share the same offset, so overlap
+        // dedup keeps the stronger composite and drops the component.
         let l3 = line(&r.context, 3);
         assert!(matches!(l3, Some(c) if c.notes.iter().any(|n| n.id == "obj/loader")));
-        assert!(matches!(l3, Some(c) if c.notes.iter().any(|n| n.id == "comp/open")));
+        assert!(matches!(l3, Some(c) if !c.notes.iter().any(|n| n.id == "comp/open")));
+    }
+
+    #[test]
+    fn overlapping_traits_keep_highest_conf_times_level() {
+        let data = b"exec(payload)\n"; // both match at offset 0
+        let mut hi = finding("a/strong", Criticality::Hostile, &[0]);
+        hi.conf = 0.9;
+        let mut lo = finding("b/weak", Criticality::Notable, &[0]);
+        lo.conf = 0.9;
+        let mut r = report(vec![hi, lo]);
+        capture(&mut r, data, FileType::Python);
+        let l1 = line(&r.context, 1);
+        assert!(matches!(l1, Some(c) if c.notes.len() == 1));
+        assert!(matches!(l1, Some(c) if c.notes[0].id == "a/strong"));
     }
 
     #[test]

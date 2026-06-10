@@ -353,7 +353,7 @@ fn format_report_output(
             let compact = types::compact_from_files(&report.files);
             Ok(serde_json::to_string(&compact)?)
         }
-        cli::OutputFormat::Terminal => Ok(output::format_terminal(report)),
+        cli::OutputFormat::Terminal => Ok(output::format_terminal_ctx(report)),
         cli::OutputFormat::Tiny => Ok(output::format_tiny(report)),
     }
 }

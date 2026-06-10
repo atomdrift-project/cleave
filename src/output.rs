@@ -609,6 +609,202 @@ fn tiny_field(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Format the report for the terminal: the same context-centric layout as
+/// [`format_tiny`], but colored — the matched evidence is **bold** and each
+/// finding is tinted by criticality.
+#[allow(dead_code)] // Used by the binary target via the default Terminal format.
+pub(crate) fn format_terminal_ctx(report: &AnalysisReport) -> String {
+    let mut out = String::new();
+    let term_width = terminal_width();
+
+    for file in &report.files {
+        if !file_has_output(file) {
+            continue;
+        }
+
+        // File header: path  type • formula, then a rule.
+        let formula_findings = filter_findings_for_formula(&file.findings);
+        let formula = malecule_bridge::formula_from_findings(&formula_findings);
+        let file_type_display = display_file_type(&file.file_type);
+        let type_formula = if formula.is_empty() {
+            file_type_display
+        } else {
+            format!("{file_type_display} • {formula}")
+        };
+        let indent = "  ".repeat(file.depth as usize);
+        let display_path = if file.depth > 0 {
+            file.path
+                .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
+                .next()
+                .or_else(|| {
+                    file.path
+                        .rsplit(crate::types::file_analysis::ENCODING_DELIMITER)
+                        .next()
+                })
+                .unwrap_or(&file.path)
+        } else {
+            &file.path
+        };
+        out.push_str(&format!(
+            "{indent}{}  {}\n",
+            display_path.bright_white().bold(),
+            type_formula.bright_black()
+        ));
+        out.push_str(&format!(
+            "{indent}{}\n",
+            file_rule(term_width.saturating_sub(indent.len()))
+        ));
+
+        let shown = shown_ids(file);
+        render_ctx_terminal(&mut out, file, &shown, &indent);
+        render_no_anchor_terminal(&mut out, file, &shown, &indent);
+        out.push('\n');
+    }
+
+    out
+}
+
+/// Colored grep-style context: `N:`/`N-` lines, bold evidence, `--` gaps.
+fn render_ctx_terminal(out: &mut String, file: &FileAnalysis, shown: &HashSet<&str>, indent: &str) {
+    let mut prev: Option<u64> = None;
+    for line in &file.context {
+        let notes: Vec<&Note> = line
+            .notes
+            .iter()
+            .filter(|n| shown.contains(n.id.as_str()))
+            .collect();
+
+        let step = if line.hex { crate::context::HEX_STRIDE } else { 1 };
+        if prev.is_some_and(|p| line.loc > p.saturating_add(step)) {
+            out.push_str(&format!("{indent}{}\n", "--".bright_black()));
+        }
+        prev = Some(line.loc);
+
+        let loc = if line.hex {
+            format!("{:x}", line.loc)
+        } else {
+            line.loc.to_string()
+        };
+        let sep = if notes.is_empty() { '-' } else { ':' };
+        let base = line.addr.unwrap_or(line.loc);
+        let content = highlight_evidence(&line.text, base, line.hex, &notes);
+        out.push_str(&format!("{indent}{}{sep} {content}", loc.bright_black()));
+
+        // Source lines trail the first finding; wide hex rows put all findings
+        // on their own lines.
+        let (trailing, standalone) = if line.hex {
+            (None, notes.as_slice())
+        } else {
+            notes
+                .split_first()
+                .map_or((None, [].as_slice()), |(f, r)| (Some(*f), r))
+        };
+        if let Some(first) = trailing {
+            out.push(' ');
+            out.push_str(&styled_note(first));
+        }
+        out.push('\n');
+        for n in standalone {
+            out.push_str(&format!("{indent}    {}\n", styled_note(n)));
+        }
+    }
+}
+
+/// Colored `.` lines for shown findings with no positional anchor.
+fn render_no_anchor_terminal(
+    out: &mut String,
+    file: &FileAnalysis,
+    shown: &HashSet<&str>,
+    indent: &str,
+) {
+    let anchored: HashSet<&str> = file
+        .context
+        .iter()
+        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
+        .collect();
+    let mut rest: Vec<&Finding> = file
+        .findings
+        .iter()
+        .filter(|f| shown.contains(f.id.as_str()) && !anchored.contains(f.id.as_str()))
+        .collect();
+    rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
+
+    let mut seen = HashSet::new();
+    for f in rest {
+        if !seen.insert(f.id.as_str()) {
+            continue;
+        }
+        let mut body = String::new();
+        body.push(f.crit.letter());
+        body.push(' ');
+        body.push_str(&f.id);
+        if !f.desc.is_empty() {
+            body.push(' ');
+            body.push_str(&terse_description(&f.desc));
+        }
+        out.push_str(&format!(
+            "{indent}{} {}\n",
+            ".".bright_black(),
+            paint_by_crit(f.crit, &body)
+        ));
+    }
+}
+
+/// Bold each note's matched span within the source line. Hex/minified rows and
+/// spans that fall outside the rendered (possibly clipped) text stay unstyled.
+fn highlight_evidence(text: &str, base: u64, hex: bool, notes: &[&Note]) -> String {
+    if notes.is_empty() || hex {
+        return text.to_string();
+    }
+    let mut spans: Vec<(usize, usize)> = notes
+        .iter()
+        .filter_map(|n| {
+            let start = usize::try_from(n.off.checked_sub(base)?).ok()?;
+            let end = start.checked_add(n.len as usize)?;
+            // Only bold when the span lands on char boundaries within the text.
+            text.get(start..end).map(|_| (start, end))
+        })
+        .collect();
+    spans.sort_unstable();
+
+    let mut s = String::new();
+    let mut pos = 0;
+    for (start, end) in spans {
+        if start < pos {
+            continue; // overlapping span already covered
+        }
+        if let Some(pre) = text.get(pos..start) {
+            s.push_str(pre);
+        }
+        if let Some(ev) = text.get(start..end) {
+            s.push_str(&ev.bold().to_string());
+        }
+        pos = end;
+    }
+    s.push_str(text.get(pos..).unwrap_or(""));
+    s
+}
+
+/// `# <SEV id desc>` with the body tinted by criticality.
+fn styled_note(n: &Note) -> String {
+    format!(
+        "{} {}",
+        "#".bright_black(),
+        paint_by_crit(n.crit, &note_str(n))
+    )
+}
+
+/// Paint text in the palette color for a criticality.
+fn paint_by_crit(crit: Criticality, text: &str) -> colored::ColoredString {
+    match crit {
+        Criticality::Hostile => crate::theme::paint_hostile(text),
+        Criticality::Suspicious => crate::theme::paint_suspicious(text),
+        Criticality::Notable => crate::theme::paint_notable(text),
+        Criticality::Component => crate::theme::paint_component(text),
+        _ => crate::theme::paint_baseline(text),
+    }
+}
+
 fn tiny_should_show(finding: &Finding, file: &FileAnalysis) -> bool {
     if finding.crit != Criticality::Component {
         return true;

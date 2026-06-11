@@ -106,8 +106,8 @@ fn prefers_unix_php_platform(rule_name: &str) -> bool {
 /// Map platforms to the filetype strings expected by the YARA file-type filter.
 ///
 /// Returns lowercase type strings compatible with `scan_bytes_filtered`'s filter:
-/// Windows → ["pe", "dll"], Linux → ["elf", "so"], macOS → ["macho", "dylib"].
-/// Returns empty slice for platforms with no binary constraint (All, Android, iOS).
+/// Windows → ["pe", "dll"], Unix ELF platforms → ["elf", "so"], macOS → ["macho", "dylib"].
+/// Returns empty slice for platforms with no reliable binary constraint.
 #[must_use]
 pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
     let mut types: Vec<&'static str> = Vec::new();
@@ -119,7 +119,15 @@ pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
                     types.push("dll");
                 }
             }
-            Platform::Linux | Platform::Unix => {
+            Platform::Linux
+            | Platform::Unix
+            | Platform::Solaris
+            | Platform::FreeBsd
+            | Platform::OpenBsd
+            | Platform::NetBsd
+            | Platform::DragonFlyBsd
+            | Platform::OpenWrt
+            | Platform::Qnx => {
                 if !types.contains(&"elf") {
                     types.push("elf");
                     types.push("so");
@@ -131,7 +139,21 @@ pub fn filetypes_from_platforms(platforms: &[Platform]) -> Vec<&'static str> {
                     types.push("dylib");
                 }
             }
-            Platform::All | Platform::Android | Platform::Ios => {}
+            Platform::All
+            | Platform::Android
+            | Platform::Ios
+            | Platform::Aix
+            | Platform::Esxi
+            | Platform::Zos
+            | Platform::Appliance
+            | Platform::RouterOs
+            | Platform::FortiOs
+            | Platform::PanOs
+            | Platform::IosXe
+            | Platform::Junos
+            | Platform::Netscaler
+            | Platform::Ivanti
+            | Platform::VxWorks => {}
         }
     }
     types

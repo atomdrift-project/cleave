@@ -41,6 +41,25 @@ pub fn parse_platforms(s: &str) -> Vec<crate::composite_rules::Platform> {
             "unix" => Some(Platform::Unix),
             "android" => Some(Platform::Android),
             "ios" => Some(Platform::Ios),
+            "aix" => Some(Platform::Aix),
+            "solaris" => Some(Platform::Solaris),
+            "freebsd" => Some(Platform::FreeBsd),
+            "openbsd" => Some(Platform::OpenBsd),
+            "netbsd" => Some(Platform::NetBsd),
+            "dragonflybsd" | "dragonfly" => Some(Platform::DragonFlyBsd),
+            "openwrt" => Some(Platform::OpenWrt),
+            "qnx" => Some(Platform::Qnx),
+            "esxi" => Some(Platform::Esxi),
+            "zos" | "z/os" => Some(Platform::Zos),
+            "appliance" | "network-appliance" => Some(Platform::Appliance),
+            "routeros" => Some(Platform::RouterOs),
+            "fortios" => Some(Platform::FortiOs),
+            "panos" | "pan-os" => Some(Platform::PanOs),
+            "iosxe" | "ios-xe" => Some(Platform::IosXe),
+            "junos" => Some(Platform::Junos),
+            "netscaler" => Some(Platform::Netscaler),
+            "ivanti" => Some(Platform::Ivanti),
+            "vxworks" => Some(Platform::VxWorks),
             unknown => {
                 eprintln!("⚠️  Unknown platform '{}', ignoring", unknown);
                 None
@@ -153,7 +172,7 @@ pub struct Args {
 
     /// Filter rules by target platform(s) (comma-separated, default: all)
     /// Examples: --platforms linux,macos or --platforms windows
-    /// Valid values: all, linux, macos, windows, unix, android, ios
+    /// Valid values: all, linux, macos, windows, unix, android, ios, appliance, routeros, fortios, freebsd, openbsd, netbsd, aix, solaris
     #[arg(long, value_name = "PLATFORMS", default_value = "all")]
     pub platforms: String,
 
@@ -1310,8 +1329,8 @@ mod tests {
     #[test]
     fn test_parse_platforms_unknown_ignored() {
         use crate::composite_rules::Platform;
-        let platforms = parse_platforms("linux,freebsd,macos");
-        // freebsd should be ignored, only linux and macos
+        let platforms = parse_platforms("linux,unknown,macos");
+        // unknown should be ignored, only linux and macos
         assert_eq!(platforms.len(), 2);
         assert!(platforms.contains(&Platform::Linux));
         assert!(platforms.contains(&Platform::MacOS));

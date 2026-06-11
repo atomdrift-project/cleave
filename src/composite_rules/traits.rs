@@ -825,9 +825,7 @@ impl TraitDefinition {
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
-        let platform_match = self.platforms.contains(&Platform::All)
-            || ctx.platforms.contains(&Platform::All)
-            || self.platforms.iter().any(|p| ctx.platforms.contains(p));
+        let platform_match = super::types::platforms_intersect(&self.platforms, ctx.platforms);
 
         if !platform_match {
             ctx.record_skip(SkipReason::PlatformMismatch {
@@ -2112,9 +2110,7 @@ impl CompositeTrait {
         let _mcg = MatchCountGuard::set(self.needs_match_count());
 
         // Check platform match
-        let platform_match = self.platforms.contains(&Platform::All)
-            || ctx.platforms.contains(&Platform::All)
-            || self.platforms.iter().any(|p| ctx.platforms.contains(p));
+        let platform_match = super::types::platforms_intersect(&self.platforms, ctx.platforms);
 
         if !platform_match {
             ctx.record_skip(SkipReason::PlatformMismatch {
@@ -3032,9 +3028,7 @@ impl CompositeTrait {
         // Match if: trait allows All platforms, OR context includes All (no --platforms filter),
         // OR trait's platforms intersect with context's platforms
         if let Some(plats) = platforms {
-            let platform_match = plats.contains(&Platform::All)
-                || ctx.platforms.contains(&Platform::All)
-                || plats.iter().any(|p| ctx.platforms.contains(p));
+            let platform_match = super::types::platforms_intersect(plats, ctx.platforms);
             if !platform_match {
                 return ConditionResult::no_match();
             }

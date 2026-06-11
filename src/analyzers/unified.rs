@@ -1276,7 +1276,7 @@ func main() {
     fn go_test_mapper() -> crate::capabilities::CapabilityMapper {
         let yaml = r#"
 defaults:
-  platforms: [linux, macos, windows, unix, android, ios]
+  platforms: [linux, macos, windows, unix, android, ios, appliance, routeros, fortios]
   for: [go]
 traits:
   - id: micro-behaviors/process/create/direct::exec-command

@@ -160,6 +160,140 @@ pub enum Platform {
     Android,
     /// iOS mobile OS
     Ios,
+    /// AIX Unix platform
+    Aix,
+    /// Solaris Unix platform
+    Solaris,
+    /// FreeBSD Unix platform
+    FreeBsd,
+    /// OpenBSD Unix platform
+    OpenBsd,
+    /// NetBSD Unix platform
+    NetBsd,
+    /// DragonFly BSD Unix platform
+    DragonFlyBsd,
+    /// OpenWrt Linux appliance platform
+    OpenWrt,
+    /// QNX Unix platform
+    Qnx,
+    /// VMware ESXi platform
+    Esxi,
+    /// z/OS platform
+    Zos,
+    /// Generic network/security appliance platform
+    #[serde(rename = "appliance", alias = "network-appliance")]
+    Appliance,
+    /// MikroTik RouterOS appliance platform
+    RouterOs,
+    /// Fortinet FortiOS appliance platform
+    FortiOs,
+    /// Palo Alto PAN-OS appliance platform
+    PanOs,
+    /// Cisco IOS-XE appliance platform
+    IosXe,
+    /// Juniper Junos appliance platform
+    Junos,
+    /// Citrix NetScaler appliance platform
+    Netscaler,
+    /// Ivanti appliance platform
+    Ivanti,
+    /// VxWorks RTOS/appliance platform
+    VxWorks,
+}
+
+impl Platform {
+    /// Stable lowercase label used by CLI output and YARA metadata.
+    #[must_use]
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Linux => "linux",
+            Self::MacOS => "macos",
+            Self::Windows => "windows",
+            Self::Unix => "unix",
+            Self::Android => "android",
+            Self::Ios => "ios",
+            Self::Aix => "aix",
+            Self::Solaris => "solaris",
+            Self::FreeBsd => "freebsd",
+            Self::OpenBsd => "openbsd",
+            Self::NetBsd => "netbsd",
+            Self::DragonFlyBsd => "dragonflybsd",
+            Self::OpenWrt => "openwrt",
+            Self::Qnx => "qnx",
+            Self::Esxi => "esxi",
+            Self::Zos => "zos",
+            Self::Appliance => "appliance",
+            Self::RouterOs => "routeros",
+            Self::FortiOs => "fortios",
+            Self::PanOs => "panos",
+            Self::IosXe => "iosxe",
+            Self::Junos => "junos",
+            Self::Netscaler => "netscaler",
+            Self::Ivanti => "ivanti",
+            Self::VxWorks => "vxworks",
+        }
+    }
+
+    /// Whether this platform is covered by the Unix umbrella.
+    #[must_use]
+    pub fn is_unix_family(&self) -> bool {
+        matches!(
+            self,
+            Self::Unix
+                | Self::Linux
+                | Self::MacOS
+                | Self::Aix
+                | Self::Solaris
+                | Self::FreeBsd
+                | Self::OpenBsd
+                | Self::NetBsd
+                | Self::DragonFlyBsd
+                | Self::OpenWrt
+                | Self::Qnx
+                | Self::Esxi
+                | Self::Zos
+        )
+    }
+
+    /// Whether this platform is covered by the appliance umbrella.
+    #[must_use]
+    pub fn is_appliance_family(&self) -> bool {
+        matches!(
+            self,
+            Self::Appliance
+                | Self::RouterOs
+                | Self::FortiOs
+                | Self::PanOs
+                | Self::IosXe
+                | Self::Junos
+                | Self::Netscaler
+                | Self::Ivanti
+                | Self::VxWorks
+        )
+    }
+
+    /// True when a rule platform should be evaluated for a requested platform filter.
+    #[must_use]
+    pub fn matches_filter(&self, filter: &Self) -> bool {
+        self == &Self::All
+            || filter == &Self::All
+            || self == filter
+            || (self == &Self::Unix && filter.is_unix_family())
+            || (filter == &Self::Unix && self.is_unix_family())
+            || (self == &Self::Appliance && filter.is_appliance_family())
+            || (filter == &Self::Appliance && self.is_appliance_family())
+    }
+}
+
+/// True when rule platforms and active scan platform filters overlap, including umbrellas.
+#[must_use]
+pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
+    if rule.is_empty() || filters.is_empty() {
+        return true;
+    }
+    rule.iter()
+        .any(|rule_platform| filters.iter().any(|filter| rule_platform.matches_filter(filter)))
 }
 
 /// File type specifier for rule targeting
@@ -851,6 +985,27 @@ mod tests {
     fn test_platform_equality() {
         assert_eq!(Platform::Linux, Platform::Linux);
         assert_ne!(Platform::Linux, Platform::Windows);
+    }
+
+    #[test]
+    fn test_platform_rollup_intersection() {
+        assert!(platforms_intersect(&[Platform::FreeBsd], &[Platform::Unix]));
+        assert!(platforms_intersect(&[Platform::Unix], &[Platform::OpenWrt]));
+        assert!(platforms_intersect(
+            &[Platform::RouterOs],
+            &[Platform::Appliance]
+        ));
+        assert!(platforms_intersect(
+            &[Platform::Appliance],
+            &[Platform::FortiOs]
+        ));
+        assert!(!platforms_intersect(&[Platform::MacOS], &[Platform::OpenWrt]));
+        assert!(!platforms_intersect(
+            &[Platform::RouterOs],
+            &[Platform::FortiOs]
+        ));
+        assert!(!platforms_intersect(&[Platform::RouterOs], &[Platform::Unix]));
+        assert!(!platforms_intersect(&[Platform::FreeBsd], &[Platform::Windows]));
     }
 
     // ==================== FileType Comparison Tests ====================

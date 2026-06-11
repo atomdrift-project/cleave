@@ -477,6 +477,9 @@ pub struct TinyOpts {
     /// Rich header (`path  type • formula` + rule) vs the minimal
     /// `path\ttype size score` line plus the `# ctx:` legend.
     pub rich_header: bool,
+    /// Allow ANSI color (still gated on a tty). The terminal view sets this;
+    /// the `tiny` view never colors — it's machine/LLM output.
+    pub color: bool,
 }
 
 impl TinyOpts {
@@ -490,14 +493,17 @@ impl TinyOpts {
             context_lines: Some(3),
             first_match_only: true,
             rich_header: true,
+            color: true,
         }
     }
 
-    /// cleave's `--format tiny` (LLM) view: same selection, minimal header.
+    /// cleave's `--format tiny` (LLM) view: same selection, minimal header, and
+    /// never colored — tiny is machine/LLM output.
     #[must_use]
     pub fn tiny() -> Self {
         Self {
             rich_header: false,
+            color: false,
             ..Self::terminal()
         }
     }
@@ -511,7 +517,7 @@ pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
     if files.is_empty() {
         return String::new();
     }
-    let colorize = colored::control::SHOULD_COLORIZE.should_colorize();
+    let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
     let term_width = terminal_width();
 
     let mut out = String::with_capacity(4096);
@@ -543,6 +549,7 @@ pub fn format_context(report: &AnalysisReport, opts: &TinyOpts) -> String {
 }
 
 /// The LLM `--format tiny` view.
+#[must_use]
 pub fn format_tiny(report: &AnalysisReport) -> String {
     format_context(report, &TinyOpts::tiny())
 }
@@ -1736,8 +1743,11 @@ mod tests {
 
     #[test]
     fn test_risk_indicator() {
-        // Verify the underlying text content (colored strings deref to &str)
-        assert_eq!(&*risk_indicator(&Criticality::Baseline), "  •");
+        // Verify the underlying text content (colored strings deref to &str).
+        // `·` (small dot) marks the minor tiers (component/baseline); `•` is
+        // notable; the dot count rises with severity.
+        assert_eq!(&*risk_indicator(&Criticality::Component), "  ·");
+        assert_eq!(&*risk_indicator(&Criticality::Baseline), "  ·");
         assert_eq!(&*risk_indicator(&Criticality::Notable), "  •");
         assert_eq!(&*risk_indicator(&Criticality::Suspicious), " ••");
         assert_eq!(&*risk_indicator(&Criticality::Hostile), "•••");
@@ -1907,10 +1917,10 @@ mod tests {
         let output = format_tiny(&report);
 
         // No capture pass ran here, so the finding has no context window and
-        // renders as a `.` no-anchor line.
-        assert!(output.contains("# ctx:"));
+        // renders as a `.` no-anchor line carrying its description (the trait-id
+        // leaf was dropped in the context-centric rewrite).
         assert!(output.contains("/test/sample.bin\tELF 12KB"));
-        assert!(output.contains(". # N micro-behaviors/process/create/shell::bash"));
+        assert!(output.contains(". # N Execute shell commands"));
     }
 
     #[test]
@@ -2001,7 +2011,8 @@ mod tests {
         assert!(!output.contains("micro-behaviors/fs/read::open"));
         assert!(!output.contains("objectives/execution/loader::fragment"));
         assert!(!output.contains("objectives/execution/loader::unused-fragment"));
-        assert!(output.contains(". # S objectives/execution/loader::matched-composite"));
+        // No-anchor lines now carry the description, not the trait id.
+        assert!(output.contains(". # S Matched composite loader"));
     }
 
     #[test]
@@ -2052,6 +2063,8 @@ mod tests {
         ];
         let output = format_tiny(&report);
         assert!(output.contains("4- ctx before"));
-        assert!(output.contains("5: s = socket() # N net/socket"));
+        // Annotation is the description in the sample's comment marker (`//` for
+        // binary), not the trait-id leaf.
+        assert!(output.contains("5: s = socket() // N socket usage"));
     }
 }

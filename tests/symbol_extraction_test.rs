@@ -39,7 +39,7 @@ fn analyze_file_for_traits(file_path: &str) -> serde_json::Value {
 
 /// Get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    json.get("fs")
+    json.get("files")
         .and_then(|f| f.as_array())
         .and_then(|arr| arr.first())
 }
@@ -71,8 +71,8 @@ fn has_structure(json: &serde_json::Value) -> bool {
     let Some(file) = get_first_file(json) else {
         return false;
     };
-    ["ct", "mc", "ca", "fn", "i"].iter().any(|key| {
-        file.pointer(&format!("/ff/{key}"))
+    ["tgt", "mbr", "imp"].iter().any(|key| {
+        file.pointer(&format!("/fact/{key}"))
             .and_then(|v| v.as_array())
             .is_some_and(|arr| !arr.is_empty())
     }) || get_file_type(json).is_some()
@@ -84,9 +84,9 @@ fn get_symbols(json: &serde_json::Value) -> Vec<String> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for key in ["ct", "mc"] {
+    for key in ["tgt", "mbr"] {
         if let Some(values) = file
-            .pointer(&format!("/ff/{key}"))
+            .pointer(&format!("/fact/{key}"))
             .and_then(|v| v.as_array())
         {
             out.extend(
@@ -96,7 +96,7 @@ fn get_symbols(json: &serde_json::Value) -> Vec<String> {
             );
         }
     }
-    if let Some(imports) = file.pointer("/ff/i").and_then(|v| v.as_array()) {
+    if let Some(imports) = file.pointer("/fact/imp").and_then(|v| v.as_array()) {
         for entry in imports {
             if let Some(symbol) = entry
                 .as_array()

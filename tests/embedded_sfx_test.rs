@@ -30,12 +30,12 @@ fn analyze_compact(path: &std::path::Path) -> (String, serde_json::Value) {
 
 fn compact_metric(file: &serde_json::Value, name: &str) -> Option<f64> {
     let (group, field) = name.split_once(".")?;
-    file.pointer(&format!("/ff/m/{group}/{field}"))
+    file.pointer(&format!("/fact/met/{group}/{field}"))
         .and_then(serde_json::Value::as_f64)
 }
 
 fn compact_strings(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.pointer("/ff/s")?.as_array()
+    file.pointer("/fact/str")?.as_array()
 }
 
 // ── Fixture builders ───────────────────────────────────────────────────────────
@@ -180,7 +180,7 @@ fn embedded_binary_scanning() {
         "Expected 'binary/embedded/pe' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-    let pe_host = report["fs"]
+    let pe_host = report["files"]
         .as_array()
         .and_then(|files| files.first())
         .expect("host PE should be present in compact report");
@@ -202,19 +202,19 @@ fn embedded_binary_scanning() {
     let nsis_path = tmp.path().join("nsis_payload.exe");
     fs::write(&nsis_path, &nsis).unwrap();
     let (stdout, report) = analyze_compact(&nsis_path);
-    let findings = report["fs"][0]["ts"]
+    let findings = report["files"][0]["find"]
         .as_array()
         .expect("top-level findings should be an array");
     let embedded_pe: Vec<_> = findings
         .iter()
-        .filter(|f| f["i"] == "binary/embedded/pe")
+        .filter(|f| f["id"] == "binary/embedded/pe")
         .collect();
     assert!(
         !embedded_pe.is_empty(),
         "expected host-level embedded PE finding"
     );
     assert!(
-        embedded_pe.iter().all(|f| f["l"] == 3),
+        embedded_pe.iter().all(|f| f["crit"] == 3),
         "expected NSIS overlay embedded PE findings to be downgraded to notable.\nstdout:\n{stdout}",
     );
 
@@ -235,7 +235,7 @@ fn embedded_binary_scanning() {
         "Expected 'binary/embedded/elf' in output.\nFirst 2000 chars:\n{}",
         &stdout[..stdout.len().min(2000)]
     );
-    let elf_host = report["fs"]
+    let elf_host = report["files"]
         .as_array()
         .and_then(|files| files.first())
         .expect("host ELF should be present in compact report");
@@ -253,7 +253,7 @@ fn embedded_binary_scanning() {
     );
 
     // 4. Child ELF extracts its own strings.
-    let files = report["fs"]
+    let files = report["files"]
         .as_array()
         .expect("report should contain file entries");
     let child = files

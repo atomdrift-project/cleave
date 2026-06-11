@@ -59,16 +59,13 @@ fn scan_with_trait(fixture_name: &str, fixture: &str, traits_yaml: &str) -> (Tem
     (dir, stdout)
 }
 
-/// The context-centric tiny format annotates findings as `# <SEV> <id> <desc>`,
-/// either trailing a matched line or on a standalone `.`/`#` line. Returns true
-/// if any annotation names the supplied trait id (token after the severity).
-fn finding_present(stdout: &str, trait_id: &str) -> bool {
-    stdout.lines().any(|line| {
-        line.rfind("# ")
-            .map(|i| &line[i + 2..])
-            .and_then(|note| note.split_whitespace().nth(1))
-            .is_some_and(|id| id == trait_id)
-    })
+/// The context-centric tiny format annotates a finding as
+/// `<marker> <SEV> <description>` (the trait-id leaf was dropped), trailing a
+/// matched line or on a standalone `.` no-anchor line. Returns true if any line
+/// carries an annotation with the given severity letter and description.
+fn finding_present(stdout: &str, sev: char, desc: &str) -> bool {
+    let needle = format!(" {sev} {desc}");
+    stdout.lines().any(|line| line.contains(&needle))
 }
 
 #[test]
@@ -96,7 +93,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, "micro-behaviors/test::pty-spawn-call"),
+        finding_present(&stdout, 'N', "pty.spawn invocation"),
         "exact: pty.spawn must surface as a finding from the cached scan path.\n\
          Verified via test-rules; the cached path in CapabilityMapper has \
          historically dropped this match.\n\nGot:\n{stdout}"
@@ -127,7 +124,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, "micro-behaviors/test::bare-spawn-call"),
+        finding_present(&stdout, 'N', "bare spawn invocation"),
         "exact: spawn must surface as a finding from the cached scan path.\n\nGot:\n{stdout}"
     );
 }
@@ -153,7 +150,7 @@ traits:
 "#,
     );
     assert!(
-        finding_present(&stdout, "micro-behaviors/test::os-hostname-call"),
+        finding_present(&stdout, 'N', "os.hostname invocation"),
         "exact: os.hostname must surface as a finding from the cached scan path.\n\nGot:\n{stdout}"
     );
 }

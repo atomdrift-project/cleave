@@ -662,7 +662,23 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     // not run on macOS). Apple-format arms therefore test `has_unix || has_macos
     // || has_ios` so a `[unix]` trait still reaches macOS-native formats.
     // Android is a mobile OS, not a traditional Unix flavor, so it is separate.
-    let has_unix = platforms.iter().any(Platform::is_unix_family);
+    let has_unix = platforms.iter().any(|p| {
+        matches!(
+            p,
+            Platform::Linux
+                | Platform::Unix
+                | Platform::Aix
+                | Platform::Solaris
+                | Platform::FreeBsd
+                | Platform::OpenBsd
+                | Platform::NetBsd
+                | Platform::DragonFlyBsd
+                | Platform::OpenWrt
+                | Platform::Qnx
+                | Platform::Esxi
+                | Platform::Zos
+        )
+    });
     // Linux-specific features: systemd, deb, rpm require Linux, not generic Unix.
     let has_linux = platforms
         .iter()

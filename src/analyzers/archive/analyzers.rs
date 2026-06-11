@@ -606,9 +606,9 @@ impl ArchiveAnalyzer {
             return true;
         }
         static SERIAL_NESTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        if *SERIAL_NESTED.get_or_init(|| {
-            std::env::var("CLEAVE_SERIAL_NESTED_MEMBERS").is_ok_and(|v| v == "1")
-        }) {
+        if *SERIAL_NESTED
+            .get_or_init(|| std::env::var("CLEAVE_SERIAL_NESTED_MEMBERS").is_ok_and(|v| v == "1"))
+        {
             return false;
         }
         member_count >= nested_parallel_min_members()
@@ -1355,8 +1355,10 @@ impl ArchiveAnalyzer {
             } else {
                 Some(yara_filetypes.as_slice())
             };
-            let yara_results =
-                par_filter_map_members(&class_members, self.members_run_parallel(class_members.len()), |member| {
+            let yara_results = par_filter_map_members(
+                &class_members,
+                self.members_run_parallel(class_members.len()),
+                |member| {
                     if self.is_cancelled() {
                         return None;
                     }
@@ -1370,7 +1372,8 @@ impl ArchiveAnalyzer {
                             None
                         }
                     }
-                });
+                },
+            );
             for (path, matches) in yara_results {
                 flagged_classes.insert(path);
                 for ym in matches {
@@ -1652,10 +1655,11 @@ impl ArchiveAnalyzer {
             "Starting in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(members, self.members_run_parallel(members.len()), |member| {
-                self.analyze_one_member(member, slow_log_label)
-            });
+        let results: Vec<MemberAnalysisResult> = par_filter_map_members(
+            members,
+            self.members_run_parallel(members.len()),
+            |member| self.analyze_one_member(member, slow_log_label),
+        );
 
         self.aggregate_member_results(
             results,
@@ -1685,10 +1689,11 @@ impl ArchiveAnalyzer {
             "Starting borrowed in-memory archive member analysis"
         );
 
-        let results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(members, self.members_run_parallel(members.len()), |member| {
-                self.analyze_one_member(member, slow_log_label)
-            });
+        let results: Vec<MemberAnalysisResult> = par_filter_map_members(
+            members,
+            self.members_run_parallel(members.len()),
+            |member| self.analyze_one_member(member, slow_log_label),
+        );
 
         self.aggregate_member_results(
             results,
@@ -2135,8 +2140,10 @@ impl ArchiveAnalyzer {
             .as_deref()
             .unwrap_or(report.target.path.as_str());
 
-        let member_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&classes_to_analyze, self.members_run_parallel(classes_to_analyze.len()), |entry| {
+        let member_results: Vec<MemberAnalysisResult> = par_filter_map_members(
+            &classes_to_analyze,
+            self.members_run_parallel(classes_to_analyze.len()),
+            |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2230,7 +2237,8 @@ impl ArchiveAnalyzer {
                     extracted_path: None,
                     report,
                 })
-            });
+            },
+        );
 
         // Single-threaded aggregation — no lock contention
         for result in member_results {
@@ -2346,8 +2354,10 @@ impl ArchiveAnalyzer {
             "starting parallel archive member analysis",
         );
 
-        let non_class_results: Vec<MemberAnalysisResult> =
-            par_filter_map_members(&non_class_files, self.members_run_parallel(non_class_files.len()), |entry| {
+        let non_class_results: Vec<MemberAnalysisResult> = par_filter_map_members(
+            &non_class_files,
+            self.members_run_parallel(non_class_files.len()),
+            |entry| {
                 let _thread_local_cache_clear_guard = ThreadLocalCacheClearGuard;
                 if self.is_cancelled() {
                     return None;
@@ -2443,7 +2453,8 @@ impl ArchiveAnalyzer {
                     extracted_path: None,
                     report,
                 })
-            });
+            },
+        );
 
         // Aggregate non-class results
         for result in non_class_results {

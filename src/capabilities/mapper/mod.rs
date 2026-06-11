@@ -83,9 +83,13 @@ pub(super) fn build_all_strings(
     let mut all_strings = Vec::with_capacity(total_capacity);
     all_strings.extend_from_slice(&report.strings);
     for imp in &report.imports {
+        let offset = imp.offset.as_ref().and_then(|s| {
+            let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
+            u64::from_str_radix(s, 16).ok()
+        });
         all_strings.push(crate::types::StringInfo {
             value: imp.symbol.clone().into(),
-            offset: None,
+            offset,
             encoding: "symbol".to_string(),
             string_type: Some(crate::types::StringType::Import),
             section: None,
@@ -134,6 +138,65 @@ pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<St
         );
     }
     all
+}
+
+/// Map a symbol name to its file-offset (hex string such as `"0x1234"`),
+/// drawn from the report's imports and exports. The symbol-match index works
+/// on names alone, so its evidence is anchored back to the symbol's real
+/// location via this map (an import's offset is its `.dynstr` name offset; an
+/// export's is its `st_value`). Used by `fill_symbol_evidence_locations`.
+pub(super) fn build_symbol_offset_map(
+    report: &crate::types::AnalysisReport,
+) -> rustc_hash::FxHashMap<String, String> {
+    let mut map: rustc_hash::FxHashMap<String, String> = rustc_hash::FxHashMap::default();
+    for i in &report.imports {
+        if let Some(off) = i.offset.as_ref() {
+            map.entry(i.symbol.clone()).or_insert_with(|| off.clone());
+        }
+    }
+    for e in &report.exports {
+        if let Some(off) = e.offset.as_ref() {
+            map.entry(e.symbol.clone()).or_insert_with(|| off.clone());
+        }
+    }
+    if let Some(view) = report.filefacts.as_ref() {
+        for symbol in &view.symbols {
+            let Some(name) = symbol.name() else {
+                continue;
+            };
+            let offset = match symbol {
+                filefacts::Symbol::Import { offset, .. }
+                | filefacts::Symbol::Export { offset, .. }
+                | filefacts::Symbol::Function { offset, .. }
+                | filefacts::Symbol::Call { offset, .. }
+                | filefacts::Symbol::Member { offset, .. }
+                | filefacts::Symbol::Identifier { offset, .. } => *offset,
+                filefacts::Symbol::Bind { offset, .. } => Some(*offset),
+            };
+            if let Some(offset) = offset {
+                map.entry(name.to_string())
+                    .or_insert_with(|| format!("{:#x}", offset));
+            }
+        }
+    }
+    map
+}
+
+/// Anchor symbol-index evidence at the matched symbol's file offset.
+///
+/// The symbol-match index emits evidence whose `value` is the symbol name but
+/// with no `location` (it sees names, not offsets). Fill each such item from
+/// `offsets`. Callers discard any item that remains unanchored so cached
+/// symbol evidence never fabricates a file-start location.
+pub(super) fn fill_symbol_evidence_locations(
+    evidence: &mut [crate::types::Evidence],
+    offsets: &rustc_hash::FxHashMap<String, String>,
+) {
+    for ev in evidence.iter_mut() {
+        if ev.location.is_none() {
+            ev.location = offsets.get(&ev.value).cloned();
+        }
+    }
 }
 
 // Extracted modules

@@ -80,7 +80,7 @@ mod description_validation_tests {
         // Descriptions that mention placeholders, examples, etc. are valid
         // This is needed for traits that detect placeholder text in manifests
         let valid_descriptions = vec![
-            "Package author field contains generic placeholder (test, example, admin)",
+            "Package author placeholder text",
             "Placeholder bundle ID in plist",
             "TODO comment in source code",
             "Example configuration file",
@@ -116,18 +116,14 @@ mod description_validation_tests {
     }
 
     #[test]
-    fn test_both_concise_and_detailed_descriptions_valid() {
-        // Both concise and detailed descriptions should be valid
+    fn test_concise_and_bounded_descriptions_valid() {
         let valid_descriptions = vec![
-            // Concise
             "PyCryptodome AES import",
             "Redis CLI tool usage",
             "XOR decryption loop",
-            // Detailed
-            "Detects usage of AES encryption from PyCryptodome library",
-            "Identifies AES cipher imports which may indicate encryption capabilities",
-            "Checks for cryptography library usage in the codebase",
-            "Scans for potential data encryption implementation",
+            "PyCryptodome AES encryption usage",
+            "Cryptography library usage in code",
+            "Potential data encryption logic",
         ];
 
         for desc in valid_descriptions {
@@ -143,23 +139,12 @@ mod description_validation_tests {
     }
 
     #[test]
-    fn test_descriptive_explanations_are_valid() {
-        // Longer descriptions with context should always pass
-        let valid_descriptions = vec![
+    fn test_long_description() {
+        let trait_def = create_test_trait_with_desc(
             "Detects malicious code attempting to bypass security via shell import",
-            "Identifies encryption library usage that may indicate ransomware",
-            "Scans for network communication patterns typical of command and control",
-        ];
-
-        for desc in valid_descriptions {
-            let trait_def = create_test_trait_with_desc(desc);
-            let warning = trait_def.check_description_quality();
-            assert!(
-                warning.is_none(),
-                "Descriptive explanation '{}' should be valid, got: {:?}",
-                desc,
-                warning
-            );
-        }
+        );
+        let warning = trait_def.check_description_quality();
+        assert!(warning.is_some());
+        assert!(warning.unwrap().contains("too long"));
     }
 }

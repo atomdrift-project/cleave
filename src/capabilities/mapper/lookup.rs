@@ -7,9 +7,14 @@ use crate::composite_rules::{CompositeTrait, TraitDefinition};
 use crate::types::{Evidence, Finding, FindingKind};
 
 impl super::CapabilityMapper {
-    /// Look up a symbol and return its capability finding if known
+    /// Look up a symbol and return its capability finding if known.
+    ///
+    /// `offset` is the symbol's file offset (hex string like `"0x1234"`, e.g.
+    /// an import's `.dynstr` name offset) so the evidence can be anchored where
+    /// the symbol sits. Pass `None` only when the caller genuinely has no
+    /// offset; the evidence then falls back to the header (`0x0`).
     #[must_use]
-    pub(crate) fn lookup(&self, symbol: &str) -> Option<Finding> {
+    pub(crate) fn lookup(&self, symbol: &str, offset: Option<&str>) -> Option<Finding> {
         // Strip common prefixes for matching
         let clean_symbol = symbol
             .trim_start_matches('_') // C symbols often have leading underscore
@@ -28,7 +33,7 @@ impl super::CapabilityMapper {
                 evidence: vec![Evidence {
                     method: "symbol".to_string(),
                     value: symbol.to_string(),
-                    location: None,
+                    location: Some(offset.map_or_else(|| "0x0".to_string(), str::to_string)),
                     ..Default::default()
                 }],
 

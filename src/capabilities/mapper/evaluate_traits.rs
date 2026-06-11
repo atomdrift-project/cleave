@@ -152,11 +152,16 @@ impl super::CapabilityMapper {
         let (symbol_matched_traits, symbol_evidence) = self
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
+        let symbol_offsets = super::build_symbol_offset_map(report);
         for (trait_idx, mut ev) in symbol_evidence {
-            cached_evidence
-                .entry(trait_idx)
-                .or_default()
-                .append(&mut ev);
+            super::fill_symbol_evidence_locations(&mut ev, &symbol_offsets);
+            ev.retain(|item| item.location.is_some());
+            if !ev.is_empty() {
+                cached_evidence
+                    .entry(trait_idx)
+                    .or_default()
+                    .append(&mut ev);
+            }
         }
 
         // Also find regex candidates based on literal prefix matching
@@ -293,11 +298,16 @@ impl super::CapabilityMapper {
         let (symbol_matched_traits, symbol_evidence) = self
             .symbol_match_index
             .find_matches_with_evidence(&all_symbols);
+        let symbol_offsets = super::build_symbol_offset_map(report);
         for (trait_idx, mut ev) in symbol_evidence {
-            cached_evidence
-                .entry(trait_idx)
-                .or_default()
-                .append(&mut ev);
+            super::fill_symbol_evidence_locations(&mut ev, &symbol_offsets);
+            ev.retain(|item| item.location.is_some());
+            if !ev.is_empty() {
+                cached_evidence
+                    .entry(trait_idx)
+                    .or_default()
+                    .append(&mut ev);
+            }
         }
 
         let regex_candidates = self.string_match_index.find_regex_candidates(&all_strings);

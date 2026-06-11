@@ -148,7 +148,7 @@ impl PEAnalyzer {
                 method: "header".to_string(),
                 source: "filefacts".to_string(),
                 value: "PE".to_string(),
-                location: None,
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }],
         });
@@ -161,7 +161,7 @@ impl PEAnalyzer {
                     method: "header".to_string(),
                     source: "filefacts".to_string(),
                     value: "DLL".to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
             });
@@ -175,7 +175,7 @@ impl PEAnalyzer {
                     method: "header".to_string(),
                     source: "filefacts".to_string(),
                     value: "OptionalHeader".to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
             });
@@ -191,7 +191,10 @@ impl PEAnalyzer {
         let mut findings = Vec::new();
         for imp in &imports {
             let normalized = crate::types::binary::normalize_symbol(&imp.symbol);
-            if let Some(capability) = self.capability_mapper.lookup(&normalized) {
+            if let Some(capability) = self
+                .capability_mapper
+                .lookup(&normalized, imp.offset.as_deref())
+            {
                 findings.push(capability);
             }
         }
@@ -753,7 +756,7 @@ impl PEAnalyzer {
                     method: "parse-failure".to_string(),
                     source: "filefacts".to_string(),
                     value: msg.to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
                 match_count: 1,
@@ -767,7 +770,7 @@ impl PEAnalyzer {
                     method: "parse-failure".to_string(),
                     source: "filefacts".to_string(),
                     value: msg.to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
             });

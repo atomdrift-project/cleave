@@ -23,6 +23,33 @@ use std::sync::LazyLock;
 static PROFILE_TIMING_ENABLED: LazyLock<bool> =
     LazyLock::new(|| std::env::var("CLEAVE_PROFILE").is_ok());
 
+fn offset_location(offset: Option<u64>, fallback: impl FnOnce() -> String) -> String {
+    offset.map(|o| format!("{:#x}", o)).unwrap_or_else(fallback)
+}
+
+fn section_start_location(
+    report: &crate::types::AnalysisReport,
+    section_name: Option<&str>,
+) -> Option<String> {
+    let section_name = section_name?;
+    report
+        .sections
+        .iter()
+        .find(|section| section.name == section_name)
+        .and_then(|section| section.offset.or(section.address))
+        .map(|offset| format!("{:#x}", offset))
+}
+
+fn string_info_location(
+    report: &crate::types::AnalysisReport,
+    string_info: &crate::types::StringInfo,
+) -> String {
+    offset_location(string_info.offset, || {
+        section_start_location(report, string_info.section.as_deref())
+            .unwrap_or_else(|| "0x0".to_string())
+    })
+}
+
 /// Helper to apply high-fidelity validation checks to a string match.
 pub(crate) fn validate_match(s: &str, validator: Option<StringValidator>) -> bool {
     match validator {
@@ -598,7 +625,11 @@ pub(crate) fn eval_comment<'a, 'b>(
                 method: "comment".to_string(),
                 source: "comment".to_string(),
                 value: truncate_evidence(v, 100),
-                location: c.offset.map(|o| format!("@{o}")),
+                location: Some(
+                    c.offset
+                        .map(|o| format!("@{o}"))
+                        .unwrap_or_else(|| "0x0".to_string()),
+                ),
                 offsets: c.offset.map(|o| vec![o]).unwrap_or_default(),
                 ..Default::default()
             });
@@ -701,7 +732,7 @@ pub(crate) fn eval_text<'a, 'b>(
                             method: "text".to_string(),
                             source: "string_extractor".to_string(),
                             value: truncate_evidence_value(original_value),
-                            location: s.offset.map(|o| format!("{:#x}", o)),
+                            location: Some(string_info_location(ctx.report, s)),
                             ..Default::default()
                         });
                     }
@@ -720,7 +751,7 @@ pub(crate) fn eval_text<'a, 'b>(
                         method: "text".to_string(),
                         source: "string_extractor".to_string(),
                         value: truncate_evidence_value(exact_str),
-                        location: s.offset.map(|o| format!("{:#x}", o)),
+                        location: Some(string_info_location(ctx.report, s)),
                         ..Default::default()
                     });
                 }
@@ -829,7 +860,7 @@ pub(crate) fn eval_string_literal<'a, 'b>(
                         method: "string_literal".to_string(),
                         source: "ast".to_string(),
                         value: truncate_evidence_value(match_value),
-                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        location: Some(string_info_location(ctx.report, string_info)),
                         ..Default::default()
                     });
                 }
@@ -925,12 +956,14 @@ pub(crate) fn eval_call<'a>(
         }
 
         match_count += 1;
-        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            && let Some(location) = offset.map(|o| format!("{:#x}", o))
+        {
             evidence.push(Evidence {
                 method: "symbol".to_string(),
                 source: "call".to_string(),
                 value: target.to_string(),
-                location: offset.map(|o| format!("{:#x}", o)),
+                location: Some(location),
                 ..Default::default()
             });
         }
@@ -975,8 +1008,8 @@ pub(crate) fn eval_symbol_fact<'a>(
         // Project each fact to its matchable name + evidence location,
         // skipping symbols whose kind the rule didn't ask for.
         let (name, source_tag, offset): (&str, &str, Option<u64>) = match (kind, sym) {
-            (SymbolKind::Member, filefacts::Symbol::Member { path, .. }) => {
-                (path.as_str(), "member", None)
+            (SymbolKind::Member, filefacts::Symbol::Member { path, offset, .. }) => {
+                (path.as_str(), "member", *offset)
             }
             (SymbolKind::Bind, filefacts::Symbol::Bind { target, offset, .. }) => {
                 (target.as_str(), "bind", Some(*offset))
@@ -998,12 +1031,14 @@ pub(crate) fn eval_symbol_fact<'a>(
         }
 
         match_count += 1;
-        if evidence.len() < MAX_EVIDENCE_PER_TRAIT {
+        if evidence.len() < MAX_EVIDENCE_PER_TRAIT
+            && let Some(location) = offset.map(|o| format!("{:#x}", o))
+        {
             evidence.push(Evidence {
                 method: "symbol".to_string(),
                 source: source_tag.to_string(),
                 value: name.to_string(),
-                location: offset.map(|o| format!("{:#x}", o)),
+                location: Some(location),
                 ..Default::default()
             });
         }
@@ -1178,7 +1213,7 @@ pub(crate) fn eval_numeric_literal<'a>(
                 method: "literal".to_string(),
                 source: "ast-number".to_string(),
                 value: format!("{} (radix {})", parsed_value, parsed_radix),
-                location: string_info.offset.map(|o| format!("{:#x}", o)),
+                location: Some(string_info_location(ctx.report, string_info)),
                 ..Default::default()
             });
         }
@@ -1323,7 +1358,7 @@ pub(crate) fn eval_raw<'a>(
                 method: "raw".to_string(),
                 source: "raw_content".to_string(),
                 value: matched,
-                location: None,
+                location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                 offsets: first_offset.into_iter().collect(),
                 ..Default::default()
             });
@@ -1418,7 +1453,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: matched,
-                        location: None,
+                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                         offsets: first_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1488,7 +1523,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: matched,
-                        location: None,
+                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                         offsets: first_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1577,7 +1612,7 @@ pub(crate) fn eval_raw<'a>(
                 method: "raw".to_string(),
                 source: "raw_content".to_string(),
                 value: first_value.unwrap_or_else(|| exact_str.clone()),
-                location: None,
+                location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                 offsets: first_offset.into_iter().collect(),
                 ..Default::default()
             });
@@ -1648,7 +1683,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_match_offset.unwrap_or(0))),
                         offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1704,7 +1739,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_match_offset.unwrap_or(0))),
                         offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1731,7 +1766,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                         offsets: first_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1788,7 +1823,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_match_offset.unwrap_or(0))),
                         offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1830,7 +1865,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_match_offset.unwrap_or(0))),
                         offsets: first_match_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -1858,7 +1893,7 @@ pub(crate) fn eval_raw<'a>(
                         method: "raw".to_string(),
                         source: "raw_content".to_string(),
                         value: substr_str.to_string(),
-                        location: None,
+                        location: Some(format!("0x{:x}", first_offset.unwrap_or(0))),
                         offsets: first_offset.into_iter().collect(),
                         ..Default::default()
                     });
@@ -2051,7 +2086,7 @@ pub(crate) fn eval_encoded<'a>(
                         method: "encoded_string".to_string(),
                         source: format!("encoding_chain:{}", string_info.encoding_chain.join("+")),
                         value: value_preview,
-                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                        location: Some(string_info_location(ctx.report, string_info)),
                         ..Default::default()
                     });
                 }

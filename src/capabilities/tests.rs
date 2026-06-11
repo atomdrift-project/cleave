@@ -28,7 +28,7 @@ fn test_empty_mapper() {
     assert_eq!(mapper.composite_rules_count(), 0);
 
     // Lookup should return None
-    assert!(mapper.lookup("socket").is_none());
+    assert!(mapper.lookup("socket", None).is_none());
 }
 
 #[test]
@@ -55,7 +55,7 @@ fn test_mapping_count() {
 #[test]
 fn test_lookup_nonexistent() {
     let mapper = CapabilityMapper::empty();
-    let capability = mapper.lookup("nonexistent_func");
+    let capability = mapper.lookup("nonexistent_func", None);
     assert!(capability.is_none());
 }
 

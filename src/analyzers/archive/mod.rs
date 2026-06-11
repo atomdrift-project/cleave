@@ -75,7 +75,7 @@ fn archive_finding(
         Criticality::Suspicious
     };
 
-    Finding {
+    Finding { src: None,
         kind: FindingKind::Capability,
         trait_refs: vec![],
         id: id.to_string(),
@@ -167,7 +167,7 @@ fn push_archive_hostile_findings(
                 ));
             }
             HostileArchiveReason::ExcessiveFileSize { file, size } => {
-                report.findings.push(Finding {
+                report.findings.push(Finding { src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
                     id: "anti-analysis/archive/large-file".to_string(),

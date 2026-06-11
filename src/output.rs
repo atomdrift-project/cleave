@@ -491,6 +491,11 @@ pub struct TinyOpts {
     /// Allow ANSI color (still gated on a tty). The terminal view sets this;
     /// the `tiny` view never colors — it's machine/LLM output.
     pub color: bool,
+    /// Reduce a standalone/root file's on-disk path to its basename in headers.
+    /// The `tiny` (LLM) view sets this — the directory is noise and can leak a
+    /// corpus label; the terminal view keeps the full path. Archive *members*
+    /// are always shown archive-relative (`a.zip/member`) regardless.
+    pub basename_root: bool,
 }
 
 impl TinyOpts {
@@ -506,16 +511,18 @@ impl TinyOpts {
             full_context: true,
             header: HeaderStyle::Rich,
             color: true,
+            basename_root: false,
         }
     }
 
-    /// cleave's `--format tiny` (LLM) view: same selection, minimal header, and
-    /// never colored — tiny is machine/LLM output.
+    /// cleave's `--format tiny` (LLM) view: same selection, minimal header,
+    /// never colored, paths reduced to basename — tiny is machine/LLM output.
     #[must_use]
     pub fn tiny() -> Self {
         Self {
             header: HeaderStyle::Minimal,
             color: false,
+            basename_root: true,
             ..Self::terminal()
         }
     }
@@ -584,7 +591,7 @@ pub fn format_context_badged(
         render_context(&mut body, file, &selected, opts, term_width, colorize);
         match opts.header {
             HeaderStyle::Rich => rich_header(&mut out, file, term_width, adorn, &body),
-            HeaderStyle::Minimal => minimal_header(&mut out, file),
+            HeaderStyle::Minimal => minimal_header(&mut out, file, opts.basename_root),
         }
         out.push_str(&body);
     }
@@ -613,7 +620,9 @@ fn file_has_output(file: &FileAnalysis) -> bool {
 fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
     let mut scored: HashMap<&str, f32> = HashMap::new();
     for f in &file.findings {
-        if f.crit < opts.min_crit || !tiny_should_show(f, file) {
+        // Show each finding only under the file it was located in: an inherited
+        // copy (`src` set) is rendered by its origin member, not here.
+        if f.src.is_some() || f.crit < opts.min_crit || !tiny_should_show(f, file) {
             continue;
         }
         let score = f.conf * f32::from(f.crit as u8);
@@ -628,9 +637,28 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
     ranked.into_iter().map(|(id, _)| id).collect()
 }
 
+/// Display path for a header. An archive member is shown archive-relative — the
+/// container's on-disk directory is noise and the internal `!!` delimiter reads
+/// better as `/`: `/tmp/x.zip!!lib/a.so` → `x.zip/lib/a.so`. A standalone/root
+/// path is reduced to its basename only when `basename_root` is set (the LLM
+/// view, where the directory is noise and can leak a corpus label).
+fn tiny_path(path: &str, basename_root: bool) -> String {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    fn basename(p: &str) -> &str {
+        p.rsplit(['/', '\\']).next().unwrap_or(p)
+    }
+    match path.split_once(ARCHIVE_DELIMITER) {
+        Some((root, members)) => {
+            format!("{}/{}", basename(root), members.replace(ARCHIVE_DELIMITER, "/"))
+        }
+        None if basename_root => basename(path).to_string(),
+        None => path.to_string(),
+    }
+}
+
 /// Minimal `path\ttype size score` header for the tiny/LLM view.
-fn minimal_header(out: &mut String, file: &FileAnalysis) {
-    out.push_str(&tiny_field(&file.path));
+fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
+    out.push_str(&tiny_field(&tiny_path(&file.path, basename_root)));
     out.push('\t');
     out.push_str(&tiny_field(&file.file_type));
     out.push(' ');
@@ -1949,7 +1977,7 @@ mod tests {
     #[test]
     fn test_aggregate_findings_different_directories() {
         let findings = vec![
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -1962,7 +1990,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "net/http::get-variant".to_string(),
@@ -1987,7 +2015,7 @@ mod tests {
     #[test]
     fn test_aggregate_findings_same_directory_keeps_highest_criticality() {
         let findings = vec![
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -2000,7 +2028,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::sh-variant".to_string(),
@@ -2025,7 +2053,7 @@ mod tests {
     #[test]
     fn test_aggregate_findings_same_directory_keeps_highest_confidence() {
         let findings = vec![
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -2038,7 +2066,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::sh-variant".to_string(),
@@ -2100,7 +2128,7 @@ mod tests {
 
     #[test]
     fn test_format_evidence_empty() {
-        let trait_item = Finding {
+        let trait_item = Finding { src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "test".to_string(),
@@ -2118,7 +2146,7 @@ mod tests {
 
     #[test]
     fn test_format_evidence_with_values() {
-        let trait_item = Finding {
+        let trait_item = Finding { src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "test".to_string(),
@@ -2160,7 +2188,7 @@ mod tests {
 
     #[test]
     fn test_format_terminal_with_capabilities() {
-        let capabilities = vec![Finding {
+        let capabilities = vec![Finding { src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "micro-behaviors/execution/shell".to_string(),
@@ -2180,7 +2208,7 @@ mod tests {
 
     #[test]
     fn test_format_terminal_includes_third_party() {
-        let findings = vec![Finding {
+        let findings = vec![Finding { src: None,
             kind: FindingKind::Indicator,
             trait_refs: vec![],
             id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string(),
@@ -2210,7 +2238,7 @@ mod tests {
 
     #[test]
     fn test_format_tiny_includes_description_as_tsv_field() {
-        let findings = vec![Finding {
+        let findings = vec![Finding { src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "micro-behaviors/process/create/shell::bash".to_string(),
@@ -2236,15 +2264,32 @@ mod tests {
         // No capture pass ran here, so the finding has no context window and
         // renders as a `.` no-anchor line carrying its description, in the file's
         // comment marker (`//` for binary). Notable+ no-anchor noise is dropped,
-        // so the fixture is Suspicious.
-        assert!(output.contains("/test/sample.bin\tELF 12KB"));
+        // so the fixture is Suspicious. The tiny view shows the basename, not the
+        // full `/test/` path.
+        assert!(output.contains("sample.bin\tELF 12KB"));
         assert!(output.contains(". // S Execute shell commands"));
+    }
+
+    #[test]
+    fn tiny_path_basenames_root_and_archive_relativizes_members() {
+        // Members are always archive-relative; the `!!` delimiter becomes `/`.
+        assert_eq!(
+            tiny_path("/tmp/a.zip!!lib/foo.so", false),
+            "a.zip/lib/foo.so"
+        );
+        assert_eq!(
+            tiny_path("/tmp/a.zip!!b.zip!!deep", true),
+            "a.zip/b.zip/deep"
+        );
+        // A standalone/root path is basenamed only in the LLM (tiny) view.
+        assert_eq!(tiny_path("/tmp/triage/x.bin", true), "x.bin");
+        assert_eq!(tiny_path("/tmp/triage/x.bin", false), "/tmp/triage/x.bin");
     }
 
     #[test]
     fn test_format_tiny_includes_baseline_and_composite_findings() {
         let findings = vec![
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "micro-behaviors/fs/read::open".to_string(),
@@ -2257,7 +2302,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "micro-behaviors/fs/read::open".to_string(),
@@ -2276,7 +2321,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "objectives/execution/loader::fragment".to_string(),
@@ -2289,7 +2334,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "objectives/execution/loader::unused-fragment".to_string(),
@@ -2302,7 +2347,7 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding {
+            Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![
                     "micro-behaviors/fs/read::open".to_string(),
@@ -2339,7 +2384,7 @@ mod tests {
         // a context line between two hits.
         use crate::types::{ContextLine, Note};
         let report = create_test_report(
-            vec![Finding {
+            vec![Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "net/socket".to_string(),

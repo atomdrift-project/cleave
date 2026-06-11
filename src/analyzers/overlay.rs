@@ -121,7 +121,7 @@ pub(crate) fn analyze_overlay(
     match analyzer.analyze(temp_file.path()) {
         Ok(archive_report) => {
             // Create finding for the SFX overlay itself
-            let sfx_finding = Finding {
+            let sfx_finding = Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: format!("file/archive/self-extracting/{}", archive_type),
@@ -150,7 +150,7 @@ pub(crate) fn analyze_overlay(
             // Archive extraction failed - still emit a finding about the SFX
             tracing::warn!(error = %e, binary_path, archive_type, "Failed to extract overlay archive");
 
-            let sfx_finding = Finding {
+            let sfx_finding = Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: format!(

@@ -990,7 +990,7 @@ impl TraitDefinition {
                 MAX_RULE_EVAL_DURATION.as_millis()
             );
 
-            let timeout_warning = Finding {
+            let timeout_warning = Finding { src: None,
                 id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string(),
                 desc: format!(
                     "Rule evaluation timeout: {} took {}ms (limit: {}ms)",
@@ -1159,6 +1159,7 @@ impl TraitDefinition {
             report_locationless_evidence(&self.id, &result.evidence);
 
             Some(Finding {
+                src: None,
                 id: self.id.clone(),
                 kind: FindingKind::Capability,
                 desc: self.desc.clone(),
@@ -2395,7 +2396,7 @@ impl CompositeTrait {
                     MAX_RULE_EVAL_DURATION.as_millis()
                 );
 
-                return Some(Finding {
+                return Some(Finding { src: None,
                     id: "objectives/anti-analysis/analysis-bomb/rule-timeout".to_string(),
                     desc: format!(
                         "Composite rule evaluation timeout: {} took {}ms (limit: {}ms)",
@@ -2426,7 +2427,7 @@ impl CompositeTrait {
                 });
             }
 
-            Some(Finding {
+            Some(Finding { src: None,
                 id: self.id.clone(),
                 kind: FindingKind::Capability,
                 desc: self.desc.clone(),

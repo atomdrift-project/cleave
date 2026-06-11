@@ -510,7 +510,7 @@ where
             "suspicious" => types::Criticality::Suspicious,
             _ => types::Criticality::Baseline,
         };
-        report.findings.push(types::Finding {
+        report.findings.push(types::Finding { src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],
             id: cap_id,
@@ -1397,7 +1397,7 @@ pub(crate) fn process_encoded_payloads(
             )
         };
 
-        report.findings.push(types::Finding {
+        report.findings.push(types::Finding { src: None,
             id: format!(
                 "metadata/encoded-payload/{}",
                 payload.encoding_chain.join("-")
@@ -1439,7 +1439,7 @@ pub(crate) fn process_encoded_payloads(
                 path = %path.display(),
                 "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
             );
-            report.findings.push(types::Finding {
+            report.findings.push(types::Finding { src: None,
                 id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
                 kind: types::FindingKind::Indicator,
                 desc: format!(

@@ -496,7 +496,7 @@ impl super::CapabilityMapper {
                     if let Some(evidence) = cache.cached_evidence.get(&idx)
                         && !evidence.is_empty()
                     {
-                        return Some(Finding {
+                        return Some(Finding { src: None,
                             id: trait_def.id.clone(),
                             desc: trait_def.desc.clone(),
                             conf: trait_def.conf,
@@ -536,7 +536,7 @@ impl super::CapabilityMapper {
                     if let Some(evidence) = cache.cached_evidence.get(&idx)
                         && !evidence.is_empty()
                     {
-                        return Some(Finding {
+                        return Some(Finding { src: None,
                             id: trait_def.id.clone(),
                             desc: trait_def.desc.clone(),
                             conf: trait_def.conf,

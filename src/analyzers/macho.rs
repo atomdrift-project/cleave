@@ -334,7 +334,7 @@ impl MachOAnalyzer {
             .truncated
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 id: "metadata/strings-truncated".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
@@ -608,7 +608,7 @@ impl MachOAnalyzer {
             format!("{}::{}", sig_category, signer)
         };
 
-        report.findings.push(Finding {
+        report.findings.push(Finding { src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: format!("metadata/signed/{}::{}", sig_category, signer),
@@ -631,7 +631,7 @@ impl MachOAnalyzer {
 
         // Identifier trait - complete trait ID includes the bundle identifier
         if let Some(identifier) = &codesig.identifier {
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: format!("metadata/signed/id::{}", identifier),
@@ -664,7 +664,7 @@ impl MachOAnalyzer {
                 macho_codesign::EntitlementValue::String(s) => s.clone(),
                 macho_codesign::EntitlementValue::Array(a) => a.join(", "),
             };
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: ent_trait_id,
@@ -1240,7 +1240,7 @@ impl MachOAnalyzer {
 
         if let Some(msg) = parse_failure {
             report.metadata.errors.push(msg.clone());
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/macho-header".to_string(),
                 desc: format!("Malformed Mach-O header: {}", msg),

@@ -87,7 +87,7 @@ impl super::JavaClassAnalyzer {
                             .is_none_or(|&b| b == b'/'))
                 {
                     if !report.findings.iter().any(|c| c.id == *cap_id) {
-                        report.findings.push(Finding {
+                        report.findings.push(Finding { src: None,
                             kind: FindingKind::Capability,
                             trait_refs: vec![],
                             id: cap_id.to_string(),
@@ -477,7 +477,7 @@ impl super::JavaClassAnalyzer {
         crit: Criticality,
     ) {
         if !report.findings.iter().any(|c| c.id == id) {
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: id.to_string(),

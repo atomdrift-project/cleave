@@ -206,7 +206,7 @@ struct SfxExtraction {
 }
 
 fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -> Finding {
-    Finding {
+    Finding { src: None,
         kind: FindingKind::Capability,
         id: kind.finding_id().to_string(),
         desc: kind.description().to_string(),
@@ -232,7 +232,7 @@ fn build_finding(kind: SfxKind, extracted: bool, marker_offset: Option<usize>) -
 }
 
 fn build_innoextract_finding(diagnostic: &InnoExtractDiagnostic) -> Finding {
-    Finding {
+    Finding { src: None,
         kind: FindingKind::Capability,
         id: diagnostic.kind.id().to_string(),
         desc: diagnostic.kind.desc().to_string(),

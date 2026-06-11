@@ -34,7 +34,7 @@ mod tests {
     use crate::types::{Evidence, FindingKind};
 
     fn test_finding(id: &str, crit: Criticality) -> Finding {
-        Finding {
+        Finding { src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: "Test".to_string(),

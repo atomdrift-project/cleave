@@ -43,7 +43,7 @@ fn create_test_context<'a>(
 }
 
 fn create_test_finding(id: &str) -> Finding {
-    Finding {
+    Finding { src: None,
         id: id.to_string(),
         kind: FindingKind::Capability,
         desc: format!("Test finding: {}", id),

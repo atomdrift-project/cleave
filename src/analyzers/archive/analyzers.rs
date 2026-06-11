@@ -885,6 +885,15 @@ impl ArchiveAnalyzer {
                     }
                 }
             }
+
+            // Capture this member's context windows from its OWN bytes, mirroring
+            // the standalone path (lib.rs, after dedupe). The member's evidence
+            // offsets index these decompressed bytes, not the container's, so
+            // without a per-member capture the member would carry findings but no
+            // byte/line context. Rides up into `files[].context` via
+            // `into_file_analysis`.
+            report.dedupe_findings();
+            crate::context::capture(&mut report, data, *file_type);
             Ok(Some(report))
         } else if self
             .analysis_options

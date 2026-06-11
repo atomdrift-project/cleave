@@ -122,17 +122,12 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
     let mut anchors: Vec<(u64, u32)> = finding
         .evidence
         .iter()
-        .filter_map(|e| e.byte_offset().map(|o| (o, len_of(e))))
+        .filter_map(local_anchor)
         .collect();
 
     for ref_id in &finding.trait_refs {
         if let Some(component) = by_id.get(ref_id.as_str()) {
-            anchors.extend(
-                component
-                    .evidence
-                    .iter()
-                    .filter_map(|e| e.byte_offset().map(|o| (o, len_of(e)))),
-            );
+            anchors.extend(component.evidence.iter().filter_map(local_anchor));
         }
     }
 
@@ -140,6 +135,22 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
     anchors.dedup_by_key(|(off, _)| *off);
     anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
     anchors
+}
+
+/// A byte anchor `(offset, len)` for evidence whose offset is in *this* file's
+/// byte space. Evidence carried up from an embedded archive member is tagged
+/// with an `archive:` location and its offsets index the member's (decompressed)
+/// bytes, not the bytes being captured here — anchoring it would render garbage,
+/// so it is skipped. Such findings still appear (description-only), and the
+/// member that owns them renders its own context.
+fn local_anchor(e: &crate::types::Evidence) -> Option<(u64, u32)> {
+    if e.location
+        .as_deref()
+        .is_some_and(|l| l.starts_with("archive:"))
+    {
+        return None;
+    }
+    e.byte_offset().map(|o| (o, len_of(e)))
 }
 
 /// Byte length of an evidence match (the matched value), clamped to u32.

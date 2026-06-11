@@ -228,6 +228,14 @@ pub struct Finding {
     #[allow(dead_code)] // Populated during trait evaluation, skip-serialized in output
     #[serde(skip_serializing, default)]
     pub source_file: Option<String>,
+    /// Provenance for an inherited finding: the [`FileAnalysis::id`] of the
+    /// embedded child file it was actually located in. `None` for a finding
+    /// native to the file that lists it. Set during `finalize` once file ids are
+    /// assigned, so consumers can attribute and de-duplicate a finding across the
+    /// archive tree by traversal (`src` → `files[id]`) rather than re-deriving it
+    /// from byte offsets that only make sense in the child's own byte space.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub src: Option<u32>,
 }
 
 impl Finding {
@@ -246,6 +254,7 @@ impl Finding {
             evidence: Vec::new(),
             match_count: 0,
             source_file: None,
+            src: None,
         }
     }
 

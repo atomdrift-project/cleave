@@ -112,6 +112,13 @@ pub struct CompactTrait {
     #[serde(rename = "atk")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub attack: Option<String>,
+    /// Origin file index when this finding was inherited from an embedded
+    /// member; absent when native to this file. Index into `files[]` — the
+    /// member's own context renders it, so traverse there instead of anchoring
+    /// the offsets here (they index the member's bytes, not this file's).
+    #[serde(rename = "src")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub src: Option<u32>,
     // Per-trait evidence (`ev`/`loc`) was removed in favour of the per-file
     // `ctx` block: the matched content is shown once, in context, and each
     // context note references the finding by `id`. Highlight a match via
@@ -585,6 +592,8 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
             if new_crit > existing.criticality {
                 existing.criticality = new_crit;
             }
+            // A copy native to this file (src=None) outranks an inherited one.
+            existing.src = existing.src.and(finding.src);
         } else {
             trait_order.push(&finding.id);
             trait_map.insert(
@@ -596,6 +605,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
                     confidence: finding.conf,
                     mbc: finding.mbc.clone(),
                     attack: finding.attack.clone(),
+                    src: finding.src,
                 },
             );
         }
@@ -775,7 +785,7 @@ mod formula_tests {
     use serde_json::json;
 
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
-        Finding {
+        Finding { src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: "test".to_string(),

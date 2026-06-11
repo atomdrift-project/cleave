@@ -131,7 +131,7 @@ pub(crate) fn process_yara_result(
             "suspicious" => types::Criticality::Suspicious,
             _ => types::Criticality::Baseline,
         };
-        report.findings.push(types::Finding {
+        report.findings.push(types::Finding { src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],
             id: cap_id,

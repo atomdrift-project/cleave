@@ -916,7 +916,21 @@ impl AnalysisReport {
                 continue;
             }
 
-            let child_findings = self.files[child_idx].findings.clone();
+            // Stamp the inherited copies with the child's file id so consumers
+            // can tell a wrapper finding bubbled up from a member (and from which
+            // one), and de-duplicate the view by attributing it to its origin.
+            // Preserve any deeper `src` already set (a finding inherited through
+            // several wrapper layers keeps pointing at where it was located).
+            let child_id = self.files[child_idx].id;
+            let child_findings: Vec<Finding> = self.files[child_idx]
+                .findings
+                .iter()
+                .cloned()
+                .map(|mut f| {
+                    f.src.get_or_insert(child_id);
+                    f
+                })
+                .collect();
             let parent = &mut self.files[parent_idx];
             parent.findings.extend(child_findings);
             dedupe_finding_list(&mut parent.findings);
@@ -1011,6 +1025,41 @@ impl AnalysisReport {
         }
 
         self.inherit_child_findings_into_wrappers();
+
+        // Attribute findings that arrived via the archive *aggregate* (their
+        // evidence carries an `archive:<member>` location but no `src` yet — the
+        // aggregate copy predates `inherit`'s id-stamping and wins de-dup). Map
+        // the member name back to its file id so every inherited finding can be
+        // traced to where it was located. Runs before evidence is stripped, since
+        // the location lives on the (transient) evidence.
+        {
+            use rustc_hash::FxHashMap;
+            let member_to_id: FxHashMap<String, u32> = self
+                .files
+                .iter()
+                .filter(|f| f.path.contains(super::file_analysis::ARCHIVE_DELIMITER))
+                .map(|f| (leaf_member(&f.path).to_string(), f.id))
+                .collect();
+            for file in &mut self.files {
+                let own_id = file.id;
+                for finding in &mut file.findings {
+                    if finding.src.is_some() {
+                        continue;
+                    }
+                    let src = finding.evidence.iter().find_map(|e| {
+                        let member = located_member(e.location.as_deref()?)?;
+                        member_to_id.get(member).copied()
+                    });
+                    // Only mark when it points at a *different* file — a member's
+                    // own finding listed on the member itself stays native.
+                    if let Some(id) = src
+                        && id != own_id
+                    {
+                        finding.src = Some(id);
+                    }
+                }
+            }
+        }
 
         for file in &mut self.files {
             file.strip_source_fields();
@@ -1261,6 +1310,28 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     }
 }
 
+/// The leaf member name of an archive-member file path: the segment after the
+/// last archive delimiter (`a.zip!!dir/b.so` → `dir/b.so`).
+fn leaf_member(path: &str) -> &str {
+    use super::file_analysis::ARCHIVE_DELIMITER;
+    path.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(path)
+}
+
+/// The archive member an evidence location points at, or `None` when the
+/// location isn't archive-scoped. Strips the `archive:` scheme, any trailing
+/// `:0x<offset>` the matcher appended, and any wrapper prefix, leaving the leaf
+/// member name to match against [`leaf_member`].
+fn located_member(location: &str) -> Option<&str> {
+    use super::file_analysis::ARCHIVE_DELIMITER;
+    let rel = location.strip_prefix("archive:")?;
+    // Drop a trailing offset suffix (e.g. `…:0x1126`); member names don't carry one.
+    let rel = match rel.rfind(":0x") {
+        Some(i) if rel[i + 3..].bytes().all(|b| b.is_ascii_hexdigit()) => &rel[..i],
+        _ => rel,
+    };
+    Some(rel.rsplit(ARCHIVE_DELIMITER).next().unwrap_or(rel))
+}
+
 fn immediate_wrapper_path(path: &str) -> Option<&str> {
     use super::file_analysis::{ARCHIVE_DELIMITER, ENCODING_DELIMITER};
 
@@ -1400,7 +1471,7 @@ mod tests {
     }
 
     fn test_finding(id: &str, crit: Criticality) -> Finding {
-        Finding {
+        Finding { src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: format!("Test finding {}", id),
@@ -1769,24 +1840,48 @@ mod tests {
             ),
         ];
 
+        report.files[1].id = 1;
+
         let changed = report.inherit_child_findings_into_wrappers();
 
         assert_eq!(changed, vec![0]);
         assert_eq!(report.files.len(), 2);
-        assert!(
-            report.files[0]
-                .findings
-                .iter()
-                .any(|f| f.id == "cap/archive")
-        );
-        assert!(
-            report.files[0]
-                .findings
-                .iter()
-                .any(|f| f.id == "cap/member")
-        );
+        // The wrapper's own finding stays native; the bubbled-up one is tagged
+        // with the member's file id so it can be attributed back to its origin.
+        let archive = report.files[0]
+            .findings
+            .iter()
+            .find(|f| f.id == "cap/archive")
+            .expect("wrapper keeps its own finding");
+        assert_eq!(archive.src, None, "native finding is not tagged");
+        let inherited = report.files[0]
+            .findings
+            .iter()
+            .find(|f| f.id == "cap/member")
+            .expect("member finding bubbled up");
+        assert_eq!(inherited.src, Some(1), "inherited finding points at member");
+        // The child entry is preserved and its own copy stays native.
         assert_eq!(report.files[1].findings.len(), 1);
         assert_eq!(report.files[1].findings[0].id, "cap/member");
+        assert_eq!(report.files[1].findings[0].src, None);
+    }
+
+    #[test]
+    fn located_member_matches_leaf_member() {
+        // Evidence locations carry the bare member name (plus an optional offset),
+        // while file paths carry the full archive chain — both reduce to the same
+        // leaf member, which is how provenance is matched in `finalize`.
+        assert_eq!(located_member("archive:embedded_ls"), Some("embedded_ls"));
+        assert_eq!(
+            located_member("archive:embedded_ls:0x1126"),
+            Some("embedded_ls")
+        );
+        assert_eq!(located_member("archive:lib/foo.so"), Some("lib/foo.so"));
+        assert_eq!(located_member("offset:0x40"), None);
+        assert_eq!(located_member("import"), None);
+        assert_eq!(leaf_member("/tmp/a.zip!!embedded_ls"), "embedded_ls");
+        assert_eq!(leaf_member("/tmp/a.zip!!inner.zip!!deep"), "deep");
+        assert_eq!(leaf_member("/bin/ls"), "/bin/ls");
     }
 
     #[test]

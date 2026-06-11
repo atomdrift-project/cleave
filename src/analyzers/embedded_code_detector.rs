@@ -644,7 +644,7 @@ fn code_snippet(value: &str) -> String {
 /// the embedded code itself (collapsed to a single line); the offset lives in
 /// `location`.
 fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value: &str) -> Finding {
-    Finding {
+    Finding { src: None,
         id: format!("metadata/lang/embedded::{}", lang_name(detected_lang)),
         kind: crate::types::FindingKind::Capability,
         desc: format!("{} code embedded in string", lang_name(detected_lang)),
@@ -673,7 +673,7 @@ fn generate_embedded_language_trait(detected_lang: &FileType, offset: u64, value
 fn generate_encoded_layer_traits(encoding_chain: &[String], offset: u64) -> Vec<Finding> {
     encoding_chain
         .iter()
-        .map(|encoding| Finding {
+        .map(|encoding| Finding { src: None,
             id: format!("metadata/lang/encoded/{encoding}"),
             kind: crate::types::FindingKind::Capability,
             desc: format!("Code recovered from {encoding}-encoded layer"),
@@ -958,7 +958,7 @@ fn detect_base64_binary(
     let virtual_path = format!("{}##base64@{:#x}", parent_path, offset);
     let sha256 = crate::analyzers::utils::calculate_sha256(&decoded);
 
-    let finding = Finding {
+    let finding = Finding { src: None,
         kind: FindingKind::Capability,
         id: format!("binary/embedded/base64-{}", inner_type),
         desc: format!(
@@ -1137,7 +1137,7 @@ fn detect_powershell_encoded_command(
         .without_embedded_detection();
     let mut report = analyzer.analyze_source(Path::new(&virtual_path), &decoded);
 
-    report.findings.push(Finding {
+    report.findings.push(Finding { src: None,
         kind: FindingKind::Capability,
         id: "binary/embedded/base64-powershell".to_string(),
         desc: format!(

@@ -459,7 +459,7 @@ mod tests {
     use types::{AnalysisReport, Criticality, TargetInfo};
 
     fn make_finding(id: &str, crit: Criticality) -> Finding {
-        Finding {
+        Finding { src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: format!("test {id}"),

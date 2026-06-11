@@ -277,7 +277,7 @@ impl ElfAnalyzer {
                 const SQUASHFS_LE: &[u8] = &[0x73, 0x71, 0x73, 0x68];
                 const SQUASHFS_BE: &[u8] = &[0x68, 0x73, 0x71, 0x73];
                 if overlay.starts_with(SQUASHFS_LE) || overlay.starts_with(SQUASHFS_BE) {
-                    report.findings.push(crate::types::Finding {
+                    report.findings.push(crate::types::Finding { src: None,
                         id: "file/sfx/appimage".to_string(),
                         kind: crate::types::FindingKind::Structural,
                         desc: "Squashfs filesystem appended after ELF image (AppImage)".to_string(),
@@ -380,7 +380,7 @@ impl ElfAnalyzer {
                     crit = Criticality::Notable;
                 }
             }
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/elf-header".to_string(),
                 desc: format!("Malformed ELF header or section headers: {err_msg}"),
@@ -537,7 +537,7 @@ impl ElfAnalyzer {
             .truncated
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 id: "metadata/strings-truncated".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
@@ -575,7 +575,7 @@ impl ElfAnalyzer {
         // this is the norm on Linux/BSD, so it's baseline metadata rather
         // than a notable deviation (unlike PE / Mach-O where signing is expected).
         if !is_core_dump {
-            report.findings.push(Finding {
+            report.findings.push(Finding { src: None,
                 id: "metadata/unsigned".to_string(),
                 kind: FindingKind::Capability,
                 desc: "Binary is not digitally signed".to_string(),

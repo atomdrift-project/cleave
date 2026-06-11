@@ -292,8 +292,11 @@ pub fn platforms_intersect(rule: &[Platform], filters: &[Platform]) -> bool {
     if rule.is_empty() || filters.is_empty() {
         return true;
     }
-    rule.iter()
-        .any(|rule_platform| filters.iter().any(|filter| rule_platform.matches_filter(filter)))
+    rule.iter().any(|rule_platform| {
+        filters
+            .iter()
+            .any(|filter| rule_platform.matches_filter(filter))
+    })
 }
 
 /// File type specifier for rule targeting
@@ -999,13 +1002,22 @@ mod tests {
             &[Platform::Appliance],
             &[Platform::FortiOs]
         ));
-        assert!(!platforms_intersect(&[Platform::MacOS], &[Platform::OpenWrt]));
+        assert!(!platforms_intersect(
+            &[Platform::MacOS],
+            &[Platform::OpenWrt]
+        ));
         assert!(!platforms_intersect(
             &[Platform::RouterOs],
             &[Platform::FortiOs]
         ));
-        assert!(!platforms_intersect(&[Platform::RouterOs], &[Platform::Unix]));
-        assert!(!platforms_intersect(&[Platform::FreeBsd], &[Platform::Windows]));
+        assert!(!platforms_intersect(
+            &[Platform::RouterOs],
+            &[Platform::Unix]
+        ));
+        assert!(!platforms_intersect(
+            &[Platform::FreeBsd],
+            &[Platform::Windows]
+        ));
     }
 
     // ==================== FileType Comparison Tests ====================

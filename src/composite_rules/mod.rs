@@ -32,8 +32,8 @@ pub(crate) use traits::{CompositeTrait, DowngradeConditions, Scope, TraitDefinit
 #[allow(unused_imports)]
 pub(crate) use types::Arch;
 pub(crate) use types::FileType;
-pub use types::platforms_intersect;
 pub use types::Platform;
+pub use types::platforms_intersect;
 
 #[cfg(test)]
 mod tests;

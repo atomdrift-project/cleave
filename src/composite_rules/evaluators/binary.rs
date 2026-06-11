@@ -127,7 +127,10 @@ pub(crate) fn eval_section<'a>(
                     method: "section".to_string(),
                     source: "binary".to_string(),
                     value,
-                    location: None,
+                    // Anchor at the section's file offset (header offset 0 when
+                    // the format doesn't record one) so scope/proximity
+                    // bucketing always has a location.
+                    location: Some(format!("0x{:x}", section.offset.unwrap_or(0))),
                     ..Default::default()
                 });
             }
@@ -209,7 +212,8 @@ pub(crate) fn eval_section<'a>(
                         matched_total_size,
                         denom,
                     ),
-                    location: None,
+                    // Aggregate over several sections — anchor at the header.
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 });
             }
@@ -276,7 +280,8 @@ pub(crate) fn eval_section<'a>(
                             denom_desc,
                             denom_mean,
                         ),
-                        location: None,
+                        // Aggregate over several sections — anchor at the header.
+                        location: Some("0x0".to_string()),
                         ..Default::default()
                     });
                 }

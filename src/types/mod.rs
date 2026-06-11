@@ -50,6 +50,7 @@ pub(crate) mod office_metrics;
 pub(crate) mod paths_env;
 pub(crate) mod scores;
 pub(crate) mod traits_findings;
+pub(crate) mod z85;
 
 // Re-export all public types to maintain API compatibility
 // These re-exports are part of the public library API even if not used directly in the binary

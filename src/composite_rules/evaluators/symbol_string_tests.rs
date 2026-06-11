@@ -117,6 +117,45 @@ fn create_test_context<'a>(report: &'a AnalysisReport, data: &'a [u8]) -> Evalua
     EvaluationContext::test_only_new(report, data, FileType::All)
 }
 
+#[test]
+fn test_eval_symbol_fact_member_location_required_without_offset() {
+    let mut report = create_test_report();
+    report.filefacts = Some(crate::types::FilefactsView {
+        symbols: vec![filefacts::Symbol::Member {
+            path: "process.env".to_string(),
+            offset: Some(4),
+        }],
+        ..Default::default()
+    });
+    let ctx = create_test_context(&report, b"process.env.SECRET");
+    let exact = "process.env".to_string();
+
+    let result = super::eval_symbol_fact(SymbolKind::Member, Some(&exact), None, None, &ctx);
+
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].location.as_deref(), Some("0x4"));
+}
+
+#[test]
+fn test_eval_call_location_required_without_offset() {
+    let mut report = create_test_report();
+    report.filefacts = Some(crate::types::FilefactsView {
+        symbols: vec![filefacts::Symbol::Call {
+            target: Some("eval".to_string()),
+            args: Vec::new(),
+            offset: Some(0),
+        }],
+        ..Default::default()
+    });
+    let ctx = create_test_context(&report, b"eval(payload)");
+    let exact = "eval".to_string();
+
+    let result = super::eval_call(Some(&exact), None, None, None, None, &ctx);
+
+    assert!(result.matched);
+    assert_eq!(result.evidence[0].location.as_deref(), Some("0x0"));
+}
+
 // =============================================================================
 // eval_symbol tests
 // =============================================================================

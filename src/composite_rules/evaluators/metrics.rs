@@ -70,7 +70,11 @@ pub(crate) fn eval_metrics<'a>(
             method: "metrics".to_string(),
             source: "analyzer".to_string(),
             value: format!("{} = {:.2}", field, value),
-            location: None,
+            // A metric describes the whole file, not a byte range. Anchor it at
+            // the header (offset 0) so scope/proximity bucketing has a location
+            // to work with; under `scope: file` this collapses to the file-wide
+            // key and pools with sibling evidence.
+            location: Some("0x0".to_string()),
             ..Default::default()
         }]
     } else {

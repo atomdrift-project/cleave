@@ -64,12 +64,16 @@ fn arch_name_from_machine(e_machine: u16) -> String {
 }
 
 impl ElfAnalyzer {
-    fn push_metadata_finding(
+    /// Push a baseline structural metadata finding with its evidence anchored
+    /// at `location` (a hex offset such as the originating section's file
+    /// offset, e.g. for a `.gnu_debuglink` reference).
+    fn push_metadata_finding_at(
         report: &mut AnalysisReport,
         id: &str,
         desc: &str,
         method: &str,
         value: String,
+        location: String,
     ) {
         report.findings.push(
             Finding::structural(id.to_string(), desc.to_string(), 1.0)
@@ -78,7 +82,7 @@ impl ElfAnalyzer {
                     method: method.to_string(),
                     source: "filefacts".to_string(),
                     value,
-                    location: None,
+                    location: Some(location),
                     ..Default::default()
                 }]),
         );
@@ -642,7 +646,7 @@ impl ElfAnalyzer {
                 method: "magic".to_string(),
                 source: "filefacts".to_string(),
                 value: "0x7f".to_string(), // ELF magic byte 0
-                location: None,
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }],
         });
@@ -661,7 +665,7 @@ impl ElfAnalyzer {
                 method: "header".to_string(),
                 source: "filefacts".to_string(),
                 value: format!("elf.machine={}", arch),
-                location: None,
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }],
         });
@@ -677,7 +681,7 @@ impl ElfAnalyzer {
                     method: "symbols".to_string(),
                     source: "filefacts".to_string(),
                     value: "no_symtab".to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
             });
@@ -694,7 +698,7 @@ impl ElfAnalyzer {
                     method: "header".to_string(),
                     source: "filefacts".to_string(),
                     value: "ET_DYN".to_string(),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
             });
@@ -713,12 +717,13 @@ impl ElfAnalyzer {
                 continue;
             }
             if let Some(debuglink) = Self::gnu_debuglink_name(&data[offset..end]) {
-                Self::push_metadata_finding(
+                Self::push_metadata_finding_at(
                     report,
                     "metadata/build/debug::elf-debuglink",
                     ".gnu_debuglink reference present",
                     "section",
                     debuglink,
+                    format!("0x{:x}", section.file_offset),
                 );
             }
         }
@@ -732,7 +737,9 @@ impl ElfAnalyzer {
         for imp in ctx.imports_from_filefacts() {
             // Capability lookup runs against the symbol name; the
             // source argument is used only for evidence attribution.
-            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol)
+            if let Some(cap) = self
+                .capability_mapper
+                .lookup(&imp.symbol, imp.offset.as_deref())
                 && !report.findings.iter().any(|c| c.id == cap.id)
             {
                 report.findings.push(cap);

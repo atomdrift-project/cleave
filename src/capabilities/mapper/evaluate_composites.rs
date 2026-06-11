@@ -493,7 +493,8 @@ impl super::CapabilityMapper {
                             method: "basename".to_string(),
                             source: "archive-entry".to_string(),
                             value: entry_name.clone(),
-                            location: None,
+                            // Archive-entry name match describes the whole entry.
+                            location: Some("0x0".to_string()),
                             ..Default::default()
                         }],
                         match_count: 0,
@@ -605,7 +606,8 @@ impl super::CapabilityMapper {
                     method: "container-composite".to_string(),
                     source: "cross-file-analysis".to_string(),
                     value: "Finding spans multiple files in container".to_string(),
-                    location: None,
+                    // Cross-file container finding — anchor at the container head.
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 });
             }

@@ -48,7 +48,7 @@ mod python_aes_import_tests {
         // not in extracted strings or symbols
         let trait_def = TraitDefinition {
             id: "test-python-import".to_string(),
-            desc: "Detects PyCryptodome AES imports for encryption capability analysis".to_string(),
+            desc: "PyCryptodome AES cipher import".to_string(),
             conf: 0.85,
             crit: Criticality::Notable,
             mbc: None,

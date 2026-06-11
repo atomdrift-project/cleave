@@ -99,6 +99,34 @@ fn get_relative_source_file(path: &std::path::Path) -> Option<String> {
         .map(std::string::ToString::to_string)
 }
 
+/// Report evidence that carries no `location`.
+///
+/// Every match must record where it was found: downstream composite
+/// scope/proximity filtering buckets evidence by `Evidence.location`, and a
+/// `None` location keys to the empty scope. When a composite mixes such
+/// locationless evidence (e.g. a symbol-type leg) with located evidence (e.g.
+/// a text-type leg), the located legs each form their own scope bucket while
+/// the locationless legs share the empty bucket — so no single bucket covers
+/// the required distinct conditions and the rule silently fails to fire even
+/// though every leg matched. A missing location is thus an evaluator bug.
+///
+/// For now this only logs an error (one line per offending evidence item) so
+/// the responsible trait and evaluator can be found. The intent is to promote
+/// it to a hard/fatal error once every evaluator populates a location.
+fn report_locationless_evidence(trait_id: &str, evidence: &[crate::types::Evidence]) {
+    for ev in evidence {
+        if ev.location.is_none() {
+            tracing::error!(
+                trait_id,
+                method = %ev.method,
+                source = %ev.source,
+                "evidence has no location — evaluator bug; locationless evidence \
+                 breaks composite scope bucketing and is slated to become fatal"
+            );
+        }
+    }
+}
+
 // NOTE: ConditionWithFilters was removed. Filter fields (count_min, count_max,
 // per_kb_min, per_kb_max, entropy_min, entropy_max, size_min, size_max) now
 // live directly on TraitDefinition. The `if:` field is now a plain Condition,
@@ -451,7 +479,7 @@ impl TraitDefinition {
         self.r#if.check_count_min_value()
     }
 
-    /// Check for empty or very short descriptions (common LLM mistake).
+    /// Check for empty, too-short, or too-long descriptions.
     /// Returns a warning message if found, None otherwise.
     #[must_use]
     pub(crate) fn check_description_quality(&self) -> Option<String> {
@@ -468,6 +496,14 @@ impl TraitDefinition {
                 "desc: '{}' is too short ({} chars). Write a clear description. Examples: 'JOIN command for IRC' or 'Detects IRC communication patterns'",
                 desc,
                 desc.len()
+            ));
+        }
+
+        if desc.chars().count() > 50 {
+            return Some(format!(
+                "desc: '{}' is too long ({} chars). Keep descriptions at 50 characters or less.",
+                desc,
+                desc.chars().count()
             ));
         }
 
@@ -977,7 +1013,7 @@ impl TraitDefinition {
                         MAX_RULE_EVAL_DURATION.as_millis(),
                         duration.as_millis()
                     ),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
                 match_count: 0,
@@ -1111,6 +1147,16 @@ impl TraitDefinition {
                 debug.matched = true;
                 debug.precision = result.precision;
             });
+
+            // Guardrail: every piece of evidence must carry a `location`.
+            // Locationless evidence silently breaks composite scope/proximity
+            // bucketing — it keys to the empty scope and can split a single-file
+            // rule into unsatisfiable singleton buckets (a symbol-type leg with
+            // no location never pools with a text-type leg that has one). A
+            // missing location is therefore an evaluator bug, not a valid state.
+            // For now we log; this is slated to become a hard error once every
+            // evaluator populates a location.
+            report_locationless_evidence(&self.id, &result.evidence);
 
             Some(Finding {
                 id: self.id.clone(),
@@ -2372,7 +2418,7 @@ impl CompositeTrait {
                             MAX_RULE_EVAL_DURATION.as_millis(),
                             duration.as_millis()
                         ),
-                        location: None,
+                        location: Some("0x0".to_string()),
                         ..Default::default()
                     }],
                     match_count: 0,

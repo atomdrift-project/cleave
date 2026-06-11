@@ -461,7 +461,7 @@ pub(crate) fn eval_hex<'a>(
                     method: "hex".to_string(),
                     source: "error".to_string(),
                     value: format!("invalid hex pattern: {}", e),
-                    location: None,
+                    location: Some("0x0".to_string()),
                     ..Default::default()
                 }],
                 match_count: 0,

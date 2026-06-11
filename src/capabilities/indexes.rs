@@ -40,6 +40,10 @@ fn archive_family_types(file_type: &RuleFileType) -> &'static [RuleFileType] {
     }
 }
 
+fn string_evidence_location(string_info: &StringInfo) -> Option<String> {
+    string_info.offset.map(|o| format!("{:#x}", o))
+}
+
 fn binary_family_types(_file_type: &RuleFileType) -> &'static [RuleFileType] {
     &[]
 }
@@ -967,12 +971,14 @@ impl StringMatchIndex {
                 for &trait_idx in trait_indices {
                     matching_traits.insert(trait_idx);
                     let entry = trait_evidence.entry(trait_idx).or_default();
-                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                    if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                        && let Some(location) = string_evidence_location(string_info)
+                    {
                         entry.push(Evidence {
                             method: "string".to_string(),
                             source: "string_extractor".to_string(),
                             value: truncate_evidence(&string_info.value, 120),
-                            location: string_info.offset.map(|o| format!("{:#x}", o)),
+                            location: Some(location),
                             ..Default::default()
                         });
                     }
@@ -989,12 +995,14 @@ impl StringMatchIndex {
                     for &trait_idx in trait_indices {
                         matching_traits.insert(trait_idx);
                         let entry = trait_evidence.entry(trait_idx).or_default();
-                        if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                        if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                            && let Some(location) = string_evidence_location(string_info)
+                        {
                             entry.push(Evidence {
                                 method: "string".to_string(),
                                 source: "string_extractor".to_string(),
                                 value: original_pattern.clone(),
-                                location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                location: Some(location),
                                 ..Default::default()
                             });
                         }
@@ -1012,7 +1020,9 @@ impl StringMatchIndex {
                         for &trait_idx in trait_indices {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
-                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                && let Some(location) = string_evidence_location(string_info)
+                            {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
@@ -1022,7 +1032,7 @@ impl StringMatchIndex {
                                         mat.end(),
                                         24,
                                     ),
-                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    location: Some(location),
                                     ..Default::default()
                                 });
                             }
@@ -1041,7 +1051,9 @@ impl StringMatchIndex {
                         for &trait_idx in trait_indices {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
-                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                && let Some(location) = string_evidence_location(string_info)
+                            {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
@@ -1051,7 +1063,7 @@ impl StringMatchIndex {
                                         mat.end(),
                                         24,
                                     ),
-                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    location: Some(location),
                                     ..Default::default()
                                 });
                             }
@@ -1097,12 +1109,14 @@ impl StringMatchIndex {
                         for &trait_idx in trait_indices {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
-                            if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                            if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                && let Some(location) = string_evidence_location(string_info)
+                            {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
                                     source: "string_extractor".to_string(),
                                     value: truncate_evidence(&string_info.value, 120),
-                                    location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                    location: Some(location),
                                     ..Default::default()
                                 });
                             }
@@ -1119,12 +1133,14 @@ impl StringMatchIndex {
                             for &trait_idx in trait_indices {
                                 matching_traits.insert(trait_idx);
                                 let entry = trait_evidence.entry(trait_idx).or_default();
-                                if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                    && let Some(location) = string_evidence_location(string_info)
+                                {
                                     entry.push(Evidence {
                                         method: "string".to_string(),
                                         source: "string_extractor".to_string(),
                                         value: original_pattern.clone(),
-                                        location: string_info.offset.map(|o| format!("{:#x}", o)),
+                                        location: Some(location),
                                         ..Default::default()
                                     });
                                 }
@@ -1142,7 +1158,10 @@ impl StringMatchIndex {
                                 for &trait_idx in trait_indices {
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
-                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                        && let Some(location) =
+                                            string_evidence_location(string_info)
+                                    {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
@@ -1152,9 +1171,7 @@ impl StringMatchIndex {
                                                 mat.end(),
                                                 24,
                                             ),
-                                            location: string_info
-                                                .offset
-                                                .map(|o| format!("{:#x}", o)),
+                                            location: Some(location),
                                             ..Default::default()
                                         });
                                     }
@@ -1173,7 +1190,10 @@ impl StringMatchIndex {
                                 for &trait_idx in trait_indices {
                                     matching_traits.insert(trait_idx);
                                     let entry = trait_evidence.entry(trait_idx).or_default();
-                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT {
+                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT
+                                        && let Some(location) =
+                                            string_evidence_location(string_info)
+                                    {
                                         entry.push(Evidence {
                                             method: "string".to_string(),
                                             source: "string_extractor".to_string(),
@@ -1183,9 +1203,7 @@ impl StringMatchIndex {
                                                 mat.end(),
                                                 24,
                                             ),
-                                            location: string_info
-                                                .offset
-                                                .map(|o| format!("{:#x}", o)),
+                                            location: Some(location),
                                             ..Default::default()
                                         });
                                     }

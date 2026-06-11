@@ -15,27 +15,24 @@ use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::types::{AnalysisReport, ContextLine, Criticality, Finding, Note};
 
-/// Maximum match windows kept per finding (the rest are dropped).
+/// Maximum match windows kept per finding (the rest are dropped). A composite
+/// shows only its first location; an atomic trait up to [`ATOMIC_MAX_MATCHES`].
 const MAX_MATCHES: usize = 4;
+/// Locations shown for an atomic trait that matches in several places.
+const ATOMIC_MAX_MATCHES: usize = 3;
 /// Minimum source-line window height per match, richest first: match 1 gets 5
 /// lines (±2), match 2 gets 3 (±1), match 3 gets 2, match 4 gets 1. Merging can
 /// grow a window beyond these minima.
 const MIN_HEIGHTS: [u32; MAX_MATCHES] = [5, 3, 2, 1];
-/// Max rendered characters for a source line (clipped, `…`-elided).
+/// Max rendered characters for a minified slice (clipped, `…`-elided).
 const LINE_CLIP: usize = 120;
-/// Bytes per hex|ascii row, sized so a row fills ~100 columns (option a):
-/// `offset + 22·"XX " + 22 ascii ≈ 98`. Wider rows = longer string fragments
-/// per line, which is what an LLM reads.
-const HEX_ROW: u64 = 22;
-/// Bytes per binary hex window: 4 rows.
-const HEX_WINDOW: u64 = HEX_ROW * 4;
-/// Bytes shown ahead of the matched bytes on the leading hex row, so the match
-/// sits a fixed distance in rather than at a grid-aligned column.
-const HEX_LEAD: u64 = 8;
+/// Max raw bytes stored per source line; the renderer clips to terminal width.
+const LINE_STORE_MAX: usize = 1024;
+/// Raw bytes captured on each side of a binary match — roughly one hex row, the
+/// byte analogue of the source view's single line of context. The renderer wraps
+/// the window (`16 + match + 16`) into hex|ascii rows at the terminal's width.
+const HEX_CONTEXT: u64 = 16;
 
-/// Byte stride between consecutive hex rows — the renderer uses it to tell a
-/// contiguous window from a gap (`--`).
-pub(crate) const HEX_STRIDE: u64 = HEX_ROW;
 /// Half-width (bytes) of a minified one-liner slice; the rendered slice is then
 /// clipped to [`LINE_CLIP`] characters, so this just needs to exceed it.
 const MINIFIED_HALF: u64 = 80;
@@ -118,8 +115,10 @@ struct Window {
 /// Collect a finding's anchor offsets: its own evidence, plus — for composites —
 /// the offsets of the component findings it references (their evidence may carry
 /// offsets the merged composite evidence lost to truncation). Deduped by offset,
-/// file-ordered, capped at [`MAX_MATCHES`].
+/// file-ordered. A composite shows only its first location; an atomic trait
+/// shows up to its first three.
 fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+    let composite = !finding.trait_refs.is_empty();
     let mut anchors: Vec<(u64, u32)> = finding
         .evidence
         .iter()
@@ -139,7 +138,7 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
 
     anchors.sort_unstable_by_key(|(off, _)| *off);
     anchors.dedup_by_key(|(off, _)| *off);
-    anchors.truncate(MAX_MATCHES);
+    anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
     anchors
 }
 
@@ -210,18 +209,17 @@ impl<'a> LineIndex<'a> {
         }
     }
 
-    /// Rendered text of line `i` (0-based): the line without its newline,
-    /// lossily decoded, clipped to [`LINE_CLIP`] characters centered on
-    /// `hit_col` (a byte offset within the line, or `None` for context lines).
-    fn render(&self, i: usize, hit_col: Option<usize>) -> String {
+    /// Raw bytes of line `i` (0-based) without its newline, bounded to
+    /// [`LINE_STORE_MAX`] so a pathological long line can't bloat the report.
+    /// The renderer clips this to the terminal width at display time.
+    fn raw_line(&self, i: usize) -> &[u8] {
         let start = self.starts.get(i).copied().unwrap_or(self.data.len());
         let end = self
             .starts
             .get(i + 1)
             .map_or(self.data.len(), |n| n.saturating_sub(1));
-        let raw = self.data.get(start..end.max(start)).unwrap_or(&[]);
-        let text = String::from_utf8_lossy(raw);
-        clip(&text, hit_col.map(|c| c.saturating_sub(start)), LINE_CLIP)
+        let end = end.max(start).min(start + LINE_STORE_MAX);
+        self.data.get(start..end).unwrap_or(&[])
     }
 }
 
@@ -258,11 +256,10 @@ fn render_line_segment(index: &LineIndex<'_>, seg: &Segment) -> Vec<ContextLine>
     (seg.lo..=seg.hi)
         .map(|line| {
             let notes = seg.notes_at(line);
-            let hit_col = notes.first().map(|n| n.off as usize);
             ContextLine {
                 loc: line + 1, // 1-based for humans
                 addr: Some(index.byte_start(line)),
-                text: index.render(line as usize, hit_col),
+                data: index.raw_line(line as usize).to_vec(),
                 hex: false,
                 notes,
             }
@@ -287,12 +284,12 @@ fn capture_byte_slices(
         for (off, len) in finding_anchors(finding, by_id) {
             let (lo, hi, at) = match render {
                 Render::Hex => {
-                    // This window only groups nearby matches into one segment (so
-                    // their notes dedup together); `render_hex_segment` lays out the
-                    // actual rows per match, each leading by `HEX_LEAD`. `at` is the
-                    // raw match offset.
-                    let lo = off.saturating_sub(HEX_LEAD);
-                    (lo, (lo + HEX_WINDOW).min(total), off)
+                    // Capture 32 bytes either side of the match; overlapping
+                    // windows merge into one segment, which `render_hex_segment`
+                    // emits as a single raw-byte unit. `at` is the match offset.
+                    let lo = off.saturating_sub(HEX_CONTEXT);
+                    let hi = (off + u64::from(len) + HEX_CONTEXT).min(total);
+                    (lo, hi, off)
                 }
                 Render::Text => {
                     let lo = off.saturating_sub(MINIFIED_HALF);
@@ -314,97 +311,24 @@ fn capture_byte_slices(
     })
 }
 
-/// Render a merged byte segment as fixed-width hex|ascii rows, like a hex editor.
-/// A *window* leads its first match by [`HEX_LEAD`] bytes then steps contiguously
-/// by [`HEX_ROW`]; matches less than a row apart keep the run flowing (no repeated
-/// bytes), and a ≥1-row gap breaks it with a `…` continuation row. Each match is
-/// annotated on the row holding the majority of its bytes; a match still wraps
-/// (highlighted) onto the next row when it runs past a row's end.
+/// Emit a merged byte segment as one raw-byte unit: the contiguous slice
+/// `[lo, hi)` with every match note attached at its absolute offset. The
+/// renderer wraps it into hex|ascii rows at the terminal's width and inserts a
+/// break before the next unit when their offsets aren't contiguous.
 fn render_hex_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
     let total = data.len() as u64;
-    let mut offs: Vec<u64> = seg.notes.iter().map(|(p, _)| *p).collect();
-    offs.sort_unstable();
-    offs.dedup();
-    if offs.is_empty() {
+    let lo = seg.lo.min(total);
+    let hi = seg.hi.min(total);
+    if lo >= hi {
         return Vec::new();
     }
-
-    // Lay out the rows: `(row_start, gap_after)` where `gap_after` flags a `…`
-    // continuation row before the next window.
-    let mut layout: Vec<(u64, bool)> = Vec::new();
-    let mut i = 0usize;
-    let mut row = offs[0].saturating_sub(HEX_LEAD);
-    loop {
-        let row_end = row + HEX_ROW;
-        while i < offs.len() && offs[i] < row_end {
-            i += 1; // matches covered by this row
-        }
-        if i >= offs.len() {
-            layout.push((row, false));
-            break;
-        }
-        // Continue the run smoothly when the next match is < one row past this
-        // row's end; otherwise break with a `…` row and lead the next match by 8.
-        if offs[i] - row_end < HEX_ROW {
-            layout.push((row, false));
-            row = row_end;
-        } else {
-            layout.push((row, true));
-            row = offs[i].saturating_sub(HEX_LEAD);
-        }
-    }
-
-    // Assign each match to the row holding the majority of its bytes.
-    let row_for = |off: u64, len: u64| -> u64 {
-        layout
-            .iter()
-            .map(|&(r, _)| r)
-            .max_by_key(|&r| {
-                let lo = off.max(r);
-                let hi = (off + len).min(r + HEX_ROW);
-                hi.saturating_sub(lo)
-            })
-            .unwrap_or(off.saturating_sub(HEX_LEAD))
-    };
-    let mut row_notes: std::collections::BTreeMap<u64, Vec<Note>> =
-        std::collections::BTreeMap::new();
-    for (off, note) in &seg.notes {
-        let r = row_for(*off, u64::from(note.len.max(1)));
-        row_notes.entry(r).or_default().push(note.clone());
-    }
-
-    let mut out: Vec<ContextLine> = Vec::new();
-    for &(r, gap_after) in &layout {
-        if r >= total {
-            continue;
-        }
-        let mut notes = row_notes.remove(&r).unwrap_or_default();
-        dedup_notes(&mut notes);
-        let end = (r + HEX_ROW).min(total);
-        out.push(ContextLine {
-            loc: r,
-            addr: None, // loc is already the byte offset
-            text: hex_ascii(&data[r as usize..end as usize]),
-            hex: true,
-            notes,
-        });
-        if gap_after {
-            // One full-width unmatched row ending in `…` marks the skip to the
-            // next window, in place of a blank gap line.
-            let cstart = r + HEX_ROW;
-            let cend = (cstart + HEX_ROW).min(total);
-            if cstart < cend {
-                out.push(ContextLine {
-                    loc: cstart,
-                    addr: None,
-                    text: hex_ascii_cont(&data[cstart as usize..cend as usize]),
-                    hex: true,
-                    notes: Vec::new(),
-                });
-            }
-        }
-    }
-    out
+    vec![ContextLine {
+        loc: lo,
+        addr: None, // loc is already the byte offset
+        data: data[lo as usize..hi as usize].to_vec(),
+        hex: true,
+        notes: seg.all_notes(),
+    }]
 }
 
 /// Render a merged byte segment of minified source as a single clipped slice.
@@ -416,61 +340,18 @@ fn render_text_segment(data: &[u8], seg: &Segment) -> Vec<ContextLine> {
     // Anchor the clip on the first match's offset within the slice.
     let mut notes = seg.all_notes();
     notes.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
-    let col = notes.first().map(|n| (n.off as usize).saturating_sub(start));
+    let col = notes
+        .first()
+        .map(|n| (n.off as usize).saturating_sub(start));
     vec![ContextLine {
         loc: seg.lo,
         addr: None, // loc is already the byte offset
-        text: clip(&text, col, LINE_CLIP),
-        hex: true,
+        // Minified source is byte-addressed but textual: render as a clipped
+        // string, not a hex dump.
+        data: clip(&text, col, LINE_CLIP).into_bytes(),
+        hex: false,
         notes,
     }]
-}
-
-/// Render a byte slice as `"<hex pairs>  <ascii>"`, non-printables as `.`.
-fn hex_ascii(bytes: &[u8]) -> String {
-    let mut hex = String::with_capacity(bytes.len() * 3 + bytes.len() + 2);
-    for b in bytes {
-        hex.push_str(&format!("{b:02x} "));
-    }
-    hex.push(' ');
-    for b in bytes {
-        hex.push(if b.is_ascii_graphic() || *b == b' ' {
-            *b as char
-        } else {
-            '.'
-        });
-    }
-    hex
-}
-
-/// Like [`hex_ascii`] but the final byte slot (hex) and final ascii char are a
-/// `…` continuation marker — full width, so the row aligns with the grid. Marks
-/// an unmatched trailing row that continues beyond the shown window.
-fn hex_ascii_cont(bytes: &[u8]) -> String {
-    let n = HEX_ROW as usize;
-    let keep = bytes.len().min(n - 1); // last slot is reserved for `…`
-    let shown = &bytes[..keep];
-    let mut hex = String::with_capacity(n * 4);
-    for b in shown {
-        hex.push_str(&format!("{b:02x} "));
-    }
-    for _ in keep..(n - 1) {
-        hex.push_str("   "); // blank unshown slots, 3 cols each
-    }
-    hex.push_str("…  "); // final slot: `…` padded to 3 cols like "XX "
-    hex.push(' '); // second separator space (matches hex_ascii)
-    for b in shown {
-        hex.push(if b.is_ascii_graphic() || *b == b' ' {
-            *b as char
-        } else {
-            '.'
-        });
-    }
-    for _ in keep..(n - 1) {
-        hex.push(' ');
-    }
-    hex.push('…'); // final ascii char
-    hex
 }
 
 // ========================================================================
@@ -544,7 +425,10 @@ fn spans_overlap(a: &Note, b: &Note) -> bool {
 /// Sort windows by start, merge overlapping/adjacent ones into [`Segment`]s, and
 /// render each via `render_segment`. Segments are emitted in file order; the
 /// renderer (tiny/JSON) inserts gap markers where consecutive `loc` values jump.
-fn merge(mut windows: Vec<Window>, render_segment: impl Fn(&Segment) -> Vec<ContextLine>) -> Vec<ContextLine> {
+fn merge(
+    mut windows: Vec<Window>,
+    render_segment: impl Fn(&Segment) -> Vec<ContextLine>,
+) -> Vec<ContextLine> {
     if windows.is_empty() {
         return Vec::new();
     }
@@ -611,10 +495,15 @@ fn clip(text: &str, col: Option<usize>, max: usize) -> String {
     }
     // Translate the byte column to a char index (best effort).
     let center = col
-        .map(|c| text.get(..c.min(text.len())).map_or(0, |s| s.chars().count()))
+        .map(|c| {
+            text.get(..c.min(text.len()))
+                .map_or(0, |s| s.chars().count())
+        })
         .unwrap_or(0);
     let half = max / 2;
-    let start = center.saturating_sub(half).min(chars.len().saturating_sub(max));
+    let start = center
+        .saturating_sub(half)
+        .min(chars.len().saturating_sub(max));
     let end = (start + max).min(chars.len());
     let mut s = String::new();
     if start > 0 {
@@ -645,7 +534,12 @@ mod tests {
     }
 
     fn finding(id: &str, crit: Criticality, offsets: &[u64]) -> Finding {
-        let mut f = Finding::new(id.to_string(), FindingKind::Capability, format!("{id} desc"), 0.9);
+        let mut f = Finding::new(
+            id.to_string(),
+            FindingKind::Capability,
+            format!("{id} desc"),
+            0.9,
+        );
         f.crit = crit;
         f.evidence = offsets
             .iter()
@@ -667,7 +561,7 @@ mod tests {
         let mut r = report(vec![
             finding("a/eval", Criticality::Hostile, &[16]), // "data" on line 3
             finding("b/fs", Criticality::Suspicious, &[23]), // "decode" on line 3 — distinct span
-            finding("c/exec", Criticality::Notable, &[33]),  // line 4 — windows merge
+            finding("c/exec", Criticality::Notable, &[33]), // line 4 — windows merge
         ]);
         capture(&mut r, data, FileType::Python);
 
@@ -721,12 +615,13 @@ mod tests {
     }
 
     #[test]
-    fn binary_renders_hex_rows() {
+    fn binary_emits_raw_byte_window() {
         let data: Vec<u8> = (0u8..64).collect();
         let mut r = report(vec![finding("bin/x", Criticality::Notable, &[16])]);
         capture(&mut r, &data, FileType::Elf);
-        // Byte-offset mode: the hit row is hex-flagged and shows hex + ascii.
+        // Byte-offset mode: one hex-flagged window of raw bytes spanning the
+        // match (the renderer wraps it into rows at display time).
         let hit = r.context.iter().find(|c| !c.notes.is_empty());
-        assert!(matches!(hit, Some(c) if c.hex && c.text.contains("  ")));
+        assert!(matches!(hit, Some(c) if c.hex && c.data.contains(&16u8)));
     }
 }

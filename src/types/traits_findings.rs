@@ -106,29 +106,37 @@ fn is_zero_u32(n: &u32) -> bool {
 // (value/method) is synthesizable from the content slice if ever needed.
 // ========================================================================
 
-/// One rendered line of merged context: a source line (clipped) or a
-/// `hex  ascii` row for binaries. A line with no notes is pure context (`-`
-/// in tiny output); a line with notes is a hit (`:`).
+/// One unit of merged context: the raw matched bytes of a source line or a
+/// binary window. Analysis emits the bytes; the hex-or-text rendering is a
+/// render-time concern. A unit with no notes is pure context (`-` in tiny
+/// output); a unit with notes is a hit (`:`).
+///
+/// Two orthogonal fields describe a unit beyond its bytes:
+/// - `addr` is the **addressing**: `Some` ⇒ `loc` is a 1-based source line
+///   number and `addr` is that line's byte offset; `None` ⇒ `loc` is already a
+///   byte offset (binary window or minified slice).
+/// - `hex` is the **presentation**: `true` ⇒ render `data` as a `hex  ascii`
+///   dump; `false` ⇒ decode `data` as UTF-8 text. These are independent — a
+///   minified slice is byte-addressed (`addr: None`) yet shown as text.
+///
+/// A finding's highlight spans `note.off - addr.unwrap_or(loc) .. + note.len`.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContextLine {
-    /// Anchor: 1-based line number for source, or byte offset for a degenerate
-    /// over-long line / a binary hex row.
+    /// Anchor: 1-based line number when `addr` is set, else a byte offset.
     #[serde(rename = "l")]
     pub loc: u64,
-    /// Byte offset of this line's content start. Present only for source lines,
-    /// where `loc` is a line number; for hex/minified lines `loc` is already the
-    /// byte offset, so this is omitted (consumers use `addr.unwrap_or(loc)`).
-    /// A finding's highlight is `note.off - line_addr .. + note.len`.
+    /// Byte offset of a source line's content start; omitted for byte-addressed
+    /// units, where `loc` is already the offset (consumers use `addr.unwrap_or(loc)`).
     #[serde(rename = "a", default, skip_serializing_if = "Option::is_none")]
     pub addr: Option<u64>,
-    /// Rendered content: the clipped source text, or `"<hex pairs>  <ascii>"`.
-    #[serde(rename = "t")]
-    pub text: String,
-    /// True when `loc` is a byte offset (binary hex row, or minified one-liner)
-    /// rather than a 1-based line number — so renderers print it in hex.
+    /// The raw matched bytes, carried as Z85 in JSON. Rendered as hex or decoded
+    /// text per `hex`.
+    #[serde(rename = "b", with = "crate::types::z85::serde_z85")]
+    pub data: Vec<u8>,
+    /// Render `data` as a `hex  ascii` dump rather than decoded UTF-8 text.
     #[serde(rename = "x", default, skip_serializing_if = "crate::types::is_false")]
     pub hex: bool,
-    /// Findings whose match falls on this line (deduped by id, severity-sorted).
+    /// Findings whose match falls on this unit (deduped by id, severity-sorted).
     #[serde(rename = "n", default, skip_serializing_if = "Vec::is_empty")]
     pub notes: Vec<Note>,
 }

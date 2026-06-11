@@ -226,7 +226,10 @@ pub(crate) fn eval_path(
                 method: "path".to_string(),
                 source: "target".to_string(),
                 value: target.to_string(),
-                location: None,
+                // A path/filename match describes the file as a whole, not a
+                // byte range. Anchor it at the header (offset 0) so scope and
+                // proximity bucketing always have a location to key on.
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }]
         } else {

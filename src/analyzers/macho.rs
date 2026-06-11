@@ -47,6 +47,23 @@ impl MachOAnalyzer {
         source: &str,
         value: String,
     ) {
+        // Header/whole-file facts (magic, arch, format bits) genuinely live at
+        // the header, so the default anchor is offset 0.
+        Self::push_metadata_finding_at(report, id, desc, method, source, value, "0x0".to_string());
+    }
+
+    /// Like [`Self::push_metadata_finding`] but with an explicit evidence
+    /// `location` — used where the fact sits at a known non-header offset
+    /// (e.g. a dylib load command).
+    fn push_metadata_finding_at(
+        report: &mut AnalysisReport,
+        id: &str,
+        desc: &str,
+        method: &str,
+        source: &str,
+        value: String,
+        location: String,
+    ) {
         report.findings.push(
             Finding::structural(id.to_string(), desc.to_string(), 1.0)
                 .with_criticality(Criticality::Baseline)
@@ -54,7 +71,7 @@ impl MachOAnalyzer {
                     method: method.to_string(),
                     source: source.to_string(),
                     value,
-                    location: None,
+                    location: Some(location),
                     ..Default::default()
                 }]),
         );
@@ -236,9 +253,9 @@ impl MachOAnalyzer {
         // the typed Section/values machinery is more work than just
         // re-parsing the blob; the cleave-side parser is already
         // panic-safe and ~free on the trivial fixtures.
-        let codesig_data: Option<macho_codesign::CodeSignature> =
-            code_signature_blob_range_from_ctx(ctx)
-                .and_then(|(off, size)| macho_codesign::parse_code_signature(data, off, size).ok());
+        let cs_range = code_signature_blob_range_from_ctx(ctx);
+        let codesig_data: Option<macho_codesign::CodeSignature> = cs_range
+            .and_then(|(off, size)| macho_codesign::parse_code_signature(data, off, size).ok());
 
         // Phase 1: structural features, signature findings, imports,
         // exports, sections. All driven from ctx.
@@ -248,7 +265,8 @@ impl MachOAnalyzer {
 
         let _t = std::time::Instant::now();
         if let Some(ref codesig) = codesig_data {
-            self.generate_signature_findings(codesig, &mut report);
+            let sig_offset = cs_range.map_or(0, |(off, _)| u64::from(off));
+            self.generate_signature_findings(codesig, sig_offset, &mut report);
         }
         let sig_findings_ms = _t.elapsed().as_millis();
 
@@ -395,7 +413,7 @@ impl MachOAnalyzer {
                         .and_then(serde_json::Value::as_u64)
                         .unwrap_or(0)
                 ),
-                location: None,
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }],
         });
@@ -412,7 +430,7 @@ impl MachOAnalyzer {
                 method: "header".to_string(),
                 source: "filefacts".to_string(),
                 value: format!("cputype=0x{:x}", cputype_raw),
-                location: None,
+                location: Some("0x0".to_string()),
                 ..Default::default()
             }],
         });
@@ -448,18 +466,39 @@ impl MachOAnalyzer {
         }
 
         if let Some(libs) = v.get("macho.libraries").and_then(|x| x.as_array()) {
+            // Map each dylib path to its load-command file offset (filefacts
+            // exposes these via `macho.load_dylibs`) so the evidence is
+            // anchored where the dylib reference physically sits.
+            let dylib_offsets: std::collections::HashMap<&str, u64> = v
+                .get("macho.load_dylibs")
+                .and_then(|x| x.as_array())
+                .map(|entries| {
+                    entries
+                        .iter()
+                        .filter_map(|e| {
+                            let path = e.get("path")?.as_str()?;
+                            let off = e.get("offset")?.as_u64()?;
+                            Some((path, off))
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             for lib in libs {
                 let Some(name) = lib.as_str() else { continue };
                 if name.is_empty() {
                     continue;
                 }
-                Self::push_metadata_finding(
+                let location = dylib_offsets
+                    .get(name)
+                    .map_or_else(|| "0x0".to_string(), |off| format!("0x{off:x}"));
+                Self::push_metadata_finding_at(
                     report,
                     "metadata/binary/linking::macho-dylib",
                     "Mach-O linked dylib",
                     "load_dylib",
                     "filefacts",
                     name.to_string(),
+                    location,
                 );
             }
         }
@@ -483,7 +522,9 @@ impl MachOAnalyzer {
     /// lookups against each, and merge into the report.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         for imp in ctx.imports_from_filefacts() {
-            if let Some(cap) = self.capability_mapper.lookup(&imp.symbol)
+            if let Some(cap) = self
+                .capability_mapper
+                .lookup(&imp.symbol, imp.offset.as_deref())
                 && !report.findings.iter().any(|c| c.id == cap.id)
             {
                 report.findings.push(cap);
@@ -528,8 +569,12 @@ impl MachOAnalyzer {
     fn generate_signature_findings(
         &self,
         codesig: &macho_codesign::CodeSignature,
+        sig_offset: u64,
         report: &mut AnalysisReport,
     ) {
+        // Every code-signature finding is anchored at the LC_CODE_SIGNATURE
+        // blob's file offset.
+        let sig_location = format!("0x{sig_offset:x}");
         // Combined signature trait: metadata/signed/{type}::{signer}
         // This allows matching by type (metadata/signed/developer) or specific signer
         let team_id = codesig.team_id.as_deref().unwrap_or("unknown");
@@ -576,7 +621,7 @@ impl MachOAnalyzer {
                 method: "code_signature".to_string(),
                 source: "codesign_parser".to_string(),
                 value: sig_value,
-                location: None,
+                location: Some(sig_location.clone()),
                 ..Default::default()
             }],
 
@@ -599,7 +644,7 @@ impl MachOAnalyzer {
                     method: "code_directory".to_string(),
                     source: "codesign_parser".to_string(),
                     value: identifier.clone(),
-                    location: None,
+                    location: Some(sig_location.clone()),
                     ..Default::default()
                 }],
 
@@ -638,7 +683,7 @@ impl MachOAnalyzer {
                     method: "entitlements_plist".to_string(),
                     source: "codesign_parser".to_string(),
                     value: format!("{}={}", entitlement_key, value_str),
-                    location: None,
+                    location: Some(sig_location.clone()),
                     ..Default::default()
                 }],
 
@@ -1100,8 +1145,9 @@ impl MachOAnalyzer {
                     continue;
                 }
                 let symbol = imp.symbol.clone();
+                let offset = imp.offset.clone();
                 report.imports.push(crate::types::Import { ..imp });
-                if let Some(cap) = self.capability_mapper.lookup(&symbol)
+                if let Some(cap) = self.capability_mapper.lookup(&symbol, offset.as_deref())
                     && !report.findings.iter().any(|c| c.id == cap.id)
                 {
                     report.findings.push(cap);

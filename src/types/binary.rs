@@ -396,10 +396,12 @@ pub struct Import {
     /// Library providing this symbol (e.g., "libc.so.6", "kernel32.dll")
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub library: Option<String>,
-    /// File offset of the call site for scripting-language imports (hex
-    /// string like `"0x1234"`). `None` for compiled-binary imports, which
-    /// have no single meaningful offset. Populated by AST extraction so
-    /// composite rules can apply `near_bytes`/`near_lines` proximity.
+    /// File offset of the import (hex string like `"0x1234"`). For
+    /// scripting-language imports this is the call site (from AST
+    /// extraction); for compiled binaries it is the symbol name's offset in
+    /// the import string table (ELF `.dynstr`), so every import is anchorable
+    /// to a real location for evidence and `near_bytes`/`near_lines`
+    /// proximity. Only `None` when the format records no offset at all.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub offset: Option<String>,
     /// Local alias of a source-language aliased import — the `sp` in

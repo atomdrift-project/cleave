@@ -27,6 +27,10 @@ fn options() -> AnalysisOptions {
 
 #[test]
 fn diff_same_file_has_zero_roc() {
+    if !Path::new(ELF).exists() {
+        eprintln!("skipping diff_same_file_has_zero_roc: {ELF} fixture not present");
+        return;
+    }
     let report = diff_paths(
         Path::new(ELF),
         Path::new(ELF),
@@ -53,6 +57,10 @@ fn diff_same_file_has_zero_roc() {
 /// runtime) happen once per test process instead of three times.
 #[test]
 fn diff_elf_vs_macho_behavior() {
+    if !Path::new(ELF).exists() || !Path::new(MACHO).exists() {
+        eprintln!("skipping diff_elf_vs_macho_behavior: ELF/Mach-O fixtures not present");
+        return;
+    }
     // ── changes are detected at top level ──
     let full = diff_paths(
         Path::new(ELF),

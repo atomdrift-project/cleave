@@ -7,11 +7,11 @@ use tempfile::TempDir;
 
 /// Helper to get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    json.get("fs").and_then(|f| f.get(0))
+    json.get("files").and_then(|f| f.get(0))
 }
 
 fn get_files(json: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    json.get("fs").and_then(|v| v.as_array())
+    json.get("files").and_then(|v| v.as_array())
 }
 
 fn get_file_type(file: &serde_json::Value) -> &str {
@@ -19,22 +19,22 @@ fn get_file_type(file: &serde_json::Value) -> &str {
 }
 
 fn get_matches(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.get("ts").and_then(|v| v.as_array())
+    file.get("find").and_then(|v| v.as_array())
 }
 
 fn match_rule(yara_match: &serde_json::Value) -> Option<&str> {
-    yara_match.get("i").and_then(|v| v.as_str())
+    yara_match.get("id").and_then(|v| v.as_str())
 }
 
 fn match_severity(yara_match: &serde_json::Value) -> Option<&str> {
     yara_match
-        .get("l")
+        .get("crit")
         .and_then(Value::as_u64)
         .map(|level| if level == 0 { "filtered" } else { "matched" })
 }
 
 fn match_description(yara_match: &serde_json::Value) -> Option<&str> {
-    yara_match.get("d").and_then(|v| v.as_str())
+    yara_match.get("desc").and_then(|v| v.as_str())
 }
 
 fn match_namespace(yara_match: &serde_json::Value) -> Option<String> {

@@ -35,7 +35,7 @@ fn run_analyze_json(path: &Path, traits_dir: &Path) -> Value {
 }
 
 fn get_first_file(json: &Value) -> &Value {
-    json.get("fs")
+    json.get("files")
         .and_then(Value::as_array)
         .and_then(|files| files.first())
         .expect("analysis output should contain a compact v5 file entry")
@@ -46,7 +46,7 @@ fn get_file_type(file: &Value) -> &str {
 }
 
 fn get_findings(file: &Value) -> &[Value] {
-    file.get("ts")
+    file.get("find")
         .and_then(Value::as_array)
         .map(Vec::as_slice)
         .expect("analysis output should contain findings")
@@ -57,7 +57,7 @@ fn finding_ids(file: &Value) -> Vec<String> {
         .iter()
         .filter_map(|finding| {
             finding
-                .get("i")
+                .get("id")
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
         })

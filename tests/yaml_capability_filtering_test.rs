@@ -7,7 +7,7 @@ use tempfile::TempDir;
 
 /// Helper to get the first compact v5 file entry.
 fn get_first_file(json: &serde_json::Value) -> Option<&serde_json::Value> {
-    json.get("fs").and_then(|f| f.get(0))
+    json.get("files").and_then(|f| f.get(0))
 }
 
 fn get_file_type(file: &serde_json::Value) -> &str {
@@ -15,24 +15,24 @@ fn get_file_type(file: &serde_json::Value) -> &str {
 }
 
 fn get_traits(file: &serde_json::Value) -> Option<&Vec<serde_json::Value>> {
-    file.get("ts").and_then(|v| v.as_array())
+    file.get("find").and_then(|v| v.as_array())
 }
 
 fn trait_id(trait_value: &serde_json::Value) -> Option<&str> {
-    trait_value.get("i").and_then(|v| v.as_str())
+    trait_value.get("id").and_then(|v| v.as_str())
 }
 
 fn trait_desc(trait_value: &serde_json::Value) -> Option<&str> {
-    trait_value.get("d").and_then(|v| v.as_str())
+    trait_value.get("desc").and_then(|v| v.as_str())
 }
 
 fn trait_conf(trait_value: &serde_json::Value) -> Option<f64> {
-    if let Some(v) = trait_value.get("c").and_then(Value::as_f64) {
+    if let Some(v) = trait_value.get("conf").and_then(Value::as_f64) {
         return Some(v);
     }
 
     // Compact output omits confidence when it is the default 0.5.
-    trait_value.get("i").map(|_| 0.5)
+    trait_value.get("id").map(|_| 0.5)
 }
 
 fn is_capability(trait_value: &serde_json::Value) -> bool {

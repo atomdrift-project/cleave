@@ -165,15 +165,7 @@ fn extract_header_tags_from_source(rule_text: &str) -> Vec<String> {
 }
 
 fn platform_label(platform: &crate::composite_rules::Platform) -> &'static str {
-    match platform {
-        crate::composite_rules::Platform::Windows => "windows",
-        crate::composite_rules::Platform::Linux => "linux",
-        crate::composite_rules::Platform::Unix => "unix",
-        crate::composite_rules::Platform::MacOS => "macos",
-        crate::composite_rules::Platform::Android => "android",
-        crate::composite_rules::Platform::Ios => "ios",
-        crate::composite_rules::Platform::All => "all",
-    }
+    platform.label()
 }
 
 fn looks_like_unix_shell_payload(lower_source: &str) -> bool {

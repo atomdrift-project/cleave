@@ -1395,8 +1395,8 @@ fn extract_trait_tier(id: &str) -> &str {
     base.find('/').map_or(base, |i| &base[..i])
 }
 
-/// Number of concrete platform variants (excludes Platform::All).
-const CONCRETE_PLATFORM_COUNT: usize = 6; // Linux, MacOS, Windows, Unix, Android, Ios
+/// Number of platform variants used when `Platform::All` is expanded.
+const CONCRETE_PLATFORM_COUNT: usize = 25;
 
 /// Effective filetype count used when `for: [all]` is set — larger than any threshold.
 const ALL_FILETYPES_COUNT: usize = usize::MAX;
@@ -1611,7 +1611,7 @@ pub(crate) const BROAD_FILETYPE_ALLOWLIST: &[&str] = &[
 ];
 
 /// Returns the effective platform count for a trait.
-/// `Platform::All` expands to all 6 concrete platforms.
+/// `Platform::All` expands to all known platform variants.
 fn effective_platform_count(platforms: &[Platform]) -> usize {
     if platforms.contains(&Platform::All) {
         CONCRETE_PLATFORM_COUNT
@@ -1633,7 +1633,7 @@ fn effective_filetype_count(t: &TraitDefinition) -> usize {
 
 /// Find atomic traits with 4+ effective platforms outside the broad-platform allowlist.
 ///
-/// `Platform::All` counts as all 6 concrete platforms. Traits must be in an allowlisted
+/// `Platform::All` counts as all known platform variants. Traits must be in an allowlisted
 /// directory to use 4+ platforms; otherwise they should target a narrower platform set.
 ///
 /// Returns `Vec<(trait_id, source_file, platform_count)>` for violations.

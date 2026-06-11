@@ -122,9 +122,7 @@ pub(crate) fn eval_symbol<'a>(
     // Match if: trait allows All platforms, OR context includes All (no --platforms filter),
     // OR trait's platforms intersect with context's platforms
     if let Some(plats) = platforms {
-        let platform_match = plats.contains(&Platform::All)
-            || ctx.platforms.contains(&Platform::All)
-            || plats.iter().any(|p| ctx.platforms.contains(p));
+        let platform_match = crate::composite_rules::platforms_intersect(plats, ctx.platforms);
         if !platform_match {
             return ConditionResult::no_match();
         }

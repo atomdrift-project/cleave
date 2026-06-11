@@ -662,19 +662,20 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     // not run on macOS). Apple-format arms therefore test `has_unix || has_macos
     // || has_ios` so a `[unix]` trait still reaches macOS-native formats.
     // Android is a mobile OS, not a traditional Unix flavor, so it is separate.
-    let has_unix = platforms
-        .iter()
-        .any(|p| matches!(p, Platform::Linux | Platform::Unix));
+    let has_unix = platforms.iter().any(Platform::is_unix_family);
     // Linux-specific features: systemd, deb, rpm require Linux, not generic Unix.
-    let has_linux = platforms.contains(&Platform::Linux);
+    let has_linux = platforms
+        .iter()
+        .any(|p| matches!(p, Platform::Linux | Platform::OpenWrt));
     let has_android = platforms.contains(&Platform::Android);
     let has_macos = platforms.contains(&Platform::MacOS);
     let has_ios = platforms.contains(&Platform::Ios);
+    let has_appliance = platforms.iter().any(Platform::is_appliance_family);
     // macOS is a Unix, so the unix umbrella reaches macOS-native formats too.
     let has_darwin = has_unix || has_macos || has_ios;
     // True when the platform set includes at least one desktop/server OS.
     // Unix covers Linux and macOS for scripting language purposes.
-    let has_desktop = has_windows || has_unix || has_macos;
+    let has_desktop = has_windows || has_unix || has_macos || has_appliance;
 
     if from_groups {
         // Silently filter incompatible types from group expansions
@@ -774,7 +775,8 @@ pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) 
             "all" => {
                 warnings.push(
                     "'platforms: [all]' is not allowed. Specify explicit platforms: \
-                     linux, macos, windows, unix, android, ios."
+                     linux, macos, windows, unix, android, ios, aix, solaris, freebsd, openbsd, \
+                     netbsd, dragonflybsd, openwrt, qnx, esxi, zos, appliance, routeros, fortios."
                         .to_string(),
                 );
                 None
@@ -785,6 +787,25 @@ pub(crate) fn parse_platforms(platforms: &[String], warnings: &mut Vec<String>) 
             "unix" => Some(Platform::Unix),
             "android" => Some(Platform::Android),
             "ios" => Some(Platform::Ios),
+            "aix" => Some(Platform::Aix),
+            "solaris" => Some(Platform::Solaris),
+            "freebsd" => Some(Platform::FreeBsd),
+            "openbsd" => Some(Platform::OpenBsd),
+            "netbsd" => Some(Platform::NetBsd),
+            "dragonflybsd" | "dragonfly" => Some(Platform::DragonFlyBsd),
+            "openwrt" => Some(Platform::OpenWrt),
+            "qnx" => Some(Platform::Qnx),
+            "esxi" => Some(Platform::Esxi),
+            "zos" | "z/os" => Some(Platform::Zos),
+            "appliance" | "network-appliance" => Some(Platform::Appliance),
+            "routeros" => Some(Platform::RouterOs),
+            "fortios" => Some(Platform::FortiOs),
+            "panos" | "pan-os" => Some(Platform::PanOs),
+            "iosxe" | "ios-xe" => Some(Platform::IosXe),
+            "junos" => Some(Platform::Junos),
+            "netscaler" => Some(Platform::Netscaler),
+            "ivanti" => Some(Platform::Ivanti),
+            "vxworks" => Some(Platform::VxWorks),
             _ => None,
         })
         .collect()

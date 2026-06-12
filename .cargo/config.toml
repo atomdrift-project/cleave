@@ -1,8 +1,2 @@
-# DEV-ONLY local override: build against the in-tree filefacts working
-# copy instead of the pinned git SHA, so unpublished filefacts changes
-# (e.g. the Identity view) are visible here. Remove (or gitignore) once
-# filefacts is published and Cargo.lock is bumped.
-paths = ["../filefacts"]
-
 [target.x86_64-unknown-illumos]
 rustflags = ["-C", "link-arg=-lstdc++"]

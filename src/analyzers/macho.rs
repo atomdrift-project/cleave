@@ -629,15 +629,23 @@ impl MachOAnalyzer {
             source_file: None,
         });
 
-        // Identifier trait - complete trait ID includes the bundle identifier
+        // Identifier trait - complete trait ID includes the bundle identifier.
+        //
+        // Notable, not Baseline: the bundle/executable identifier is the
+        // *identity a binary claims*, which is first-class supply-chain
+        // signal an analyst reads in a diff ("this Mach-O now identifies as
+        // `com.apple.ls` but is ad-hoc signed", "the identifier changed
+        // between releases"). Identity is promoted to Notable across all
+        // formats — see traits/metadata/signed/trust-level/traits.yaml for the
+        // shared rationale.
         if let Some(identifier) = &codesig.identifier {
             report.findings.push(Finding { src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: format!("metadata/signed/id::{}", identifier),
-                desc: "Identifier".to_string(),
+                desc: format!("Identifier: {identifier}"),
                 conf: 1.0,
-                crit: Criticality::Baseline,
+                crit: Criticality::Notable,
                 mbc: None,
                 attack: None,
                 evidence: vec![Evidence {
@@ -937,6 +945,13 @@ fn entitlement_category(key: &str) -> &'static str {
     "other"
 }
 
+/// Criticality for a single entitlement. Permissions are *always*
+/// Notable-or-higher, never Baseline: an entitlement is a capability the
+/// binary is granted (debugger access, JIT, disabled library validation),
+/// which is exactly the kind of provenance signal an analyst reads in a
+/// diff. Dangerous entitlements escalate to Suspicious; nothing here returns
+/// Baseline. This mirrors the cross-format identity/permissions principle in
+/// traits/metadata/signed/trust-level/traits.yaml.
 fn determine_entitlement_criticality(
     entitlement_key: &str,
     signature_type: &macho_codesign::SignatureType,
@@ -1478,6 +1493,93 @@ mod tests {
         PathBuf::from("tests/fixtures/test.macho")
     }
 
+    fn report_with_offsets() -> AnalysisReport {
+        let target = crate::types::TargetInfo {
+            path: "/tmp/fat".to_string(),
+            file_type: "macho".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        };
+        let mut report = AnalysisReport::new(target);
+        report.functions.push(crate::types::Function {
+            name: "f".to_string(),
+            offset: Some("0x1000".to_string()),
+            size: None,
+            complexity: None,
+            calls: vec![],
+            control_flow: None,
+            register_usage: None,
+            constants: vec![],
+            signature: None,
+            nesting: None,
+            call_patterns: None,
+        });
+        report.imports.push(crate::types::Import {
+            symbol: "acl_get_entry".to_string(),
+            offset: Some("0x5078".to_string()),
+            ..Default::default()
+        });
+        report
+            .exports
+            .push(Export::new("main", Some("0x2000".to_string())));
+        // A section with both a file offset (rebased) and a vm address (left alone).
+        report.sections.push(crate::types::Section {
+            name: "__text".to_string(),
+            address: Some(0x1_0000_4000),
+            offset: Some(0x4000),
+            size: 0,
+            entropy: 0.0,
+            permissions: None,
+            flags: vec![],
+        });
+        report
+    }
+
+    /// The preferred slice of a fat Mach-O is parsed at base 0, so its
+    /// structural offsets are slice-relative. Rebasing adds the slice's fat
+    /// offset to every *file* offset (functions, imports, exports, section
+    /// offsets) while leaving virtual addresses untouched — so symbol
+    /// annotations line up with the full-file hex view.
+    #[test]
+    fn rebase_slice_offsets_shifts_file_offsets_only() {
+        let mut report = report_with_offsets();
+        MachOAnalyzer::rebase_slice_offsets(&mut report, 0x4000);
+
+        assert_eq!(report.functions[0].offset.as_deref(), Some("0x5000"));
+        assert_eq!(report.imports[0].offset.as_deref(), Some("0x9078"));
+        assert_eq!(report.exports[0].offset.as_deref(), Some("0x6000"));
+        // File offset rebased; virtual address (vmaddr) left as-is.
+        assert_eq!(report.sections[0].offset, Some(0x8000));
+        assert_eq!(report.sections[0].address, Some(0x1_0000_4000));
+    }
+
+    /// A zero delta (thin binary / preferred slice already at offset 0) must
+    /// be a no-op so thin binaries are never perturbed.
+    #[test]
+    fn rebase_slice_offsets_zero_delta_is_noop() {
+        let mut report = report_with_offsets();
+        MachOAnalyzer::rebase_slice_offsets(&mut report, 0);
+        assert_eq!(report.imports[0].offset.as_deref(), Some("0x5078"));
+        assert_eq!(report.sections[0].offset, Some(0x4000));
+    }
+
+    #[test]
+    fn shift_hex_offset_parses_and_preserves_none() {
+        let mut some = Some("0x10".to_string());
+        shift_hex_offset(&mut some, 0xff0);
+        assert_eq!(some.as_deref(), Some("0x1000"));
+
+        let mut none: Option<String> = None;
+        shift_hex_offset(&mut none, 0x100);
+        assert_eq!(none, None);
+
+        // A non-numeric location string (e.g. a forward target) is untouched.
+        let mut label = Some("forward → KERNEL32.X".to_string());
+        shift_hex_offset(&mut label, 0x100);
+        assert_eq!(label.as_deref(), Some("forward → KERNEL32.X"));
+    }
+
     #[test]
     fn test_can_analyze_macho() {
         let analyzer = MachOAnalyzer::new();
@@ -1749,6 +1851,59 @@ mod tests {
         for finding in &sig_type_findings {
             assert_eq!(finding.crit, Criticality::Notable);
             assert_eq!(finding.conf, 1.0); // Should be high confidence
+        }
+    }
+
+    /// Identity (bundle/executable identifier) is Notable, not Baseline:
+    /// "who the binary claims to be" must clear the notable-floored views so
+    /// an analyst sees it in a diff. Locks the cross-format identity principle
+    /// for the Mach-O emitter. Deterministic — no test fixture needed.
+    #[test]
+    fn test_identity_finding_is_notable() {
+        let analyzer = MachOAnalyzer::new();
+        let codesig = macho_codesign::CodeSignature {
+            signature_type: macho_codesign::SignatureType::Platform,
+            identifier: Some("com.apple.ls".to_string()),
+            ..Default::default()
+        };
+        let mut report = AnalysisReport::new(crate::types::TargetInfo {
+            path: "/bin/ls".to_string(),
+            file_type: "macho".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        analyzer.generate_signature_findings(&codesig, 0x1000, &mut report);
+
+        let id_finding = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/signed/id::com.apple.ls")
+            .expect("identity finding emitted");
+        assert_eq!(id_finding.crit, Criticality::Notable);
+        // The value rides in the description so notable-floored views (which
+        // print only `desc`, not the trait id) stay readable.
+        assert_eq!(id_finding.desc, "Identifier: com.apple.ls");
+    }
+
+    /// Permissions never fall to Baseline: every entitlement is at least
+    /// Notable, and dangerous ones escalate to Suspicious. Guards the
+    /// `determine_entitlement_criticality` invariant.
+    #[test]
+    fn test_entitlements_never_baseline() {
+        use macho_codesign::SignatureType;
+        let cases = [
+            ("com.apple.security.app-sandbox", SignatureType::DeveloperID),
+            ("com.apple.security.cs.allow-jit", SignatureType::DeveloperID),
+            ("com.apple.security.get-task-allow", SignatureType::Adhoc),
+            ("com.apple.private.tcc.allow", SignatureType::Platform),
+        ];
+        for (key, sig) in cases {
+            let crit = determine_entitlement_criticality(key, &sig, false);
+            assert!(
+                crit >= Criticality::Notable,
+                "entitlement {key} must be Notable-or-higher, got {crit:?}"
+            );
         }
     }
 

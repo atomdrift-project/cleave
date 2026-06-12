@@ -524,18 +524,19 @@ impl TinyOpts {
         }
     }
 
-    /// cleave's `--format tiny` (LLM) view: minimal header, never colored,
-    /// paths reduced to basename. The trait cap is widened to 512 and every
-    /// suspicious/hostile trait is shown regardless of it — the machine/LLM
-    /// reader must never lose a high-criticality signal to truncation.
+    /// cleave's `--format tiny` (LLM) view: minimal header, never colored, paths
+    /// reduced to basename. Unlike the terminal view it casts a *wide* net —
+    /// top 100 findings down to Component/Baseline — so the model sees the whole
+    /// picture, including low-severity legitimacy signals (signer, product name,
+    /// version metadata) that would otherwise be crowded out by behavioral hits.
     #[must_use]
     pub fn tiny() -> Self {
         Self {
-            top_n: 512,
-            always_crit: Some(Criticality::Suspicious),
             header: HeaderStyle::Minimal,
             color: false,
             basename_root: true,
+            top_n: 250,
+            min_crit: Criticality::Component,
             ..Self::terminal()
         }
     }
@@ -584,11 +585,20 @@ pub fn format_context_badged(
 
     let mut out = String::with_capacity(4096);
     let mut emitted = false;
+    // The machine/LLM view shows each distinct finding once across the whole
+    // sample: an identical finding repeated across many archive members (product
+    // name, overlay notes, "no symbol table", …) adds no signal and floods the
+    // context. Root renders first, so its native findings win; near-identical
+    // members then collapse. The terminal view keeps per-member detail.
+    let dedup_across_files = matches!(opts.header, HeaderStyle::Minimal);
+    let mut seen: HashSet<&str> = HashSet::new();
     for file in files {
-        let selected = select_ids(file, opts);
-        // Render a file that has either findings to show or an identity
-        // headline worth surfacing (a benign signed binary still answers
-        // "who is this?").
+        let mut selected = select_ids(file, opts);
+        if dedup_across_files {
+            selected.retain(|&id| seen.insert(id));
+        }
+        // Render a file that has either findings to show or an identity headline
+        // worth surfacing (a benign signed binary still answers "who is this?").
         if selected.is_empty() && file.identity.is_none() {
             continue;
         }
@@ -717,6 +727,9 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
         out.push_str(&headline);
     }
     out.push('\n');
+    // The signer/product headline is rendered separately from the normalized
+    // `file.identity` (see `render_identity`), so a recognized vendor's
+    // signature always reaches the model up front — no finding-list crowding.
 }
 
 /// Render the normalized identity headline: who/what the file claims to
@@ -998,17 +1011,50 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
 /// (machine/LLM) binary view, before the window is elided with `…`.
 const ASCII_CONTEXT: usize = 24;
 
-/// Bytes as an ASCII-forward stream: printable ASCII verbatim; every other byte
-/// — and a literal `<`, so the escape markers stay unambiguous — as `<xx>`.
+/// Minimum `<printable>\0` pairs to treat a run as UTF-16LE ASCII and collapse
+/// it to text. PE version-info / Authenticode strings are UTF-16LE and sit at
+/// mid-file offsets (no BOM for [`crate::file_io::normalize_text_encoding`] to
+/// catch), so without this `ProductName` renders as `P<00>r<00>o<00>…`.
+const UTF16_RUN: usize = 4;
+
+/// Bytes as an ASCII-forward stream using C-string escapes — the notation every
+/// model has seen in source/strings, and shorter than a bracketed form: `\0` for
+/// NUL (2 chars vs 4), `\t`/`\n`/`\r` for whitespace, `\xNN` for other
+/// non-printables, `\\` for a literal backslash; printable ASCII verbatim. A
+/// UTF-16LE ASCII run is collapsed to plain text (the interleaved nulls dropped).
 fn ascii_forward(data: &[u8]) -> String {
     use std::fmt::Write;
+    let printable = |b: u8| (0x20..=0x7e).contains(&b) && b != b'\\';
     let mut s = String::with_capacity(data.len());
-    for &b in data {
-        if (0x20..=0x7e).contains(&b) && b != b'<' {
-            s.push(b as char);
-        } else {
-            let _ = write!(s, "<{b:02x}>");
+    let mut i = 0;
+    while i < data.len() {
+        // A UTF-16LE ASCII run: `<printable>\0` pairs. Collapse to the text.
+        let mut run = 0;
+        while i + run * 2 + 1 < data.len()
+            && printable(data[i + run * 2])
+            && data[i + run * 2 + 1] == 0
+        {
+            run += 1;
         }
+        if run >= UTF16_RUN {
+            for k in 0..run {
+                s.push(data[i + k * 2] as char);
+            }
+            i += run * 2;
+            continue;
+        }
+        match data[i] {
+            b'\\' => s.push_str("\\\\"),
+            0x00 => s.push_str("\\0"),
+            b'\t' => s.push_str("\\t"),
+            b'\n' => s.push_str("\\n"),
+            b'\r' => s.push_str("\\r"),
+            b @ 0x20..=0x7e => s.push(b as char),
+            b => {
+                let _ = write!(s, "\\x{b:02x}");
+            }
+        }
+        i += 1;
     }
     s
 }
@@ -2761,14 +2807,17 @@ mod tests {
     }
 
     #[test]
-    fn ascii_forward_keeps_printable_escapes_rest() {
-        // Printable ASCII verbatim; NUL, high bytes, and a literal `<` as `<xx>`.
+    fn ascii_forward_uses_c_escapes_and_collapses_utf16() {
+        // Printable ASCII verbatim; NUL as `\0`, other non-printables as `\xNN`.
         assert_eq!(
             ascii_forward(b"\x00getpwuid\x00\x7f\xff"),
-            "<00>getpwuid<00><7f><ff>"
+            "\\0getpwuid\\0\\x7f\\xff"
         );
-        assert_eq!(ascii_forward(b"a<b"), "a<3c>b");
-        assert_eq!(ascii_forward(b"\x7fELF\x02\x01"), "<7f>ELF<02><01>");
+        // `<` is no longer special; a literal backslash doubles.
+        assert_eq!(ascii_forward(b"a<b\\c"), "a<b\\\\c");
+        assert_eq!(ascii_forward(b"\x7fELF\x02\x01"), "\\x7fELF\\x02\\x01");
+        // A UTF-16LE ASCII run collapses to plain text (nulls dropped).
+        assert_eq!(ascii_forward(b"P\x00r\x00o\x00d\x00"), "Prod");
     }
 
     #[test]

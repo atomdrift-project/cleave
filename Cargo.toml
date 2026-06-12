@@ -330,3 +330,4 @@ opt-level = 3
 
 [profile.dev.package.aho-corasick]
 opt-level = 3
+

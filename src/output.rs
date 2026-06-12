@@ -477,6 +477,12 @@ pub enum HeaderStyle {
 pub struct TinyOpts {
     /// Max findings shown per file, ranked by `crit × conf` (highest first).
     pub top_n: usize,
+    /// Findings at or above this criticality bypass `top_n` entirely — they
+    /// are always shown, however many there are. `top_n` then caps only the
+    /// lower-criticality remainder. `None` applies `top_n` uniformly. The
+    /// `tiny` (LLM) view sets this to `Suspicious` so no suspicious/hostile
+    /// trait is ever dropped from machine-read output.
+    pub always_crit: Option<Criticality>,
     /// Hide findings below this criticality.
     pub min_crit: Criticality,
     /// Lines of context per hit (hit ± `(n-1)/2`). `None` keeps the full
@@ -499,13 +505,16 @@ pub struct TinyOpts {
 }
 
 impl TinyOpts {
-    /// cleave's default terminal view: top 20, notable+. Each hit shows one
-    /// line of leading context (the line before tends to carry the clue); each
-    /// trait shows the locations capture kept (atomic: up to 3, composite: 1).
+    /// cleave's default terminal view: notable+, capped at 50 — but every
+    /// suspicious/hostile trait is shown regardless of the cap (50 limits only
+    /// the lower-criticality remainder). Each hit shows one line of leading
+    /// context (the line before tends to carry the clue); each trait shows the
+    /// locations capture kept (atomic: up to 3, composite: 1).
     #[must_use]
     pub fn terminal() -> Self {
         Self {
-            top_n: 20,
+            top_n: 50,
+            always_crit: Some(Criticality::Suspicious),
             min_crit: Criticality::Notable,
             context_lines: Some(2),
             full_context: true,
@@ -515,11 +524,15 @@ impl TinyOpts {
         }
     }
 
-    /// cleave's `--format tiny` (LLM) view: same selection, minimal header,
-    /// never colored, paths reduced to basename — tiny is machine/LLM output.
+    /// cleave's `--format tiny` (LLM) view: minimal header, never colored,
+    /// paths reduced to basename. The trait cap is widened to 512 and every
+    /// suspicious/hostile trait is shown regardless of it — the machine/LLM
+    /// reader must never lose a high-criticality signal to truncation.
     #[must_use]
     pub fn tiny() -> Self {
         Self {
+            top_n: 512,
+            always_crit: Some(Criticality::Suspicious),
             header: HeaderStyle::Minimal,
             color: false,
             basename_root: true,
@@ -628,7 +641,9 @@ fn file_has_output(file: &FileAnalysis) -> bool {
 /// The top-`n` finding ids to show, ranked by `crit × conf` (highest first) and
 /// floored at `min_crit` (after the usual component/filtered gating).
 fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
-    let mut scored: HashMap<&str, f32> = HashMap::new();
+    // Per id, keep the best score and the highest criticality seen — the
+    // latter decides whether the id bypasses the cap.
+    let mut scored: HashMap<&str, (f32, Criticality)> = HashMap::new();
     for f in &file.findings {
         // Show each finding only under the file it was located in: an inherited
         // copy (`src` set) is rendered by its origin member, not here.
@@ -638,13 +653,33 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
         let score = f.conf * f32::from(f.crit as u8);
         scored
             .entry(f.id.as_str())
-            .and_modify(|s| *s = s.max(score))
-            .or_insert(score);
+            .and_modify(|(s, c)| {
+                *s = s.max(score);
+                *c = (*c).max(f.crit);
+            })
+            .or_insert((score, f.crit));
     }
-    let mut ranked: Vec<(&str, f32)> = scored.into_iter().collect();
+    let mut ranked: Vec<(&str, f32, Criticality)> = scored
+        .into_iter()
+        .map(|(id, (s, c))| (id, s, c))
+        .collect();
     ranked.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    ranked.truncate(opts.top_n);
-    ranked.into_iter().map(|(id, _)| id).collect()
+
+    // Findings at or above `always_crit` are shown regardless of `top_n`;
+    // `top_n` then caps only the lower-criticality remainder. A suspicious or
+    // hostile trait is never dropped to truncation.
+    let mut out: Vec<&str> = Vec::new();
+    let mut filler: Vec<&str> = Vec::new();
+    for (id, _, crit) in ranked {
+        if opts.always_crit.is_some_and(|threshold| crit >= threshold) {
+            out.push(id);
+        } else {
+            filler.push(id);
+        }
+    }
+    let remaining = opts.top_n.saturating_sub(out.len());
+    out.extend(filler.into_iter().take(remaining));
+    out
 }
 
 /// Display path for a header. An archive member is shown archive-relative — the
@@ -1552,15 +1587,39 @@ fn rich_header(
     let badged = badge.badge.is_some();
     let file_type_display = display_file_type(&file.file_type);
     let type_display = if badged {
-        format!("\u{00b7} {file_type_display}")
+        // Litmus verdict view stays lean — type only, no identity/formula.
+        format!("\u{00b7} {file_type_display}").bright_black().to_string()
     } else {
         let formula_findings = filter_findings_for_formula(&file.findings);
         let formula = malecule_bridge::formula_from_findings(&formula_findings);
-        if formula.is_empty() {
-            file_type_display
-        } else {
-            format!("{file_type_display} • {formula}")
+        // Header reads `TYPE · <identifier> — <org> • <formula>`. The type
+        // and formula stay dim; the identifier and signing org render in the
+        // default color so "what is this / who signed it" pops at a glance.
+        // `identity_org` prefers the cert O (Apple Inc.) over the CN
+        // (Software Signing) and falls back to the reverse-DNS vendor.
+        let mut s = file_type_display.bright_black().to_string();
+        if let Some(identity) = &file.identity {
+            if let Some(idf) = &identity.identifier {
+                s.push_str(&format!(" {} {}", "·".bright_black(), truncate_end(&idf.value, 48)));
+            }
+            // Signing org: a real publisher (default color), or an explicit
+            // dimmed `ad hoc` marker — ad-hoc signing proves integrity but
+            // names no one, so the slot says so rather than going blank.
+            let org_segment = if let Some(org) = identity_org(identity) {
+                Some(truncate_end(&org, 28))
+            } else if matches!(identity.trust, filefacts::Trust::AdHoc) {
+                Some("ad hoc".dimmed().italic().to_string())
+            } else {
+                None
+            };
+            if let Some(org) = org_segment {
+                s.push_str(&format!(" {} {}", "—".bright_black(), org));
+            }
         }
+        if !formula.is_empty() {
+            s.push_str(&format!(" {} {}", "•".bright_black(), formula.bright_black()));
+        }
+        s
     };
     let display_path = if file.depth > 0 {
         file.path
@@ -1588,7 +1647,7 @@ fn rich_header(
     let header_line = format!(
         "{lead}{}{sep}{}{}{}",
         display_path.bright_white().bold(),
-        type_display.bright_black(),
+        type_display,
         counts,
         trail,
     );
@@ -2143,6 +2202,85 @@ mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Evidence, FindingKind, TargetInfo, YaraMatch};
     use chrono::Utc;
+
+    fn finding_with(id: &str, crit: Criticality) -> Finding {
+        Finding {
+            src: None,
+            kind: FindingKind::Capability,
+            trait_refs: vec![],
+            id: id.to_string(),
+            desc: id.to_string(),
+            conf: 0.9,
+            crit,
+            mbc: None,
+            attack: None,
+            evidence: vec![],
+            match_count: 0,
+            source_file: None,
+        }
+    }
+
+    fn file_with_findings(findings: Vec<Finding>) -> FileAnalysis {
+        let mut fa = FileAnalysis::new(
+            0,
+            "/t".to_string(),
+            "elf".to_string(),
+            "sha".to_string(),
+            1,
+        );
+        fa.findings = findings;
+        fa
+    }
+
+    #[test]
+    fn select_ids_always_shows_suspicious_and_hostile_past_cap() {
+        // 60 hostile findings with a cap of 50: every one must survive,
+        // because suspicious/hostile bypass `top_n` entirely.
+        let findings = (0..60)
+            .map(|i| finding_with(&format!("hostile-{i}"), Criticality::Hostile))
+            .collect();
+        let file = file_with_findings(findings);
+        let selected = select_ids(&file, &TinyOpts::terminal());
+        assert_eq!(selected.len(), 60, "all 60 hostile must show despite cap 50");
+    }
+
+    #[test]
+    fn select_ids_caps_lower_crit_remainder_but_keeps_high() {
+        // 60 notable + 8 suspicious/hostile, cap 50. All 8 high-crit show;
+        // the notable remainder fills to a total of 50 (42 notables).
+        let mut findings: Vec<Finding> = (0..60)
+            .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
+            .collect();
+        for i in 0..5 {
+            findings.push(finding_with(&format!("sus-{i}"), Criticality::Suspicious));
+        }
+        for i in 0..3 {
+            findings.push(finding_with(&format!("hostile-{i}"), Criticality::Hostile));
+        }
+        let file = file_with_findings(findings);
+        let selected = select_ids(&file, &TinyOpts::terminal());
+        assert_eq!(selected.len(), 50, "total capped at 50");
+        for i in 0..5 {
+            assert!(selected.contains(&format!("sus-{i}").as_str()));
+        }
+        for i in 0..3 {
+            assert!(selected.contains(&format!("hostile-{i}").as_str()));
+        }
+        let notables = selected.iter().filter(|id| id.starts_with("notable-")).count();
+        assert_eq!(notables, 42, "lower-crit remainder fills the rest of the 50");
+    }
+
+    #[test]
+    fn tiny_view_widens_cap_to_512() {
+        // 300 notable findings: the terminal cap (50) would truncate, but the
+        // tiny/LLM view widens the cap to 512 so all 300 show.
+        let findings = (0..300)
+            .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
+            .collect();
+        let file = file_with_findings(findings);
+        assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 50);
+        assert_eq!(select_ids(&file, &TinyOpts::tiny()).len(), 300);
+    }
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {
         let mut report = AnalysisReport {

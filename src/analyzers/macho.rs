@@ -703,6 +703,24 @@ impl MachOAnalyzer {
     // AMOS cipher detection/decryption removed - now handled by stng library internally
 }
 
+/// Shift a hex-string file offset (`"0x5078"`) in place by `delta`,
+/// preserving `0x` formatting. A location string that doesn't parse as a
+/// plain hex (or decimal) number is left unchanged — only real byte
+/// offsets are rebased.
+fn shift_hex_offset(offset: &mut Option<String>, delta: u64) {
+    let Some(current) = offset.as_deref() else {
+        return;
+    };
+    let parsed = current
+        .strip_prefix("0x")
+        .or_else(|| current.strip_prefix("0X"))
+        .and_then(|hex| u64::from_str_radix(hex, 16).ok())
+        .or_else(|| current.parse::<u64>().ok());
+    if let Some(value) = parsed {
+        *offset = Some(format!("0x{:x}", value.saturating_add(delta)));
+    }
+}
+
 /// Architecture label for a Mach-O ctx. Mirrors filefacts's
 /// `cpu_type_string` taxonomy (`x86_64`, `arm64`, `arm64e`, …) so
 /// downstream consumers see a canonical lowercase name. Returns
@@ -993,6 +1011,38 @@ impl MachOAnalyzer {
         0..data.len()
     }
 
+    /// Rebase a fat slice's structural file offsets into full-file
+    /// coordinates by adding `delta` (the slice's byte offset within the
+    /// fat wrapper).
+    ///
+    /// filefacts parses each slice from its own bytes at base 0, so every
+    /// import, export, function, and section *file* offset it reports is
+    /// slice-relative. The rest of the pipeline — extracted strings, raw
+    /// pattern matching, YARA, and the hex/context view — all operate on
+    /// the full file. Without this shift a fat binary's symbol annotations
+    /// land `delta` bytes early in the hex view, and `section:`- and
+    /// `near_bytes:`-bounded trait searches target the wrong region.
+    ///
+    /// A section's `address` is a virtual (vm) address, not a file offset,
+    /// so it is deliberately left untouched.
+    pub(crate) fn rebase_slice_offsets(report: &mut AnalysisReport, delta: u64) {
+        if delta == 0 {
+            return;
+        }
+        for func in &mut report.functions {
+            shift_hex_offset(&mut func.offset, delta);
+        }
+        for import in &mut report.imports {
+            shift_hex_offset(&mut import.offset, delta);
+        }
+        for export in &mut report.exports {
+            shift_hex_offset(&mut export.offset, delta);
+        }
+        for section in &mut report.sections {
+            section.offset = section.offset.map(|o| o.saturating_add(delta));
+        }
+    }
+
     /// Returns byte ranges for ALL architecture slices in a fat binary.
     /// For thin binaries, returns a single range covering the entire file.
     /// This ensures we scan all architectures and don't miss malware hidden in non-preferred slices.
@@ -1139,26 +1189,30 @@ impl MachOAnalyzer {
             };
             arches_parsed += 1;
 
-            for imp in slice_ctx.imports_from_filefacts() {
+            for mut imp in slice_ctx.imports_from_filefacts() {
                 let key = (imp.symbol.clone(), imp.library.clone());
                 if !seen_imports.insert(key) {
                     continue;
                 }
+                // This slice was parsed at base 0; rebase its offsets into
+                // full-file coordinates by the slice's fat offset, matching
+                // the preferred slice (rebased by `rebase_slice_offsets`).
+                shift_hex_offset(&mut imp.offset, offset as u64);
                 let symbol = imp.symbol.clone();
-                let offset = imp.offset.clone();
+                let import_offset = imp.offset.clone();
                 report.imports.push(crate::types::Import { ..imp });
-                if let Some(cap) = self.capability_mapper.lookup(&symbol, offset.as_deref())
+                if let Some(cap) = self.capability_mapper.lookup(&symbol, import_offset.as_deref())
                     && !report.findings.iter().any(|c| c.id == cap.id)
                 {
                     report.findings.push(cap);
                 }
             }
 
-            for exp in slice_ctx.exports_from_filefacts() {
-                let symbol = exp.symbol.clone();
-                if !seen_exports.insert(symbol) {
+            for mut exp in slice_ctx.exports_from_filefacts() {
+                if !seen_exports.insert(exp.symbol.clone()) {
                     continue;
                 }
+                shift_hex_offset(&mut exp.offset, offset as u64);
                 report.exports.push(Export { ..exp });
             }
         }
@@ -1322,6 +1376,11 @@ impl Analyzer for MachOAnalyzer {
 
         if is_fat {
             let preferred_offset = self.preferred_arch_range(input.data).start;
+            // The preferred slice was parsed at base 0; rebase its
+            // structural offsets into full-file coordinates so symbol
+            // annotations and section/proximity searches line up with the
+            // full-file strings, raw matches, and hex view.
+            Self::rebase_slice_offsets(&mut report, preferred_offset as u64);
             self.union_supplementary_arches(&mut report, input.data, preferred_offset);
         }
 

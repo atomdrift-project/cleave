@@ -1787,6 +1787,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
             analyzer.apply_fat_metadata(&mut report, file_data);
 
+            // The preferred slice was parsed at base 0, so its structural
+            // offsets are slice-relative. Strings, raw matching, YARA, and
+            // the hex view all use full-file coordinates — rebase the
+            // preferred slice's offsets to match before any of them run.
+            if is_fat {
+                analyzers::macho::MachOAnalyzer::rebase_slice_offsets(
+                    &mut report,
+                    range.start as u64,
+                );
+            }
+
             // For FAT binaries, open each non-preferred arch slice as
             // its own AnalysisContext and union its imports/exports
             // into the report. Without this, malware hidden in a

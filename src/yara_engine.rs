@@ -3640,6 +3640,7 @@ rule builtin_generic_rule {
 
         let traits_dir = dirs::data_dir()
             .unwrap_or_default()
+            .join("atomdrift")
             .join("cleave")
             .join("traits")
             .join("third-party");

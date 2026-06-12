@@ -66,10 +66,10 @@ pub(crate) fn determine_default_log_file() -> Option<String> {
     } else if let Some(state_dir) = dirs::state_dir() {
         // XDG_STATE_HOME (~/.local/state) is the correct place for logs,
         // not XDG_CACHE_HOME (~/.cache) which is for disposable data.
-        state_dir.join("cleave").join("logs")
+        state_dir.join("atomdrift").join("cleave").join("logs")
     } else if let Some(cache_base) = dirs::cache_dir() {
         // macOS/Windows: no XDG state dir, fall back to cache
-        cache_base.join("cleave").join("logs")
+        cache_base.join("atomdrift").join("cleave").join("logs")
     } else {
         std::env::temp_dir().join("cleave-logs")
     };

@@ -47,6 +47,7 @@ fn renders_ledger_row_for_added_file() {
         files: vec![FileDiffEntry {
             path: "lib/foo.so".into(),
             status: FileStatus::Added,
+            identity: None,
             scopes: ScopeDiffs {
                 traits: Some(ScopeDiff {
                     added: vec![TraitChange {
@@ -81,6 +82,119 @@ fn renders_ledger_row_for_added_file() {
     assert!(out.contains("family::evil"));
 }
 
+fn ident(name: &str, trust: filefacts::Trust, org: Option<&str>) -> filefacts::Identity {
+    filefacts::Identity {
+        name: Some(filefacts::Claim::claimed(name, "test")),
+        organization: org.map(|o| filefacts::Claim::claimed(o, "test")),
+        trust,
+        ..Default::default()
+    }
+}
+
+fn diff_with_identity(identity: crate::types::IdentityDiff) -> AnalysisReport {
+    report_with_diff(DiffReportV1 {
+        old_root: "a".into(),
+        new_root: "b".into(),
+        summary: DiffSummary {
+            files_changed: 1,
+            ..Default::default()
+        },
+        scopes: ScopeDiffs::default(),
+        files: vec![FileDiffEntry {
+            path: "bin/tool".into(),
+            status: FileStatus::Changed,
+            identity: Some(identity),
+            scopes: ScopeDiffs::default(),
+            old_formula: None,
+            new_formula: None,
+        }],
+    })
+}
+
+#[test]
+fn identity_drift_renders_old_to_new_and_forces_significance() {
+    // Apple-signed system binary → unsigned: the headline drift, with no
+    // other scope change. Must still render (significance) and show the
+    // field-level old → new transition.
+    let r = diff_with_identity(crate::types::IdentityDiff {
+        old: Some(ident("tool", filefacts::Trust::System, Some("Apple"))),
+        new: Some(ident("tool", filefacts::Trust::Unsigned, None)),
+        changed: true,
+    });
+    let out = strip_ansi(&format_terminal(&r));
+    assert!(out.contains("identity"));
+    assert!(out.contains("changed"));
+    // Trust drift shown as old → new.
+    assert!(out.contains("system"));
+    assert!(out.contains("unsigned"));
+    assert!(out.contains("→"));
+    // Signer organization disappeared (Apple → —).
+    assert!(out.contains("Apple"));
+}
+
+#[test]
+fn unchanged_identity_still_shows_summary_headline() {
+    // The file is significant because a string changed; its identity did
+    // not move, yet the headline still shows — the "show even if
+    // unchanged" behavior, like the analyze view.
+    let id = ident("tool", filefacts::Trust::DeveloperId, Some("Acme Corp"));
+    let r = report_with_diff(DiffReportV1 {
+        old_root: "a".into(),
+        new_root: "b".into(),
+        summary: DiffSummary {
+            files_changed: 1,
+            ..Default::default()
+        },
+        scopes: ScopeDiffs::default(),
+        files: vec![FileDiffEntry {
+            path: "bin/tool".into(),
+            status: FileStatus::Changed,
+            identity: Some(crate::types::IdentityDiff {
+                old: Some(id.clone()),
+                new: Some(id),
+                changed: false,
+            }),
+            scopes: ScopeDiffs {
+                strings: Some(ScopeDiff {
+                    added: vec![StringChange {
+                        value: "/etc/passwd".into(),
+                    }],
+                    old_count: 1,
+                    new_count: 2,
+                    roc: 0.5,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            old_formula: None,
+            new_formula: None,
+        }],
+    });
+    let out = strip_ansi(&format_terminal(&r));
+    assert!(out.contains("identity"));
+    assert!(out.contains("unchanged"));
+    assert!(out.contains("tool"));
+    assert!(out.contains("Acme Corp"));
+}
+
+/// Drop ANSI SGR sequences so assertions match the visible text.
+fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\u{1b}' {
+            for c2 in chars.by_ref() {
+                if c2.is_ascii_alphabetic() {
+                    break;
+                }
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 #[test]
 fn renders_changed_file_in_ledger_no_zero_filler() {
     let r = report_with_diff(DiffReportV1 {
@@ -99,6 +213,7 @@ fn renders_changed_file_in_ledger_no_zero_filler() {
         files: vec![FileDiffEntry {
             path: "x.py".into(),
             status: FileStatus::Changed,
+            identity: None,
             scopes: ScopeDiffs {
                 strings: Some(ScopeDiff {
                     added: vec![StringChange {
@@ -148,6 +263,7 @@ fn header_aligns_formula_arrow_under_label_arrow_single_file() {
         files: vec![FileDiffEntry {
             path: "<root>".into(),
             status: FileStatus::Changed,
+            identity: None,
             scopes: ScopeDiffs::default(),
             // Mirror the real liblzma case the user reported: new formula
             // is wider than `new_label`, which used to cause `35.2% changed
@@ -208,6 +324,7 @@ fn pane_renders_old_and_new_formula_under_path() {
         files: vec![FileDiffEntry {
             path: "lib/foo.so".into(),
             status: FileStatus::Changed,
+            identity: None,
             scopes: ScopeDiffs {
                 strings: Some(ScopeDiff {
                     added: vec![StringChange {
@@ -252,6 +369,7 @@ fn pane_renders_added_file_formula_only() {
         files: vec![FileDiffEntry {
             path: "new_only.py".into(),
             status: FileStatus::Added,
+            identity: None,
             scopes: ScopeDiffs {
                 traits: Some(ScopeDiff {
                     added: vec![TraitChange {
@@ -301,6 +419,7 @@ fn sort_files_by_max_crit_then_roc() {
     let mk = |path: &str, crit: Criticality, roc: f32| FileDiffEntry {
         path: path.into(),
         status: FileStatus::Changed,
+        identity: None,
         scopes: ScopeDiffs {
             traits: Some(ScopeDiff {
                 added: vec![TraitChange {

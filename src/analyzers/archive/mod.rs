@@ -779,6 +779,7 @@ impl ArchiveAnalyzer {
                 .map(|(k, v)| (k.to_string(), v))
                 .collect();
             report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
+            report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
             drop(ctx);
             if let serde_json::Value::Object(map) = values_tree {

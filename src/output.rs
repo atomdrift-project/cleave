@@ -558,7 +558,11 @@ pub fn format_context_badged(
     opts: &TinyOpts,
     badge: HeaderBadge<'_>,
 ) -> String {
-    let files: Vec<&FileAnalysis> = report.files.iter().filter(|f| file_has_output(f)).collect();
+    let files: Vec<&FileAnalysis> = report
+        .files
+        .iter()
+        .filter(|f| file_has_output(f) || f.identity.is_some())
+        .collect();
     if files.is_empty() {
         return String::new();
     }
@@ -569,7 +573,10 @@ pub fn format_context_badged(
     let mut emitted = false;
     for file in files {
         let selected = select_ids(file, opts);
-        if selected.is_empty() {
+        // Render a file that has either findings to show or an identity
+        // headline worth surfacing (a benign signed binary still answers
+        // "who is this?").
+        if selected.is_empty() && file.identity.is_none() {
             continue;
         }
         if emitted {
@@ -587,6 +594,9 @@ pub fn format_context_badged(
         // widest line it actually produced. Location-less findings lead the
         // context (a file-level note) rather than floating, orphaned, after it.
         let mut body = String::new();
+        if let Some(identity) = &file.identity {
+            render_identity(&mut body, identity, colorize);
+        }
         render_no_anchor(&mut body, file, &selected, opts, colorize);
         render_context(&mut body, file, &selected, opts, term_width, colorize);
         match opts.header {
@@ -666,6 +676,139 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
     out.push(' ');
     out.push_str(&file.score.to_string());
     out.push('\n');
+}
+
+/// Render the normalized identity headline: who/what the file claims to
+/// be, its signer/trust tier, and origin artifacts. A few dense,
+/// scannable lines that answer "is this what it says it is?" — the
+/// claimed-vs-verified distinction is carried by the trust word and the
+/// `✓` (shown only when a signature actually verified a claim).
+fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
+    let label = |s: &str| {
+        if colorize {
+            s.dimmed().to_string()
+        } else {
+            s.to_string()
+        }
+    };
+
+    let mut segs: Vec<String> = Vec::new();
+    let primary = id.name.as_ref().or(id.title.as_ref());
+    if let Some(c) = primary {
+        segs.push(if colorize {
+            c.value.as_str().bold().to_string()
+        } else {
+            c.value.clone()
+        });
+    }
+    if let Some(ident) = &id.identifier
+        && primary.is_none_or(|p| p.value != ident.value)
+    {
+        segs.push(ident.value.clone());
+    }
+    if let Some(p) = &id.project {
+        segs.push(format!("({})", p.value));
+    }
+    if let Some(org) = identity_org(id) {
+        segs.push(org);
+    }
+    segs.push(trust_segment(id, colorize));
+
+    out.push_str(&label("identity"));
+    out.push_str("  ");
+    out.push_str(&segs.join(" · "));
+    out.push('\n');
+
+    if let Some(bp) = &id.build_path {
+        out.push_str(&format!("  {}  {}\n", label("build"), truncate_mid(&bp.value, 72)));
+    }
+    if !id.emails.is_empty() {
+        out.push_str(&format!("  {}  {}\n", label("contact"), id.emails.join(", ")));
+    }
+    if !id.unique_ids.is_empty() {
+        let ids: Vec<String> = id
+            .unique_ids
+            .iter()
+            .map(|(k, v)| format!("{k}={}", truncate_end(v, 16)))
+            .collect();
+        out.push_str(&format!("  {}  {}\n", label("ids"), ids.join(" ")));
+    }
+}
+
+/// Best display name for the signing/publishing organization: a verified
+/// signer certificate's O (or CN) wins over the self-asserted field.
+fn identity_org(id: &filefacts::Identity) -> Option<String> {
+    if let Some(signer) = &id.signer
+        && let Some(org) = signer.organization.clone().or_else(|| signer.common_name.clone())
+    {
+        return Some(org);
+    }
+    id.organization.as_ref().map(|c| c.value.clone())
+}
+
+/// The trust tier word, colored by tier and suffixed with `✓` when a
+/// signature cryptographically verified one of the identity claims.
+fn trust_segment(id: &filefacts::Identity, colorize: bool) -> String {
+    use filefacts::Trust;
+    let word = match id.trust {
+        Trust::System => "system",
+        Trust::Platform => "platform",
+        Trust::DeveloperId => "developer-id",
+        Trust::CaSigned => "ca-signed",
+        Trust::SelfSigned => "self-signed",
+        Trust::AdHoc => "ad-hoc",
+        Trust::Unsigned => "unsigned",
+        _ => "unknown",
+    };
+    let verified = [
+        &id.name,
+        &id.identifier,
+        &id.organization,
+        &id.team_id,
+        &id.version,
+        &id.project,
+    ]
+    .into_iter()
+    .flatten()
+    .any(|c| c.verified);
+    let text = if verified {
+        format!("{word} ✓")
+    } else {
+        word.to_string()
+    };
+    if !colorize {
+        return text;
+    }
+    match id.trust {
+        Trust::System | Trust::Platform => text.as_str().green().to_string(),
+        Trust::DeveloperId | Trust::CaSigned => text.as_str().cyan().to_string(),
+        Trust::SelfSigned | Trust::AdHoc => text.as_str().yellow().to_string(),
+        Trust::Unsigned => text.as_str().red().to_string(),
+        _ => text,
+    }
+}
+
+/// Truncate keeping head and tail (for paths): `/Users/t/…/main.rs`.
+fn truncate_mid(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let head = max.saturating_sub(1) / 2;
+    let tail = max.saturating_sub(1) - head;
+    let h: String = chars[..head].iter().collect();
+    let t: String = chars[chars.len() - tail..].iter().collect();
+    format!("{h}…{t}")
+}
+
+/// Truncate keeping the head only (for long hashes): `b38a051e6c36…`.
+fn truncate_end(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        return s.to_string();
+    }
+    let h: String = chars[..max].iter().collect();
+    format!("{h}…")
 }
 
 /// Emit the merged context. Source files render line-by-line; binaries render
@@ -2024,6 +2167,7 @@ mod tests {
             yara_matches,
             syscalls: vec![],
             filefacts: None,
+            identity: None,
             values_tree: None,
             filefacts_metrics: None,
             paths: vec![],

@@ -120,6 +120,13 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts: Option<FilefactsView>,
 
+    /// Normalized identity claims (filefacts `Identity`): who/what the
+    /// file claims to be, signer, trust tier, build path, unique ids —
+    /// each tagged claimed-vs-verified. Present only when non-empty.
+    /// The headline surface for "is this what it says it is?".
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub identity: Option<filefacts::Identity>,
+
     /// Flat metric map mirroring filefacts's emission convention.
     /// Sole numeric metric surface — typed projection structs retired.
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -197,6 +204,7 @@ impl FileAnalysis {
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
             filefacts: None,
+            identity: None,
             filefacts_metrics: None,
             paths: Vec::new(),
             directories: Vec::new(),

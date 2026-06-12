@@ -5,7 +5,6 @@
 //! (segments, dylibs, code signature, header bits) is read from
 //! `filefacts`'s typed views rather than re-walked with goblin. The
 //! analyzer no longer carries its own goblin parse path.
-use crate::analyzers::macho_codesign;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
@@ -244,30 +243,19 @@ impl MachOAnalyzer {
         let mut report = AnalysisReport::new(target);
         let mut tools_used = vec!["filefacts".to_string()];
 
-        // Parse code signature for findings and richer metrics (team
-        // ID, entitlements, hardened runtime). Filefacts already emits
-        // most of the same data under `macho.code_signature.*`, but
-        // the structured `CodeSignature` value drives downstream
-        // helpers (entitlement criticality, dangerous-entitlement
-        // counting). Reuse filefacts's `LC_CODE_SIGNATURE` offset via
-        // the typed Section/values machinery is more work than just
-        // re-parsing the blob; the cleave-side parser is already
-        // panic-safe and ~free on the trivial fixtures.
-        let cs_range = code_signature_blob_range_from_ctx(ctx);
-        let codesig_data: Option<macho_codesign::CodeSignature> = cs_range
-            .and_then(|(off, size)| macho_codesign::parse_code_signature(data, off, size).ok());
-
         // Phase 1: structural features, signature findings, imports,
         // exports, sections. All driven from ctx.
         let _t = std::time::Instant::now();
         self.fill_structural_features_from_ctx(ctx, &mut report);
         let structure_ms = _t.elapsed().as_millis();
 
+        // Code-signature identity/trust/entitlement findings. filefacts
+        // already decoded the signature into its typed
+        // `macho.code_signature.*` view and normalized `Identity`; we
+        // only project those facts into findings rather than re-parsing
+        // the blob.
         let _t = std::time::Instant::now();
-        if let Some(ref codesig) = codesig_data {
-            let sig_offset = cs_range.map_or(0, |(off, _)| u64::from(off));
-            self.generate_signature_findings(codesig, sig_offset, &mut report);
-        }
+        self.generate_signature_findings_from_ctx(ctx, &mut report);
         let sig_findings_ms = _t.elapsed().as_millis();
 
         let _t = std::time::Instant::now();
@@ -308,7 +296,7 @@ impl MachOAnalyzer {
             .filter_map(crate::analysis_context::project_filefacts_function)
             .collect();
         let r2_strings: Option<Vec<stng::ExtractedString>> = None;
-        let _ = (allow_rizin, precomputed_sha256, codesig_data);
+        let _ = (allow_rizin, precomputed_sha256);
 
         let r2_total_ms = _t_r2.elapsed().as_millis();
 
@@ -565,147 +553,31 @@ impl MachOAnalyzer {
         }
     }
 
-    /// Generate findings from parsed code signature data
-    fn generate_signature_findings(
-        &self,
-        codesig: &macho_codesign::CodeSignature,
-        sig_offset: u64,
-        report: &mut AnalysisReport,
-    ) {
-        // Every code-signature finding is anchored at the LC_CODE_SIGNATURE
-        // blob's file offset.
-        let sig_location = format!("0x{sig_offset:x}");
-        // Combined signature trait: metadata/signed/{type}::{signer}
-        // This allows matching by type (metadata/signed/developer) or specific signer
-        let team_id = codesig.team_id.as_deref().unwrap_or("unknown");
-        let (sig_category, signer, desc) = match codesig.signature_type {
-            macho_codesign::SignatureType::DeveloperID => {
-                let company = codesig
-                    .authorities
-                    .first()
-                    .and_then(|auth| {
-                        auth.split(": ")
-                            .nth(1)
-                            .map(|s| s.split(" (").next().unwrap_or(s).to_string())
-                    })
-                    .unwrap_or_else(|| team_id.to_string());
-                ("developer", team_id, format!("Developer ID: {}", company))
-            }
-            macho_codesign::SignatureType::Platform => {
-                ("platform", "apple", "macOS Platform Binary".to_string())
-            }
-            macho_codesign::SignatureType::Adhoc => {
-                ("adhoc", "unsigned", "Ad-hoc Signature".to_string())
-            }
-            macho_codesign::SignatureType::Unknown => {
-                ("unknown", "unknown", "Unknown Signature".to_string())
-            }
+    /// Project filefacts's parsed code signature into identity/trust and
+    /// entitlement findings. cleave does **not** re-parse the signature
+    /// blob: filefacts already decoded it into the typed
+    /// `macho.code_signature.*` view and the normalized [`Identity`], and
+    /// it reports the `LC_CODE_SIGNATURE` blob's file offset via
+    /// `macho.code_signature_offset`. We read those facts and anchor every
+    /// finding at that exact offset.
+    ///
+    /// [`Identity`]: filefacts::Identity
+    fn generate_signature_findings_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        let values = ctx.parsed.values();
+        // The `LC_CODE_SIGNATURE` blob offset is present iff the binary is
+        // signed. Without it there's nothing to attribute — unsigned
+        // binaries are covered by the YAML `unsigned-macho` trait.
+        let Some(sig_offset) = values
+            .get("macho.code_signature_offset")
+            .and_then(serde_json::Value::as_u64)
+        else {
+            return;
         };
-
-        let sig_value = if let Some(ref s) = codesig.signer {
-            format!("{}::{}", sig_category, s)
-        } else {
-            format!("{}::{}", sig_category, signer)
-        };
-
-        report.findings.push(Finding { src: None,
-            kind: FindingKind::Capability,
-            trait_refs: vec![],
-            id: format!("metadata/signed/{}::{}", sig_category, signer),
-            desc,
-            conf: 1.0,
-            crit: Criticality::Notable,
-            mbc: None,
-            attack: None,
-            evidence: vec![Evidence {
-                method: "code_signature".to_string(),
-                source: "codesign_parser".to_string(),
-                value: sig_value,
-                location: Some(sig_location.clone()),
-                ..Default::default()
-            }],
-
-            match_count: 0,
-            source_file: None,
-        });
-
-        // Identifier trait - complete trait ID includes the bundle identifier.
-        //
-        // Notable, not Baseline: the bundle/executable identifier is the
-        // *identity a binary claims*, which is first-class supply-chain
-        // signal an analyst reads in a diff ("this Mach-O now identifies as
-        // `com.apple.ls` but is ad-hoc signed", "the identifier changed
-        // between releases"). Identity is promoted to Notable across all
-        // formats — see traits/metadata/signed/trust-level/traits.yaml for the
-        // shared rationale.
-        if let Some(identifier) = &codesig.identifier {
-            report.findings.push(Finding { src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: format!("metadata/signed/id::{}", identifier),
-                desc: format!("Identifier: {identifier}"),
-                conf: 1.0,
-                crit: Criticality::Notable,
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "code_directory".to_string(),
-                    source: "codesign_parser".to_string(),
-                    value: identifier.clone(),
-                    location: Some(sig_location.clone()),
-                    ..Default::default()
-                }],
-
-                match_count: 0,
-                source_file: None,
-            });
-        }
-
-        // Entitlements traits
-        for (entitlement_key, entitlement_value) in &codesig.entitlements {
-            let ent_category = entitlement_category(entitlement_key);
-            let ent_trait_id =
-                format!("metadata/entitlement/{}::{}", ent_category, entitlement_key);
-            let desc = describe_entitlement(entitlement_key);
-            let value_str = match entitlement_value {
-                macho_codesign::EntitlementValue::Boolean(b) => b.to_string(),
-                macho_codesign::EntitlementValue::String(s) => s.clone(),
-                macho_codesign::EntitlementValue::Array(a) => a.join(", "),
-            };
-            report.findings.push(Finding { src: None,
-                kind: FindingKind::Capability,
-                trait_refs: vec![],
-                id: ent_trait_id,
-                desc,
-                conf: 1.0,
-                crit: determine_entitlement_criticality(
-                    entitlement_key,
-                    &codesig.signature_type,
-                    codesig
-                        .entitlements
-                        .contains_key("com.apple.security.cs.disable-library-validation"),
-                ),
-                mbc: None,
-                attack: None,
-                evidence: vec![Evidence {
-                    method: "entitlements_plist".to_string(),
-                    source: "codesign_parser".to_string(),
-                    value: format!("{}={}", entitlement_key, value_str),
-                    location: Some(sig_location.clone()),
-                    ..Default::default()
-                }],
-
-                match_count: 0,
-                source_file: None,
-            });
-        }
-
-        // `metadata/notarized` and `metadata/hardened-runtime` were
-        // here.  Now emitted by YAML kv traits reading
-        // `signing.notarized` and `signing.hardened_runtime` from the
-        // binary kv tree.  See:
-        //   - metadata/signed/macho-codesign.yaml::macho-notarized
-        //   - metadata/signed/trust-level/traits.yaml::hardened-runtime-dup
+        let identity = ctx.identity().unwrap_or_default();
+        let entitlements = values
+            .get("macho.code_signature.entitlements")
+            .and_then(serde_json::Value::as_object);
+        emit_signature_findings(report, sig_offset, &identity, entitlements);
     }
 
     // AMOS cipher detection/decryption removed - now handled by stng library internally
@@ -726,6 +598,40 @@ fn shift_hex_offset(offset: &mut Option<String>, delta: u64) {
         .or_else(|| current.parse::<u64>().ok());
     if let Some(value) = parsed {
         *offset = Some(format!("0x{:x}", value.saturating_add(delta)));
+    }
+}
+
+/// Rebase a finding's evidence anchor by `delta`. Shifts every concrete
+/// byte offset and a location string that encodes a byte offset (`"0x.."`
+/// or `"offset:.."`), matching the forms [`Evidence::byte_offset`] reads.
+/// Named or `archive:`-scoped locations carry no file offset and are left
+/// untouched.
+///
+/// [`Evidence::byte_offset`]: crate::types::Evidence::byte_offset
+fn shift_evidence_offset(evidence: &mut crate::types::Evidence, delta: u64) {
+    for off in &mut evidence.offsets {
+        *off = off.saturating_add(delta);
+    }
+    let Some(loc) = evidence.location.as_deref() else {
+        return;
+    };
+    if let Some(rest) = loc.strip_prefix("offset:")
+        && let Some(v) = parse_hex_or_dec_loc(rest)
+    {
+        evidence.location = Some(format!("offset:0x{:x}", v.saturating_add(delta)));
+    } else if (loc.starts_with("0x") || loc.starts_with("0X"))
+        && let Some(v) = parse_hex_or_dec_loc(loc)
+    {
+        evidence.location = Some(format!("0x{:x}", v.saturating_add(delta)));
+    }
+}
+
+/// Parse a string as hex (`0x` prefix) or decimal — the location-string
+/// number grammar shared with the context-capture anchor parser.
+fn parse_hex_or_dec_loc(s: &str) -> Option<u64> {
+    match s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        Some(hex) => u64::from_str_radix(hex, 16).ok(),
+        None => s.parse().ok(),
     }
 }
 
@@ -756,41 +662,156 @@ fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
         .is_some_and(|arr| arr.iter().any(|lc| lc.as_str().is_some_and(|s| s == name)))
 }
 
-/// Locate the LC_CODE_SIGNATURE blob `(file_offset, size)` from
-/// filefacts's code-signature metadata. Returns `None` when the binary
-/// is unsigned. `file_offset` isn't currently emitted by filefacts, so
-/// we recover it from the `__LINKEDIT` segment + the signature size:
-/// the cms blob always sits at the end of `__LINKEDIT`.
+/// Build the code-signature findings — signer + trust class, bundle
+/// identifier, entitlements — from filefacts's normalized [`Identity`]
+/// and the projected entitlements map. Split out from
+/// [`MachOAnalyzer::generate_signature_findings_from_ctx`] so the
+/// taxonomy mapping is unit-testable without a parsed binary. Every
+/// finding anchors at `sig_offset`, the `LC_CODE_SIGNATURE` blob offset
+/// filefacts reports (slice-relative on fat binaries; rebased to
+/// full-file coordinates by [`MachOAnalyzer::rebase_slice_offsets`]).
 ///
-/// This is a small hack that lets the cleave-side
-/// `macho_codesign::parse_code_signature` consume the same bytes
-/// filefacts's parser saw, without re-walking the load commands.
-fn code_signature_blob_range_from_ctx(ctx: &Ctx<'_>) -> Option<(u32, u32)> {
-    let v = ctx.parsed.values();
-    // Filefacts surfaces the signature size when LC_CODE_SIGNATURE is
-    // present; absence here means there's no signature to parse.
-    let size = v
-        .get("macho.code_signature_size")
-        .and_then(serde_json::Value::as_u64)? as u32;
-    if size == 0 {
-        return None;
+/// [`Identity`]: filefacts::Identity
+fn emit_signature_findings(
+    report: &mut AnalysisReport,
+    sig_offset: u64,
+    identity: &filefacts::Identity,
+    entitlements: Option<&serde_json::Map<String, serde_json::Value>>,
+) {
+    use filefacts::Trust;
+    let location = format!("0x{sig_offset:x}");
+
+    // Signer + trust class, mapped onto the established
+    // `metadata/signed/{category}::{signer}` taxonomy so existing
+    // composites (`developer-signed`, `platform::*`) and ML features keep
+    // resolving. `category` is the stable path segment; the `signer`
+    // suffix carries the team id / vendor for per-instance granularity.
+    let team_id = identity.team_id.as_ref().map(|c| c.value.as_str());
+    let signer_org = identity
+        .signer
+        .as_ref()
+        .and_then(|s| s.organization.as_deref().or(s.common_name.as_deref()));
+    let is_platform = matches!(identity.trust, Trust::System | Trust::Platform);
+    let (category, signer, desc) = match identity.trust {
+        Trust::DeveloperId | Trust::CaSigned => {
+            let team = team_id.unwrap_or("unknown");
+            let company = signer_org.unwrap_or(team);
+            ("developer", team.to_string(), format!("Developer ID: {company}"))
+        }
+        Trust::System | Trust::Platform => (
+            "platform",
+            "apple".to_string(),
+            "macOS Platform Binary".to_string(),
+        ),
+        Trust::AdHoc => (
+            "adhoc",
+            "unsigned".to_string(),
+            "Ad-hoc Signature".to_string(),
+        ),
+        Trust::SelfSigned => (
+            "self-signed",
+            signer_org.unwrap_or("unknown").to_string(),
+            "Self-signed".to_string(),
+        ),
+        // A signature offset existed but filefacts resolved no trust
+        // tier (`Unsigned`) or a tier added after this match: surface it
+        // as an unknown signature rather than dropping it.
+        _ => (
+            "unknown",
+            "unknown".to_string(),
+            "Unknown Signature".to_string(),
+        ),
+    };
+    let signer_value = signer_org.map_or_else(|| signer.clone(), str::to_string);
+    report.findings.push(signature_finding(
+        format!("metadata/signed/{category}::{signer}"),
+        desc,
+        Criticality::Notable,
+        "code_signature",
+        format!("{category}::{signer_value}"),
+        &location,
+    ));
+
+    // Bundle / executable identifier — the identity the binary claims.
+    // Notable across all formats (see trust-level/traits.yaml rationale).
+    if let Some(identifier) = identity.identifier.as_ref().map(|c| c.value.as_str()) {
+        report.findings.push(signature_finding(
+            format!("metadata/signed/id::{identifier}"),
+            format!("Identifier: {identifier}"),
+            Criticality::Notable,
+            "code_directory",
+            identifier.to_string(),
+            &location,
+        ));
     }
-    // The LC_CODE_SIGNATURE blob sits inside __LINKEDIT, at the very
-    // end. Use `__LINKEDIT.file_offset + __LINKEDIT.file_size - size`
-    // as the start offset.
-    let segs = v.get("macho.segments").and_then(|x| x.as_array())?;
-    let linkedit = segs
-        .iter()
-        .find(|s| s.get("name").and_then(|n| n.as_str()) == Some("__LINKEDIT"))?;
-    let file_offset = linkedit
-        .get("file_offset")
-        .and_then(serde_json::Value::as_u64)?;
-    let file_size = linkedit
-        .get("file_size")
-        .and_then(serde_json::Value::as_u64)?;
-    let end = file_offset.checked_add(file_size)?;
-    let cs_off = end.checked_sub(u64::from(size))?;
-    Some((cs_off as u32, size))
+
+    // Entitlements — each granted capability is at least Notable.
+    let Some(entitlements) = entitlements else {
+        return;
+    };
+    let has_disable_lib_val =
+        entitlements.contains_key("com.apple.security.cs.disable-library-validation");
+    for (key, value) in entitlements {
+        report.findings.push(signature_finding(
+            format!("metadata/entitlement/{}::{}", entitlement_category(key), key),
+            describe_entitlement(key),
+            determine_entitlement_criticality(key, is_platform, has_disable_lib_val),
+            "entitlements_plist",
+            format!("{key}={}", entitlement_value_string(value)),
+            &location,
+        ));
+    }
+}
+
+/// One code-signature finding, anchored at the signature blob `location`.
+/// All signature findings share this shape: a full-confidence Capability
+/// sourced from filefacts.
+fn signature_finding(
+    id: String,
+    desc: String,
+    crit: Criticality,
+    method: &str,
+    value: String,
+    location: &str,
+) -> Finding {
+    Finding {
+        src: None,
+        kind: FindingKind::Capability,
+        trait_refs: vec![],
+        id,
+        desc,
+        conf: 1.0,
+        crit,
+        mbc: None,
+        attack: None,
+        evidence: vec![Evidence {
+            method: method.to_string(),
+            source: "filefacts".to_string(),
+            value,
+            location: Some(location.to_string()),
+            ..Default::default()
+        }],
+        match_count: 0,
+        source_file: None,
+    }
+}
+
+/// Render an entitlement value (from the projected plist JSON) as the
+/// compact `key=value` evidence string. Mirrors the prior
+/// boolean/string/array handling and adds numbers; nested objects are
+/// vanishingly rare in entitlements and fall back to their JSON form.
+fn entitlement_value_string(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Bool(b) => b.to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Array(a) => a
+            .iter()
+            .map(entitlement_value_string)
+            .collect::<Vec<_>>()
+            .join(", "),
+        other => other.to_string(),
+    }
 }
 
 /// Determine criticality of an entitlement based on its key
@@ -954,11 +975,11 @@ fn entitlement_category(key: &str) -> &'static str {
 /// traits/metadata/signed/trust-level/traits.yaml.
 fn determine_entitlement_criticality(
     entitlement_key: &str,
-    signature_type: &macho_codesign::SignatureType,
+    is_platform: bool,
     has_disable_library_validation: bool,
 ) -> Criticality {
-    // Platform (Apple-signed) binaries: all entitlements are notable
-    if matches!(signature_type, macho_codesign::SignatureType::Platform) {
+    // Platform/system (Apple-signed) binaries: all entitlements are notable
+    if is_platform {
         return Criticality::Notable;
     }
 
@@ -1055,6 +1076,17 @@ impl MachOAnalyzer {
         }
         for section in &mut report.sections {
             section.offset = section.offset.map(|o| o.saturating_add(delta));
+        }
+        // Structural findings emitted by this analyzer (code-signature
+        // identity, signer, entitlements) anchor their evidence at
+        // slice-relative file offsets. The context-capture pass renders
+        // them against the full file, so they need the same shift — without
+        // it the "Identifier"/signer annotations land `delta` bytes early,
+        // inside the slice's __text instead of on the signature blob.
+        for finding in &mut report.findings {
+            for evidence in &mut finding.evidence {
+                shift_evidence_offset(evidence, delta);
+            }
         }
     }
 
@@ -1554,6 +1586,45 @@ mod tests {
         assert_eq!(report.sections[0].address, Some(0x1_0000_4000));
     }
 
+    /// A fat slice's code-signature findings (identity, signer) anchor their
+    /// evidence at slice-relative offsets. Rebasing must shift those too, or
+    /// the "Identifier" annotation lands `delta` bytes early — inside the
+    /// slice's __text instead of on the signature blob. Named or `archive:`
+    /// locations carry no file offset and stay put.
+    #[test]
+    fn rebase_slice_offsets_shifts_finding_evidence() {
+        let mut report = report_with_offsets();
+        report.findings.push(Finding {
+            id: "metadata/signed/id::com.apple.ls".to_string(),
+            desc: "Identifier: com.apple.ls".to_string(),
+            evidence: vec![
+                Evidence {
+                    location: Some("0x739b".to_string()),
+                    ..Default::default()
+                },
+                Evidence {
+                    location: Some("LC_CODE_SIGNATURE".to_string()),
+                    offsets: vec![0x100],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        MachOAnalyzer::rebase_slice_offsets(&mut report, 0x4000);
+
+        // Hex-string location rebased onto the real signature blob.
+        assert_eq!(
+            report.findings[0].evidence[0].location.as_deref(),
+            Some("0xb39b")
+        );
+        // Concrete offset rebased; the named location is left as-is.
+        assert_eq!(report.findings[0].evidence[1].offsets, vec![0x4100]);
+        assert_eq!(
+            report.findings[0].evidence[1].location.as_deref(),
+            Some("LC_CODE_SIGNATURE")
+        );
+    }
+
     /// A zero delta (thin binary / preferred slice already at offset 0) must
     /// be a no-op so thin binaries are never perturbed.
     #[test]
@@ -1857,13 +1928,18 @@ mod tests {
     /// Identity (bundle/executable identifier) is Notable, not Baseline:
     /// "who the binary claims to be" must clear the notable-floored views so
     /// an analyst sees it in a diff. Locks the cross-format identity principle
-    /// for the Mach-O emitter. Deterministic — no test fixture needed.
+    /// for the Mach-O emitter. Also pins the two invariants of the
+    /// filefacts-sourced rewrite: a platform binary emits
+    /// `metadata/signed/platform::apple`, and every finding anchors at the
+    /// supplied signature-blob offset. Deterministic — no fixture needed.
     #[test]
     fn test_identity_finding_is_notable() {
-        let analyzer = MachOAnalyzer::new();
-        let codesig = macho_codesign::CodeSignature {
-            signature_type: macho_codesign::SignatureType::Platform,
-            identifier: Some("com.apple.ls".to_string()),
+        let identity = filefacts::Identity {
+            identifier: Some(filefacts::Claim::verified(
+                "com.apple.ls",
+                "macho.code_signature.identifier",
+            )),
+            trust: filefacts::Trust::Platform,
             ..Default::default()
         };
         let mut report = AnalysisReport::new(crate::types::TargetInfo {
@@ -1873,7 +1949,7 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        analyzer.generate_signature_findings(&codesig, 0x1000, &mut report);
+        emit_signature_findings(&mut report, 0xb3a0, &identity, None);
 
         let id_finding = report
             .findings
@@ -1884,6 +1960,71 @@ mod tests {
         // The value rides in the description so notable-floored views (which
         // print only `desc`, not the trait id) stay readable.
         assert_eq!(id_finding.desc, "Identifier: com.apple.ls");
+        // Anchored at the signature blob, not a re-derived guess.
+        assert_eq!(
+            id_finding.evidence[0].location.as_deref(),
+            Some("0xb3a0")
+        );
+
+        let platform = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/signed/platform::apple")
+            .expect("platform-trust finding emitted");
+        assert_eq!(platform.crit, Criticality::Notable);
+        assert_eq!(platform.desc, "macOS Platform Binary");
+    }
+
+    /// A Developer-ID-signed binary yields the `metadata/signed/developer::<team>`
+    /// trait keyed by Team ID, with the signer organization in the description,
+    /// plus a per-entitlement finding — all sourced from filefacts's `Identity`
+    /// and entitlements map, none from a re-parse. This is the supply-chain
+    /// signal an analyst reads first: who signed it, and what it was granted.
+    #[test]
+    fn test_developer_signed_and_entitlement_findings() {
+        let identity = filefacts::Identity {
+            trust: filefacts::Trust::DeveloperId,
+            team_id: Some(filefacts::Claim::verified("ABCDE12345", "macho.code_signature")),
+            signer: Some(filefacts::Signer {
+                common_name: Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string()),
+                organization: Some("Acme Inc.".to_string()),
+                subject: None,
+                issuer: None,
+                signed_at: None,
+                source: "macho.code_signature".to_string(),
+            }),
+            ..Default::default()
+        };
+        let mut entitlements = serde_json::Map::new();
+        entitlements.insert(
+            "com.apple.security.cs.debugger".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        let mut report = AnalysisReport::new(crate::types::TargetInfo {
+            path: "/Applications/Acme.app/Contents/MacOS/Acme".to_string(),
+            file_type: "macho".to_string(),
+            size_bytes: 0,
+            sha256: String::new(),
+            architectures: None,
+        });
+        emit_signature_findings(&mut report, 0x4000, &identity, Some(&entitlements));
+
+        let dev = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/signed/developer::ABCDE12345")
+            .expect("developer-trust finding keyed by team id");
+        assert_eq!(dev.crit, Criticality::Notable);
+        assert_eq!(dev.desc, "Developer ID: Acme Inc.");
+
+        // A dangerous entitlement on a non-platform binary escalates to Suspicious.
+        let ent = report
+            .findings
+            .iter()
+            .find(|f| f.id == "metadata/entitlement/security::com.apple.security.cs.debugger")
+            .expect("entitlement finding emitted");
+        assert_eq!(ent.crit, Criticality::Suspicious);
+        assert_eq!(ent.evidence[0].location.as_deref(), Some("0x4000"));
     }
 
     /// Permissions never fall to Baseline: every entitlement is at least
@@ -1891,15 +2032,15 @@ mod tests {
     /// `determine_entitlement_criticality` invariant.
     #[test]
     fn test_entitlements_never_baseline() {
-        use macho_codesign::SignatureType;
+        // (key, is_platform)
         let cases = [
-            ("com.apple.security.app-sandbox", SignatureType::DeveloperID),
-            ("com.apple.security.cs.allow-jit", SignatureType::DeveloperID),
-            ("com.apple.security.get-task-allow", SignatureType::Adhoc),
-            ("com.apple.private.tcc.allow", SignatureType::Platform),
+            ("com.apple.security.app-sandbox", false),
+            ("com.apple.security.cs.allow-jit", false),
+            ("com.apple.security.get-task-allow", false),
+            ("com.apple.private.tcc.allow", true),
         ];
-        for (key, sig) in cases {
-            let crit = determine_entitlement_criticality(key, &sig, false);
+        for (key, is_platform) in cases {
+            let crit = determine_entitlement_criticality(key, is_platform, false);
             assert!(
                 crit >= Criticality::Notable,
                 "entitlement {key} must be Notable-or-higher, got {crit:?}"
@@ -1971,7 +2112,7 @@ mod tests {
             assert_eq!(
                 determine_entitlement_criticality(
                     key,
-                    &macho_codesign::SignatureType::Platform,
+                    true,
                     false,
                 ),
                 Criticality::Notable,
@@ -1990,7 +2131,7 @@ mod tests {
             assert_eq!(
                 determine_entitlement_criticality(
                     key,
-                    &macho_codesign::SignatureType::DeveloperID,
+                    false,
                     false,
                 ),
                 Criticality::Suspicious,
@@ -2001,7 +2142,7 @@ mod tests {
         assert_eq!(
             determine_entitlement_criticality(
                 "com.apple.security.cs.allow-jit",
-                &macho_codesign::SignatureType::DeveloperID,
+                false,
                 false,
             ),
             Criticality::Notable,
@@ -2014,7 +2155,7 @@ mod tests {
         assert_eq!(
             determine_entitlement_criticality(
                 "com.apple.security.cs.disable-library-validation",
-                &macho_codesign::SignatureType::DeveloperID,
+                false,
                 false,
             ),
             Criticality::Notable,
@@ -2027,7 +2168,7 @@ mod tests {
             assert_eq!(
                 determine_entitlement_criticality(
                     key,
-                    &macho_codesign::SignatureType::Adhoc,
+                    false,
                     false,
                 ),
                 Criticality::Notable,
@@ -2040,7 +2181,7 @@ mod tests {
         assert_eq!(
             determine_entitlement_criticality(
                 "com.apple.security.cs.allow-unsigned-executable-memory",
-                &macho_codesign::SignatureType::DeveloperID,
+                false,
                 true,
             ),
             Criticality::Notable,
@@ -2048,7 +2189,7 @@ mod tests {
         assert_eq!(
             determine_entitlement_criticality(
                 "com.apple.security.cs.allow-unsigned-executable-memory",
-                &macho_codesign::SignatureType::Adhoc,
+                false,
                 true,
             ),
             Criticality::Notable,
@@ -2095,9 +2236,10 @@ mod tests {
             .collect();
 
         // If identifier findings exist, they should have proper evidence
+        // sourced from filefacts (cleave no longer re-parses the signature).
         for finding in &identifier_findings {
             assert_eq!(finding.evidence[0].method, "code_directory");
-            assert_eq!(finding.evidence[0].source, "codesign_parser");
+            assert_eq!(finding.evidence[0].source, "filefacts");
         }
     }
 }

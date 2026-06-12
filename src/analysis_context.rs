@@ -75,6 +75,16 @@ impl<'a> AnalysisContext<'a> {
         self.parsed.source_ast()
     }
 
+    /// Normalized identity claims filefacts derived, when the file
+    /// asserts any identity or carries a signature. Returns `None` for
+    /// the empty case so reports don't carry a bare `unsigned` record on
+    /// every file.
+    #[must_use]
+    pub fn identity(&self) -> Option<filefacts::Identity> {
+        let identity = self.parsed.identity();
+        (!identity.is_empty()).then(|| identity.clone())
+    }
+
     /// Archive member index emitted by filefacts.
     ///
     /// ZIP entries include header/data/central-directory offsets when

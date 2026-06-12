@@ -772,6 +772,7 @@ impl UnifiedSourceAnalyzer {
             if !view.is_empty() {
                 report.filefacts = Some(view);
             }
+            report.identity = ctx.identity();
         }
 
         // Evaluate all rules (atomic + composite) and merge into report,

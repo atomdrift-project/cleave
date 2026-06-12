@@ -161,6 +161,9 @@ pub(crate) struct DiffUnit {
     pub(crate) exports: Vec<Export>,
     pub(crate) strings: Vec<StringInfo>,
     pub(crate) sections: Vec<Section>,
+    /// Normalized identity claims for this side, when present. Compared
+    /// whole to produce the file's identity headline/diff.
+    pub(crate) identity: Option<filefacts::Identity>,
 }
 
 impl DiffUnit {
@@ -174,6 +177,7 @@ impl DiffUnit {
             exports: Vec::new(),
             strings: Vec::new(),
             sections: Vec::new(),
+            identity: None,
         }
     }
 }
@@ -346,6 +350,7 @@ fn units_from_report(report: &AnalysisReport, root_rel: &str) -> Vec<DiffUnit> {
         exports: report.exports.clone(),
         strings: report.strings.clone(),
         sections: report.sections.clone(),
+        identity: report.identity.clone(),
     });
     for fa in &report.files {
         out.push(unit_from_member(fa, root_rel, ARCHIVE_DELIMITER));
@@ -381,6 +386,7 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
         exports: fa.exports.clone(),
         strings: fa.strings.clone(),
         sections: fa.sections.clone(),
+        identity: fa.identity.clone(),
     }
 }
 
@@ -449,9 +455,15 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
             .then(|| scopes::diff_sections(&old, &new, limit)),
     };
 
+    // Identity is compared whole. A drift here (signer, trust tier,
+    // publisher, build user, …) is the highest-signal change a file can
+    // carry, so it forces `Changed` on its own — even if no scope moved.
+    let identity = identity_diff(&old, &new);
+    let identity_changed = identity.as_ref().is_some_and(|d| d.changed);
+
     let resolved = match initial_status {
         FileStatus::Added | FileStatus::Removed => initial_status,
-        _ if any_scope_changed(&scopes) => FileStatus::Changed,
+        _ if identity_changed || any_scope_changed(&scopes) => FileStatus::Changed,
         _ => FileStatus::Unchanged,
     };
 
@@ -473,10 +485,27 @@ fn diff_pair(pair: UnitPair, mask: ScopeMask, limit: usize) -> FileDiffEntry {
     FileDiffEntry {
         path,
         status: resolved,
+        identity,
         scopes,
         old_formula,
         new_formula,
     }
+}
+
+/// Build the identity headline for a diffed pair. Returns `None` only
+/// when neither side carried an identity. When one side has it and the
+/// other doesn't (added/removed signing, a manifest gained/lost), that
+/// is itself a change.
+fn identity_diff(old: &DiffUnit, new: &DiffUnit) -> Option<crate::types::IdentityDiff> {
+    if old.identity.is_none() && new.identity.is_none() {
+        return None;
+    }
+    let changed = old.identity != new.identity;
+    Some(crate::types::IdentityDiff {
+        old: old.identity.clone(),
+        new: new.identity.clone(),
+        changed,
+    })
 }
 
 fn side_formula(findings: &[Finding]) -> Option<String> {

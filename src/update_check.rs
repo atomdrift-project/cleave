@@ -76,9 +76,14 @@ struct Cache {
     url: Option<String>,
 }
 
-/// Path to the notice cache (`<cache_dir>/cleave/update-check.toml`).
+/// Path to the notice cache (`<cache_dir>/atomdrift/cleave/update-check.toml`).
 fn cache_path() -> Option<PathBuf> {
-    Some(dirs::cache_dir()?.join("cleave").join("update-check.toml"))
+    Some(
+        dirs::cache_dir()?
+            .join("atomdrift")
+            .join("cleave")
+            .join("update-check.toml"),
+    )
 }
 
 /// Current Unix time in seconds (0 if the clock predates the epoch).

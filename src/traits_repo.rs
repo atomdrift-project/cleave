@@ -138,6 +138,7 @@ pub fn install_target() -> PathBuf {
 fn default_traits_dir() -> PathBuf {
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        .join("atomdrift")
         .join("cleave")
         .join("traits")
 }

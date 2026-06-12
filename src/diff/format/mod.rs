@@ -196,6 +196,12 @@ pub(super) fn max_added_crit(file: &crate::types::FileDiffEntry) -> Criticality 
 /// without hiding real findings.
 pub(super) fn is_significant_file(file: &crate::types::FileDiffEntry) -> bool {
     const ROC_FLOOR: f32 = 0.01;
+    // A drifted identity is always significant on its own — a binary that
+    // went Apple-signed → unsigned with no other change is the headline
+    // case this diff exists to catch.
+    if file.identity.as_ref().is_some_and(|i| i.changed) {
+        return true;
+    }
     if file_max_roc(&file.scopes) >= ROC_FLOOR {
         return true;
     }

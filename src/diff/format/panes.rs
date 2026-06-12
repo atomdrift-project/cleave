@@ -72,6 +72,13 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     // of the header so they can align under the `old → new` filenames; see
     // `header::write`.
 
+    // Identity leads every pane — a changed identity is the highest-signal
+    // drift a file can have, and even an unchanged identity is the headline
+    // answer to "what is this?". Rendered before the trait diff.
+    if let Some(identity) = file.identity.as_ref() {
+        write_identity(out, identity);
+    }
+
     if let Some(t) = file.scopes.traits.as_ref().filter(|s| s.has_changes()) {
         write_traits(out, t);
     }
@@ -89,6 +96,157 @@ fn write_pane(out: &mut String, file: &FileDiffEntry) {
     }
     if let Some(e) = file.scopes.sections.as_ref().filter(|s| s.has_changes()) {
         write_sections(out, e);
+    }
+}
+
+// ---- identity ---------------------------------------------------------------
+
+/// Render the identity headline. Always shown when present: a compact
+/// summary line for the unchanged case, or field-level `old → new` rows
+/// when the identity drifted (the high-signal case).
+fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
+    let state = if id.changed {
+        "changed".yellow().bold().to_string()
+    } else {
+        "unchanged".dimmed().to_string()
+    };
+    let _ = writeln!(out, "\n  {}  {}", "identity".bold(), state);
+
+    if !id.changed {
+        if let Some(cur) = id.new.as_ref().or(id.old.as_ref()) {
+            let _ = writeln!(out, "    {}", identity_summary(cur));
+        }
+        return;
+    }
+
+    // Field-level drift: compare the flattened scalar fields and show
+    // only those that moved, oldest cause (signer/trust) first.
+    let old = id.old.as_ref().map(identity_fields).unwrap_or_default();
+    let new = id.new.as_ref().map(identity_fields).unwrap_or_default();
+    let mut keys: Vec<String> = IDENTITY_FIELD_ORDER.iter().map(|s| (*s).to_string()).collect();
+    for k in old.keys().chain(new.keys()) {
+        if !keys.contains(k) {
+            keys.push(k.clone());
+        }
+    }
+    for key in keys {
+        let o = old.get(&key).map(String::as_str);
+        let n = new.get(&key).map(String::as_str);
+        if o == n {
+            continue;
+        }
+        let _ = writeln!(
+            out,
+            "    {}  {}  {}  {}",
+            key.dimmed(),
+            o.unwrap_or("—").red(),
+            "→".dimmed(),
+            n.unwrap_or("—").green(),
+        );
+    }
+}
+
+/// Canonical scalar fields of an identity, in display order (cause →
+/// effect: the signer and trust first, then the claimed identity).
+const IDENTITY_FIELD_ORDER: &[&str] = &[
+    "trust",
+    "signer",
+    "team_id",
+    "name",
+    "title",
+    "identifier",
+    "project",
+    "version",
+    "organization",
+    "producer",
+    "build_path",
+    "contact",
+];
+
+/// Flatten an identity into comparable `field → value` scalars. Keys for
+/// `unique_ids` are emitted as `id:<name>` so a changed cdhash or
+/// extension id shows up as its own row.
+fn identity_fields(id: &filefacts::Identity) -> std::collections::BTreeMap<String, String> {
+    let mut m: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    let mut put = |k: &str, v: Option<String>| {
+        if let Some(v) = v {
+            m.insert(k.to_string(), v);
+        }
+    };
+    put("trust", Some(trust_word(id.trust).to_string()));
+    put(
+        "signer",
+        id.signer.as_ref().and_then(|s| {
+            s.organization
+                .clone()
+                .or_else(|| s.common_name.clone())
+                .or_else(|| s.subject.clone())
+        }),
+    );
+    put("team_id", id.team_id.as_ref().map(|c| c.value.clone()));
+    put("name", id.name.as_ref().map(|c| c.value.clone()));
+    put("title", id.title.as_ref().map(|c| c.value.clone()));
+    put("identifier", id.identifier.as_ref().map(|c| c.value.clone()));
+    put("project", id.project.as_ref().map(|c| c.value.clone()));
+    put("version", id.version.as_ref().map(|c| c.value.clone()));
+    put(
+        "organization",
+        id.organization.as_ref().map(|c| c.value.clone()),
+    );
+    put("producer", id.producer.as_ref().map(|c| c.value.clone()));
+    put("build_path", id.build_path.as_ref().map(|c| c.value.clone()));
+    if !id.emails.is_empty() {
+        put("contact", Some(id.emails.join(", ")));
+    }
+    for (k, v) in &id.unique_ids {
+        m.insert(format!("id:{k}"), v.clone());
+    }
+    m
+}
+
+/// One-line identity summary for the unchanged case: the same dense
+/// headline the analyze view shows.
+fn identity_summary(id: &filefacts::Identity) -> String {
+    let mut segs: Vec<String> = Vec::new();
+    if let Some(c) = id.name.as_ref().or(id.title.as_ref()) {
+        segs.push(c.value.as_str().bold().to_string());
+    }
+    if let Some(ident) = &id.identifier
+        && id.name.as_ref().is_none_or(|n| n.value != ident.value)
+    {
+        segs.push(ident.value.clone());
+    }
+    if let Some(p) = &id.project {
+        segs.push(format!("({})", p.value));
+    }
+    if let Some(s) = &id.signer {
+        if let Some(o) = s.organization.clone().or_else(|| s.common_name.clone()) {
+            segs.push(o);
+        }
+    } else if let Some(o) = &id.organization {
+        segs.push(o.value.clone());
+    }
+    let trust = trust_word(id.trust);
+    segs.push(match id.trust {
+        filefacts::Trust::System | filefacts::Trust::Platform => trust.green().to_string(),
+        filefacts::Trust::DeveloperId | filefacts::Trust::CaSigned => trust.cyan().to_string(),
+        filefacts::Trust::SelfSigned | filefacts::Trust::AdHoc => trust.yellow().to_string(),
+        filefacts::Trust::Unsigned => trust.red().to_string(),
+        _ => trust.to_string(),
+    });
+    segs.join(" · ")
+}
+
+fn trust_word(t: filefacts::Trust) -> &'static str {
+    match t {
+        filefacts::Trust::System => "system",
+        filefacts::Trust::Platform => "platform",
+        filefacts::Trust::DeveloperId => "developer-id",
+        filefacts::Trust::CaSigned => "ca-signed",
+        filefacts::Trust::SelfSigned => "self-signed",
+        filefacts::Trust::AdHoc => "ad-hoc",
+        filefacts::Trust::Unsigned => "unsigned",
+        _ => "unknown",
     }
 }
 

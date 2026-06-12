@@ -262,6 +262,26 @@ impl<'a, T> From<Option<&'a ScopeDiff<T>>> for ScopeView<'a> {
     }
 }
 
+/// Identity headline for a diffed file: who/what each side claims to be.
+///
+/// Unlike the six scopes (which only carry *changes*), identity is shown
+/// for every file — a stable headline, like the analyze view — so a
+/// reader always sees the claimed identity and instantly spots drift
+/// (Apple-signed → unsigned, a new publisher, a different build user).
+/// It is rendered first, ahead of the trait diff, because a changed
+/// identity is the highest-signal change a file can have.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IdentityDiff {
+    /// Identity on the old/baseline side. Absent for added files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<filefacts::Identity>,
+    /// Identity on the new side. Absent for removed files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<filefacts::Identity>,
+    /// True when the two sides differ — the high-signal case.
+    pub changed: bool,
+}
+
 /// A single file's contribution to the diff.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileDiffEntry {
@@ -269,6 +289,11 @@ pub struct FileDiffEntry {
     pub path: String,
     /// Whether the file was added, removed, changed, or unchanged.
     pub status: FileStatus,
+    /// Identity headline (claimed/verified identity of each side).
+    /// Present whenever either side carried an identity; rendered first,
+    /// ahead of the scope diffs. `None` when neither side had one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<IdentityDiff>,
     /// Per-scope diffs for this file. Scopes with no changes are `None`.
     pub scopes: ScopeDiffs,
     /// Behavioral fingerprint of the old side (notable-or-higher findings).
@@ -547,6 +572,7 @@ mod tests {
             files: vec![FileDiffEntry {
                 path: "lib/foo.so".to_string(),
                 status: FileStatus::Changed,
+                identity: None,
                 scopes: ScopeDiffs {
                     strings: Some(ScopeDiff {
                         added: vec![StringChange {

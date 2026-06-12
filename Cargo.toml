@@ -183,6 +183,12 @@ lru = "0.12"  # LRU cache for UTF-8 conversion results
 anyhow = "1.0"
 thiserror = "2.0"
 chrono = { version = "0.4", features = ["serde"] }
+# Transitive-only (via plist/yara-x/sevenz-rust), pinned explicitly: `time`
+# 0.3.48 added a `ModifierValue` projection impl that rustc 1.96 rejects as
+# coherence-conflicting against any downstream blanket `From` impl (breaks
+# yara-x, sevenz-rust, …). 0.3.47 is the newest release without it and still
+# satisfies plist's `^0.3.47`. Drop this once a fixed `time` ships.
+time = "=0.3.47"
 hex = "0.4"
 base64 = "0.22"
 roxmltree = "0.21"

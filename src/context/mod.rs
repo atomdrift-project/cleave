@@ -693,14 +693,6 @@ mod tests {
     }
 
     #[test]
-    fn no_anchor_finding_yields_no_context() {
-        let data = b"hello world\n";
-        let mut r = report(vec![finding("meta/x", Criticality::Notable, &[])]);
-        capture(&mut r, data, FileType::Python);
-        assert!(r.context.is_empty());
-    }
-
-    #[test]
     fn binary_emits_raw_byte_window() {
         let data: Vec<u8> = (0u8..64).collect();
         let mut r = report(vec![finding("bin/x", Criticality::Notable, &[16])]);

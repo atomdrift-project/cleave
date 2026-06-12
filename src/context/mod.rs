@@ -622,6 +622,45 @@ mod tests {
     }
 
     #[test]
+    fn locationless_finding_pins_to_byte_zero() {
+        let data = b"import os\nx = 1\n";
+        // A finding with no evidence offset at all — a trait that matched without
+        // recording where. It must still render, anchored at the file's first line
+        // (byte 0), not vanish or float as a bare comment.
+        let mut r = report(vec![finding("struct/entropy", Criticality::Notable, &[])]);
+        capture(&mut r, data, FileType::Python);
+        let first = line(&r.context, 1);
+        assert!(
+            matches!(first, Some(c) if c.notes.iter().any(|n| n.id == "struct/entropy")),
+            "location-less finding should pin to line 1 (byte 0): {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn archive_member_offset_is_not_pinned() {
+        let data = b"import os\nx = 1\n";
+        let mut f = finding("member/evil", Criticality::Hostile, &[]);
+        // Offset indexes an embedded member (archive: location). The member renders
+        // it in its own context, so it must stay description-only here — never
+        // pinned to byte 0 of the carrier.
+        f.evidence = vec![
+            Evidence::new("m", "s", "match")
+                .with_offset(5)
+                .with_location("archive:member.bin"),
+        ];
+        let mut r = report(vec![f]);
+        capture(&mut r, data, FileType::Python);
+        assert!(
+            r.context
+                .iter()
+                .all(|c| c.notes.iter().all(|n| n.id != "member/evil")),
+            "archive-member finding must not be pinned into the carrier: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
     fn composite_inherits_component_offset() {
         let data = b"a\nb\nopen(f)\nexec(p)\nc\n"; // "open" line 3 (off 4), "exec" line 4 (off 11)
         let mut comp = finding("comp/open", Criticality::Component, &[4]);

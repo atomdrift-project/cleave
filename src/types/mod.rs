@@ -93,9 +93,9 @@ pub use binary::{
 
 #[allow(unused_imports)]
 pub use diff::{
-    Changed, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, KvChange, MetricChange, Scope,
-    ScopeDiff, ScopeDiffs, ScopeRocs, ScopeView, SectionChange, StringChange, SymbolChange,
-    SymbolKind, TraitChange,
+    Changed, DiffReportV1, DiffSummary, FileDiffEntry, FileStatus, IdentityDiff, KvChange,
+    MetricChange, Scope, ScopeDiff, ScopeDiffs, ScopeRocs, ScopeView, SectionChange, StringChange,
+    SymbolChange, SymbolKind, TraitChange,
 };
 
 #[allow(unused_imports)]

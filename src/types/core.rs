@@ -152,6 +152,14 @@ pub struct AnalysisReport {
     /// directly.
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub filefacts: Option<FilefactsView>,
+    /// Normalized identity claims from filefacts: who and what the file
+    /// says it is (name, identifier, project, signer, trust tier,
+    /// authors, document title, build path, unique ids), each tagged
+    /// claimed-vs-verified. Attached only when filefacts found a
+    /// non-empty identity, so most files omit it. Rendered as a headline
+    /// in terminal/tiny output and diffed as a high-signal change.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub identity: Option<filefacts::Identity>,
     /// Synthetic key-value tree for `type: value` matchers on file
     /// formats whose metadata isn't natively a manifest (e.g.,
     /// office documents). Populated by analyzers; consumed by the
@@ -368,6 +376,7 @@ impl AnalysisReport {
             yara_matches: Vec::new(),
             syscalls: Vec::new(),
             filefacts: None,
+            identity: None,
             values_tree: None,
             filefacts_metrics: None,
             paths: Vec::new(),
@@ -1123,6 +1132,7 @@ impl AnalysisReport {
         file.findings = self.findings.clone();
         file.context = self.context.clone();
         file.filefacts = self.filefacts.clone();
+        file.identity = self.identity.clone();
         file.filefacts_metrics = self.filefacts_metrics.clone();
         file.structure = self.structure.clone();
         file.strings = self.strings.clone();
@@ -1168,6 +1178,7 @@ impl AnalysisReport {
         file.findings = self.findings;
         file.context = self.context;
         file.filefacts = self.filefacts;
+        file.identity = self.identity;
         file.filefacts_metrics = self.filefacts_metrics;
         file.structure = self.structure;
         file.strings = self.strings;

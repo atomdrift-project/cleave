@@ -58,7 +58,6 @@ pub(crate) mod embedded_binary_detector;
 pub(crate) mod java_class;
 pub(crate) mod jpeg;
 pub(crate) mod macho;
-pub(crate) mod macho_codesign;
 pub(crate) mod office;
 pub(crate) mod package_json;
 pub mod pdf;

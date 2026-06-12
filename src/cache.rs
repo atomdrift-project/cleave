@@ -154,13 +154,13 @@ pub fn format_age(secs: u64) -> String {
 
 /// Get the cache directory for cleave
 /// Returns OS-appropriate cache directory:
-/// - macOS: ~/Library/Caches/cleave
-/// - Linux: ~/.cache/cleave
-/// - Windows: %LOCALAPPDATA%\cleave
+/// - macOS: ~/Library/Caches/atomdrift/cleave
+/// - Linux: ~/.cache/atomdrift/cleave
+/// - Windows: %LOCALAPPDATA%\atomdrift\cleave
 pub fn cache_dir() -> Result<PathBuf> {
     let mut candidates = Vec::new();
     if let Some(base_cache) = dirs::cache_dir() {
-        candidates.push(base_cache.join("cleave"));
+        candidates.push(base_cache.join("atomdrift").join("cleave"));
     }
     candidates.push(std::env::temp_dir().join("cleave-cache"));
 
@@ -190,6 +190,7 @@ pub fn traits_path() -> PathBuf {
     // Platform data dir (same as traits_repo::default_traits_dir)
     dirs::data_dir()
         .unwrap_or_else(|| PathBuf::from("."))
+        .join("atomdrift")
         .join("cleave")
         .join("traits")
 }

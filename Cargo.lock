@@ -4389,7 +4389,6 @@ dependencies = [
 [[package]]
 name = "stng"
 version = "1.6.1"
-source = "git+https://codeberg.org/atomdrift/stng.git#8dea3a42cfbd37e2111bd3d5df4d5e0cdf8465ff"
 dependencies = [
  "aho-corasick",
  "anyhow",

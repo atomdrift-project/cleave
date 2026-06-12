@@ -879,6 +879,20 @@ pub fn clear_all_thread_caches() {
 /// YARA engine must not be first initialized from a rayon worker because rule
 /// loading itself uses rayon internally.
 pub fn prefetch_yara_engine(enable_third_party: bool) {
+    // Bootstrap the traits archive before compiling rules. On a fresh install the
+    // data directory is empty, and without this the prefetch would find zero rules
+    // and print a spurious "No YARA rules loaded" warning before the analysis path
+    // gets a chance to download the archive. `resolve_and_ensure` is idempotent and
+    // returns immediately (a cheap directory check, no network) once traits exist,
+    // so warm runs pay nothing. Because this blocks until traits are present, it
+    // also serializes the install ahead of the analysis path's own
+    // `resolve_and_ensure`, avoiding a concurrent double-download race.
+    if let Err(e) = traits_repo::resolve_and_ensure() {
+        tracing::debug!(
+            error = %e,
+            "traits ensure before YARA prefetch failed; analysis path will surface the error"
+        );
+    }
     let handle = std::thread::spawn(move || shared_resources::yara_engine(enable_third_party));
     if handle.join().is_err() {
         tracing::warn!("YARA engine prefetch thread panicked");
@@ -1785,6 +1799,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
             report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
+            report.identity = ctx.as_ref().and_then(crate::analysis_context::AnalysisContext::identity);
             analyzer.apply_fat_metadata(&mut report, file_data);
 
             // The preferred slice was parsed at base 0, so its structural
@@ -1878,6 +1893,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
+            report.identity = ctx.as_ref().and_then(crate::analysis_context::AnalysisContext::identity);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read ELF facts directly from
@@ -1935,6 +1951,7 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             report.filefacts = Some(filefacts_view);
+            report.identity = ctx.identity();
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read PE facts directly from
@@ -2010,6 +2027,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             }
         }
     }?;
+
+    // Identity is normalized the same way for every file. Binary, source,
+    // and archive analyzers attach it from the filefacts context they
+    // already opened; for the remaining formats (documents, images, …)
+    // derive it once here so the headline is consistent across every
+    // analyzer path. Gated on `is_none` so no path pays a second open.
+    if report.identity.is_none()
+        && let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, file_data)
+    {
+        report.identity = ctx.identity();
+    }
     let stage_structural_ms = structural_start.elapsed().as_millis() as u64;
 
     // Process encoded payloads and analyze them

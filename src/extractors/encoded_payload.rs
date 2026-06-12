@@ -218,7 +218,6 @@ pub(crate) fn decompress_and_nest(
     // Check if data contains additional encoding
     if let Ok(text) = std::str::from_utf8(data) {
         let text = text.trim();
-        println!("DEBUG_CLEAVE: text.len() = {}, text = {:?}", text.len(), text);
 
         // Check for additional base64 (nested)
         if text.len() >= MIN_PAYLOAD_LENGTH

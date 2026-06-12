@@ -441,6 +441,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
     if is_arch_package_metadata_name(file_path) {
         return FileType::Text;
     }
+    if is_routeros_script_name(file_path) {
+        return FileType::Text;
+    }
 
     filefacts::fileid::detect_path(file_path)
         .map(|d| d.file_type)
@@ -453,6 +456,9 @@ pub(crate) fn detect_file_type_from_path(file_path: &Path) -> FileType {
 #[inline]
 pub(crate) fn detect_file_type_from_data(file_path: &Path, file_data: &[u8]) -> FileType {
     if is_arch_package_metadata_name(file_path) {
+        return FileType::Text;
+    }
+    if is_routeros_script_name(file_path) {
         return FileType::Text;
     }
 
@@ -490,6 +496,13 @@ fn is_arch_package_metadata_name(file_path: &Path) -> bool {
         name.to_ascii_lowercase().as_str(),
         ".pkginfo" | ".buildinfo" | ".mtree"
     )
+}
+
+fn is_routeros_script_name(file_path: &Path) -> bool {
+    file_path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("rsc"))
 }
 
 /// Detect file type by reading the first 1KB from disk.

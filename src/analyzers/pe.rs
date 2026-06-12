@@ -852,6 +852,14 @@ impl PEAnalyzer {
         // a `metadata/signed/<type>::<cn>` finding; the very first
         // signature's CN is also emitted as a `metadata/signed/leaf::<cn>`
         // Notable so "who signed this" stands out from the chain.
+        //
+        // Both are Notable, not Baseline: the signer is the *identity a
+        // binary claims*, which is first-class supply-chain signal an analyst
+        // reads in a diff (a swapped or revoked signer, a previously-Microsoft
+        // binary now signed by an unknown CA). Identity is promoted to Notable
+        // across all formats — see
+        // traits/metadata/signed/trust-level/traits.yaml for the shared
+        // rationale.
         if let Some(sigs) = ctx
             .parsed
             .values()
@@ -876,7 +884,7 @@ impl PEAnalyzer {
                     kind: FindingKind::Capability,
                     desc: format!("Authenticode chain CN: {}", cn),
                     conf: 1.0,
-                    crit: Criticality::Baseline,
+                    crit: Criticality::Notable,
                     mbc: None,
                     attack: None,
                     trait_refs: vec![],

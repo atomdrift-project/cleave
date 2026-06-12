@@ -714,7 +714,25 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
             continue;
         }
         notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
-        out.push_str(&ascii_forward(&line.data));
+        // Clip the window to the match span ± a fixed margin, so a large merged
+        // window doesn't dump the whole region at the model; `…` marks a trim.
+        let len = line.data.len();
+        let within = |off: u64| (off.saturating_sub(line.loc) as usize).min(len);
+        let lo = notes.iter().map(|n| within(n.off)).min().unwrap_or(0);
+        let hi = notes
+            .iter()
+            .map(|n| within(n.off + u64::from(n.len.max(1))))
+            .max()
+            .unwrap_or(len);
+        let start = lo.saturating_sub(ASCII_CONTEXT);
+        let end = (hi + ASCII_CONTEXT).min(len);
+        if start > 0 {
+            out.push('…');
+        }
+        out.push_str(&ascii_forward(&line.data[start..end]));
+        if end < len {
+            out.push('…');
+        }
         for n in notes {
             let _ = write!(
                 out,
@@ -726,6 +744,10 @@ fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]
         out.push('\n');
     }
 }
+
+/// Bytes of context shown on each side of the match span in the ASCII-forward
+/// (machine/LLM) binary view, before the window is elided with `…`.
+const ASCII_CONTEXT: usize = 24;
 
 /// Bytes as an ASCII-forward stream: printable ASCII verbatim; every other byte
 /// — and a literal `<`, so the escape markers stay unambiguous — as `<xx>`.

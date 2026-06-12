@@ -679,10 +679,67 @@ fn render_context(
     colorize: bool,
 ) {
     if file.context.first().is_some_and(|l| l.hex) {
-        render_hex_context(out, file, selected, term_width, opts.full_context, colorize);
+        // The machine/LLM view (Minimal header) renders binary windows as a
+        // single ASCII-forward line — no hex column, no offsets — which a local
+        // model reads far more cheaply than a hex|ascii dump. The terminal view
+        // keeps the hex|ascii rows.
+        if matches!(opts.header, HeaderStyle::Minimal) {
+            render_ascii_context(out, file, selected);
+        } else {
+            render_hex_context(out, file, selected, term_width, opts.full_context, colorize);
+        }
     } else {
         render_source_context(out, file, selected, opts, term_width, colorize);
     }
+}
+
+/// Render binary context for the machine/LLM view: each match window as one
+/// ASCII-forward line — printable bytes verbatim, every other byte (and a literal
+/// `<`) as `<xx>` — followed by a `// SEV desc` trailer per finding it carries.
+/// Drops the redundant hex column and byte offsets the terminal view shows.
+fn render_ascii_context(out: &mut String, file: &FileAnalysis, selected: &[&str]) {
+    use std::fmt::Write;
+    let sel: HashSet<&str> = selected.iter().copied().collect();
+    let marker = comment_marker(&file.file_type);
+    for line in &file.context {
+        // Distinct selected findings on this window, strongest first. (Capture
+        // already capped locations per trait; merging can pool several here.)
+        let mut seen = HashSet::new();
+        let mut notes: Vec<&Note> = line
+            .notes
+            .iter()
+            .filter(|n| sel.contains(n.id.as_str()) && seen.insert(n.id.as_str()))
+            .collect();
+        if notes.is_empty() {
+            continue;
+        }
+        notes.sort_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.off.cmp(&b.off)));
+        out.push_str(&ascii_forward(&line.data));
+        for n in notes {
+            let _ = write!(
+                out,
+                "  {marker} {} {}",
+                n.crit.letter(),
+                terse_description(&n.desc)
+            );
+        }
+        out.push('\n');
+    }
+}
+
+/// Bytes as an ASCII-forward stream: printable ASCII verbatim; every other byte
+/// — and a literal `<`, so the escape markers stay unambiguous — as `<xx>`.
+fn ascii_forward(data: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut s = String::with_capacity(data.len());
+    for &b in data {
+        if (0x20..=0x7e).contains(&b) && b != b'<' {
+            s.push(b as char);
+        } else {
+            let _ = write!(s, "<{b:02x}>");
+        }
+    }
+    s
 }
 
 /// Render source/minified context: `grep -n -C2`-style numbered lines with a
@@ -2284,6 +2341,17 @@ mod tests {
         // A standalone/root path is basenamed only in the LLM (tiny) view.
         assert_eq!(tiny_path("/tmp/triage/x.bin", true), "x.bin");
         assert_eq!(tiny_path("/tmp/triage/x.bin", false), "/tmp/triage/x.bin");
+    }
+
+    #[test]
+    fn ascii_forward_keeps_printable_escapes_rest() {
+        // Printable ASCII verbatim; NUL, high bytes, and a literal `<` as `<xx>`.
+        assert_eq!(
+            ascii_forward(b"\x00getpwuid\x00\x7f\xff"),
+            "<00>getpwuid<00><7f><ff>"
+        );
+        assert_eq!(ascii_forward(b"a<b"), "a<3c>b");
+        assert_eq!(ascii_forward(b"\x7fELF\x02\x01"), "<7f>ELF<02><01>");
     }
 
     #[test]

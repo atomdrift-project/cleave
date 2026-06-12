@@ -243,12 +243,12 @@ fn maybe_evict_report_cache(conn: &Connection) {
 fn options_hash(options: &AnalysisOptions) -> String {
     use sha2::{Digest, Sha256};
 
-    let platforms_str: String = options
-        .platforms
-        .iter()
-        .map(|p| format!("{:?}", p))
-        .collect::<Vec<_>>()
-        .join(",");
+    // Sort so the key is independent of the order platforms were supplied on the
+    // command line: `--platforms linux,macos` and `macos,linux` share cache entries.
+    let mut platform_names: Vec<String> =
+        options.platforms.iter().map(|p| format!("{p:?}")).collect();
+    platform_names.sort_unstable();
+    let platforms_str = platform_names.join(",");
     // Cache version bumped v=5 → v=6 for the filefacts v6 schema cut
     // (Symbol enum collapse, Text/Literals split). Cached reports from
     // older binaries deserialize via `serde_json::Value` flexibility,

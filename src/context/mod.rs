@@ -131,10 +131,46 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
         }
     }
 
+    if anchors.is_empty() {
+        return fallback_anchor(finding, by_id);
+    }
+
     anchors.sort_unstable_by_key(|(off, _)| *off);
     anchors.dedup_by_key(|(off, _)| *off);
     anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
     anchors
+}
+
+/// Every shown finding must anchor somewhere so it renders attached to its file
+/// rather than floating as a bare comment. When [`finding_anchors`] collects
+/// none, distinguish the two reasons:
+///
+/// - The finding's offsets index an embedded archive member (`archive:`
+///   location, skipped by [`local_anchor`]). That member renders them in its own
+///   context, so this finding stays description-only here — no fallback.
+/// - The finding carries no byte offset anywhere: a trait matched without
+///   recording where. Pin it to byte 0 so it still renders in place, and log an
+///   error — every finding is expected to carry a location, so a missing one is a
+///   trait bug to fix at the source.
+fn fallback_anchor(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+    let has_remote_offset = finding.evidence.iter().any(|e| e.byte_offset().is_some())
+        || finding.trait_refs.iter().any(|id| {
+            by_id
+                .get(id.as_str())
+                .is_some_and(|c| c.evidence.iter().any(|e| e.byte_offset().is_some()))
+        });
+    if has_remote_offset {
+        // Offsets belong to an embedded member; that member owns their context.
+        return Vec::new();
+    }
+    tracing::error!(
+        finding_id = %finding.id,
+        kind = ?finding.kind,
+        crit = ?finding.crit,
+        "finding has no file offset — pinning to byte 0; the trait should record a \
+         match location for every hit"
+    );
+    vec![(0, 1)]
 }
 
 /// A byte anchor `(offset, len)` for evidence whose offset is in *this* file's

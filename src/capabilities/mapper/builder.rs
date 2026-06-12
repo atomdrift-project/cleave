@@ -7,7 +7,7 @@
 use crate::capabilities::indexes::{
     RawContentRegexIndex, StringMatchIndex, SymbolMatchIndex, TraitIndex,
 };
-use crate::composite_rules::Platform;
+use crate::composite_rules::{Platform, platforms_intersect};
 use anyhow::Context;
 use std::collections::HashMap;
 
@@ -78,8 +78,17 @@ impl super::CapabilityMapper {
         )
     }
 
-    /// Set the platform filter(s) for rule evaluation
-    /// Pass vec![Platform::All] to match all platforms (default)
+    /// Set the platform filter(s) for rule evaluation.
+    ///
+    /// Pass `vec![Platform::All]` (or an empty vec) to match all platforms — the
+    /// default, which leaves the fully-populated indexes untouched. For any other
+    /// selection the four match indexes are rebuilt so off-platform traits'
+    /// patterns are excluded from the automata, keeping per-file matching cheap
+    /// (a Linux scan no longer pays the cost of Windows-only patterns).
+    ///
+    /// `trait_definitions` and `trait_id_map` are left whole, so composites that
+    /// reference an off-platform trait by id still resolve and the per-rule
+    /// platform gate in evaluation stays correct.
     #[must_use]
     pub fn with_platforms(mut self, platforms: Vec<Platform>) -> Self {
         self.platforms = if platforms.is_empty() {
@@ -87,6 +96,54 @@ impl super::CapabilityMapper {
         } else {
             platforms
         };
+
+        // `All` intersects every rule, so there is nothing to prune — keep the
+        // indexes the loader already built (or restored from cache).
+        if self.platforms.contains(&Platform::All) {
+            return self;
+        }
+
+        // Pattern counts before filtering, so the log can report the reduction
+        // this platform selection buys on the live traits repo.
+        let string_patterns_before = self.string_match_index.total_patterns;
+        let regex_patterns_before = self.raw_content_regex_index.total_patterns;
+
+        self.trait_index = TraitIndex::build_filtered(&self.trait_definitions, &self.platforms);
+        self.string_match_index =
+            StringMatchIndex::build_filtered(&self.trait_definitions, &self.platforms);
+        self.symbol_match_index =
+            SymbolMatchIndex::build_filtered(&self.trait_definitions, &self.platforms);
+        // A filtered rebuild only ever drops patterns from an already-validated
+        // set, so an error here is not expected; keep the full index rather than
+        // panicking in library code if one somehow surfaces.
+        match RawContentRegexIndex::build_filtered(&self.trait_definitions, &self.platforms) {
+            Ok(index) => self.raw_content_regex_index = index,
+            Err(errors) => {
+                tracing::warn!(
+                    "platform-filtered regex index rebuild failed; keeping full index: {}",
+                    errors.join("; ")
+                );
+            }
+        }
+
+        let traits_total = self.trait_definitions.len();
+        let traits_kept = self
+            .trait_definitions
+            .iter()
+            .filter(|t| platforms_intersect(&t.platforms, &self.platforms))
+            .count();
+        tracing::debug!(
+            platforms = ?self.platforms,
+            traits_kept,
+            traits_total,
+            traits_dropped = traits_total - traits_kept,
+            string_patterns_before,
+            string_patterns_after = self.string_match_index.total_patterns,
+            regex_patterns_before,
+            regex_patterns_after = self.raw_content_regex_index.total_patterns,
+            "platform filter applied: trimmed off-platform trait patterns from match indexes"
+        );
+
         self
     }
 

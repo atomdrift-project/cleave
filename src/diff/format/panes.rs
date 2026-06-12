@@ -204,37 +204,10 @@ fn identity_fields(id: &filefacts::Identity) -> std::collections::BTreeMap<Strin
     m
 }
 
-/// One-line identity summary for the unchanged case: the same dense
-/// headline the analyze view shows.
+/// One-line identity summary for the unchanged case — the same concise
+/// headline the analyze view shows, so the two surfaces never diverge.
 fn identity_summary(id: &filefacts::Identity) -> String {
-    let mut segs: Vec<String> = Vec::new();
-    if let Some(c) = id.name.as_ref().or(id.title.as_ref()) {
-        segs.push(c.value.as_str().bold().to_string());
-    }
-    if let Some(ident) = &id.identifier
-        && id.name.as_ref().is_none_or(|n| n.value != ident.value)
-    {
-        segs.push(ident.value.clone());
-    }
-    if let Some(p) = &id.project {
-        segs.push(format!("({})", p.value));
-    }
-    if let Some(s) = &id.signer {
-        if let Some(o) = s.organization.clone().or_else(|| s.common_name.clone()) {
-            segs.push(o);
-        }
-    } else if let Some(o) = &id.organization {
-        segs.push(o.value.clone());
-    }
-    let trust = trust_word(id.trust);
-    segs.push(match id.trust {
-        filefacts::Trust::System | filefacts::Trust::Platform => trust.green().to_string(),
-        filefacts::Trust::DeveloperId | filefacts::Trust::CaSigned => trust.cyan().to_string(),
-        filefacts::Trust::SelfSigned | filefacts::Trust::AdHoc => trust.yellow().to_string(),
-        filefacts::Trust::Unsigned => trust.red().to_string(),
-        _ => trust.to_string(),
-    });
-    segs.join(" · ")
+    crate::output::identity_headline(id, true).unwrap_or_default()
 }
 
 fn trust_word(t: filefacts::Trust) -> &'static str {

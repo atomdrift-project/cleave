@@ -6,7 +6,9 @@
 //! - `RawContentRegexIndex`: Batched regex matching for binary content
 
 use crate::composite_rules::evaluators::{match_window, truncate_evidence};
-use crate::composite_rules::{Condition, FileType as RuleFileType, TraitDefinition};
+use crate::composite_rules::{
+    Condition, FileType as RuleFileType, Platform, TraitDefinition, platforms_intersect,
+};
 use crate::types::binary::normalize_symbol;
 use crate::types::{Evidence, MAX_EVIDENCE_PER_TRAIT, StringInfo, deduplicate_evidence};
 use aho_corasick::AhoCorasick;
@@ -69,13 +71,26 @@ impl TraitIndex {
         }
     }
 
-    /// Build index from trait definitions
+    /// Build index from trait definitions (all platforms).
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
+        Self::build_filtered(traits, &[Platform::All])
+    }
+
+    /// Build index, keeping only traits whose platform set intersects `platforms`.
+    ///
+    /// Off-platform traits retain their absolute index slot but contribute no
+    /// file-type buckets, so `get_applicable` never selects them for standalone
+    /// evaluation. `trait_definitions` itself is left intact, so composite rules
+    /// that reference these traits by id still resolve.
+    pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
         let mut by_type: FxHashMap<RuleFileType, TraitBitSet> = FxHashMap::default();
         let num_traits = traits.len();
         let mut universal = TraitBitSet::with_capacity(num_traits);
 
         for (i, trait_def) in traits.iter().enumerate() {
+            if !platforms_intersect(&trait_def.platforms, platforms) {
+                continue;
+            }
             let has_all = trait_def.r#for.contains(&RuleFileType::All);
 
             if has_all {
@@ -302,7 +317,14 @@ pub(crate) struct SymbolMatchIndex {
 }
 
 impl SymbolMatchIndex {
+    /// Build index from trait definitions (all platforms).
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
+        Self::build_filtered(traits, &[Platform::All])
+    }
+
+    /// Build index, keeping only traits whose platform set intersects `platforms`.
+    /// Off-platform traits keep their absolute index slot but contribute no patterns.
+    pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
         let num_traits = traits.len();
         let mut exact_symbols: FxHashMap<String, Vec<usize>> = FxHashMap::default();
         let mut symbol_trait_indices: FxHashSet<usize> = FxHashSet::default();
@@ -325,6 +347,9 @@ impl SymbolMatchIndex {
         let mut regex_fallback_patterns: Vec<String> = Vec::new();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
+            if !platforms_intersect(&trait_def.platforms, platforms) {
+                continue;
+            }
             match &trait_def.r#if {
                 Condition::Symbol {
                     exact: Some(exact_str),
@@ -724,7 +749,14 @@ impl StringMatchIndex {
 
     /// Build the string match index from trait definitions.
     /// Uses HashSet for O(1) exact matching instead of Aho-Corasick.
+    /// Build index from trait definitions (all platforms).
     pub(crate) fn build(traits: &[TraitDefinition]) -> Self {
+        Self::build_filtered(traits, &[Platform::All])
+    }
+
+    /// Build index, keeping only traits whose platform set intersects `platforms`.
+    /// Off-platform traits keep their absolute index slot but contribute no patterns.
+    pub(crate) fn build_filtered(traits: &[TraitDefinition], platforms: &[Platform]) -> Self {
         // Pre-allocate capacity based on trait count to reduce reallocations
         let estimated_patterns = traits.len() / 2;
 
@@ -756,6 +788,9 @@ impl StringMatchIndex {
         let mut exact_trait_indices: FxHashSet<usize> = FxHashSet::default();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
+            if !platforms_intersect(&trait_def.platforms, platforms) {
+                continue;
+            }
             match &trait_def.r#if {
                 // Exact string patterns
                 Condition::Text {
@@ -1552,7 +1587,17 @@ struct WordPattern {
 }
 
 impl RawContentRegexIndex {
+    /// Build index from trait definitions (all platforms).
     pub(crate) fn build(traits: &[TraitDefinition]) -> Result<Self, Vec<String>> {
+        Self::build_filtered(traits, &[Platform::All])
+    }
+
+    /// Build index, keeping only traits whose platform set intersects `platforms`.
+    /// Off-platform traits keep their absolute index slot but contribute no patterns.
+    pub(crate) fn build_filtered(
+        traits: &[TraitDefinition],
+        platforms: &[Platform],
+    ) -> Result<Self, Vec<String>> {
         // Group patterns by file type
         let mut by_file_type_patterns: FxHashMap<RuleFileType, Vec<(String, usize)>> =
             FxHashMap::default();
@@ -1568,6 +1613,9 @@ impl RawContentRegexIndex {
         let mut errors = Vec::new();
 
         for (trait_idx, trait_def) in traits.iter().enumerate() {
+            if !platforms_intersect(&trait_def.platforms, platforms) {
+                continue;
+            }
             // Extract regex patterns from Content traits
             // Word patterns are routed to a dedicated Aho-Corasick automaton
             match &trait_def.r#if {

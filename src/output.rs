@@ -710,6 +710,12 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
     out.push_str(&format_size(file.size));
     out.push(' ');
     out.push_str(&file.score.to_string());
+    // The minimal header is tiny's only identity surface (no rich header),
+    // so carry the same concise headline here for the LLM reader.
+    if let Some(headline) = file.identity.as_ref().and_then(|id| identity_headline(id, false)) {
+        out.push('\t');
+        out.push_str(&headline);
+    }
     out.push('\n');
 }
 
@@ -718,6 +724,11 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
 /// scannable lines that answer "is this what it says it is?" — the
 /// claimed-vs-verified distinction is carried by the trust word and the
 /// `✓` (shown only when a signature actually verified a claim).
+/// Supplementary forensic identity lines that don't belong in the
+/// one-line headline (which the file header carries): the build path —
+/// which often leaks the dev account — plus contact emails and stable
+/// unique ids (cdhash, extension id, MAC). Emitted only when present, so
+/// most files render nothing here.
 fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
     let label = |s: &str| {
         if colorize {
@@ -726,33 +737,6 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
             s.to_string()
         }
     };
-
-    let mut segs: Vec<String> = Vec::new();
-    let primary = id.name.as_ref().or(id.title.as_ref());
-    if let Some(c) = primary {
-        segs.push(if colorize {
-            c.value.as_str().bold().to_string()
-        } else {
-            c.value.clone()
-        });
-    }
-    if let Some(ident) = &id.identifier
-        && primary.is_none_or(|p| p.value != ident.value)
-    {
-        segs.push(ident.value.clone());
-    }
-    if let Some(p) = &id.project {
-        segs.push(format!("({})", p.value));
-    }
-    if let Some(org) = identity_org(id) {
-        segs.push(org);
-    }
-    segs.push(trust_segment(id, colorize));
-
-    out.push_str(&label("identity"));
-    out.push_str("  ");
-    out.push_str(&segs.join(" · "));
-    out.push('\n');
 
     if let Some(bp) = &id.build_path {
         out.push_str(&format!("  {}  {}\n", label("build"), truncate_mid(&bp.value, 72)));
@@ -770,20 +754,107 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
     }
 }
 
-/// Best display name for the signing/publishing organization: a verified
-/// signer certificate's O (or CN) wins over the self-asserted field.
-fn identity_org(id: &filefacts::Identity) -> Option<String> {
-    if let Some(signer) = &id.signer
-        && let Some(org) = signer.organization.clone().or_else(|| signer.common_name.clone())
-    {
-        return Some(org);
+/// The concise identity headline: the 2-3 facts a security engineer
+/// actually needs — *what it claims to be*, *who is responsible*, and
+/// *how it's signed* — deduplicated, never a 100-field dump.
+///
+/// Shape: `<what> — <who> · <provenance>`.
+/// - **what**: the canonical id / title / name (version folded in for
+///   packages). For binaries this is the bundle id; for documents the
+///   title; for packages `name version`.
+/// - **who**: the responsible party, picked in order of authority —
+///   verified signer org, then named author/maintainer, then a claimed
+///   company, then a publisher namespace, then an explicit `ad hoc`.
+/// - **provenance**: the trust tier when signed (System/Developer-ID/…),
+///   otherwise the producing tool (Word/Excel/…) for documents.
+///
+/// Each slot is dropped when absent or when it would merely echo another.
+/// Returns `None` when there is nothing worth showing.
+pub(crate) fn identity_headline(id: &filefacts::Identity, colorize: bool) -> Option<String> {
+    use filefacts::Trust;
+
+    // what — canonical identity; fold the version in for package-style names.
+    let what = id
+        .identifier
+        .as_ref()
+        .map(|c| c.value.clone())
+        .or_else(|| id.title.as_ref().map(|c| c.value.clone()))
+        .or_else(|| {
+            id.name.as_ref().map(|c| match &id.version {
+                Some(v) => format!("{} {}", c.value, v.value),
+                None => c.value.clone(),
+            })
+        })
+        .map(|w| truncate_end(&w, 48));
+
+    // who — responsible party, most authoritative first. `ad hoc` stands
+    // in only when nothing is named.
+    let signer_org = id
+        .signer
+        .as_ref()
+        .and_then(|s| s.organization.clone().or_else(|| s.common_name.clone()));
+    let author = id
+        .authors
+        .first()
+        .and_then(|a| a.name.clone().or_else(|| a.email.clone()));
+    let (who, who_adhoc) = signer_org
+        .or(author)
+        .or_else(|| id.organization.as_ref().map(|c| c.value.clone()))
+        .or_else(|| id.team_id.as_ref().map(|c| c.value.clone()))
+        .map(|w| (w, false))
+        .or_else(|| matches!(id.trust, Trust::AdHoc).then(|| ("ad hoc".to_string(), true)))
+        .map(|(w, adhoc)| (truncate_end(&w, 28), adhoc))
+        .map(|(w, adhoc)| (Some(w), adhoc))
+        .unwrap_or((None, false));
+    // Drop `who` when it just echoes `what`.
+    let who = who.filter(|w| Some(w.as_str()) != what.as_deref());
+
+    // provenance — trust tier when signed, else the producing tool.
+    let third = if !matches!(id.trust, Trust::Unsigned | Trust::AdHoc) {
+        Some(trust_text(id, colorize))
+    } else {
+        id.producer
+            .as_ref()
+            .map(|c| truncate_end(&c.value, 28))
+            .filter(|p| Some(p.as_str()) != who.as_deref())
+    };
+
+    // Assemble at most three parts. `—` introduces the party; `·` the rest.
+    let mut parts: Vec<(&str, String)> = Vec::new();
+    if let Some(w) = what {
+        parts.push(("·", w));
     }
-    id.organization.as_ref().map(|c| c.value.clone())
+    if let Some(w) = who {
+        let v = if who_adhoc && colorize {
+            w.as_str().dimmed().italic().to_string()
+        } else {
+            w
+        };
+        parts.push(("—", v));
+    }
+    if let Some(t) = third {
+        parts.push(("·", t));
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    let mut s = String::new();
+    for (i, (sym, text)) in parts.iter().enumerate() {
+        if i > 0 {
+            if colorize {
+                s.push_str(&format!(" {} ", sym.bright_black()));
+            } else {
+                s.push_str(&format!(" {sym} "));
+            }
+        }
+        s.push_str(text);
+    }
+    Some(s)
 }
 
 /// The trust tier word, colored by tier and suffixed with `✓` when a
 /// signature cryptographically verified one of the identity claims.
-fn trust_segment(id: &filefacts::Identity, colorize: bool) -> String {
+fn trust_text(id: &filefacts::Identity, colorize: bool) -> String {
     use filefacts::Trust;
     let word = match id.trust {
         Trust::System => "system",
@@ -1571,6 +1642,27 @@ fn visible_width(s: &str) -> usize {
     width
 }
 
+/// Turn cleave's synthetic embedded-binary path segment
+/// (`embedded:<kind>[:<name>]@0x<off>`, built in `analyzers::utils`) into a
+/// human header label such as `Embedded ELF @ 0x324f9 [2508 bytes]` — or, when
+/// the carrier named the payload, `Embedded PE payload.exe @ 0x5010 [2508 bytes]`.
+/// Returns `None` for any segment that isn't an embedded-binary marker.
+fn embedded_label(segment: &str, size: u64) -> Option<String> {
+    let rest = segment.strip_prefix("embedded:")?;
+    let (kind_and_name, off) = rest.rsplit_once('@')?;
+    let (kind, name) = match kind_and_name.split_once(':') {
+        Some((kind, name)) => (kind, Some(name)),
+        None => (kind_and_name, None),
+    };
+    let mut label = format!("Embedded {}", display_file_type(kind));
+    if let Some(name) = name {
+        label.push(' ');
+        label.push_str(name);
+    }
+    label.push_str(&format!(" @ {off} [{size} bytes]"));
+    Some(label)
+}
+
 /// Render the rich file header. Plain (cleave): `path  type • formula  legend`.
 /// With a [`HeaderBadge`] (litmus): a single lean line `stamp path · type
 /// trailer`, plus the badge's subtitle beneath. Then a rule sized to the widest
@@ -1586,41 +1678,6 @@ fn rich_header(
     // type after a `·`, no formula or legend. cleave's own header keeps both.
     let badged = badge.badge.is_some();
     let file_type_display = display_file_type(&file.file_type);
-    let type_display = if badged {
-        // Litmus verdict view stays lean — type only, no identity/formula.
-        format!("\u{00b7} {file_type_display}").bright_black().to_string()
-    } else {
-        let formula_findings = filter_findings_for_formula(&file.findings);
-        let formula = malecule_bridge::formula_from_findings(&formula_findings);
-        // Header reads `TYPE · <identifier> — <org> • <formula>`. The type
-        // and formula stay dim; the identifier and signing org render in the
-        // default color so "what is this / who signed it" pops at a glance.
-        // `identity_org` prefers the cert O (Apple Inc.) over the CN
-        // (Software Signing) and falls back to the reverse-DNS vendor.
-        let mut s = file_type_display.bright_black().to_string();
-        if let Some(identity) = &file.identity {
-            if let Some(idf) = &identity.identifier {
-                s.push_str(&format!(" {} {}", "·".bright_black(), truncate_end(&idf.value, 48)));
-            }
-            // Signing org: a real publisher (default color), or an explicit
-            // dimmed `ad hoc` marker — ad-hoc signing proves integrity but
-            // names no one, so the slot says so rather than going blank.
-            let org_segment = if let Some(org) = identity_org(identity) {
-                Some(truncate_end(&org, 28))
-            } else if matches!(identity.trust, filefacts::Trust::AdHoc) {
-                Some("ad hoc".dimmed().italic().to_string())
-            } else {
-                None
-            };
-            if let Some(org) = org_segment {
-                s.push_str(&format!(" {} {}", "—".bright_black(), org));
-            }
-        }
-        if !formula.is_empty() {
-            s.push_str(&format!(" {} {}", "•".bright_black(), formula.bright_black()));
-        }
-        s
-    };
     let display_path = if file.depth > 0 {
         file.path
             .rsplit(crate::types::file_analysis::ARCHIVE_DELIMITER)
@@ -1634,6 +1691,42 @@ fn rich_header(
     } else {
         &file.path
     };
+    // Embedded binaries carry a synthetic `embedded:<kind>@0x<off>` segment; turn
+    // it into a self-describing headline so the sub-view reads as a distinct
+    // payload of the parent, not a cryptic stray entry.
+    let embedded = (file.depth > 0)
+        .then(|| embedded_label(display_path, file.size))
+        .flatten();
+    let formula = || {
+        let formula_findings = filter_findings_for_formula(&file.findings);
+        malecule_bridge::formula_from_findings(&formula_findings)
+    };
+    let type_display = if badged {
+        // Litmus verdict view stays lean — type only, no identity/formula.
+        format!("\u{00b7} {file_type_display}").bright_black().to_string()
+    } else if embedded.is_some() {
+        // The kind already leads the embedded headline, so show only the formula.
+        let formula = formula();
+        if formula.is_empty() {
+            String::new()
+        } else {
+            format!("{} {}", "•".bright_black(), formula.bright_black())
+        }
+    } else {
+        let formula = formula();
+        // Header reads `TYPE · <identity headline> • <formula>`. The type and
+        // formula stay dim; the identity headline (what · who · trust) renders
+        // brighter so "what is this / who signed it" pops at a glance.
+        let mut s = file_type_display.bright_black().to_string();
+        if let Some(headline) = file.identity.as_ref().and_then(|id| identity_headline(id, true)) {
+            s.push_str(&format!(" {} {headline}", "·".bright_black()));
+        }
+        if !formula.is_empty() {
+            s.push_str(&format!(" {} {}", "•".bright_black(), formula.bright_black()));
+        }
+        s
+    };
+    let label = embedded.as_deref().unwrap_or(display_path);
     let counts = if badged {
         String::new()
     } else {
@@ -1646,7 +1739,7 @@ fn rich_header(
     let trail = badge.trailer.map(|t| format!(" {t}")).unwrap_or_default();
     let header_line = format!(
         "{lead}{}{sep}{}{}{}",
-        display_path.bright_white().bold(),
+        label.bright_white().bold(),
         type_display,
         counts,
         trail,
@@ -2202,6 +2295,26 @@ mod tests {
     use super::*;
     use crate::types::{AnalysisReport, Evidence, FindingKind, TargetInfo, YaraMatch};
     use chrono::Utc;
+
+    #[test]
+    fn embedded_label_formats_kind_offset_and_size() {
+        assert_eq!(
+            embedded_label("embedded:elf@0x324f9", 2508).as_deref(),
+            Some("Embedded ELF @ 0x324f9 [2508 bytes]")
+        );
+        // Carrier-named payload (PE metadata name) keeps the name in the headline.
+        assert_eq!(
+            embedded_label("embedded:pe:payload.exe@0x5010", 4096).as_deref(),
+            Some("Embedded PE payload.exe @ 0x5010 [4096 bytes]")
+        );
+        // A name that itself contains ':' splits only on the first separator.
+        assert_eq!(
+            embedded_label("embedded:pe:a:b@0x10", 1).as_deref(),
+            Some("Embedded PE a:b @ 0x10 [1 bytes]")
+        );
+        // Ordinary paths are not embedded markers.
+        assert_eq!(embedded_label("alvr/deps", 100), None);
+    }
 
     fn finding_with(id: &str, crit: Criticality) -> Finding {
         Finding {

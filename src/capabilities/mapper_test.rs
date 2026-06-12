@@ -86,6 +86,54 @@ fn test_with_platforms_empty_defaults_to_all() {
 }
 
 #[test]
+fn test_with_platforms_filters_index_but_keeps_definitions() {
+    // One Linux-only and one Windows-only standalone trait, each with a distinct
+    // raw substring pattern.
+    let yaml = r#"
+defaults:
+  for: [all]
+
+traits:
+  - id: "test/linux::marker"
+    desc: "Linux marker"
+    crit: baseline
+    platforms: [linux]
+    if:
+      type: text
+      substr: "linux_only_pattern"
+  - id: "test/windows::marker"
+    desc: "Windows marker"
+    crit: baseline
+    platforms: [windows]
+    if:
+      type: text
+      substr: "windows_only_pattern"
+"#;
+    let (_dir, path) = create_test_yaml(yaml);
+
+    let full = CapabilityMapper::from_yaml(&path).unwrap();
+    let full_patterns = full.string_match_index.total_patterns;
+    assert_eq!(full.trait_definitions_count(), 2);
+
+    let linux = CapabilityMapper::from_yaml(&path)
+        .unwrap()
+        .with_platforms(vec![Platform::Linux]);
+
+    // Definitions stay whole, so composites referencing either trait still resolve.
+    assert_eq!(linux.trait_definitions_count(), 2);
+    assert!(linux.find_trait("test/windows::marker").is_some());
+
+    // ...but the Windows-only pattern is excluded from the match index, so a Linux
+    // scan never pays to match it.
+    assert!(
+        linux.string_match_index.total_patterns < full_patterns,
+        "expected platform filter to drop off-platform patterns: {} !< {}",
+        linux.string_match_index.total_patterns,
+        full_patterns
+    );
+}
+
+#[test]
 fn test_from_yaml_minimal_symbol_map() {
     let yaml = r#"
 symbols:

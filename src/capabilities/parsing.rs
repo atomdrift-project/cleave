@@ -1767,6 +1767,7 @@ mod tests {
         let mut ft = vec![
             RuleFileType::Shell,
             RuleFileType::Batch,
+            RuleFileType::Jcl,
             RuleFileType::Python,
             RuleFileType::JavaScript,
             RuleFileType::Ruby,
@@ -1795,6 +1796,8 @@ mod tests {
         assert!(!ft.contains(&RuleFileType::AppleScript));
         // Shell requires unix/apple — filtered out for windows-only
         assert!(!ft.contains(&RuleFileType::Shell));
+        // JCL requires z/OS — filtered out for windows-only
+        assert!(!ft.contains(&RuleFileType::Jcl));
     }
 
     #[test]

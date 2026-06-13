@@ -2536,9 +2536,10 @@ fn test_parse_file_types_groups_and_exclusions() {
 
     let scripts = parsing::parse_file_types(&["scripts".to_string()], &mut warnings);
     assert!(scripts.from_groups);
-    assert_eq!(scripts.types.len(), 11); // TypeScript maps to JavaScript, not separate
+    assert_eq!(scripts.types.len(), 12); // TypeScript maps to JavaScript, not separate
     assert!(scripts.types.contains(&RuleFileType::Python));
     assert!(scripts.types.contains(&RuleFileType::Shell));
+    assert!(scripts.types.contains(&RuleFileType::Jcl));
     assert!(!scripts.types.contains(&RuleFileType::Elf));
 
     // Test alias "all"

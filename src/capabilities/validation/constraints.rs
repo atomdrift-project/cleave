@@ -1066,6 +1066,7 @@ pub(crate) fn find_excessive_file_types(
     let scripts: &[FileType] = &[
         FileType::Shell,
         FileType::Batch,
+        FileType::Jcl,
         FileType::Python,
         FileType::JavaScript,
         FileType::Ruby,

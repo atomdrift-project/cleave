@@ -278,6 +278,7 @@ pub(crate) fn cli_file_type_to_internal(ft: crate::cli::DetectFileType) -> FileT
         crate::cli::DetectFileType::Python => FileType::Python,
         crate::cli::DetectFileType::Go => FileType::Go,
         crate::cli::DetectFileType::Shell => FileType::Shell,
+        crate::cli::DetectFileType::Jcl => FileType::Jcl,
         crate::cli::DetectFileType::Makefile => FileType::Makefile,
         crate::cli::DetectFileType::SystemdService => FileType::SystemdService,
         crate::cli::DetectFileType::DesktopEntry => FileType::DesktopEntry,

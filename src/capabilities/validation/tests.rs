@@ -4622,6 +4622,7 @@ mod excessive_file_types_tests {
             vec![
                 FileType::Shell,
                 FileType::Batch,
+                FileType::Jcl,
                 FileType::Python,
                 FileType::JavaScript,
                 FileType::Ruby,
@@ -4719,6 +4720,7 @@ mod excessive_file_types_tests {
         let scripts = vec![
             FileType::Shell,
             FileType::Batch,
+            FileType::Jcl,
             FileType::Python,
             FileType::JavaScript,
             FileType::Ruby,
@@ -4753,7 +4755,7 @@ mod excessive_file_types_tests {
             FileType::Elixir,
         ];
         let combined: Vec<FileType> = scripts.into_iter().chain(binaries).chain(source).collect();
-        assert_eq!(combined.len(), 30);
+        assert_eq!(combined.len(), 31);
         let traits = vec![trait_with_for("test::multi-group", combined)];
         let result = find_excessive_file_types(&traits, &[]);
         assert!(

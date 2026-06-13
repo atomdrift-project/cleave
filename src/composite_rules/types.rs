@@ -484,6 +484,7 @@ impl FileType {
             self,
             FileType::Shell
                 | FileType::Batch
+                | FileType::Jcl
                 | FileType::Python
                 | FileType::JavaScript
                 | FileType::TypeScript
@@ -619,6 +620,7 @@ impl FileType {
             // Source code formats
             FileType::Shell,
             FileType::Batch,
+            FileType::Jcl,
             FileType::Python,
             FileType::JavaScript,
             FileType::TypeScript,
@@ -711,6 +713,7 @@ impl FileType {
             "pe" | "exe" | "dll" => FileType::Pe,
             "shell" | "shellscript" | "shell_script" => FileType::Shell,
             "batch" | "bat" | "cmd" => FileType::Batch,
+            "jcl" => FileType::Jcl,
             "python" | "python_script" => FileType::Python,
             "javascript" | "js" | "typescript" | "ts" => FileType::JavaScript,
             "c" | "h" | "cpp" | "cxx" | "cc" | "hpp" | "hxx" => FileType::C,

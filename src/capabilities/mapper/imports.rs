@@ -6,6 +6,14 @@
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 use rustc_hash::FxHashSet;
 
+/// Parse an `Import::offset` (a `"0x…"` hex string produced upstream) into a
+/// byte offset. Returns `None` when the import carries no resolved offset.
+fn parse_import_offset(offset: Option<&str>) -> Option<u64> {
+    let s = offset?;
+    let hex = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X"))?;
+    u64::from_str_radix(hex, 16).ok()
+}
+
 impl super::CapabilityMapper {
     /// Generate capability findings from import data in analysis reports.
     ///
@@ -34,8 +42,12 @@ impl super::CapabilityMapper {
             // with many imports.  YAML traits now use inline
             // `type: symbol, exact: <name>` conditions instead.
 
-            // Group symbols by library for dylib findings.
+            // Group symbols by library for dylib findings, tracking each
+            // import's file offset so the aggregate finding anchors at the
+            // import sites rather than carrying a bare symbol count.
             let mut libs_with_symbols: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            let mut libs_with_offsets: std::collections::HashMap<String, Vec<u64>> =
                 std::collections::HashMap::new();
 
             for import in &report.imports {
@@ -46,6 +58,9 @@ impl super::CapabilityMapper {
                         .entry(lib.clone())
                         .or_default()
                         .push(import.symbol.clone());
+                    if let Some(off) = parse_import_offset(import.offset.as_deref()) {
+                        libs_with_offsets.entry(lib.clone()).or_default().push(off);
+                    }
                 }
             }
 
@@ -77,6 +92,10 @@ impl super::CapabilityMapper {
                     format!("links {} ({})", library, symbol_preview.join(", "))
                 };
 
+                // Anchor at the import sites: the first offset drives the
+                // content window, the rest ride in `offsets` for completeness.
+                let offsets = libs_with_offsets.remove(&library).unwrap_or_default();
+                let location = offsets.first().map(|off| format!("0x{off:x}"));
                 new_findings.push(Finding {
                     id,
                     kind: FindingKind::Structural,
@@ -90,7 +109,8 @@ impl super::CapabilityMapper {
                         method: "library".to_string(),
                         source: "goblin".to_string(),
                         value: library,
-                        location: Some(format!("{} symbols", symbols.len())),
+                        location,
+                        offsets,
                         ..Default::default()
                     }],
 
@@ -144,7 +164,9 @@ impl super::CapabilityMapper {
                         method: "import".to_string(),
                         source: import.source.clone(),
                         value: import.symbol.clone(),
-                        location: import.library.clone(),
+                        // Anchor at the import statement's offset; the source
+                        // module is already named in the description.
+                        location: import.offset.clone(),
                         ..Default::default()
                     }],
 

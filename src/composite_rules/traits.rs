@@ -31,6 +31,20 @@ const MAX_RULE_EVAL_DURATION: Duration = Duration::from_secs(90);
 /// Rules exceeding this emit an info-level log.
 const RULE_EVAL_DEBUG_DURATION: Duration = Duration::from_millis(600);
 
+/// Lower a criticality by one level when a downgrade condition fires. Hostile →
+/// Suspicious → Notable → Baseline; anything already at or below Baseline floors
+/// at Component.
+fn downgrade_crit(c: Criticality) -> Criticality {
+    match c {
+        Criticality::Hostile => Criticality::Suspicious,
+        Criticality::Suspicious => Criticality::Notable,
+        Criticality::Notable => Criticality::Baseline,
+        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
+            Criticality::Component
+        }
+    }
+}
+
 fn condition_count_weight(condition: &Condition, result: &ConditionResult) -> usize {
     if !result.matched {
         return 0;
@@ -1042,7 +1056,7 @@ impl TraitDefinition {
 
         // Record condition result if debug collector is present
         ctx.with_debug(|debug| {
-            let cond_debug = ConditionDebug::new(format!("{:?}", self.r#if))
+            let cond_debug = ConditionDebug::default()
                 .with_matched(result.matched)
                 .with_evidence(result.evidence.clone())
                 .with_precision(result.precision);
@@ -1115,14 +1129,7 @@ impl TraitDefinition {
             if let Some(downgrade_conds) = &self.downgrade {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
-                    final_crit = match self.crit {
-                        Criticality::Hostile => Criticality::Suspicious,
-                        Criticality::Suspicious => Criticality::Notable,
-                        Criticality::Notable => Criticality::Baseline,
-                        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
-                            Criticality::Component
-                        }
-                    };
+                    final_crit = downgrade_crit(self.crit);
                     if final_crit != self.crit {
                         tracing::debug!(
                             "Downgrade applied: trait '{}' from {:?} → {:?}",
@@ -1196,14 +1203,7 @@ impl TraitDefinition {
         ctx: &EvaluationContext<'a>,
     ) -> Criticality {
         if self.eval_downgrade_conditions(conditions, ctx) {
-            match base_crit {
-                Criticality::Hostile => Criticality::Suspicious,
-                Criticality::Suspicious => Criticality::Notable,
-                Criticality::Notable => Criticality::Baseline,
-                Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
-                    Criticality::Component
-                }
-            }
+            downgrade_crit(*base_crit)
         } else {
             *base_crit
         }
@@ -2360,14 +2360,7 @@ impl CompositeTrait {
             if let Some(downgrade_conds) = &self.downgrade {
                 let triggered = self.eval_downgrade_conditions(downgrade_conds, ctx);
                 if triggered {
-                    final_crit = match self.crit {
-                        Criticality::Hostile => Criticality::Suspicious,
-                        Criticality::Suspicious => Criticality::Notable,
-                        Criticality::Notable => Criticality::Baseline,
-                        Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
-                            Criticality::Component
-                        }
-                    };
+                    final_crit = downgrade_crit(self.crit);
                 }
 
                 // Record downgrade debug
@@ -2459,14 +2452,7 @@ impl CompositeTrait {
         ctx: &EvaluationContext<'a>,
     ) -> Criticality {
         if self.eval_downgrade_conditions(conditions, ctx) {
-            return match base_crit {
-                Criticality::Hostile => Criticality::Suspicious,
-                Criticality::Suspicious => Criticality::Notable,
-                Criticality::Notable => Criticality::Baseline,
-                Criticality::Baseline | Criticality::Component | Criticality::Filtered => {
-                    Criticality::Component
-                }
-            };
+            return downgrade_crit(*base_crit);
         }
         *base_crit
     }

@@ -62,14 +62,9 @@ fn target_is_remote(target: &str) -> bool {
     {
         return true;
     }
-    // UNC / authority-relative paths: \\host\share or //host/share. A leading
-    // `file://` is stripped first so `file://server/share` is judged on the
-    // authority, while `file:///C:/...` and `file:///path` (empty authority)
-    // read as local.
-    let after_file = lower
-        .strip_prefix("file:")
-        .map(|r| r.trim_start_matches('/'))
-        .unwrap_or(&lower);
+    // UNC / authority-relative paths: \\host\share or //host/share. A `file:`
+    // scheme is excluded here and judged on its authority just below, so
+    // `file:///C:/...` and `file:///path` (empty authority) read as local.
     if (t.starts_with("\\\\") || t.starts_with("//")) && !lower.starts_with("file:") {
         return true;
     }
@@ -86,7 +81,6 @@ fn target_is_remote(target: &str) -> bool {
             }
         }
     }
-    let _ = after_file;
     false
 }
 

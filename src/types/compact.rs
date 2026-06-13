@@ -59,11 +59,11 @@ pub struct CompactFile {
     pub size: u64,
     /// Weighted risk score
     #[serde(rename = "risk")]
-    #[serde(skip_serializing_if = "is_zero_u32")]
+    #[serde(skip_serializing_if = "super::is_zero_u32")]
     pub risk: u32,
     /// Archive nesting depth (omit when 0)
     #[serde(rename = "dp")]
-    #[serde(skip_serializing_if = "is_zero_u32")]
+    #[serde(skip_serializing_if = "super::is_zero_u32")]
     pub depth: u32,
     /// Molecular formula
     #[serde(rename = "mol")]
@@ -415,10 +415,6 @@ impl Serialize for RoundedMetrics {
 // ========================================================================
 // Helpers
 // ========================================================================
-
-fn is_zero_u32(v: &u32) -> bool {
-    *v == 0
-}
 
 fn is_default_conf(v: &f32) -> bool {
     (*v - DEFAULT_CONF).abs() < f32::EPSILON || *v == 0.0

@@ -187,11 +187,6 @@ pub(crate) struct ConditionDebug {
 }
 
 impl ConditionDebug {
-    /// Create a new condition debug
-    pub(crate) fn new(_desc: impl Into<String>) -> Self {
-        Self::default()
-    }
-
     /// Set the matched flag
     #[must_use]
     pub(crate) fn with_matched(mut self, matched: bool) -> Self {

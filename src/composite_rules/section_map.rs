@@ -96,20 +96,7 @@ impl SectionMap {
         let Ok(parsed) = filefacts::open(binary_data) else {
             return Self::empty(file_size);
         };
-        let sections: Vec<SectionInfo> = parsed
-            .sections()
-            .iter()
-            .map(|s| SectionInfo {
-                name: s.name.clone(),
-                start: s.file_offset,
-                end: s.file_offset.saturating_add(s.file_size),
-            })
-            .collect();
-        Self {
-            sections,
-            file_size,
-            bounds_cache: Arc::new(RwLock::new(FxHashMap::default())),
-        }
+        Self::from_filefacts(&parsed, file_size)
     }
 
     /// Returns true if this map contains any section information.

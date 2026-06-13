@@ -46,10 +46,6 @@ fn truncate_str_at_boundary(s: &str, max_bytes: usize) -> &str {
 // ML-Ready Feature Extraction Structures
 // ========================================================================
 
-// ========================================================================
-// ML-Ready Feature Extraction Structures
-// ========================================================================
-
 /// Control flow graph metrics for a function
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ControlFlowMetrics {

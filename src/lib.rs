@@ -963,19 +963,7 @@ pub fn analyze_file<P: AsRef<Path>>(path: P, options: &AnalysisOptions) -> Resul
     };
 
     // Cache miss: load mapper and YARA engine in parallel (~860ms + ~270ms → ~860ms)
-    let (mapper_result, yara_engine) = rayon::join(
-        || shared_resources::capability_mapper_with_options(options),
-        || {
-            if options.disable_yara {
-                None
-            } else {
-                Some(shared_resources::yara_engine(
-                    options.enable_third_party_yara,
-                ))
-            }
-        },
-    );
-    let mapper = mapper_result?;
+    let (mapper, yara_engine) = load_scan_resources(options)?;
     analyze_file_with_resources_and_sha256(
         path,
         options,
@@ -1036,19 +1024,7 @@ pub fn analyze_bytes_owned(
 
     let preloaded = file_io::FileData::Owned(data);
 
-    let (mapper_result, yara_engine) = rayon::join(
-        || shared_resources::capability_mapper_with_options(options),
-        || {
-            if options.disable_yara {
-                None
-            } else {
-                Some(shared_resources::yara_engine(
-                    options.enable_third_party_yara,
-                ))
-            }
-        },
-    );
-    let mapper = mapper_result?;
+    let (mapper, yara_engine) = load_scan_resources(options)?;
     analyze_file_with_resources_and_sha256(
         path,
         options,

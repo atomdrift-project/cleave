@@ -138,6 +138,20 @@ impl MemberAccumulator {
         };
         self.files_analyzed += 1;
 
+        // Aggregate member YARA matches from the report *before* conversion:
+        // `into_file_analysis` does not carry `yara_matches` onto the
+        // FileAnalysis, so reading it post-conversion would silently see none.
+        for yara_match in &file_report.yara_matches {
+            if !self
+                .collected_yara
+                .iter()
+                .any(|m| m.rule == yara_match.rule)
+                && self.collected_yara.len() < 1_000
+            {
+                self.collected_yara.push(yara_match.clone());
+            }
+        }
+
         let (mut file_entry, mut nested_files, archive_contents) =
             file_report.into_file_analysis(0);
         file_entry.path = result.entry_path.clone();
@@ -179,17 +193,6 @@ impl MemberAccumulator {
                 .or_insert(new_finding);
         }
 
-        for yara_match in &file_entry.yara_matches {
-            if !self
-                .collected_yara
-                .iter()
-                .any(|m| m.rule == yara_match.rule)
-                && self.collected_yara.len() < 1_000
-            {
-                self.collected_yara.push(yara_match.clone());
-            }
-        }
-
         for string in &file_entry.strings {
             if matches!(
                 string.string_type,
@@ -211,19 +214,27 @@ impl MemberAccumulator {
         }
     }
 
-    /// Merge the deduplicated aggregate into the parent report and write
-    /// archive-level metadata. Called once per archive after all members fold.
-    fn finalize(
-        self,
-        report: &mut AnalysisReport,
-        start: std::time::Instant,
-        archive_label: &'static str,
-        tools_used: Vec<String>,
-        total_files: usize,
-    ) {
-        let files_analyzed = self.files_analyzed;
-        let trait_count = self.total_traits.len();
-        let capability_count = self.total_capabilities.len();
+    /// Sort the collected member files by descending peak severity, then cap the
+    /// count. Generic archives surface their most severe members first under a
+    /// hard ceiling; formats that keep insertion order simply don't call this.
+    fn sort_files_by_severity(&mut self, limit: usize) {
+        self.collected_files.sort_by(|a, b| {
+            let peak =
+                |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
+            peak(b).cmp(&peak(a))
+        });
+        self.collected_files.truncate(limit);
+    }
+
+    /// Drain the deduplicated aggregate into the parent report, returning the
+    /// tallies each archive type folds into its own summary line. Writes no
+    /// metadata — callers append their format-specific summary and tools after.
+    fn merge_into(self, report: &mut AnalysisReport) -> MemberCounts {
+        let counts = MemberCounts {
+            files_analyzed: self.files_analyzed,
+            trait_count: self.total_traits.len(),
+            capability_count: self.total_capabilities.len(),
+        };
         for (_, t) in self.collected_traits {
             if !report.findings.iter().any(|existing| existing.id == t.id) {
                 report.findings.push(t);
@@ -239,6 +250,26 @@ impl MemberAccumulator {
             .archive_contents
             .extend(self.collected_archive_entries);
         report.files.extend(self.collected_files);
+        counts
+    }
+
+    /// Merge the deduplicated aggregate into the parent report and write the
+    /// generic archive-level metadata. Called once per archive after all members
+    /// fold (the windowed ZIP/ASAR path); JAR and generic archives build their
+    /// own summary lines from [`MemberAccumulator::merge_into`] instead.
+    fn finalize(
+        self,
+        report: &mut AnalysisReport,
+        start: std::time::Instant,
+        archive_label: &'static str,
+        tools_used: Vec<String>,
+        total_files: usize,
+    ) {
+        let MemberCounts {
+            files_analyzed,
+            trait_count,
+            capability_count,
+        } = self.merge_into(report);
         report.metadata.errors.push(format!(
             "{archive_label}: {total_files} members, {files_analyzed} analyzed, \
              {trait_count} traits and {capability_count} capabilities detected"
@@ -246,6 +277,14 @@ impl MemberAccumulator {
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
         report.metadata.tools_used = tools_used;
     }
+}
+
+/// Per-archive tallies returned by [`MemberAccumulator::merge_into`] — each
+/// archive format folds these into its own summary line.
+struct MemberCounts {
+    files_analyzed: usize,
+    trait_count: usize,
+    capability_count: usize,
 }
 
 /// Resident-byte budget for one member window. Caps how much decompressed
@@ -2130,17 +2169,11 @@ impl ArchiveAnalyzer {
         debug!("Full analysis on {} classes", classes_to_analyze.len());
 
         // Run full analysis on selected classes — collect results lock-free,
-        // then aggregate single-threaded to avoid Mutex contention deadlocks.
-        let mut total_capabilities = HashSet::new();
-        let mut total_traits = HashSet::new();
+        // then fold single-threaded to avoid Mutex contention deadlocks. Both
+        // the class phase and the non-class phase below fold into one
+        // accumulator so the JAR's tallies span every analyzed member.
         let expected_count = classes_to_analyze.len();
-        let mut collected_traits =
-            HashMap::<String, Finding>::with_capacity(expected_count.min(500));
-        let mut collected_yara = Vec::<YaraMatch>::with_capacity(50);
-        let mut collected_strings = Vec::<StringInfo>::with_capacity((expected_count * 2).min(200));
-        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(expected_count);
-        let mut collected_files = Vec::<FileAnalysis>::with_capacity(expected_count);
-        let mut files_analyzed: usize = 0;
+        let mut acc = MemberAccumulator::default();
 
         let members_done = std::sync::atomic::AtomicUsize::new(0);
         let last_progress_ms = AtomicU64::new(0);
@@ -2249,87 +2282,9 @@ impl ArchiveAnalyzer {
             },
         );
 
-        // Single-threaded aggregation — no lock contention
+        // Single-threaded fold — no lock contention
         for result in member_results {
-            collected_archive_entries.push(result.entry_metadata);
-
-            let Some(file_report) = result.report else {
-                continue;
-            };
-            files_analyzed += 1;
-            trace!(
-                "Analyzed archive member {}: {} findings",
-                result.entry_path,
-                file_report.findings.len()
-            );
-
-            // Aggregate findings — keep highest (crit, conf) per trait ID
-            for f in &file_report.findings {
-                total_traits.insert(f.id.clone());
-                total_capabilities.insert(f.id.clone());
-                let mut new_finding = f.clone();
-                for evidence in &mut new_finding.evidence {
-                    match &evidence.location {
-                        None => {
-                            evidence.location = Some(result.archive_location.clone());
-                        }
-                        Some(loc) if !loc.starts_with("archive:") => {
-                            evidence.location =
-                                Some(format!("{}:{}", result.archive_location, loc));
-                        }
-                        _ => {}
-                    }
-                }
-                collected_traits
-                    .entry(new_finding.id.clone())
-                    .and_modify(|existing| {
-                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
-                            > (existing.crit, std::cmp::Ordering::Equal)
-                        {
-                            *existing = new_finding.clone();
-                        }
-                    })
-                    .or_insert(new_finding);
-            }
-
-            // Aggregate YARA matches
-            for yara_match in &file_report.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
-                    && collected_yara.len() < 1_000
-                {
-                    collected_yara.push(yara_match.clone());
-                }
-            }
-
-            // Aggregate interesting strings
-            for string in &file_report.strings {
-                if matches!(
-                    string.string_type,
-                    Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) && collected_strings.len() < 10_000
-                {
-                    collected_strings.push(string.clone());
-                }
-            }
-
-            // Convert to FileAnalysis
-            let (mut file_entry, nested_files, archive_contents) =
-                file_report.into_file_analysis(0);
-            file_entry.path = result.entry_path.clone();
-            file_entry.depth = 1;
-            file_entry.compute_summary();
-            collected_files.push(file_entry);
-
-            for nested_entry in archive_contents {
-                collected_archive_entries.push(nested_entry);
-            }
-            for mut nested_file in nested_files {
-                if !nested_file.path.contains("!!") {
-                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
-                }
-                nested_file.depth += 1;
-                collected_files.push(nested_file);
-            }
+            acc.fold(result);
         }
 
         // Phase 3: Analyze non-class files (scripts, configs, etc.)
@@ -2465,99 +2420,17 @@ impl ArchiveAnalyzer {
             },
         );
 
-        // Aggregate non-class results
+        // Fold non-class results into the same accumulator
         for result in non_class_results {
-            collected_archive_entries.push(result.entry_metadata);
-
-            let Some(file_report) = result.report else {
-                continue;
-            };
-            files_analyzed += 1;
-            trace!(
-                "Analyzed archive member {}: {} findings",
-                result.entry_path,
-                file_report.findings.len()
-            );
-
-            for f in &file_report.findings {
-                total_traits.insert(f.id.clone());
-                total_capabilities.insert(f.id.clone());
-                let mut new_finding = f.clone();
-                for evidence in &mut new_finding.evidence {
-                    match &evidence.location {
-                        None => {
-                            evidence.location = Some(result.archive_location.clone());
-                        }
-                        Some(loc) if !loc.starts_with("archive:") => {
-                            evidence.location =
-                                Some(format!("{}:{}", result.archive_location, loc));
-                        }
-                        _ => {}
-                    }
-                }
-                collected_traits
-                    .entry(new_finding.id.clone())
-                    .and_modify(|existing| {
-                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
-                            > (existing.crit, std::cmp::Ordering::Equal)
-                        {
-                            *existing = new_finding.clone();
-                        }
-                    })
-                    .or_insert(new_finding);
-            }
-
-            for yara_match in &file_report.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
-                    && collected_yara.len() < 1_000
-                {
-                    collected_yara.push(yara_match.clone());
-                }
-            }
-
-            for string in &file_report.strings {
-                if matches!(
-                    string.string_type,
-                    Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) && collected_strings.len() < 10_000
-                {
-                    collected_strings.push(string.clone());
-                }
-            }
-
-            let (mut file_entry, nested_files, archive_contents) =
-                file_report.into_file_analysis(0);
-            file_entry.path = result.entry_path.clone();
-            file_entry.depth = 1;
-            file_entry.compute_summary();
-            collected_files.push(file_entry);
-
-            for nested_entry in archive_contents {
-                collected_archive_entries.push(nested_entry);
-            }
-            for mut nested_file in nested_files {
-                if !nested_file.path.contains("!!") {
-                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
-                }
-                nested_file.depth += 1;
-                collected_files.push(nested_file);
-            }
+            acc.fold(result);
         }
 
         // Merge JAR collected results into the report
-        for (_, t) in collected_traits {
-            if !report.findings.iter().any(|existing| existing.id == t.id) {
-                report.findings.push(t);
-            }
-        }
-        for ym in collected_yara {
-            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
-                report.yara_matches.push(ym);
-            }
-        }
-        report.strings.extend(collected_strings);
-        report.archive_contents.extend(collected_archive_entries);
-        report.files.extend(collected_files);
+        let MemberCounts {
+            files_analyzed,
+            trait_count,
+            capability_count,
+        } = acc.merge_into(report);
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(
@@ -2565,8 +2438,8 @@ impl ArchiveAnalyzer {
             total_class_files,
             flagged_classes.len(),
             files_analyzed,
-            total_traits.len(),
-            total_capabilities.len()
+            trait_count,
+            capability_count
         ));
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;
@@ -2628,15 +2501,8 @@ impl ArchiveAnalyzer {
         let total_files = files.len();
         debug!("Found {} files to analyze", total_files);
 
-        // Collect results lock-free, aggregate single-threaded afterwards
-        let mut total_capabilities = HashSet::new();
-        let mut total_traits = HashSet::new();
-        let mut collected_traits = HashMap::<String, Finding>::with_capacity(total_files.min(500));
-        let mut collected_yara = Vec::<YaraMatch>::with_capacity(100);
-        let mut collected_strings = Vec::<StringInfo>::with_capacity((total_files * 2).min(200));
-        let mut collected_archive_entries = Vec::<ArchiveEntry>::with_capacity(total_files);
-        let mut collected_files = Vec::<FileAnalysis>::with_capacity(total_files);
-        let mut files_analyzed: usize = 0;
+        // Collect results lock-free, fold single-threaded afterwards
+        let mut acc = MemberAccumulator::default();
 
         // Analyze files in parallel — no shared Mutexes. Nested rayon calls
         // (analyze_extracted_member → rayon::join, scan_bytes → par_iter) are
@@ -2745,111 +2611,20 @@ impl ArchiveAnalyzer {
                 })
             });
 
-        // Single-threaded aggregation
+        // Single-threaded fold
         let _aggregate = crate::mem_profile::phase(crate::mem_profile::Phase::Aggregate);
         for result in generic_results {
-            collected_archive_entries.push(result.entry_metadata);
-
-            let Some(file_report) = result.report else {
-                continue;
-            };
-            files_analyzed += 1;
-            trace!(
-                "Analyzed archive member {}: {} findings",
-                result.entry_path,
-                file_report.findings.len()
-            );
-
-            let (mut file_entry, nested_files, archive_contents) =
-                file_report.into_file_analysis(0);
-            file_entry.path = result.entry_path.clone();
-            file_entry.depth = 1;
-            file_entry.compute_summary();
-            file_entry.extracted_path = result.extracted_path.clone();
-
-            // Aggregate findings — keep highest (crit, conf) per trait ID
-            for f in &file_entry.findings {
-                total_traits.insert(f.id.clone());
-                total_capabilities.insert(f.id.clone());
-                let mut new_finding = f.clone();
-                for evidence in &mut new_finding.evidence {
-                    match &evidence.location {
-                        None => {
-                            evidence.location = Some(result.archive_location.clone());
-                        }
-                        Some(loc) if !loc.starts_with("archive:") => {
-                            evidence.location =
-                                Some(format!("{}:{}", result.archive_location, loc));
-                        }
-                        _ => {}
-                    }
-                }
-                collected_traits
-                    .entry(new_finding.id.clone())
-                    .and_modify(|existing| {
-                        if (new_finding.crit, new_finding.conf.total_cmp(&existing.conf))
-                            > (existing.crit, std::cmp::Ordering::Equal)
-                        {
-                            *existing = new_finding.clone();
-                        }
-                    })
-                    .or_insert(new_finding);
-            }
-
-            for yara_match in &file_entry.yara_matches {
-                if !collected_yara.iter().any(|m| m.rule == yara_match.rule)
-                    && collected_yara.len() < 1_000
-                {
-                    collected_yara.push(yara_match.clone());
-                }
-            }
-
-            for string in &file_entry.strings {
-                if matches!(
-                    string.string_type,
-                    Some(StringType::Url | StringType::IP | StringType::Base64)
-                ) && collected_strings.len() < 10_000
-                {
-                    collected_strings.push(string.clone());
-                }
-            }
-
-            collected_files.push(file_entry.clone());
-
-            for nested_entry in archive_contents {
-                collected_archive_entries.push(nested_entry);
-            }
-            for mut nested_file in nested_files {
-                if !nested_file.path.contains("!!") {
-                    nested_file.path = encode_archive_path(&result.entry_path, &nested_file.path);
-                }
-                nested_file.depth += 1;
-                collected_files.push(nested_file);
-            }
+            acc.fold(result);
         }
 
-        // Sort files by highest severity first, then truncate to limit
-        collected_files.sort_by(|a, b| {
-            let max_crit =
-                |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
-            max_crit(b).cmp(&max_crit(a))
-        });
-        collected_files.truncate(100_000);
-
-        // Merge collected results into the report
-        for (_, t) in collected_traits {
-            if !report.findings.iter().any(|existing| existing.id == t.id) {
-                report.findings.push(t);
-            }
-        }
-        for ym in collected_yara {
-            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
-                report.yara_matches.push(ym);
-            }
-        }
-        report.strings.extend(collected_strings);
-        report.archive_contents.extend(collected_archive_entries);
-        report.files.extend(collected_files);
+        // Surface the most severe members first under a hard ceiling, then drain
+        // the aggregate into the report.
+        acc.sort_files_by_severity(100_000);
+        let MemberCounts {
+            files_analyzed,
+            trait_count,
+            capability_count,
+        } = acc.merge_into(report);
 
         // Emit the `archive.*` kv subtree (members + aggregates) so traits
         // can match on archive contents and shape. See
@@ -2858,10 +2633,8 @@ impl ArchiveAnalyzer {
 
         // Add metadata about archive contents
         report.metadata.errors.push(format!(
-            "Archive contains {} files analyzed, {} traits and {} capabilities detected",
-            files_analyzed,
-            total_traits.len(),
-            total_capabilities.len()
+            "Archive contains {files_analyzed} files analyzed, {trait_count} traits and \
+             {capability_count} capabilities detected"
         ));
 
         report.metadata.analysis_duration_ms = start.elapsed().as_millis() as u64;

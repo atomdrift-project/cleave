@@ -1240,10 +1240,13 @@ impl AnalysisReport {
         file.sections = self.sections.clone();
 
         file.populate_file_metrics();
+        // Flatten the values tree into `kv` (the serialized form). The nested
+        // tree itself is NOT retained on the file: `kv` is the single output
+        // representation, and the only structural reader (`type: value` sibling
+        // lookups, diff) now reads `kv`.
         if let Some(tree) = self.values_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
-        file.values_tree = self.values_tree.clone();
         file
     }
 
@@ -1286,10 +1289,10 @@ impl AnalysisReport {
         file.sections = self.sections;
 
         file.populate_file_metrics();
+        // `kv` is the single retained representation — see `to_file_analysis`.
         if let Some(tree) = self.values_tree.as_deref() {
             flatten_kv_for_output(tree, &mut file.kv);
         }
-        file.values_tree = self.values_tree;
         (file, nested_files, archive_contents)
     }
 }
@@ -1301,7 +1304,7 @@ impl AnalysisReport {
 /// fields via `skip_serializing_if` — keeping kv consistent halves
 /// the JSON payload on stripped binaries without losing signal
 /// (consumers treat absent features as default).
-fn flatten_kv_for_output(
+pub(crate) fn flatten_kv_for_output(
     value: &serde_json::Value,
     out: &mut std::collections::BTreeMap<String, serde_json::Value>,
 ) {

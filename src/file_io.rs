@@ -9,6 +9,7 @@
 //! Note: Uses unwrap for internal slice operations where bounds are verified.
 
 use anyhow::Result;
+use bytes::Bytes;
 use encoding_rs::{UTF_16BE, UTF_16LE};
 use memmap2::Mmap;
 use std::borrow::Cow;
@@ -19,13 +20,15 @@ use std::path::Path;
 /// Files larger than this will be memory-mapped (zero-copy).
 const MMAP_THRESHOLD: u64 = 10 * 1024 * 1024; // 10 MB
 
-/// File data that can be either memory-mapped or owned.
+/// File data that can be memory-mapped, owned, or a shared refcounted buffer.
 #[derive(Debug)]
 pub enum FileData {
     /// Memory-mapped file (zero-copy, for large files)
     Mapped(Mmap),
     /// Owned data (for small files)
     Owned(Vec<u8>),
+    /// Refcounted buffer adopted without a copy (e.g. a downloaded sample)
+    Shared(Bytes),
 }
 
 impl FileData {
@@ -35,6 +38,7 @@ impl FileData {
         match self {
             FileData::Mapped(mmap) => mmap,
             FileData::Owned(vec) => vec,
+            FileData::Shared(bytes) => bytes,
         }
     }
 

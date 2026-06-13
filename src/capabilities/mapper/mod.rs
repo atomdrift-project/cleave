@@ -130,9 +130,14 @@ pub(super) fn build_string_pseudo_entries(
 /// skipped — the prefilter must see the same facts the evaluators do.
 pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<&str> {
     let filefacts_len = report.filefacts.as_ref().map_or(0, |v| v.symbols.len());
-    let mut all = Vec::with_capacity(report.imports.len() + report.exports.len() + filefacts_len);
+    let mut all = Vec::with_capacity(
+        report.imports.len() + report.exports.len() + report.functions.len() + filefacts_len,
+    );
     all.extend(report.imports.iter().map(|i| i.symbol.as_str()));
     all.extend(report.exports.iter().map(|e| e.symbol.as_str()));
+    // Binary function names come from the typed `report.functions` (the view
+    // only mirrors source-AST kinds); source-AST names come from the view.
+    all.extend(report.functions.iter().map(|f| f.name.as_str()));
     if let Some(view) = report.filefacts.as_ref() {
         all.extend(view.symbols.iter().filter_map(|s| s.name()));
     }
@@ -156,6 +161,13 @@ pub(super) fn build_symbol_offset_map(
     for e in &report.exports {
         if let Some(off) = e.offset.as_ref() {
             map.entry(e.symbol.as_str()).or_insert_with(|| off.clone());
+        }
+    }
+    // Function offsets come from the typed `report.functions` — the view no
+    // longer mirrors `Function` symbols (see `FilefactsView::retained_symbols`).
+    for f in &report.functions {
+        if let Some(off) = f.offset.as_ref() {
+            map.entry(f.name.as_str()).or_insert_with(|| off.clone());
         }
     }
     if let Some(view) = report.filefacts.as_ref() {

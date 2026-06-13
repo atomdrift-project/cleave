@@ -1035,6 +1035,41 @@ pub fn analyze_bytes_owned(
     )
 }
 
+/// Analyze in-memory file data backed by a refcounted [`bytes::Bytes`] buffer,
+/// adopting it without a copy.
+///
+/// Prefer this over [`analyze_bytes_owned`] when the caller already holds the
+/// bytes as `Bytes` (e.g. a worker handing over a body straight from an HTTP
+/// client). It saves the `Bytes` → `Vec<u8>` copy that the owned path requires.
+pub fn analyze_bytes_shared(
+    data: bytes::Bytes,
+    filename: &str,
+    options: &AnalysisOptions,
+) -> Result<AnalysisReport> {
+    // Use a synthetic path for extension-based type detection and reporting.
+    let path = Path::new(filename);
+
+    let sha256 = analyzers::utils::calculate_sha256(&data);
+    if let Some(mut report) = analysis_cache::report_cache_lookup(&sha256, options) {
+        report.target.path = filename.to_string();
+        report.analysis_timestamp = Some(chrono::Utc::now());
+        tracing::info!("Cache hit (fast path)");
+        return Ok(report);
+    }
+
+    let preloaded = file_io::FileData::Shared(data);
+
+    let (mapper, yara_engine) = load_scan_resources(options)?;
+    analyze_file_with_resources_and_sha256(
+        path,
+        options,
+        &mapper,
+        yara_engine.as_ref(),
+        Some(preloaded),
+        Some(sha256),
+    )
+}
+
 /// Analyze a single file using a pre-loaded CapabilityMapper.
 ///
 /// Use this for batch processing to avoid reloading capabilities for each file.
@@ -2714,6 +2749,28 @@ mod tests {
     #[allow(clippy::expect_used)]
     fn test_max_analysis_depth_constant() {
         assert_eq!(MAX_ANALYSIS_DEPTH, 8);
+    }
+
+    /// `analyze_bytes_shared` (zero-copy `Bytes` path) must produce the same
+    /// report as `analyze_bytes_owned` for identical input.
+    #[test]
+    #[allow(clippy::expect_used)]
+    fn analyze_bytes_shared_matches_owned() {
+        // Distinct payload so the content-keyed report cache can't collide.
+        let payload = b"#!/bin/sh\necho analyze_bytes_shared_parity_probe\n";
+        let options = AnalysisOptions {
+            disable_yara: true,
+            ..Default::default()
+        };
+
+        let shared = analyze_bytes_shared(bytes::Bytes::from_static(payload), "probe.sh", &options)
+            .expect("shared analysis");
+        let owned =
+            analyze_bytes_owned(payload.to_vec(), "probe.sh", &options).expect("owned analysis");
+
+        assert_eq!(shared.target.sha256, owned.target.sha256);
+        assert_eq!(shared.target.file_type, owned.target.file_type);
+        assert_eq!(shared.findings.len(), owned.findings.len());
     }
 
     /// A cache-hit report carries the cache donor's `file.basename`/`file.stem`

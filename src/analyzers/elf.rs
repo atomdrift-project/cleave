@@ -767,20 +767,16 @@ impl ElfAnalyzer {
         // matched by the YAML trait `metadata/binary/linking::ifunc`.
     }
 
-    /// Walk the section table from filefacts's typed `Sections` view +
-    /// per-section entropies from its metric map.
+    /// Walk the section table from filefacts's typed `Sections` view,
+    /// reading each section's entropy directly off the typed field (the same
+    /// value PE/Mach-O use via `sections_from_filefacts`).
     fn fill_sections_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
         let parsed = &ctx.parsed;
-        let metrics_view = parsed.metrics();
-        for (idx, section) in parsed.sections().iter().enumerate() {
+        for section in parsed.sections().iter() {
             if section.file_size == 0 {
                 continue;
             }
-            let entropy = metrics_view
-                .iter()
-                .find(|(k, _)| *k == format!("sections[{idx}].entropy"))
-                .map(|(_, v)| v)
-                .unwrap_or(0.0);
+            let entropy = section.entropy.unwrap_or(0.0);
             report.sections.push(Section {
                 name: section.name.clone(),
                 address: Some(section.vaddr),

@@ -156,21 +156,11 @@ impl MemberAccumulator {
             }
         }
 
-        let (mut file_entry, mut nested_files, archive_contents) =
-            file_report.into_file_analysis(0);
+        let (mut file_entry, nested_files, archive_contents) = file_report.into_file_analysis(0);
         file_entry.path = result.entry_path.clone();
         file_entry.depth = 1;
         file_entry.compute_summary();
         file_entry.extracted_path = result.extracted_path.clone();
-        // `into_file_analysis` has just flattened `values_tree` into the
-        // serialized `kv` map. The tree itself is `#[serde(skip)]` — the compact
-        // output (which every consumer, including `cleave diff`, reads) never
-        // sees it — so retaining it per member only accumulates GB of dead
-        // structural JSON. Drop it now that `kv` is derived.
-        file_entry.values_tree = None;
-        for nested in &mut nested_files {
-            nested.values_tree = None;
-        }
 
         for f in &file_entry.findings {
             self.distinct_finding_ids.insert(f.id.clone());

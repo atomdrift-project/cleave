@@ -34,13 +34,14 @@ pub struct FilefactsView {
     /// source members (no binary tree).
     #[serde(skip_serializing_if = "is_null_or_empty_object", default)]
     pub values: serde_json::Value,
-    /// Call and member-access symbols, held as typed `filefacts::Symbol`
-    /// (not `serde_json::Value`) so the per-symbol heap cost is the typed
-    /// payload rather than a JSON map with duplicated string keys — the
-    /// dominant per-member retention on source-heavy archives. Only `Call`
-    /// (read by `eval_call`, emitted as `ff.ct`) and `Member` (`ff.mc`) are
-    /// retained; other kinds are read from the typed `FileAnalysis` fields or
-    /// unused. Serializes to the same `{"kind": ...}` JSON shape as before.
+    /// Source-AST symbols only — `Call`, `Member`, `Bind`, `Identifier` —
+    /// held as typed `filefacts::Symbol`. These are the four kinds the
+    /// `type: symbol, kind: …` evaluators read back from this view (`eval_call`
+    /// for `Call`, `eval_symbol_fact` for the rest). `Import`/`Export`/`Function`
+    /// are deliberately NOT mirrored here: they already live in the typed
+    /// `report.{imports,exports,functions}` fields, and the symbol-match index +
+    /// offset map read them from there — so mirroring them was a pure duplicate
+    /// of the (often huge) binary symbol table on every analyzed member.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub symbols: Vec<filefacts::Symbol>,
     /// Recoverable parse errors filefacts collected — see
@@ -81,15 +82,26 @@ fn is_null_or_empty_object(v: &serde_json::Value) -> bool {
     v.is_null() || v.as_object().is_some_and(serde_json::Map::is_empty)
 }
 
-/// Mirror every symbol kind filefacts extracted. Source-AST projections —
-/// `call`, `member`, `bind`, `identifier` — are all matchable by the
-/// `type: symbol, kind: …` trait evaluators (the targets `query:` rules
-/// migrate onto), so retaining them is what makes those migrations fire.
-/// Imports/exports/functions are also read from the typed `FileAnalysis`
-/// fields, but keeping them here too costs little and keeps the view a
-/// faithful mirror of `parsed.symbols()`.
+/// Retain only the source-AST symbol kinds — `Call`, `Member`, `Bind`,
+/// `Identifier` — that the `type: symbol, kind: …` evaluators read back from
+/// this view. `Import`/`Export`/`Function` are dropped: they're already carried
+/// by `report.{imports,exports,functions}`, so mirroring them here duplicated
+/// the entire binary symbol table (thousands of entries) on every member.
 fn retained_symbols(parsed: &filefacts::ParsedFile<'_>) -> Vec<filefacts::Symbol> {
-    parsed.symbols().iter().cloned().collect()
+    parsed
+        .symbols()
+        .iter()
+        .filter(|s| {
+            matches!(
+                s,
+                filefacts::Symbol::Call { .. }
+                    | filefacts::Symbol::Member { .. }
+                    | filefacts::Symbol::Bind { .. }
+                    | filefacts::Symbol::Identifier { .. }
+            )
+        })
+        .cloned()
+        .collect()
 }
 
 /// Serialize a `#[serde(transparent)] Vec<T>` wrapper (e.g.

@@ -275,7 +275,7 @@ impl GenericAnalyzer {
 
         // Compute basic metrics
         let t_metrics = std::time::Instant::now();
-        self.compute_metrics(content, original_bytes, &mut report);
+        self.compute_metrics(content, original_bytes, source_ctx.as_ref(), &mut report);
         tracing::debug!(
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
@@ -429,25 +429,31 @@ impl GenericAnalyzer {
         &self,
         content: &str,
         original_bytes: Option<&[u8]>,
+        ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
         report: &mut AnalysisReport,
     ) {
-        // Pull `text.*` directly from filefacts. The capability mapper
-        // also merges filefacts's metric map into `report.filefacts_metrics`
-        // later, but `analyze_source_internal` may be called outside
-        // that pipeline (tests, embedded-code re-entry), so do it
-        // here too so generic-text files always carry the bytes view.
-        let bytes = original_bytes.unwrap_or(content.as_bytes());
-        if let Ok(parsed) = filefacts::open(bytes) {
-            use crate::types::core::MetricsExt;
-            let flat = report
-                .filefacts_metrics
-                .get_or_insert_with(Default::default);
-            for (k, v) in parsed.metrics().iter() {
-                // binary.overall_entropy is now emitted universally by filefacts
-                // (generic pass); carry it through this re-entry path too.
-                if k.starts_with("text.") || k == "binary.overall_entropy" {
-                    flat.set_f(k.to_string(), v);
+        // Pull `text.*` (+ `binary.overall_entropy`) directly from filefacts.
+        // Reuse the already-open parse when the analyze pipeline supplies one;
+        // only the context-less re-entry paths (tests, embedded-code) re-parse.
+        match ctx {
+            Some(ctx) => Self::pull_text_metrics(&ctx.parsed, report),
+            None => {
+                let bytes = original_bytes.unwrap_or(content.as_bytes());
+                if let Ok(parsed) = filefacts::open(bytes) {
+                    Self::pull_text_metrics(&parsed, report);
                 }
+            }
+        }
+    }
+
+    fn pull_text_metrics(parsed: &filefacts::ParsedFile<'_>, report: &mut AnalysisReport) {
+        use crate::types::core::MetricsExt;
+        let flat = report
+            .filefacts_metrics
+            .get_or_insert_with(Default::default);
+        for (k, v) in parsed.metrics().iter() {
+            if k.starts_with("text.") || k == "binary.overall_entropy" {
+                flat.set_f(k.to_string(), v);
             }
         }
     }

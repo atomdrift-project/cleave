@@ -158,27 +158,16 @@ fn flatten_subreport(
         // archive's own report). Shift by child_depth so the depth
         // reflects the full lineage from the root.
         entry.depth = entry.depth.saturating_add(child_depth);
-        tag_findings_chain(&mut entry, location_prefix);
+        // For doubly-nested entries (archive-of-base64-of-tar.gz), this chains
+        // the prefix so locations read top-down — each layer's caller adds its
+        // own prefix, never overwriting.
+        tag_findings(&mut entry, location_prefix);
         out.push(entry);
     }
     out
 }
 
 fn tag_findings(file: &mut FileAnalysis, location_prefix: &str) {
-    for finding in &mut file.findings {
-        for evidence in &mut finding.evidence {
-            evidence.location = Some(match evidence.location.as_deref() {
-                Some(loc) => format!("{location_prefix}:{loc}"),
-                None => location_prefix.to_string(),
-            });
-        }
-    }
-}
-
-fn tag_findings_chain(file: &mut FileAnalysis, location_prefix: &str) {
-    // For doubly-nested entries (archive-of-base64-of-tar.gz),
-    // chain the prefix so locations read top-down. We don't
-    // overwrite — each layer's caller adds its own prefix.
     for finding in &mut file.findings {
         for evidence in &mut finding.evidence {
             evidence.location = Some(match evidence.location.as_deref() {

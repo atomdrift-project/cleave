@@ -803,7 +803,7 @@ fn parse_systemd_service(content: &[u8]) -> Option<Value> {
             let items = split_systemd_items(&raw_value);
             if !items.is_empty() {
                 append_string_items(section_obj, "environment_list", items.clone());
-                if let Some(env_obj) = ensure_child_json_object(section_obj, "environment") {
+                if let Some(env_obj) = ensure_json_object(section_obj, "environment") {
                     for item in items {
                         if let Some((name, value)) = item.split_once('=')
                             && !name.is_empty()
@@ -1258,15 +1258,8 @@ fn ensure_json_object<'a>(
     map.get_mut(key)?.as_object_mut()
 }
 
-fn ensure_child_json_object<'a>(
-    map: &'a mut serde_json::Map<String, Value>,
-    key: &str,
-) -> Option<&'a mut serde_json::Map<String, Value>> {
-    ensure_json_object(map, key)
-}
-
 fn append_systemd_raw(section_obj: &mut serde_json::Map<String, Value>, key: &str, value: String) {
-    if let Some(raw_obj) = ensure_child_json_object(section_obj, "_raw") {
+    if let Some(raw_obj) = ensure_json_object(section_obj, "_raw") {
         append_string_occurrence(raw_obj, key, value);
     }
 }

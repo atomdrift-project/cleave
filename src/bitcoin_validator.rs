@@ -71,15 +71,9 @@ fn validate_base58check(s: &str) -> bool {
 
     // Bitcoin uses double SHA-256 for Base58Check
     use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    let hash1 = hasher.finalize();
+    let double_sha = Sha256::digest(Sha256::digest(data));
 
-    let mut hasher2 = Sha256::new();
-    hasher2.update(hash1);
-    let hash2 = hasher2.finalize();
-
-    &hash2[0..4] == checksum
+    &double_sha[0..4] == checksum
 }
 
 /// Simple Base58 decoder (Bitcoin alphabet)

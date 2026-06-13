@@ -28,47 +28,6 @@ struct AnalyzeDispatchContext<'a> {
     all_files: bool,
 }
 
-impl<'a> AnalyzeDispatchContext<'a> {
-    #[allow(clippy::too_many_arguments)]
-    fn new(
-        format: &'a cli::OutputFormat,
-        disabled: &'a cli::DisabledComponents,
-        zip_passwords: &'a [String],
-        sample_extraction: Option<&'a cleave::SampleExtractionConfig>,
-        platforms: &'a [cleave::Platform],
-        slow_rule_ms: u64,
-        output_to_file: bool,
-        output_path: Option<&'a str>,
-        max_memory_file_size: u64,
-        max_scan_file_size: u64,
-        min_crit: Option<cleave::Criticality>,
-        max_crit: Option<cleave::Criticality>,
-        min_file_crit: Option<cleave::Criticality>,
-        max_file_crit: Option<cleave::Criticality>,
-        all_files: bool,
-        enable_third_party_global: bool,
-    ) -> Self {
-        Self {
-            format,
-            disabled,
-            zip_passwords,
-            enable_third_party_global,
-            sample_extraction,
-            platforms,
-            slow_rule_ms,
-            output_to_file,
-            output_path,
-            max_memory_file_size,
-            max_scan_file_size,
-            min_crit,
-            max_crit,
-            min_file_crit,
-            max_file_crit,
-            all_files,
-        }
-    }
-}
-
 pub(crate) struct DispatchContext<'a> {
     format: &'a cli::OutputFormat,
     disabled: &'a cli::DisabledComponents,
@@ -332,24 +291,24 @@ pub(crate) fn build_dispatch_context<'a>(opts: &DispatchOptions<'a>) -> Dispatch
     DispatchContext {
         format: opts.format,
         disabled: opts.disabled,
-        analyze: AnalyzeDispatchContext::new(
-            opts.format,
-            opts.disabled,
-            opts.zip_passwords,
-            opts.sample_extraction,
-            opts.platforms,
-            opts.slow_rule_ms,
-            opts.output_to_file,
-            opts.output_path,
-            opts.max_memory_file_size,
-            opts.max_scan_file_size,
-            opts.min_crit,
-            opts.max_crit,
-            opts.min_file_crit,
-            opts.max_file_crit,
-            opts.all_files,
-            !opts.disabled.third_party,
-        ),
+        analyze: AnalyzeDispatchContext {
+            format: opts.format,
+            disabled: opts.disabled,
+            zip_passwords: opts.zip_passwords,
+            enable_third_party_global: !opts.disabled.third_party,
+            sample_extraction: opts.sample_extraction,
+            platforms: opts.platforms,
+            slow_rule_ms: opts.slow_rule_ms,
+            output_to_file: opts.output_to_file,
+            output_path: opts.output_path,
+            max_memory_file_size: opts.max_memory_file_size,
+            max_scan_file_size: opts.max_scan_file_size,
+            min_crit: opts.min_crit,
+            max_crit: opts.max_crit,
+            min_file_crit: opts.min_file_crit,
+            max_file_crit: opts.max_file_crit,
+            all_files: opts.all_files,
+        },
     }
 }
 

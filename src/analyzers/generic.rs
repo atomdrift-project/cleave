@@ -105,9 +105,11 @@ impl GenericAnalyzer {
             )
         };
 
+        let file_type = self.file_type_str();
+        let node_types = self.call_node_types();
         let target = TargetInfo {
             path: file_path.display().to_string(),
-            file_type: self.file_type_str(),
+            file_type: file_type.clone(),
             size_bytes,
             sha256,
             architectures: None,
@@ -125,22 +127,22 @@ impl GenericAnalyzer {
         // capability mapper — no synthesis needed here.
 
         // Add structural feature
-        let (parser_name, description) = if self.call_node_types().is_some() {
+        let (parser_name, description) = if node_types.is_some() {
             (
-                format!("tree-sitter-{}", self.file_type_str()),
-                format!("{} source code", self.file_type_str()),
+                format!("tree-sitter-{file_type}"),
+                format!("{file_type} source code"),
             )
         } else {
             (
                 "text-analysis".to_string(),
-                format!("{} file (text analysis)", self.file_type_str()),
+                format!("{file_type} file (text analysis)"),
             )
         };
 
         report
             .structure
             .push(crate::analyzers::utils::create_language_feature(
-                &self.file_type_str(),
+                &file_type,
                 &parser_name,
                 &description,
             ));
@@ -150,7 +152,7 @@ impl GenericAnalyzer {
         // e.g. oversized source), AST-based extraction is silently
         // skipped — text and string features still flow downstream.
         let t_tree = std::time::Instant::now();
-        if let (Some(ast), Some(node_types)) = (source_ast, self.call_node_types()) {
+        if let (Some(ast), Some(node_types)) = (source_ast, node_types) {
             symbol_extraction::extract_symbols_from_tree(
                 ast.tree,
                 ast.source,

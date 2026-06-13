@@ -4,15 +4,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-fn compile_regex_logged(
-    _kind: &str,
-    _source_pattern: &str,
-    compile_pattern: &str,
-    _case_insensitive: bool,
-) -> std::result::Result<regex::Regex, regex::Error> {
-    regex::Regex::new(compile_pattern)
-}
-
 /// Process-global, deduplicated, lazily-compiled regex cache.
 ///
 /// Replaces eager per-condition precompilation. A pattern is compiled on first
@@ -3213,11 +3204,9 @@ impl Condition {
                 // Validate only — the compiled regex is resolved lazily and shared
                 // process-wide at eval time (see `cached_regex`), so it isn't stored
                 // per condition. Compile here purely to surface invalid patterns.
-                compile_regex_logged("symbol.regex", regex_pattern, regex_pattern, false).map_err(
-                    |e| {
-                        anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
-                    },
-                )?;
+                regex::Regex::new(regex_pattern).map_err(|e| {
+                    anyhow::anyhow!("Failed to compile symbol regex '{}': {}", regex_pattern, e)
+                })?;
             }
             // Text/Literal `word:`/`substr:`/`exact:` are literal matches and
             // `regex:` compiles lazily (shared) on first eval — see
@@ -3236,23 +3225,21 @@ impl Condition {
                 regex: Some(regex_pattern),
                 ..
             } => {
-                compile_regex_logged("value.regex", regex_pattern, regex_pattern, false).map_err(
-                    |e| anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e),
-                )?;
+                regex::Regex::new(regex_pattern).map_err(|e| {
+                    anyhow::anyhow!("Failed to compile value regex '{}': {}", regex_pattern, e)
+                })?;
             }
             Condition::Path {
                 regex: Some(regex_pattern),
                 ..
             } => {
-                compile_regex_logged("path.regex", regex_pattern, regex_pattern, false).map_err(
-                    |e| {
-                        anyhow::anyhow!(
-                            "Failed to compile basename regex '{}': {}",
-                            regex_pattern,
-                            e
-                        )
-                    },
-                )?;
+                regex::Regex::new(regex_pattern).map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to compile basename regex '{}': {}",
+                        regex_pattern,
+                        e
+                    )
+                })?;
             }
             _ => {}
         }

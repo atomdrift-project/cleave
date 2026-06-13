@@ -1873,9 +1873,7 @@ fn render_no_anchor(
             f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
         })
         .filter(|f| {
-            !omit_dominated
-                || f.trait_refs.is_empty()
-                || file.composite_sources.contains_key(&f.id)
+            !omit_dominated || f.trait_refs.is_empty() || file.composite_sources.contains_key(&f.id)
         })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
@@ -2804,15 +2802,16 @@ mod tests {
     }
 
     #[test]
-    fn tiny_view_widens_cap_to_512() {
-        // 300 notable findings: the terminal cap (40) would truncate, but the
-        // tiny/LLM view widens the cap to 512 so all 300 show.
+    fn tiny_view_widens_cap_to_250() {
+        // 300 notable findings: the terminal cap (40) truncates hard, but the
+        // tiny/LLM view casts a wider net — top 250 — so the model sees far more
+        // of the picture before the cap bites.
         let findings = (0..300)
             .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
             .collect();
         let file = file_with_findings(findings);
         assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 40);
-        assert_eq!(select_ids(&file, &TinyOpts::tiny()).len(), 300);
+        assert_eq!(select_ids(&file, &TinyOpts::tiny()).len(), 250);
     }
 
     fn create_test_report(findings: Vec<Finding>, yara_matches: Vec<YaraMatch>) -> AnalysisReport {

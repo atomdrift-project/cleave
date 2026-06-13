@@ -219,9 +219,9 @@ pub(crate) fn decompress_and_nest(
     if let Ok(text) = std::str::from_utf8(data) {
         let text = text.trim();
 
-        // Check for additional base64 (nested)
-        if text.len() >= MIN_PAYLOAD_LENGTH
-            && is_base64_candidate(text)
+        // Check for additional base64 (nested). `is_base64_candidate` already
+        // enforces the MIN_PAYLOAD_LENGTH floor.
+        if is_base64_candidate(text)
             && let Some((decoded, compression)) = decode_base64(text)
         {
             chain.push("base64".to_string());
@@ -231,9 +231,9 @@ pub(crate) fn decompress_and_nest(
             return decompress_and_nest(&decoded, chain, depth + 1);
         }
 
-        // Check for additional hex (nested)
-        if text.len() >= 48
-            && is_hex_string(text)
+        // Check for additional hex (nested). `is_hex_string` already enforces
+        // the 48-char floor.
+        if is_hex_string(text)
             && let Some(decoded) = decode_hex_string(text)
         {
             chain.push("hex".to_string());

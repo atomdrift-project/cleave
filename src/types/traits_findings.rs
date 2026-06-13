@@ -89,11 +89,6 @@ fn is_zero_usize(n: &usize) -> bool {
     *n == 0
 }
 
-/// Check if a u32 value is zero (for skip_serializing_if)
-fn is_zero_u32(n: &u32) -> bool {
-    *n == 0
-}
-
 // ========================================================================
 // Context Model — the LLM/output surface that replaces raw Evidence.
 //
@@ -179,7 +174,7 @@ pub struct Note {
     #[serde(rename = "o")]
     pub off: u64,
     /// Match length in bytes (the "Length"); 0 when unknown.
-    #[serde(rename = "z", default, skip_serializing_if = "is_zero_u32")]
+    #[serde(rename = "z", default, skip_serializing_if = "super::is_zero_u32")]
     pub len: u32,
     /// Finding confidence — internal only (used to rank overlapping matches:
     /// the highest `conf × crit` wins). Not serialized; the finding's `conf`

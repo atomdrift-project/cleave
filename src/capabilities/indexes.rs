@@ -1122,134 +1122,13 @@ impl StringMatchIndex {
         &self,
         strings: &[StringInfo],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
-        // Process strings in parallel chunks
+        // Process strings in parallel chunks, delegating each chunk to the
+        // sequential matcher (single source of truth) and merging per-chunk.
         const CHUNK_SIZE: usize = 2000;
-        let has_ci_patterns = !self.ci_exact_patterns.is_empty();
 
         let chunk_results: Vec<(FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>)> = strings
             .par_chunks(CHUNK_SIZE)
-            .map(|chunk| {
-                let mut matching_traits = FxHashSet::default();
-                let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
-                let mut lower_buf = String::new();
-
-                for string_info in chunk {
-                    let len = string_info.value.len();
-
-                    // Case-sensitive exact matching with length pre-filter
-                    if len >= self.min_pattern_length
-                        && let Some(trait_indices) =
-                            self.exact_patterns.get(string_info.value.as_str())
-                    {
-                        for &trait_idx in trait_indices {
-                            matching_traits.insert(trait_idx);
-                            let entry = trait_evidence.entry(trait_idx).or_default();
-                            if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                && let Some(location) = string_evidence_location(string_info)
-                            {
-                                entry.push(Evidence {
-                                    method: "string".to_string(),
-                                    source: "string_extractor".to_string(),
-                                    value: truncate_evidence(&string_info.value, 120),
-                                    location: Some(location),
-                                    ..Default::default()
-                                });
-                            }
-                        }
-                    }
-
-                    // Case-insensitive exact matching — skip entirely when no CI patterns exist
-                    if has_ci_patterns && len >= self.ci_min_pattern_length {
-                        lower_buf.clear();
-                        lower_buf.extend(string_info.value.chars().flat_map(char::to_lowercase));
-                        if let Some((original_pattern, trait_indices)) =
-                            self.ci_exact_patterns.get(lower_buf.as_str())
-                        {
-                            for &trait_idx in trait_indices {
-                                matching_traits.insert(trait_idx);
-                                let entry = trait_evidence.entry(trait_idx).or_default();
-                                if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                    && let Some(location) = string_evidence_location(string_info)
-                                {
-                                    entry.push(Evidence {
-                                        method: "string".to_string(),
-                                        source: "string_extractor".to_string(),
-                                        value: original_pattern.clone(),
-                                        location: Some(location),
-                                        ..Default::default()
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    // Experiment 4: Aho-Corasick substr matching (case-sensitive)
-                    if let Some(ref ac) = self.substr_automaton {
-                        for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
-                            let pattern_idx = mat.pattern().as_usize();
-                            if let Some((_pattern_str, trait_indices)) =
-                                self.substr_to_traits.get(pattern_idx)
-                            {
-                                for &trait_idx in trait_indices {
-                                    matching_traits.insert(trait_idx);
-                                    let entry = trait_evidence.entry(trait_idx).or_default();
-                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                        && let Some(location) =
-                                            string_evidence_location(string_info)
-                                    {
-                                        entry.push(Evidence {
-                                            method: "string".to_string(),
-                                            source: "string_extractor".to_string(),
-                                            value: match_window(
-                                                &string_info.value,
-                                                mat.start(),
-                                                mat.end(),
-                                                24,
-                                            ),
-                                            location: Some(location),
-                                            ..Default::default()
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Experiment 4: Aho-Corasick substr matching (case-insensitive)
-                    if let Some(ref ac) = self.ci_substr_automaton {
-                        for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
-                            let pattern_idx = mat.pattern().as_usize();
-                            if let Some((_original_pattern, trait_indices)) =
-                                self.ci_substr_to_traits.get(pattern_idx)
-                            {
-                                for &trait_idx in trait_indices {
-                                    matching_traits.insert(trait_idx);
-                                    let entry = trait_evidence.entry(trait_idx).or_default();
-                                    if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                        && let Some(location) =
-                                            string_evidence_location(string_info)
-                                    {
-                                        entry.push(Evidence {
-                                            method: "string".to_string(),
-                                            source: "string_extractor".to_string(),
-                                            value: match_window(
-                                                &string_info.value,
-                                                mat.start(),
-                                                mat.end(),
-                                                24,
-                                            ),
-                                            location: Some(location),
-                                            ..Default::default()
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                (matching_traits, trait_evidence)
-            })
+            .map(|chunk| self.find_matches_sequential(chunk))
             .collect();
 
         // Merge results from all chunks

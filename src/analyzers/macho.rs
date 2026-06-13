@@ -558,8 +558,9 @@ impl MachOAnalyzer {
     /// blob: filefacts already decoded it into the typed
     /// `macho.code_signature.*` view and the normalized [`Identity`], and
     /// it reports the `LC_CODE_SIGNATURE` blob's file offset via
-    /// `macho.code_signature_offset`. We read those facts and anchor every
-    /// finding at that exact offset.
+    /// `macho.code_signature_offset` and the identifier string's offset via
+    /// `macho.code_signature.identifier_offset`. We read those facts and
+    /// anchor each finding at the offset of the thing it describes.
     ///
     /// [`Identity`]: filefacts::Identity
     fn generate_signature_findings_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
@@ -573,11 +574,17 @@ impl MachOAnalyzer {
         else {
             return;
         };
+        // Absolute file offset of the identifier C-string inside the
+        // CodeDirectory, when filefacts resolved one. Anchors the identifier
+        // finding at the string itself rather than at the signature blob.
+        let identifier_offset = values
+            .get("macho.code_signature.identifier_offset")
+            .and_then(serde_json::Value::as_u64);
         let identity = ctx.identity().unwrap_or_default();
         let entitlements = values
             .get("macho.code_signature.entitlements")
             .and_then(serde_json::Value::as_object);
-        emit_signature_findings(report, sig_offset, &identity, entitlements);
+        emit_signature_findings(report, sig_offset, identifier_offset, &identity, entitlements);
     }
 
     // AMOS cipher detection/decryption removed - now handled by stng library internally
@@ -666,15 +673,19 @@ fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
 /// identifier, entitlements — from filefacts's normalized [`Identity`]
 /// and the projected entitlements map. Split out from
 /// [`MachOAnalyzer::generate_signature_findings_from_ctx`] so the
-/// taxonomy mapping is unit-testable without a parsed binary. Every
-/// finding anchors at `sig_offset`, the `LC_CODE_SIGNATURE` blob offset
-/// filefacts reports (slice-relative on fat binaries; rebased to
-/// full-file coordinates by [`MachOAnalyzer::rebase_slice_offsets`]).
+/// taxonomy mapping is unit-testable without a parsed binary. Findings
+/// anchor at `sig_offset`, the `LC_CODE_SIGNATURE` blob offset filefacts
+/// reports, except the identifier finding, which anchors at
+/// `identifier_offset` — the byte position of the identifier C-string
+/// inside the CodeDirectory — when filefacts resolved one. Both offsets
+/// are slice-relative on fat binaries; [`MachOAnalyzer::rebase_slice_offsets`]
+/// rebases them to full-file coordinates together.
 ///
 /// [`Identity`]: filefacts::Identity
 fn emit_signature_findings(
     report: &mut AnalysisReport,
     sig_offset: u64,
+    identifier_offset: Option<u64>,
     identity: &filefacts::Identity,
     entitlements: Option<&serde_json::Map<String, serde_json::Value>>,
 ) {
@@ -734,14 +745,17 @@ fn emit_signature_findings(
 
     // Bundle / executable identifier — the identity the binary claims.
     // Notable across all formats (see trust-level/traits.yaml rationale).
+    // Anchors at the identifier string's own offset, falling back to the
+    // signature blob only when filefacts couldn't resolve the string offset.
     if let Some(identifier) = identity.identifier.as_ref().map(|c| c.value.as_str()) {
+        let id_location = identifier_offset.map_or_else(|| location.clone(), |off| format!("0x{off:x}"));
         report.findings.push(signature_finding(
             format!("metadata/signed/id::{identifier}"),
             format!("Identifier: {identifier}"),
             Criticality::Notable,
             "code_directory",
             identifier.to_string(),
-            &location,
+            &id_location,
         ));
     }
 
@@ -1930,8 +1944,9 @@ mod tests {
     /// an analyst sees it in a diff. Locks the cross-format identity principle
     /// for the Mach-O emitter. Also pins the two invariants of the
     /// filefacts-sourced rewrite: a platform binary emits
-    /// `metadata/signed/platform::apple`, and every finding anchors at the
-    /// supplied signature-blob offset. Deterministic — no fixture needed.
+    /// `metadata/signed/platform::apple`, the signer finding anchors at the
+    /// signature-blob offset, and the identifier finding anchors at the
+    /// distinct identifier-string offset. Deterministic — no fixture needed.
     #[test]
     fn test_identity_finding_is_notable() {
         let identity = filefacts::Identity {
@@ -1949,7 +1964,7 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        emit_signature_findings(&mut report, 0xb3a0, &identity, None);
+        emit_signature_findings(&mut report, 0xb3a0, Some(0xb3c8), &identity, None);
 
         let id_finding = report
             .findings
@@ -1960,11 +1975,8 @@ mod tests {
         // The value rides in the description so notable-floored views (which
         // print only `desc`, not the trait id) stay readable.
         assert_eq!(id_finding.desc, "Identifier: com.apple.ls");
-        // Anchored at the signature blob, not a re-derived guess.
-        assert_eq!(
-            id_finding.evidence[0].location.as_deref(),
-            Some("0xb3a0")
-        );
+        // Anchored at the identifier string itself, not the signature blob.
+        assert_eq!(id_finding.evidence[0].location.as_deref(), Some("0xb3c8"));
 
         let platform = report
             .findings
@@ -1973,6 +1985,8 @@ mod tests {
             .expect("platform-trust finding emitted");
         assert_eq!(platform.crit, Criticality::Notable);
         assert_eq!(platform.desc, "macOS Platform Binary");
+        // The signer finding still anchors at the signature blob.
+        assert_eq!(platform.evidence[0].location.as_deref(), Some("0xb3a0"));
     }
 
     /// A Developer-ID-signed binary yields the `metadata/signed/developer::<team>`
@@ -2007,7 +2021,7 @@ mod tests {
             sha256: String::new(),
             architectures: None,
         });
-        emit_signature_findings(&mut report, 0x4000, &identity, Some(&entitlements));
+        emit_signature_findings(&mut report, 0x4000, None, &identity, Some(&entitlements));
 
         let dev = report
             .findings

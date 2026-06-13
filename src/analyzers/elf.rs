@@ -738,23 +738,29 @@ impl ElfAnalyzer {
     /// findings still attach. Exports come from `.dynsym` only —
     /// filefacts's typed view doesn't filefacts `.symtab` exports today.
     fn fill_dynamic_symbols_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        use std::collections::HashSet;
+        // Dedup via sets, not O(n²) linear rescans — `.dynsym` can carry
+        // thousands of exports.
+        let mut finding_ids: HashSet<String> =
+            report.findings.iter().map(|f| f.id.clone()).collect();
         for imp in ctx.imports_from_filefacts() {
             // Capability lookup runs against the symbol name; the
             // source argument is used only for evidence attribution.
             if let Some(cap) = self
                 .capability_mapper
                 .lookup(&imp.symbol, imp.offset.as_deref())
-                && !report.findings.iter().any(|c| c.id == cap.id)
+                && finding_ids.insert(cap.id.clone())
             {
                 report.findings.push(cap);
             }
             report.imports.push(imp);
         }
+        let mut export_symbols: HashSet<String> =
+            report.exports.iter().map(|e| e.symbol.clone()).collect();
         for exp in ctx.exports_from_filefacts() {
-            if report.exports.iter().any(|e| e.symbol == exp.symbol) {
-                continue;
+            if export_symbols.insert(exp.symbol.clone()) {
+                report.exports.push(exp);
             }
-            report.exports.push(exp);
         }
         // STT_GNU_IFUNC names are surfaced via the value path
         // `elf.ifunc_symbols[]` (populated by binary_extractors) and
@@ -983,7 +989,8 @@ impl ElfAnalyzer {
                     let unpacked_sha256 = crate::analyzers::utils::calculate_sha256(&unpacked_data);
                     let virtual_path = encode_upx_path(&file_path.display().to_string());
 
-                    let mut unpacked_file = unpacked_report.to_file_analysis(0);
+                    let (mut unpacked_file, unpacked_nested, _) =
+                        unpacked_report.into_file_analysis(0);
                     unpacked_file.path = virtual_path;
                     unpacked_file.sha256 = unpacked_sha256;
                     unpacked_file.size = unpacked_data.len() as u64;
@@ -1000,7 +1007,7 @@ impl ElfAnalyzer {
                     }
 
                     // Add nested files from unpacked analysis (e.g., embedded code)
-                    report.files.extend(unpacked_report.files);
+                    report.files.extend(unpacked_nested);
                     report.files.push(unpacked_file);
 
                     report.metadata.tools_used.push("upx".to_string());

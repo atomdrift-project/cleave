@@ -571,7 +571,7 @@ impl UnifiedSourceAnalyzer {
             // Process payload report - convert to FileAnalysis for v2 flat files array
             if let Some(pr) = payload_report {
                 // Prefix findings with extracted payload location (same as archive: prefix)
-                let mut file_entry = pr.to_file_analysis(0);
+                let (mut file_entry, _, _) = pr.into_file_analysis(0);
                 file_entry.path = virtual_path.clone();
                 file_entry.depth = 1; // Decoded content is one level deep
                 file_entry.encoding = Some(vec!["base64".to_string()]);
@@ -677,7 +677,7 @@ impl UnifiedSourceAnalyzer {
 
                 // Process payload report
                 if let Some(pr) = payload_report {
-                    let mut file_entry = pr.to_file_analysis(0);
+                    let (mut file_entry, _, _) = pr.into_file_analysis(0);
                     file_entry.path = virtual_path.clone();
                     file_entry.depth = 1;
                     file_entry.encoding = Some(payload.encoding_chain.clone());

@@ -477,7 +477,7 @@ impl SymbolMatchIndex {
 
     /// Legacy entry point — returns only the matched trait indices.
     /// Prefer `find_matches_with_evidence`.
-    pub(crate) fn find_matches(&self, symbols: &[String]) -> FxHashSet<usize> {
+    pub(crate) fn find_matches(&self, symbols: &[&str]) -> FxHashSet<usize> {
         self.find_matches_with_evidence(symbols).0
     }
 
@@ -509,7 +509,7 @@ impl SymbolMatchIndex {
     /// `cached_evidence` fast path.
     pub(crate) fn find_matches_with_evidence(
         &self,
-        symbols: &[String],
+        symbols: &[&str],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         // Parallel path threshold matches StringMatchIndex.
         const PARALLEL_THRESHOLD: usize = 4096;
@@ -525,14 +525,14 @@ impl SymbolMatchIndex {
 
     fn find_matches_sequential(
         &self,
-        symbols: &[String],
+        symbols: &[&str],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         let mut matched: FxHashSet<usize> = FxHashSet::default();
         let mut evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
         // Reused across symbols to avoid per-symbol allocation.
         let mut seen_candidates: FxHashSet<usize> = FxHashSet::default();
 
-        for symbol in symbols {
+        for &symbol in symbols {
             let normalized = normalize_symbol_ref(symbol);
             if normalized.is_empty() {
                 continue;
@@ -600,7 +600,7 @@ impl SymbolMatchIndex {
     /// large enough to amortize the merge cost.
     fn find_matches_parallel(
         &self,
-        symbols: &[String],
+        symbols: &[&str],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         let chunk_size = (symbols.len() / rayon::current_num_threads().max(1)).max(512);
         let results: Vec<(FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>)> = symbols
@@ -973,7 +973,7 @@ impl StringMatchIndex {
     /// - Experiment 3: Skip strings shorter than minimum pattern length
     pub(crate) fn find_matches_with_evidence(
         &self,
-        strings: &[StringInfo],
+        strings: &[&StringInfo],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         // Experiment 2: Use parallel processing for large string sets (>1000 strings)
         const PARALLEL_THRESHOLD: usize = 1000;
@@ -988,15 +988,19 @@ impl StringMatchIndex {
     /// Sequential matching for small string sets
     fn find_matches_sequential(
         &self,
-        strings: &[StringInfo],
+        strings: &[&StringInfo],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         let mut matching_traits = FxHashSet::default();
         let mut trait_evidence: FxHashMap<usize, Vec<Evidence>> = FxHashMap::default();
         let has_ci_patterns = !self.ci_exact_patterns.is_empty();
         let mut lower_buf = String::new();
 
-        for string_info in strings {
+        for &string_info in strings {
             let len = string_info.value.len();
+            // Format the evidence offset at most once per string, shared across
+            // every trait that records evidence for it — a hot substring can hit
+            // many traits, and the formatted location is identical for all of them.
+            let mut cached_location: Option<Option<String>> = None;
 
             // Experiment 1 + 3: O(1) HashSet lookup with length pre-filter
             // Case-sensitive exact matching
@@ -1007,7 +1011,9 @@ impl StringMatchIndex {
                     matching_traits.insert(trait_idx);
                     let entry = trait_evidence.entry(trait_idx).or_default();
                     if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                        && let Some(location) = string_evidence_location(string_info)
+                        && let Some(location) = cached_location
+                            .get_or_insert_with(|| string_evidence_location(string_info))
+                            .clone()
                     {
                         entry.push(Evidence {
                             method: "string".to_string(),
@@ -1031,7 +1037,9 @@ impl StringMatchIndex {
                         matching_traits.insert(trait_idx);
                         let entry = trait_evidence.entry(trait_idx).or_default();
                         if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                            && let Some(location) = string_evidence_location(string_info)
+                            && let Some(location) = cached_location
+                                .get_or_insert_with(|| string_evidence_location(string_info))
+                                .clone()
                         {
                             entry.push(Evidence {
                                 method: "string".to_string(),
@@ -1056,7 +1064,9 @@ impl StringMatchIndex {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                && let Some(location) = string_evidence_location(string_info)
+                                && let Some(location) = cached_location
+                                    .get_or_insert_with(|| string_evidence_location(string_info))
+                                    .clone()
                             {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
@@ -1087,7 +1097,9 @@ impl StringMatchIndex {
                             matching_traits.insert(trait_idx);
                             let entry = trait_evidence.entry(trait_idx).or_default();
                             if entry.len() < MAX_EVIDENCE_PER_TRAIT
-                                && let Some(location) = string_evidence_location(string_info)
+                                && let Some(location) = cached_location
+                                    .get_or_insert_with(|| string_evidence_location(string_info))
+                                    .clone()
                             {
                                 entry.push(Evidence {
                                     method: "string".to_string(),
@@ -1120,7 +1132,7 @@ impl StringMatchIndex {
     /// Parallel matching for large string sets (Experiment 2)
     fn find_matches_parallel(
         &self,
-        strings: &[StringInfo],
+        strings: &[&StringInfo],
     ) -> (FxHashSet<usize>, FxHashMap<usize, Vec<Evidence>>) {
         // Process strings in parallel chunks, delegating each chunk to the
         // sequential matcher (single source of truth) and merging per-chunk.
@@ -1161,13 +1173,13 @@ impl StringMatchIndex {
     /// Find regex traits that MIGHT match based on literal prefix matching.
     /// Returns trait indices whose regex patterns had their literal prefix found.
     /// Traits not in this set can be skipped without running the full regex.
-    pub(crate) fn find_regex_candidates(&self, strings: &[StringInfo]) -> FxHashSet<usize> {
+    pub(crate) fn find_regex_candidates(&self, strings: &[&StringInfo]) -> FxHashSet<usize> {
         let mut candidates = FxHashSet::default();
 
         if let Some(ref ac) = self.regex_literal_automaton {
             let total_patterns = self.regex_literal_to_traits.len();
             let mut seen_patterns: FxHashSet<usize> = FxHashSet::default();
-            'outer: for string_info in strings {
+            'outer: for &string_info in strings {
                 for mat in ac.find_overlapping_iter(string_info.value.as_str()) {
                     let pattern_idx = mat.pattern().as_usize();
                     if seen_patterns.insert(pattern_idx) {
@@ -2580,12 +2592,12 @@ mod tests {
         // Trait has a literal, so it is NOT in the always-candidate set; it must
         // be found by the literal prefilter when a matching string is present.
         assert!(index.regex_traits_without_literals.is_empty());
-        let hit = index.find_regex_candidates(&[make_string("fetch http://evil.example/x")]);
+        let hit = index.find_regex_candidates(&[&make_string("fetch http://evil.example/x")]);
         assert!(
             hit.contains(&0),
             "fetch-cmd must be a candidate when 'fetch' is present"
         );
-        let miss = index.find_regex_candidates(&[make_string("nothing relevant here")]);
+        let miss = index.find_regex_candidates(&[&make_string("nothing relevant here")]);
         assert!(
             !miss.contains(&0),
             "fetch-cmd must NOT be a candidate without its literal"
@@ -2604,7 +2616,7 @@ mod tests {
         // Always a candidate, regardless of input strings.
         assert!(
             index
-                .find_regex_candidates(&[make_string("xyz")])
+                .find_regex_candidates(&[&make_string("xyz")])
                 .contains(&0)
         );
         assert!(index.find_regex_candidates(&[]).contains(&0));
@@ -2622,8 +2634,9 @@ mod tests {
         ];
         let index = StringMatchIndex::build(&traits);
 
-        let strings = vec![make_string("set volume output muted true")];
-        let (matched, evidence) = index.find_matches_with_evidence(&strings);
+        let strings = [make_string("set volume output muted true")];
+        let (matched, evidence) =
+            index.find_matches_with_evidence(&strings.iter().collect::<Vec<_>>());
 
         // Both traits must match: the short "output" AND the long full string
         assert!(
@@ -2650,8 +2663,8 @@ mod tests {
         ];
         let index = StringMatchIndex::build(&traits);
 
-        let strings = vec![make_string("set volume output muted true")];
-        let (matched, _) = index.find_matches_with_evidence(&strings);
+        let strings = [make_string("set volume output muted true")];
+        let (matched, _) = index.find_matches_with_evidence(&strings.iter().collect::<Vec<_>>());
 
         assert!(matched.contains(&0), "long-trait should match");
         assert!(matched.contains(&1), "short-trait should match");
@@ -2667,8 +2680,8 @@ mod tests {
         ];
         let index = StringMatchIndex::build(&traits);
 
-        let strings = vec![make_string("curl_easy_setopt")];
-        let (matched, _) = index.find_matches_with_evidence(&strings);
+        let strings = [make_string("curl_easy_setopt")];
+        let (matched, _) = index.find_matches_with_evidence(&strings.iter().collect::<Vec<_>>());
 
         assert!(matched.contains(&0), "'curl' should match");
         assert!(matched.contains(&1), "'curl_easy' should match");
@@ -2690,7 +2703,7 @@ mod tests {
             .collect();
         strings.push(make_string("set volume output muted true"));
 
-        let (matched, _) = index.find_matches_with_evidence(&strings);
+        let (matched, _) = index.find_matches_with_evidence(&strings.iter().collect::<Vec<_>>());
 
         assert!(
             matched.contains(&0),
@@ -2723,8 +2736,8 @@ mod tests {
         ];
         let index = StringMatchIndex::build(&traits);
 
-        let strings = vec![make_string("Set Volume Output Muted True")];
-        let (matched, _) = index.find_matches_with_evidence(&strings);
+        let strings = [make_string("Set Volume Output Muted True")];
+        let (matched, _) = index.find_matches_with_evidence(&strings.iter().collect::<Vec<_>>());
 
         assert!(
             matched.contains(&0),

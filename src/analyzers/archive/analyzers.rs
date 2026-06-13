@@ -117,8 +117,10 @@ struct MemoryArchiveMember {
 /// member-heavy archives (e.g. a 4 MB wheel with thousands of members).
 #[derive(Default)]
 struct MemberAccumulator {
-    total_capabilities: HashSet<String>,
-    total_traits: HashSet<String>,
+    /// Distinct finding ids seen across all members. Reported as both the trait
+    /// and capability tally (the two are identical — every finding id counts as
+    /// one of each), kept once rather than in two parallel sets.
+    distinct_finding_ids: HashSet<String>,
     collected_traits: HashMap<String, Finding>,
     collected_yara: Vec<YaraMatch>,
     collected_strings: Vec<StringInfo>,
@@ -142,11 +144,13 @@ impl MemberAccumulator {
         // `into_file_analysis` does not carry `yara_matches` onto the
         // FileAnalysis, so reading it post-conversion would silently see none.
         for yara_match in &file_report.yara_matches {
+            if self.collected_yara.len() >= 1_000 {
+                break;
+            }
             if !self
                 .collected_yara
                 .iter()
                 .any(|m| m.rule == yara_match.rule)
-                && self.collected_yara.len() < 1_000
             {
                 self.collected_yara.push(yara_match.clone());
             }
@@ -169,8 +173,7 @@ impl MemberAccumulator {
         }
 
         for f in &file_entry.findings {
-            self.total_traits.insert(f.id.clone());
-            self.total_capabilities.insert(f.id.clone());
+            self.distinct_finding_ids.insert(f.id.clone());
             let mut new_finding = f.clone();
             for evidence in &mut new_finding.evidence {
                 match &evidence.location {
@@ -218,10 +221,10 @@ impl MemberAccumulator {
     /// count. Generic archives surface their most severe members first under a
     /// hard ceiling; formats that keep insertion order simply don't call this.
     fn sort_files_by_severity(&mut self, limit: usize) {
-        self.collected_files.sort_by(|a, b| {
-            let peak =
-                |f: &FileAnalysis| f.findings.iter().map(|f| f.crit).max().unwrap_or_default();
-            peak(b).cmp(&peak(a))
+        // `cached_key` computes each file's peak once rather than on every
+        // comparison; `Reverse` gives descending order while staying stable.
+        self.collected_files.sort_by_cached_key(|f| {
+            std::cmp::Reverse(f.findings.iter().map(|f| f.crit).max().unwrap_or_default())
         });
         self.collected_files.truncate(limit);
     }
@@ -230,18 +233,24 @@ impl MemberAccumulator {
     /// tallies each archive type folds into its own summary line. Writes no
     /// metadata — callers append their format-specific summary and tools after.
     fn merge_into(self, report: &mut AnalysisReport) -> MemberCounts {
+        let distinct = self.distinct_finding_ids.len();
         let counts = MemberCounts {
             files_analyzed: self.files_analyzed,
-            trait_count: self.total_traits.len(),
-            capability_count: self.total_capabilities.len(),
+            trait_count: distinct,
+            capability_count: distinct,
         };
+        // Dedup against what the container already holds via sets, not a linear
+        // rescan per item (archives can carry thousands of distinct findings).
+        let mut seen_ids: HashSet<String> = report.findings.iter().map(|f| f.id.clone()).collect();
         for (_, t) in self.collected_traits {
-            if !report.findings.iter().any(|existing| existing.id == t.id) {
+            if seen_ids.insert(t.id.clone()) {
                 report.findings.push(t);
             }
         }
+        let mut seen_rules: HashSet<String> =
+            report.yara_matches.iter().map(|m| m.rule.clone()).collect();
         for ym in self.collected_yara {
-            if !report.yara_matches.iter().any(|m| m.rule == ym.rule) {
+            if seen_rules.insert(ym.rule.clone()) {
                 report.yara_matches.push(ym);
             }
         }

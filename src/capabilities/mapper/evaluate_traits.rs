@@ -141,8 +141,12 @@ impl super::CapabilityMapper {
         let ast_kind_cache =
             self.build_ast_kind_cache(cached_ast, binary_data, &applicable_indices, file_type);
 
-        // Pre-filter using batched Aho-Corasick string matching WITH evidence caching
-        let all_strings = super::build_all_strings(report);
+        // Pre-filter using batched Aho-Corasick string matching WITH evidence
+        // caching. The haystack borrows `report.strings` and only owns the small
+        // import/export pseudo-entries, avoiding a deep copy of every string.
+        let pseudo_strings = super::build_string_pseudo_entries(report);
+        let all_strings: Vec<&crate::types::StringInfo> =
+            report.strings.iter().chain(pseudo_strings.iter()).collect();
 
         let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
         {
@@ -291,8 +295,10 @@ impl super::CapabilityMapper {
             SectionMap::empty(binary_data.len() as u64)
         };
 
-        // Build all_strings
-        let all_strings = super::build_all_strings(report);
+        // Build the string haystack — borrow report.strings, own only pseudo-entries.
+        let pseudo_strings = super::build_string_pseudo_entries(report);
+        let all_strings: Vec<&crate::types::StringInfo> =
+            report.strings.iter().chain(pseudo_strings.iter()).collect();
         let (string_matched_traits, mut cached_evidence) = if self.string_match_index.has_patterns()
         {
             self.string_match_index

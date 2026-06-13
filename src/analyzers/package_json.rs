@@ -761,7 +761,7 @@ impl PackageJsonAnalyzer {
                     .with_capability_mapper_arc(self.capability_mapper.clone())
                     .without_embedded_detection();
                 let js_report = js_analyzer.analyze_source(Path::new(&virtual_path), trailing);
-                let mut layer = js_report.to_file_analysis(0);
+                let (mut layer, _, _) = js_report.into_file_analysis(0);
                 layer.path = virtual_path;
                 layer.depth = 1;
                 layer.compute_summary();

@@ -73,6 +73,11 @@ pub(crate) struct EvaluationContext<'a> {
     /// Validated UTF-8 view of `binary_data`, populated once per file for source-code
     /// file types. Lets AST/text evaluators skip the per-rule O(N) `from_utf8` check.
     pub cached_source_utf8: Option<&'a str>,
+    /// Whole-`binary_data` ASCII-lowercased once and shared (via the `Arc`)
+    /// across every case-insensitive raw/text condition on this file. ASCII
+    /// lowercasing is byte-position-preserving, so any search sub-range maps to
+    /// the same range of this buffer (see [`Self::lower_binary`]).
+    pub cached_lower_binary: Arc<OnceLock<Vec<u8>>>,
 }
 
 impl<'a> EvaluationContext<'a> {
@@ -133,6 +138,7 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
+            cached_lower_binary: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -256,6 +262,15 @@ impl<'a> EvaluationContext<'a> {
     /// Get or build the exact string index for O(1) lookups. Only `report.strings`
     /// is indexed (the only consumer, `eval_text` exact, ignores import/export
     /// entries); values are `report.strings` indices, not cloned strings.
+    /// The whole `binary_data` ASCII-lowercased, built once and shared across
+    /// every case-insensitive raw/text condition. Because ASCII lowercasing
+    /// preserves byte positions, callers slice this by the same `[start..end]`
+    /// they would have applied to `binary_data`.
+    pub(crate) fn lower_binary(&self) -> &[u8] {
+        self.cached_lower_binary
+            .get_or_init(|| self.binary_data.to_ascii_lowercase())
+    }
+
     pub(crate) fn get_string_exact_index(&self) -> &FxHashMap<String, Vec<u32>> {
         self.string_exact_index.get_or_init(|| {
             let mut index: FxHashMap<String, Vec<u32>> = FxHashMap::default();
@@ -336,6 +351,7 @@ impl<'a> EvaluationContext<'a> {
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
             cached_kv_offsets: Arc::new(OnceLock::new()),
+            cached_lower_binary: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),

@@ -380,19 +380,30 @@ pub(crate) fn filter_findings_for_formula(findings: &[Finding]) -> Vec<Finding> 
 /// Format a single file analysis as a JSONL line
 #[allow(dead_code)] // Used by binary target
 pub(crate) fn format_jsonl_line(file: &crate::types::FileAnalysis) -> Result<String> {
-    // Compute formula if not already set
+    // Inject the formula at serialize time when it isn't precomputed (e.g. an
+    // empty-formula benign member) rather than cloning the whole file just to
+    // set one field. The file's own `formula` is `None` here, so it's omitted
+    // by `skip_serializing_if` and this override is the only one emitted.
     if file.formula.is_none() {
-        let mut file_with_formula = file.clone();
         let filtered = filter_findings_for_formula(&file.findings);
         let formula = malecule_bridge::formula_from_findings(&filtered);
-        file_with_formula.formula = Some(if formula.is_empty() {
+        let formula = if formula.is_empty() {
             "∅".to_string()
         } else {
             formula
-        });
-        let entry = JsonlFileEntry {
+        };
+        #[derive(serde::Serialize)]
+        struct JsonlFileEntryWithFormula<'a> {
+            #[serde(rename = "type")]
+            entry_type: &'static str,
+            #[serde(flatten)]
+            file: &'a crate::types::FileAnalysis,
+            formula: String,
+        }
+        let entry = JsonlFileEntryWithFormula {
             entry_type: "file",
-            file: &file_with_formula,
+            file,
+            formula,
         };
         return Ok(serde_json::to_string(&entry)?);
     }

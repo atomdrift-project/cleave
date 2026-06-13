@@ -476,7 +476,8 @@ impl PEAnalyzer {
                     let unpacked_sha256 = crate::analyzers::utils::calculate_sha256(&unpacked_data);
                     let virtual_path = encode_upx_path(&file_path.display().to_string());
 
-                    let mut unpacked_file = unpacked_report.to_file_analysis(0);
+                    let (mut unpacked_file, unpacked_nested, _) =
+                        unpacked_report.into_file_analysis(0);
                     unpacked_file.path = virtual_path;
                     unpacked_file.sha256 = unpacked_sha256;
                     unpacked_file.size = unpacked_data.len() as u64;
@@ -493,7 +494,7 @@ impl PEAnalyzer {
                     }
 
                     // Add nested files from unpacked analysis (e.g., embedded code)
-                    report.files.extend(unpacked_report.files);
+                    report.files.extend(unpacked_nested);
                     report.files.push(unpacked_file);
 
                     report.metadata.tools_used.push("upx".to_string());
@@ -659,8 +660,10 @@ impl PEAnalyzer {
 
             report.structure.extend(structural_features);
             report.imports.extend(pe_imports);
+            let mut finding_ids: std::collections::HashSet<String> =
+                report.findings.iter().map(|f| f.id.clone()).collect();
             for finding in pe_import_findings {
-                if !report.findings.iter().any(|f| f.id == finding.id) {
+                if finding_ids.insert(finding.id.clone()) {
                     report.findings.push(finding);
                 }
             }
@@ -1062,6 +1065,26 @@ impl PEAnalyzer {
                 pe_data,
                 self.cancellation.as_deref(),
             );
+            // Invariant across every embedded candidate — compute once, not per
+            // binary. `is_dotnet` scans the whole PE buffer; the platform-signed
+            // check rescans findings (the embedded-binary findings pushed in this
+            // loop never carry the `metadata/signed/platform::` prefix); the
+            // `.rsrc` byte range is fixed by the section table.
+            let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
+            let host_is_platform_signed = report
+                .findings
+                .iter()
+                .any(|f| f.id.starts_with("metadata/signed/platform::"));
+            let rsrc_range: Option<(usize, usize)> = if filefacts_ok {
+                ctx.parsed.sections().iter().find_map(|s| {
+                    (s.name == ".rsrc").then(|| {
+                        let start = s.file_offset as usize;
+                        (start, start + s.file_size as usize)
+                    })
+                })
+            } else {
+                None
+            };
             for binary in &embedded {
                 if self.is_cancelled() {
                     break;
@@ -1082,20 +1105,8 @@ impl PEAnalyzer {
                 // drivers). Section lookup runs over filefacts's typed
                 // Sections view.
                 if filefacts_ok {
-                    let in_rsrc = ctx.parsed.sections().iter().any(|s| {
-                        if s.name != ".rsrc" {
-                            return false;
-                        }
-                        let start = s.file_offset as usize;
-                        let end = start + s.file_size as usize;
-                        binary.offset >= start && binary.offset < end
-                    });
-                    // .NET assemblies store managed resources —
-                    // including embedded native drivers — in the
-                    // .text section, not .rsrc. Detect .NET via the
-                    // CLR metadata root BSJB signature, which is
-                    // present in every valid .NET assembly.
-                    let is_dotnet = pe_data.windows(4).any(|w| w == b"BSJB");
+                    let in_rsrc = rsrc_range
+                        .is_some_and(|(start, end)| binary.offset >= start && binary.offset < end);
                     let in_nsis_overlay =
                         matches!(
                             detected_sfx_kind,
@@ -1118,14 +1129,9 @@ impl PEAnalyzer {
                     // the host-level embedded-PE marker should be
                     // informational rather than suspicious.
                     //
-                    // Platform-signed PEs (e.g. Microsoft Windows
-                    // drivers) legitimately carry firmware blobs
-                    // (Intel microcode, etc.) formatted as ELF
-                    // inside non-standard sections like .drt.
-                    let host_is_platform_signed = report
-                        .findings
-                        .iter()
-                        .any(|f| f.id.starts_with("metadata/signed/platform::"));
+                    // Platform-signed PEs (e.g. Microsoft Windows drivers)
+                    // legitimately carry firmware blobs (Intel microcode, etc.)
+                    // formatted as ELF inside non-standard sections like .drt.
                     if in_rsrc || is_dotnet || in_nsis_overlay || host_is_platform_signed {
                         finding.crit = Criticality::Notable;
                     }

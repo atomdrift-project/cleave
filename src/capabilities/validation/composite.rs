@@ -154,6 +154,54 @@ pub(crate) fn collect_trait_refs_from_rule(rule: &CompositeTrait) -> Vec<(String
     refs
 }
 
+/// Collect all trait reference IDs from an atomic trait definition.
+///
+/// Returns a vector of `(trait_id, owner_id)` tuples for every `type: trait`
+/// reference reachable from the trait's `if:`, `unless:`, and `downgrade:`
+/// clauses. The `not:` field carries only string exclusions (`NotException`),
+/// never trait references, so it is not inspected.
+///
+/// Counterpart to [`collect_trait_refs_from_rule`] for composites — atomic
+/// traits can reference other traits too (an `if: { id: … }` chains to another
+/// detection; an `unless: [{ id: … }]` suppresses on one), and those refs went
+/// unvalidated until this was added.
+#[must_use]
+pub(crate) fn collect_trait_refs_from_trait_def(t: &TraitDefinition) -> Vec<(String, String)> {
+    let mut refs = Vec::new();
+
+    fn collect_from_conditions(
+        conditions: &[Condition],
+        owner_id: &str,
+        refs: &mut Vec<(String, String)>,
+    ) {
+        for cond in conditions {
+            if let Condition::Trait { id } = cond {
+                refs.push((id.clone(), owner_id.to_string()));
+            }
+        }
+    }
+
+    if let Condition::Trait { id } = &t.r#if {
+        refs.push((id.clone(), t.id.clone()));
+    }
+    if let Some(ref conditions) = t.unless {
+        collect_from_conditions(conditions, &t.id, &mut refs);
+    }
+    if let Some(ref downgrade) = t.downgrade {
+        if let Some(ref conditions) = downgrade.all {
+            collect_from_conditions(conditions, &t.id, &mut refs);
+        }
+        if let Some(ref conditions) = downgrade.any {
+            collect_from_conditions(conditions, &t.id, &mut refs);
+        }
+        if let Some(ref conditions) = downgrade.none {
+            collect_from_conditions(conditions, &t.id, &mut refs);
+        }
+    }
+
+    refs
+}
+
 /// Find `any:` clauses that reference 4+ traits from the same external directory.
 ///
 /// This suggests the rule should either:

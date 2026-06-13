@@ -117,7 +117,8 @@ pub(crate) use duplicates::{
 
 // Composite rule validation
 pub(crate) use composite::{
-    autoprefix_trait_refs, collect_trait_refs_from_rule, find_many_directory_refs,
+    autoprefix_trait_refs, collect_trait_refs_from_rule, collect_trait_refs_from_trait_def,
+    find_many_directory_refs,
     find_overlapping_conditions, find_pure_directory_alias_composites, find_redundant_any_refs,
     find_self_referencing_traits, find_single_item_clauses, validate_composite_trait_only,
 };

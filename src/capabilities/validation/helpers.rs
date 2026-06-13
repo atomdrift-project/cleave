@@ -48,6 +48,7 @@ pub(super) fn is_ast_source_type(ft: RuleFileType) -> bool {
             | RuleFileType::Elixir
             | RuleFileType::Vbs
             | RuleFileType::Batch
+            | RuleFileType::Jcl
             | RuleFileType::AppleScript
     )
 }

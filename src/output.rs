@@ -526,9 +526,10 @@ impl TinyOpts {
 
     /// cleave's `--format tiny` (LLM) view: minimal header, never colored, paths
     /// reduced to basename. Unlike the terminal view it casts a *wide* net —
-    /// top 100 findings down to Component/Baseline — so the model sees the whole
-    /// picture, including low-severity legitimacy signals (signer, product name,
-    /// version metadata) that would otherwise be crowded out by behavioral hits.
+    /// top 250 findings down to Component — so the model sees the whole picture,
+    /// including the low-severity context that keeps it from over-calling
+    /// legitimate-but-aggressive software. The signer/product/version/trust
+    /// headline comes from `file.identity` (see `render_identity`).
     #[must_use]
     pub fn tiny() -> Self {
         Self {
@@ -536,6 +537,11 @@ impl TinyOpts {
             color: false,
             basename_root: true,
             top_n: 250,
+            // Component+: cast a wide net. The low-severity findings (cert
+            // chains, module names, normal structure) aren't just noise — they
+            // give the model the benign-context counterweight that keeps it from
+            // over-calling legitimate-but-aggressive software (installers,
+            // archivers). Raising this floor regressed WinRAR benign→hostile.
             min_crit: Criticality::Component,
             ..Self::terminal()
         }

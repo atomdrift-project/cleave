@@ -392,6 +392,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 "scripts" => vec![
                     RuleFileType::Shell,
                     RuleFileType::Batch,
+                    RuleFileType::Jcl,
                     RuleFileType::Python,
                     RuleFileType::JavaScript,
                     RuleFileType::Ruby,
@@ -473,6 +474,7 @@ pub(crate) fn parse_file_types(types: &[String], warnings: &mut Vec<String>) -> 
                 // Scripting languages (fullname + extension)
                 "shell" | "sh" => vec![RuleFileType::Shell],
                 "batch" | "bat" | "cmd" => vec![RuleFileType::Batch],
+                "jcl" => vec![RuleFileType::Jcl],
                 "python" | "py" => vec![RuleFileType::Python],
                 "javascript" | "js" | "typescript" | "ts" => vec![RuleFileType::JavaScript],
                 "ruby" | "rb" => vec![RuleFileType::Ruby],
@@ -686,6 +688,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
     let has_android = platforms.contains(&Platform::Android);
     let has_macos = platforms.contains(&Platform::MacOS);
     let has_ios = platforms.contains(&Platform::Ios);
+    let has_zos = platforms.contains(&Platform::Zos);
     let has_appliance = platforms.iter().any(Platform::is_appliance_family);
     // macOS is a Unix, so the unix umbrella reaches macOS-native formats too.
     let has_darwin = has_unix || has_macos || has_ios;
@@ -706,6 +709,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 | RuleFileType::Nupkg => has_windows,
                 // ELF and APK both run on Linux/Android
                 RuleFileType::Elf | RuleFileType::Apk => has_unix || has_android,
+                RuleFileType::Jcl => has_zos,
                 // Mach-O/Plist/Ipa and AppleScript/Swift/ObjC are macOS/iOS-native;
                 // Shell runs on all unix-like systems. macOS is a Unix, so the
                 // `unix` umbrella reaches all of them.
@@ -749,6 +753,7 @@ pub(crate) fn resolve_platform_filetype_conflicts(
                 RuleFileType::Elf | RuleFileType::Apk => {
                     (has_unix || has_android, "linux, unix, or android")
                 }
+                RuleFileType::Jcl => (has_zos, "zos"),
                 RuleFileType::Shell => (has_darwin, "linux, unix, macos, or ios"),
                 // macOS/iOS-native languages and formats — the `unix` umbrella
                 // includes macOS, so a unix-targeting trait satisfies them.

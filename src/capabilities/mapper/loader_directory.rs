@@ -16,7 +16,8 @@ use crate::capabilities::validation::{
     check_overlapping_regex_patterns, check_regex_alternative_subsets,
     check_regex_or_overlapping_exact, check_regex_should_be_exact,
     check_same_string_different_types, collect_trait_refs_from_rule,
-    find_alternation_merge_candidates, find_ast_function_call_should_use_symbol,
+    collect_trait_refs_from_trait_def, find_alternation_merge_candidates,
+    find_ast_function_call_should_use_symbol,
     find_atomic_logic_duplicates, find_banned_directory_segments, find_broad_filetype_traits,
     find_broad_platform_traits, find_cap_obj_violations, find_cap_wellknown_violations,
     find_case_insensitive_overlap_issues, find_composite_only_wellknown_files,
@@ -151,6 +152,42 @@ fn trait_local_id(id: &str) -> &str {
 
 fn normalize_ref_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// True when `ref_id` targets a namespace that analyzers synthesize at runtime
+/// (from imports, code signatures, entitlements, or embedded-language detection)
+/// rather than one defined by a static YAML trait. Such references never appear
+/// in `valid_trait_ids`, so the broken-reference check must exempt them.
+///
+/// Keep this in sync with the analyzers that synthesize these IDs:
+/// `imports.rs` (`metadata/import/…`, `metadata/dylib…`), `macho.rs`/`pe.rs`
+/// (`metadata/signed/…`, `metadata/entitlement/…`, `metadata/binary/linking::macho-*`),
+/// `embedded_code_detector.rs` (`metadata/lang/embedded::…`, `metadata/lang/encoded/…`),
+/// and the structural analyzers (`metadata/build/debug::elf-debuglink`,
+/// `metadata/binary/anomaly::inflated-section-headers`). The trailing ids below are
+/// specific, not prefixes, because their directories also hold static YAML traits
+/// (e.g. `metadata/binary/linking::ifunc`) that must still be validated.
+fn is_dynamic_metadata_ref(ref_id: &str) -> bool {
+    const DYNAMIC_PREFIXES: &[&str] = &[
+        "metadata/import/",
+        "metadata/dylib::",
+        "metadata/dylib/",
+        "metadata/signed/",
+        "metadata/entitlement/",
+        "metadata/lang/embedded::",
+        "metadata/lang/encoded/",
+        // Emitted by macho.rs from Mach-O load commands (LC_ID_DYLIB / LC_LOAD_DYLIB /
+        // LC_RPATH); the directory also holds static traits, so match the exact ids.
+        "metadata/binary/linking::macho-install-name",
+        "metadata/binary/linking::macho-dylib",
+        "metadata/binary/linking::macho-rpath",
+        // Emitted by the debug-info and section structural analyzers.
+        "metadata/build/debug::elf-debuglink",
+        "metadata/binary/anomaly::inflated-section-headers",
+    ];
+    DYNAMIC_PREFIXES
+        .iter()
+        .any(|prefix| ref_id.starts_with(prefix))
 }
 
 fn format_reference_choices(ids: &[String]) -> String {
@@ -1817,10 +1854,7 @@ impl super::CapabilityMapper {
                 let is_cross_dir = ref_id.contains("::") || ref_id.contains('/');
                 if is_cross_dir {
                     // Skip validation for metadata/ paths - these are dynamically generated
-                    if ref_id.starts_with("metadata/import/")
-                        || ref_id.starts_with("metadata/dylib/")
-                        || ref_id.starts_with("metadata/signed/")
-                    {
+                    if is_dynamic_metadata_ref(&ref_id) {
                         continue;
                     }
 
@@ -3603,58 +3637,90 @@ impl super::CapabilityMapper {
             }
 
             let mut broken_refs = Vec::new();
+            // Validate a single `(ref_id, owner_id)` pair. Returns `Some(..)` when the
+            // reference resolves to nothing — a `::`-qualified ref with no exactly-matching
+            // trait/composite (the runtime requires an exact match for `::` refs; see
+            // `eval_trait` / `unless_trait_id_matches`), or a slashed ref under no known
+            // directory.
+            //
+            // `bare_resolves_by_suffix` distinguishes the two ref sources: composite refs are
+            // auto-prefixed at load, so a bare same-file ref has already become a full
+            // `dir::id` and must resolve exactly. Atomic-trait refs are NOT auto-prefixed, so a
+            // bare ref (no `::`, no `/`) resolves at runtime by suffix match across directories
+            // — that path is left to the runtime rather than flagged here.
+            let check_ref = |ref_id: String,
+                             owner_id: &str,
+                             bare_resolves_by_suffix: bool|
+             -> Option<BrokenTraitReference> {
+                // Directory-level references (intentional loose coupling): "discovery/system"
+                // matches any trait in that directory; parent refs like "micro-behaviors/fs/write/"
+                // match traits in subdirs.
+                let ref_without_slash = ref_id.trim_end_matches('/');
+                let is_directory_ref = prefix_hierarchy.contains(&ref_id)
+                    || prefix_hierarchy.contains(ref_without_slash);
+
+                // Dynamically generated metadata/* references (imports, signatures,
+                // entitlements, embedded-language detection) have no static trait
+                // definition, so exempt them.
+                let is_dynamic_or_internal = is_dynamic_metadata_ref(&ref_id);
+
+                // Bare same-directory reference on an atomic trait — resolves at runtime by
+                // suffix match, not validated here.
+                let is_bare_suffix_ref =
+                    bare_resolves_by_suffix && !ref_id.contains("::") && !ref_id.contains('/');
+
+                // Exact-match requirement: references like "micro-behaviors/foo/bar/filename"
+                // where "filename" is a YAML file (not a directory) are invalid — filenames are
+                // never part of trait IDs, only the directory path is used for prefixing.
+                if is_directory_ref
+                    || is_dynamic_or_internal
+                    || is_bare_suffix_ref
+                    || valid_trait_ids.contains(&ref_id)
+                {
+                    return None;
+                }
+
+                // Debug: Print broken reference details
+                if std::env::var("CLEAVE_DEBUG").is_ok()
+                    && (ref_id.contains("tiny-elf")
+                        || ref_id.contains("small-elf")
+                        || ref_id.contains("setup-py")
+                        || ref_id.contains("pkginfo"))
+                {
+                    eprintln!(
+                        "[DEBUG] Broken reference: '{}' (from '{}')",
+                        ref_id, owner_id
+                    );
+                }
+                let source_file = rule_source_files
+                    .get(owner_id)
+                    .map(std::string::String::as_str)
+                    .unwrap_or("unknown");
+                let line_hint = find_line_number(source_file, &ref_id);
+                let suggestion = build_filename_reference_suggestion(&ref_id, &file_stem_hints);
+                Some(BrokenTraitReference {
+                    rule_id: owner_id.to_string(),
+                    ref_id,
+                    source_file: source_file.to_string(),
+                    line_hint,
+                    suggestion,
+                })
+            };
+
             for rule in &composite_rules {
-                let trait_refs = collect_trait_refs_from_rule(rule);
-                for (ref_id, rule_id) in trait_refs {
-                    // Skip validation for directory-level references (intentional loose coupling)
-                    // e.g., "discovery/system" matches any trait in that directory
-                    // Also allow parent directory refs like "micro-behaviors/fs/write/" when traits exist in subdirs
-                    let ref_without_slash = ref_id.trim_end_matches('/');
-                    // O(1) prefix hierarchy lookup instead of O(n) iteration
-                    let is_directory_ref = prefix_hierarchy.contains(&ref_id)
-                        || prefix_hierarchy.contains(ref_without_slash);
-
-                    // Skip validation for dynamically generated metadata/* references
-                    // - metadata/import/ and metadata/dylib/ are generated from binary imports
-                    // - metadata/signed/ is generated from code signature parsing
-                    let is_dynamic_or_internal = ref_id.starts_with("metadata/import/")
-                        || ref_id.starts_with("metadata/dylib/")
-                        || ref_id.starts_with("metadata/signed/");
-
-                    // Check if the exact trait ID exists (unless it's an intentional directory ref)
-                    // Note: We require exact matches. References like "micro-behaviors/foo/bar/filename" where
-                    // "filename" is a YAML file (not a directory) are invalid - filenames are never
-                    // part of trait IDs, only the directory path is used for prefixing.
-                    if !is_directory_ref
-                        && !is_dynamic_or_internal
-                        && !valid_trait_ids.contains(&ref_id)
-                    {
-                        // Debug: Print broken reference details
-                        if std::env::var("CLEAVE_DEBUG").is_ok()
-                            && (ref_id.contains("tiny-elf")
-                                || ref_id.contains("small-elf")
-                                || ref_id.contains("setup-py")
-                                || ref_id.contains("pkginfo"))
-                        {
-                            eprintln!(
-                                "[DEBUG] Broken reference: '{}' (from rule '{}')",
-                                ref_id, rule_id
-                            );
-                        }
-                        let source_file = rule_source_files
-                            .get(&rule_id)
-                            .map(std::string::String::as_str)
-                            .unwrap_or("unknown");
-                        let line_hint = find_line_number(source_file, &ref_id);
-                        let suggestion =
-                            build_filename_reference_suggestion(&ref_id, &file_stem_hints);
-                        broken_refs.push(BrokenTraitReference {
-                            rule_id: rule_id.clone(),
-                            ref_id,
-                            source_file: source_file.to_string(),
-                            line_hint,
-                            suggestion,
-                        });
+                for (ref_id, rule_id) in collect_trait_refs_from_rule(rule) {
+                    if let Some(broken) = check_ref(ref_id, &rule_id, false) {
+                        broken_refs.push(broken);
+                    }
+                }
+            }
+            // Atomic traits reference other traits in their `if:`, `unless:`, and `downgrade:`
+            // clauses; those refs went unvalidated before this loop, so dangling `::` refs
+            // (e.g. a YAML-filename-in-ID exemption) silently became no-ops.
+            for trait_def in &trait_definitions {
+                for (ref_id, owner_id) in collect_trait_refs_from_trait_def(trait_def) {
+                    if let Some(broken) = check_ref(ref_id, &owner_id, true) {
+                        broken_refs.push(broken);
                     }
                 }
             }

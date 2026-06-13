@@ -322,7 +322,8 @@ impl MachOAnalyzer {
             .truncated
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            report.findings.push(Finding { src: None,
+            report.findings.push(Finding {
+                src: None,
                 id: "metadata/strings-truncated".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
@@ -584,7 +585,13 @@ impl MachOAnalyzer {
         let entitlements = values
             .get("macho.code_signature.entitlements")
             .and_then(serde_json::Value::as_object);
-        emit_signature_findings(report, sig_offset, identifier_offset, &identity, entitlements);
+        emit_signature_findings(
+            report,
+            sig_offset,
+            identifier_offset,
+            &identity,
+            entitlements,
+        );
     }
 
     // AMOS cipher detection/decryption removed - now handled by stng library internally
@@ -615,6 +622,32 @@ fn shift_hex_offset(offset: &mut Option<String>, delta: u64) {
 /// untouched.
 ///
 /// [`Evidence::byte_offset`]: crate::types::Evidence::byte_offset
+/// Add `delta` to every `*_offset` numeric leaf in a value tree, recursing into
+/// objects and arrays. filefacts records a structural fact's source offset under
+/// a `<key>_offset` sibling (e.g. `macho.uuid_offset`); on a fat slice those are
+/// slice-relative and must shift with everything else.
+fn shift_value_tree_offsets(value: &mut serde_json::Value, delta: u64) {
+    match value {
+        serde_json::Value::Object(map) => {
+            for (key, child) in map.iter_mut() {
+                if key.ends_with("_offset") {
+                    if let Some(n) = child.as_u64() {
+                        *child = serde_json::Value::from(n.saturating_add(delta));
+                    }
+                } else {
+                    shift_value_tree_offsets(child, delta);
+                }
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                shift_value_tree_offsets(item, delta);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn shift_evidence_offset(evidence: &mut crate::types::Evidence, delta: u64) {
     for off in &mut evidence.offsets {
         *off = off.saturating_add(delta);
@@ -707,7 +740,11 @@ fn emit_signature_findings(
         Trust::DeveloperId | Trust::CaSigned => {
             let team = team_id.unwrap_or("unknown");
             let company = signer_org.unwrap_or(team);
-            ("developer", team.to_string(), format!("Developer ID: {company}"))
+            (
+                "developer",
+                team.to_string(),
+                format!("Developer ID: {company}"),
+            )
         }
         Trust::System | Trust::Platform => (
             "platform",
@@ -748,7 +785,8 @@ fn emit_signature_findings(
     // Anchors at the identifier string's own offset, falling back to the
     // signature blob only when filefacts couldn't resolve the string offset.
     if let Some(identifier) = identity.identifier.as_ref().map(|c| c.value.as_str()) {
-        let id_location = identifier_offset.map_or_else(|| location.clone(), |off| format!("0x{off:x}"));
+        let id_location =
+            identifier_offset.map_or_else(|| location.clone(), |off| format!("0x{off:x}"));
         report.findings.push(signature_finding(
             format!("metadata/signed/id::{identifier}"),
             format!("Identifier: {identifier}"),
@@ -767,7 +805,11 @@ fn emit_signature_findings(
         entitlements.contains_key("com.apple.security.cs.disable-library-validation");
     for (key, value) in entitlements {
         report.findings.push(signature_finding(
-            format!("metadata/entitlement/{}::{}", entitlement_category(key), key),
+            format!(
+                "metadata/entitlement/{}::{}",
+                entitlement_category(key),
+                key
+            ),
             describe_entitlement(key),
             determine_entitlement_criticality(key, is_platform, has_disable_lib_val),
             "entitlements_plist",
@@ -1102,6 +1144,13 @@ impl MachOAnalyzer {
                 shift_evidence_offset(evidence, delta);
             }
         }
+        // `*_offset` siblings in the value tree (e.g. `macho.uuid_offset`) are
+        // slice-relative too. The capability mapper reads them *after* this
+        // pass to anchor `type: value` matches, so shift them here — otherwise
+        // those findings render `delta` bytes early on a fat binary.
+        if let Some(tree) = report.values_tree.as_deref_mut() {
+            shift_value_tree_offsets(tree, delta);
+        }
     }
 
     /// Returns byte ranges for ALL architecture slices in a fat binary.
@@ -1262,7 +1311,9 @@ impl MachOAnalyzer {
                 let symbol = imp.symbol.clone();
                 let import_offset = imp.offset.clone();
                 report.imports.push(crate::types::Import { ..imp });
-                if let Some(cap) = self.capability_mapper.lookup(&symbol, import_offset.as_deref())
+                if let Some(cap) = self
+                    .capability_mapper
+                    .lookup(&symbol, import_offset.as_deref())
                     && !report.findings.iter().any(|c| c.id == cap.id)
                 {
                     report.findings.push(cap);
@@ -1355,7 +1406,8 @@ impl MachOAnalyzer {
 
         if let Some(msg) = parse_failure {
             report.metadata.errors.push(msg.clone());
-            report.findings.push(Finding { src: None,
+            report.findings.push(Finding {
+                src: None,
                 kind: FindingKind::Structural,
                 id: "anti-analysis/malformed/macho-header".to_string(),
                 desc: format!("Malformed Mach-O header: {}", msg),
@@ -1637,6 +1689,22 @@ mod tests {
             report.findings[0].evidence[1].location.as_deref(),
             Some("LC_CODE_SIGNATURE")
         );
+    }
+
+    #[test]
+    fn rebase_slice_offsets_shifts_value_tree_companion_offsets() {
+        let mut report = report_with_offsets();
+        report.values_tree = Some(Box::new(serde_json::json!({
+            "macho": { "uuid": "ed6f...", "uuid_offset": 1472u64 },
+            "macho.code_signature_offset": 0x100u64,
+        })));
+        MachOAnalyzer::rebase_slice_offsets(&mut report, 0x4000);
+        let tree = report.values_tree.expect("values tree present");
+        // `*_offset` siblings shift by the slice delta so `type: value`
+        // matches anchor on the full file; the value itself is untouched.
+        assert_eq!(tree["macho"]["uuid_offset"].as_u64(), Some(0x4000 + 1472));
+        assert_eq!(tree["macho"]["uuid"].as_str(), Some("ed6f..."));
+        assert_eq!(tree["macho.code_signature_offset"].as_u64(), Some(0x4100));
     }
 
     /// A zero delta (thin binary / preferred slice already at offset 0) must
@@ -1998,7 +2066,10 @@ mod tests {
     fn test_developer_signed_and_entitlement_findings() {
         let identity = filefacts::Identity {
             trust: filefacts::Trust::DeveloperId,
-            team_id: Some(filefacts::Claim::verified("ABCDE12345", "macho.code_signature")),
+            team_id: Some(filefacts::Claim::verified(
+                "ABCDE12345",
+                "macho.code_signature",
+            )),
             signer: Some(filefacts::Signer {
                 common_name: Some("Developer ID Application: Acme Inc. (ABCDE12345)".to_string()),
                 organization: Some("Acme Inc.".to_string()),
@@ -2124,11 +2195,7 @@ mod tests {
             "com.apple.security.cs.disable-library-validation",
         ] {
             assert_eq!(
-                determine_entitlement_criticality(
-                    key,
-                    true,
-                    false,
-                ),
+                determine_entitlement_criticality(key, true, false,),
                 Criticality::Notable,
                 "platform binary entitlement {key} should be notable"
             );
@@ -2143,22 +2210,14 @@ mod tests {
             "com.apple.security.cs.allow-unsigned-executable-memory",
         ] {
             assert_eq!(
-                determine_entitlement_criticality(
-                    key,
-                    false,
-                    false,
-                ),
+                determine_entitlement_criticality(key, false, false,),
                 Criticality::Suspicious,
                 "non-Apple entitlement {key} should be suspicious"
             );
         }
         // allow-jit is common in legitimate apps, notable not suspicious
         assert_eq!(
-            determine_entitlement_criticality(
-                "com.apple.security.cs.allow-jit",
-                false,
-                false,
-            ),
+            determine_entitlement_criticality("com.apple.security.cs.allow-jit", false, false,),
             Criticality::Notable,
         );
     }
@@ -2180,11 +2239,7 @@ mod tests {
     fn test_determine_entitlement_criticality_privacy_notable() {
         for key in ["personal-information.location", "device.bluetooth"] {
             assert_eq!(
-                determine_entitlement_criticality(
-                    key,
-                    false,
-                    false,
-                ),
+                determine_entitlement_criticality(key, false, false,),
                 Criticality::Notable,
             );
         }

@@ -117,6 +117,27 @@ struct PackageJson {
     bin: serde_json::Value,
 }
 
+/// Byte offset of a `"key"` entry within the named top-level object
+/// (`section`, e.g. `"scripts"` or `"dependencies"`) in the raw package.json.
+/// Lets script/dependency findings anchor where the entry physically sits
+/// rather than carrying a semantic `scripts.<name>` label the context pass
+/// can't turn into a file position (so the finding pins to byte 0). The key
+/// search is scoped to after the section marker; approximate but stable.
+fn json_entry_offset(content: &str, section: &str, key: &str) -> Option<u64> {
+    let section_start = content.find(&format!("\"{section}\"")).unwrap_or(0);
+    content[section_start..]
+        .find(&format!("\"{key}\""))
+        .map(|rel| (section_start + rel) as u64)
+}
+
+/// Byte offset of a top-level `"field"` key in the raw package.json, formatted
+/// as an `offset:<n>` location string the context pass can resolve.
+fn json_field_location(content: &str, field: &str) -> Option<String> {
+    content
+        .find(&format!("\"{field}\""))
+        .map(|p| format!("offset:{p}"))
+}
+
 /// Strip single-line `//` comments and trailing commas from JSON-like content.
 /// Returns `None` if no changes were made (content was already clean).
 fn sanitize_json(content: &str) -> Option<String> {
@@ -523,19 +544,19 @@ impl PackageJsonAnalyzer {
         });
 
         // Check for suspicious package metadata
-        self.check_metadata(&pkg, &mut report);
+        self.check_metadata(&pkg, content, &mut report);
 
         // Analyze scripts for suspicious patterns
-        self.analyze_scripts(&pkg.scripts, &mut report);
+        self.analyze_scripts(&pkg.scripts, content, &mut report);
 
         // Analyze dependencies for known malicious packages and typosquatting
-        self.analyze_dependencies(&pkg, &mut report);
+        self.analyze_dependencies(&pkg, content, &mut report);
 
         // Check for install hooks that could run malicious code
-        self.check_install_hooks(&pkg.scripts, &mut report);
+        self.check_install_hooks(&pkg.scripts, content, &mut report);
 
         // Extract interesting strings from scripts
-        self.extract_script_strings(&pkg.scripts, &mut report);
+        self.extract_script_strings(&pkg.scripts, content, &mut report);
 
         // Evaluate all rules (atomic + composite) and merge into report
         // This catches patterns like curl, wget, perl execution, etc.
@@ -749,7 +770,12 @@ impl PackageJsonAnalyzer {
         }
     }
 
-    fn analyze_scripts(&self, scripts: &HashMap<String, String>, report: &mut AnalysisReport) {
+    fn analyze_scripts(
+        &self,
+        scripts: &HashMap<String, String>,
+        content: &str,
+        report: &mut AnalysisReport,
+    ) {
         for (name, script) in scripts {
             // Per-script capability detection (base64/encoding, network egress,
             // shell+eval, file deletion, env-var access, interpreters) now lives
@@ -782,7 +808,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: truncate_str(script, 200).to_string(),
-                        location: Some(format!("scripts.{}", name)),
+                        location: json_entry_offset(content, "scripts", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -817,7 +844,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: truncate_str(script, 300).to_string(),
-                        location: Some(format!("scripts.{}", name)),
+                        location: json_entry_offset(content, "scripts", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -842,7 +870,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: truncate_str(script, 200).to_string(),
-                        location: Some(format!("scripts.{}", name)),
+                        location: json_entry_offset(content, "scripts", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -881,7 +910,8 @@ impl PackageJsonAnalyzer {
                             method: "pattern".to_string(),
                             source: "package.json".to_string(),
                             value: hidden_files.join(", "),
-                            location: Some(format!("scripts.{}", name)),
+                            location: json_entry_offset(content, "scripts", name)
+                                .map(|o| format!("offset:{o}")),
                             ..Default::default()
                         }]),
                     );
@@ -905,7 +935,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: truncate_str(script, 200).to_string(),
-                        location: Some(format!("scripts.{}", name)),
+                        location: json_entry_offset(content, "scripts", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -926,7 +957,8 @@ impl PackageJsonAnalyzer {
                             method: "heuristic".to_string(),
                             source: "package.json".to_string(),
                             value: url,
-                            location: Some(format!("scripts.{}", name)),
+                            location: json_entry_offset(content, "scripts", name)
+                                .map(|o| format!("offset:{o}")),
                             ..Default::default()
                         }]),
                     );
@@ -935,7 +967,7 @@ impl PackageJsonAnalyzer {
         }
     }
 
-    fn check_metadata(&self, pkg: &PackageJson, report: &mut AnalysisReport) {
+    fn check_metadata(&self, pkg: &PackageJson, content: &str, report: &mut AnalysisReport) {
         let is_official_react_native = self.is_official_react_native_package(pkg);
 
         // Check for empty or missing author (suspicious for published packages)
@@ -969,7 +1001,9 @@ impl PackageJsonAnalyzer {
                     method: "metadata".to_string(),
                     source: "package.json".to_string(),
                     value: "author field is empty".to_string(),
-                    location: Some("author".to_string()),
+                    // The author field is absent, so there's no byte to point
+                    // at — anchor at the file start per the locationless rule.
+                    location: Some("offset:0".to_string()),
                     ..Default::default()
                 }]),
             );
@@ -991,7 +1025,7 @@ impl PackageJsonAnalyzer {
                     method: "pattern".to_string(),
                     source: "package.json".to_string(),
                     value: name.clone(),
-                    location: Some("name".to_string()),
+                    location: json_field_location(content, "name"),
                     ..Default::default()
                 }]),
             );
@@ -1018,7 +1052,7 @@ impl PackageJsonAnalyzer {
                         method: "heuristic".to_string(),
                         source: "package.json".to_string(),
                         value: "version 1.0.0 with install hooks".to_string(),
-                        location: Some("version + scripts".to_string()),
+                        location: json_field_location(content, "version"),
                         ..Default::default()
                     }]),
                 );
@@ -1026,7 +1060,7 @@ impl PackageJsonAnalyzer {
         }
     }
 
-    fn analyze_dependencies(&self, pkg: &PackageJson, report: &mut AnalysisReport) {
+    fn analyze_dependencies(&self, pkg: &PackageJson, content: &str, report: &mut AnalysisReport) {
         let is_official_react_native = self.is_official_react_native_package(pkg);
         let all_deps: Vec<(&str, &str)> = pkg
             .dependencies
@@ -1054,7 +1088,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: version.to_string(),
-                        location: Some(format!("dependencies.{}", name)),
+                        location: json_entry_offset(content, "dependencies", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1073,7 +1108,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: version.to_string(),
-                        location: Some(format!("dependencies.{}", name)),
+                        location: json_entry_offset(content, "dependencies", name)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1095,7 +1131,7 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: name.to_string(),
-                        location: Some("dependencies".to_string()),
+                        location: json_field_location(content, "dependencies"),
                         ..Default::default()
                     }]),
                 );
@@ -1114,7 +1150,7 @@ impl PackageJsonAnalyzer {
                         method: "levenshtein".to_string(),
                         source: "package.json".to_string(),
                         value: format!("{} -> {}", name, original),
-                        location: Some("dependencies".to_string()),
+                        location: json_field_location(content, "dependencies"),
                         ..Default::default()
                     }]),
                 );
@@ -1130,7 +1166,12 @@ impl PackageJsonAnalyzer {
         }
     }
 
-    fn check_install_hooks(&self, scripts: &HashMap<String, String>, report: &mut AnalysisReport) {
+    fn check_install_hooks(
+        &self,
+        scripts: &HashMap<String, String>,
+        content: &str,
+        report: &mut AnalysisReport,
+    ) {
         // These hooks run automatically during npm install
         let install_hooks = [
             "preinstall",
@@ -1168,7 +1209,8 @@ impl PackageJsonAnalyzer {
                         method: "pattern".to_string(),
                         source: "package.json".to_string(),
                         value: truncate_str(script, 200).to_string(),
-                        location: Some(format!("scripts.{}", hook)),
+                        location: json_entry_offset(content, "scripts", hook)
+                            .map(|o| format!("offset:{o}")),
                         ..Default::default()
                     }]),
                 );
@@ -1179,14 +1221,22 @@ impl PackageJsonAnalyzer {
     fn extract_script_strings(
         &self,
         scripts: &HashMap<String, String>,
+        content: &str,
         report: &mut AnalysisReport,
     ) {
+        // Anchor each extracted string at its real byte position in the raw
+        // package.json (the script-key offset as a fallback) so downstream
+        // trait matches on these strings carry a location instead of byte 0.
         for (name, script) in scripts {
+            let script_offset = json_entry_offset(content, "scripts", name);
+            let value_offset =
+                |value: &str| content.find(value).map(|p| p as u64).or(script_offset);
+
             // Extract URLs
             for url in self.extract_urls(script) {
                 report.strings.push(StringInfo {
+                    offset: value_offset(&url),
                     value: url.into(),
-                    offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::Url),
                     section: Some(format!("scripts.{}", name)),
@@ -1198,8 +1248,8 @@ impl PackageJsonAnalyzer {
             // Extract IP addresses
             for ip in self.extract_ips(script) {
                 report.strings.push(StringInfo {
+                    offset: value_offset(&ip),
                     value: ip.into(),
-                    offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::IP),
                     section: Some(format!("scripts.{}", name)),
@@ -1211,8 +1261,8 @@ impl PackageJsonAnalyzer {
             // Extract paths
             for path in self.extract_paths(script) {
                 report.strings.push(StringInfo {
+                    offset: value_offset(&path),
                     value: path.into(),
-                    offset: None,
                     encoding: "utf8".to_string(),
                     string_type: Some(StringType::Path),
                     section: Some(format!("scripts.{}", name)),

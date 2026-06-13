@@ -207,7 +207,8 @@ fn test_finding_constructor() {
         ..Default::default()
     }];
 
-    let finding = Finding { src: None,
+    let finding = Finding {
+        src: None,
         id: "net/socket".to_string(),
         kind: FindingKind::Capability,
         desc: "Network socket".to_string(),

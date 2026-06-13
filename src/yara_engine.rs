@@ -2133,7 +2133,8 @@ impl YaraEngine {
                     _ => Criticality::Baseline,
                 };
 
-                findings.push(Finding { src: None,
+                findings.push(Finding {
+                    src: None,
                     kind: FindingKind::Capability,
                     trait_refs: vec![],
                     id: cap_id,

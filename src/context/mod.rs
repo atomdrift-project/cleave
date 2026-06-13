@@ -28,10 +28,13 @@ const MIN_HEIGHTS: [u32; MAX_MATCHES] = [5, 3, 2, 1];
 const LINE_CLIP: usize = 120;
 /// Max raw bytes stored per source line; the renderer clips to terminal width.
 const LINE_STORE_MAX: usize = 1024;
-/// Raw bytes captured on each side of a binary match — roughly one hex row, the
-/// byte analogue of the source view's single line of context. The renderer wraps
-/// the window (`16 + match + 16`) into hex|ascii rows at the terminal's width.
-const HEX_CONTEXT: u64 = 16;
+/// Raw bytes captured before a binary match — roughly one hex row of lead-in.
+const HEX_CONTEXT_BEFORE: u64 = 16;
+/// Raw bytes captured after a binary match. Wider than the lead-in (two rows'
+/// worth) so a match near the window's end still has a full row of trailing
+/// bytes: the renderer then keeps note-bearing rows full and clips the leftover
+/// note-less tail, rather than emitting a ragged stub.
+const HEX_CONTEXT_AFTER: u64 = 32;
 
 /// Half-width (bytes) of a minified one-liner slice; the rendered slice is then
 /// clipped to [`LINE_CLIP`] characters, so this just needs to exceed it.
@@ -119,26 +122,78 @@ struct Window {
 /// shows up to its first three.
 fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
     let composite = !finding.trait_refs.is_empty();
-    let mut anchors: Vec<(u64, u32)> = finding
-        .evidence
-        .iter()
-        .filter_map(local_anchor)
-        .collect();
+    let mut anchors = local_anchors(finding, by_id);
+    anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
+    anchors
+}
 
+/// All of a finding's local byte anchors `(offset, len)`, file-ordered and
+/// deduped by offset — its own evidence plus its components' (a composite's
+/// "legs"). Falls back to [`fallback_anchor`] when none are local. Unlike
+/// [`finding_anchors`] this keeps every leg, so a composite can be placed at the
+/// first one not already taken by a stronger match.
+fn local_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
+    let mut anchors: Vec<(u64, u32)> = finding.evidence.iter().filter_map(local_anchor).collect();
     for ref_id in &finding.trait_refs {
         if let Some(component) = by_id.get(ref_id.as_str()) {
             anchors.extend(component.evidence.iter().filter_map(local_anchor));
         }
     }
-
     if anchors.is_empty() {
         return fallback_anchor(finding, by_id);
     }
-
     anchors.sort_unstable_by_key(|(off, _)| *off);
     anchors.dedup_by_key(|(off, _)| *off);
-    anchors.truncate(if composite { 1 } else { ATOMIC_MAX_MATCHES });
     anchors
+}
+
+/// A finding's rank for overlap resolution: confidence weighted by criticality.
+/// Matches [`note_score`] so the placement pass and the per-line dedup agree on
+/// which match is "stronger."
+fn finding_score(finding: &Finding) -> f32 {
+    finding.conf * f32::from(finding.crit as u8)
+}
+
+/// A composite's candidate legs `(offset, len, confidence)` — one per local
+/// component match — ordered most-confident first (ties: earliest offset),
+/// deduped by offset keeping the highest confidence, and capped. `confidence` is
+/// the *component's* confidence, so the placement pass anchors the composite at
+/// its strongest evidence point. Falls back to [`fallback_anchor`] (carrying the
+/// composite's own confidence) when no leg is local — e.g. a cross-file composite
+/// whose components live in other files, which then has no leg and is omitted
+/// from the byte view (it renders as a located-elsewhere note instead).
+fn composite_legs(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32, f32)> {
+    /// Bound on legs considered — composites reference at most a handful of
+    /// distinguishing components; a few extra metric legs add nothing.
+    const MAX_LEGS: usize = 8;
+
+    let mut legs: Vec<(u64, u32, f32)> = finding
+        .evidence
+        .iter()
+        .filter_map(|e| local_anchor(e).map(|(o, l)| (o, l, finding.conf)))
+        .collect();
+    for ref_id in &finding.trait_refs {
+        if let Some(component) = by_id.get(ref_id.as_str()) {
+            for e in &component.evidence {
+                if let Some((o, l)) = local_anchor(e) {
+                    legs.push((o, l, component.conf));
+                }
+            }
+        }
+    }
+    if legs.is_empty() {
+        return fallback_anchor(finding, by_id)
+            .into_iter()
+            .map(|(o, l)| (o, l, finding.conf))
+            .collect();
+    }
+    // Keep the highest-confidence leg per offset…
+    legs.sort_by(|a, b| a.0.cmp(&b.0).then(b.2.total_cmp(&a.2)));
+    legs.dedup_by_key(|l| l.0);
+    // …then order by confidence (desc), earliest offset breaking ties.
+    legs.sort_by(|a, b| b.2.total_cmp(&a.2).then(a.0.cmp(&b.0)));
+    legs.truncate(MAX_LEGS);
+    legs
 }
 
 /// Every shown finding must anchor somewhere so it renders attached to its file
@@ -148,28 +203,64 @@ fn finding_anchors(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<
 /// - The finding's offsets index an embedded archive member (`archive:`
 ///   location, skipped by [`local_anchor`]). That member renders them in its own
 ///   context, so this finding stays description-only here — no fallback.
-/// - The finding carries no byte offset anywhere: a trait matched without
-///   recording where. Pin it to byte 0 so it still renders in place, and log an
-///   error — every finding is expected to carry a location, so a missing one is a
-///   trait bug to fix at the source.
+/// - The finding carries no byte offset anywhere. Pin it to byte 0 so it still
+///   renders in place. Two unrelated cases land here: a *content* matcher
+///   (string/symbol/raw/text/ast/…) that matched specific bytes but failed to
+///   record where — a real bug worth an error — or a *file-global* fact (signing
+///   trust, UUID, arch, metrics, a `value:` field match, an `exists: false`
+///   absence) for which byte 0 is an honest anchor, not a bug. Classify by the
+///   evidence method and log accordingly; unknown sources default to quiet.
 fn fallback_anchor(finding: &Finding, by_id: &FxHashMap<&str, &Finding>) -> Vec<(u64, u32)> {
-    let has_remote_offset = finding.evidence.iter().any(|e| e.byte_offset().is_some())
+    // An `archive:` location carries a real offset in an embedded member's byte
+    // space — `local_anchor` skips it (it doesn't index *this* file's bytes), and
+    // the member renders it in its own context. `byte_offset()` can't parse that
+    // form, so check the prefix explicitly; otherwise these member findings look
+    // offset-less and get mis-reported as bugs.
+    let has_offset = |e: &crate::types::Evidence| {
+        e.byte_offset().is_some()
+            || e.location
+                .as_deref()
+                .is_some_and(|l| l.starts_with("archive:"))
+    };
+    let has_remote_offset = finding.evidence.iter().any(&has_offset)
         || finding.trait_refs.iter().any(|id| {
             by_id
                 .get(id.as_str())
-                .is_some_and(|c| c.evidence.iter().any(|e| e.byte_offset().is_some()))
+                .is_some_and(|c| c.evidence.iter().any(&has_offset))
         });
     if has_remote_offset {
         // Offsets belong to an embedded member; that member owns their context.
         return Vec::new();
     }
-    tracing::error!(
-        finding_id = %finding.id,
-        kind = ?finding.kind,
-        crit = ?finding.crit,
-        "finding has no file offset — pinning to byte 0; the trait should record a \
-         match location for every hit"
-    );
+    let is_content_match = finding.evidence.iter().any(|e| {
+        matches!(
+            e.method.as_str(),
+            "string"
+                | "symbol"
+                | "symbols"
+                | "raw"
+                | "text"
+                | "literal"
+                | "string_literal"
+                | "ast"
+                | "ast_query"
+                | "encoded_string"
+                | "hex"
+                | "xor"
+        )
+    });
+    if is_content_match {
+        tracing::error!(
+            finding_id = %finding.id,
+            kind = ?finding.kind,
+            "content match has no file offset — the matcher should record where it matched"
+        );
+    } else {
+        tracing::debug!(
+            finding_id = %finding.id,
+            "file-global finding anchored at byte 0"
+        );
+    }
     vec![(0, 1)]
 }
 
@@ -326,29 +417,76 @@ fn capture_byte_slices(
 ) -> Vec<ContextLine> {
     let total = data.len() as u64;
 
+    // `[off, off+len)` widened to the render's context margin, plus the match
+    // anchor `at`.
+    let bounds = |off: u64, len: u32| match render {
+        Render::Hex => {
+            // A row of lead-in and two rows of trailing context; overlapping
+            // windows merge into one segment, which `render_hex_segment` emits as
+            // a single raw-byte unit.
+            let lo = off.saturating_sub(HEX_CONTEXT_BEFORE);
+            let hi = (off + u64::from(len) + HEX_CONTEXT_AFTER).min(total);
+            (lo, hi, off)
+        }
+        Render::Text => (
+            off.saturating_sub(MINIFIED_HALF),
+            (off + MINIFIED_HALF).min(total),
+            off,
+        ),
+    };
+
     let mut windows: Vec<Window> = Vec::new();
-    for finding in shown {
+    // Match span `[start, end)` of every placed note, with its strength. A later
+    // composite is placed only where no *stronger* match already sits.
+    let mut placed: Vec<(u64, u64, f32)> = Vec::new();
+    let span = |off: u64, len: u32| (off, off + u64::from(len.max(1)));
+
+    // Atomic findings anchor at their own offsets (the fixed scaffolding).
+    for finding in shown.iter().filter(|f| f.trait_refs.is_empty()) {
+        let score = finding_score(finding);
         for (off, len) in finding_anchors(finding, by_id) {
-            let (lo, hi, at) = match render {
-                Render::Hex => {
-                    // Capture 32 bytes either side of the match; overlapping
-                    // windows merge into one segment, which `render_hex_segment`
-                    // emits as a single raw-byte unit. `at` is the match offset.
-                    let lo = off.saturating_sub(HEX_CONTEXT);
-                    let hi = (off + u64::from(len) + HEX_CONTEXT).min(total);
-                    (lo, hi, off)
-                }
-                Render::Text => {
-                    let lo = off.saturating_sub(MINIFIED_HALF);
-                    (lo, (off + MINIFIED_HALF).min(total), off)
-                }
-            };
+            let (lo, hi, at) = bounds(off, len);
             windows.push(Window {
                 lo,
                 hi,
                 at,
                 note: note_for(finding, off, len),
             });
+            let (s, e) = span(off, len);
+            placed.push((s, e, score));
+        }
+    }
+
+    // Composites are conclusions that span several legs (their components). Place
+    // each at its strongest-evidence leg — the highest-confidence component — that
+    // no equal-or-stronger match already occupies, so it anchors at its best real
+    // location instead of being silently dropped when a leg collides; the other
+    // legs keep showing their component traits. A composite whose every leg is
+    // dominated is omitted (no honest spot for it). Strongest-first so the
+    // higher-severity conclusion claims the contested leg.
+    let mut composites: Vec<&&Finding> =
+        shown.iter().filter(|f| !f.trait_refs.is_empty()).collect();
+    composites.sort_by(|a, b| finding_score(b).total_cmp(&finding_score(a)));
+    for finding in composites {
+        let score = finding_score(finding);
+        let leg = composite_legs(finding, by_id)
+            .into_iter()
+            .find(|&(off, len, _)| {
+                let (s, e) = span(off, len);
+                !placed
+                    .iter()
+                    .any(|&(ps, pe, pscore)| pscore >= score && ps < e && s < pe)
+            });
+        if let Some((off, len, _)) = leg {
+            let (lo, hi, at) = bounds(off, len);
+            windows.push(Window {
+                lo,
+                hi,
+                at,
+                note: note_for(finding, off, len),
+            });
+            let (s, e) = span(off, len);
+            placed.push((s, e, score));
         }
     }
 
@@ -656,6 +794,88 @@ mod tests {
                 .iter()
                 .all(|c| c.notes.iter().all(|n| n.id != "member/evil")),
             "archive-member finding must not be pinned into the carrier: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn archive_location_with_embedded_offset_is_not_pinned() {
+        // The real shape: the member offset is encoded *in* the `archive:` location
+        // string (`archive:<member>:0x<off>`), not the `offsets` vec — so
+        // `byte_offset()` can't see it. The carrier must still recognise it as a
+        // remote offset and leave the finding description-only, not pin it to byte 0.
+        let data = b"import os\nx = 1\n";
+        let mut f = finding("member/evil", Criticality::Hostile, &[]);
+        f.evidence = vec![
+            Evidence::new("text", "raw_content", "match")
+                .with_location("archive:package/src/hooks/deps:0x3fa97"),
+        ];
+        let mut r = report(vec![f]);
+        capture(&mut r, data, FileType::Python);
+        assert!(
+            r.context
+                .iter()
+                .all(|c| c.notes.iter().all(|n| n.id != "member/evil")),
+            "archive-member finding with an embedded-offset location must not be \
+             pinned into the carrier: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn composite_walks_to_first_undominated_leg() {
+        // A 256-byte binary. A stronger atomic holds offset 10; the composite's
+        // most-confident leg is also 10 (via comp/a), with a weaker leg at 100.
+        let data = vec![0u8; 256];
+        let strong = finding("atomic/strong", Criticality::Hostile, &[10]);
+        let mut comp_a = finding("comp/a", Criticality::Component, &[10]);
+        comp_a.conf = 0.9;
+        let mut comp_b = finding("comp/b", Criticality::Component, &[100]);
+        comp_b.conf = 0.8;
+        let mut composite = finding("obj/composite", Criticality::Suspicious, &[]);
+        composite.trait_refs = vec!["comp/a".to_string(), "comp/b".to_string()];
+
+        let mut r = report(vec![strong, comp_a, comp_b, composite]);
+        capture(&mut r, &data, FileType::Elf);
+
+        let note_at = |off: u64| {
+            r.context
+                .iter()
+                .flat_map(|c| &c.notes)
+                .any(|n| n.id == "obj/composite" && n.off == off)
+        };
+        assert!(
+            !note_at(10),
+            "composite must skip the leg held by a stronger match: {:?}",
+            r.context
+        );
+        assert!(
+            note_at(100),
+            "composite anchors at its next undominated leg: {:?}",
+            r.context
+        );
+    }
+
+    #[test]
+    fn composite_omitted_when_every_leg_dominated() {
+        // The composite's only leg (offset 10, via comp/only) is held by a
+        // stronger atomic, so it has no honest spot and is omitted entirely.
+        let data = vec![0u8; 64];
+        let strong = finding("atomic/strong", Criticality::Hostile, &[10]);
+        let mut comp = finding("comp/only", Criticality::Component, &[10]);
+        comp.conf = 0.9;
+        let mut composite = finding("obj/dominated", Criticality::Suspicious, &[]);
+        composite.trait_refs = vec!["comp/only".to_string()];
+
+        let mut r = report(vec![strong, comp, composite]);
+        capture(&mut r, &data, FileType::Elf);
+
+        assert!(
+            r.context
+                .iter()
+                .flat_map(|c| &c.notes)
+                .all(|n| n.id != "obj/dominated"),
+            "a composite dominated on every leg is omitted: {:?}",
             r.context
         );
     }

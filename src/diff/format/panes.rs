@@ -123,7 +123,10 @@ fn write_identity(out: &mut String, id: &crate::types::IdentityDiff) {
     // only those that moved, oldest cause (signer/trust) first.
     let old = id.old.as_ref().map(identity_fields).unwrap_or_default();
     let new = id.new.as_ref().map(identity_fields).unwrap_or_default();
-    let mut keys: Vec<String> = IDENTITY_FIELD_ORDER.iter().map(|s| (*s).to_string()).collect();
+    let mut keys: Vec<String> = IDENTITY_FIELD_ORDER
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     for k in old.keys().chain(new.keys()) {
         if !keys.contains(k) {
             keys.push(k.clone());
@@ -186,7 +189,10 @@ fn identity_fields(id: &filefacts::Identity) -> std::collections::BTreeMap<Strin
     put("team_id", id.team_id.as_ref().map(|c| c.value.clone()));
     put("name", id.name.as_ref().map(|c| c.value.clone()));
     put("title", id.title.as_ref().map(|c| c.value.clone()));
-    put("identifier", id.identifier.as_ref().map(|c| c.value.clone()));
+    put(
+        "identifier",
+        id.identifier.as_ref().map(|c| c.value.clone()),
+    );
     put("project", id.project.as_ref().map(|c| c.value.clone()));
     put("version", id.version.as_ref().map(|c| c.value.clone()));
     put(
@@ -194,7 +200,10 @@ fn identity_fields(id: &filefacts::Identity) -> std::collections::BTreeMap<Strin
         id.organization.as_ref().map(|c| c.value.clone()),
     );
     put("producer", id.producer.as_ref().map(|c| c.value.clone()));
-    put("build_path", id.build_path.as_ref().map(|c| c.value.clone()));
+    put(
+        "build_path",
+        id.build_path.as_ref().map(|c| c.value.clone()),
+    );
     if !id.emails.is_empty() {
         put("contact", Some(id.emails.join(", ")));
     }

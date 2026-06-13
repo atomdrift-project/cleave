@@ -84,7 +84,8 @@ mod tests {
 
     /// Helper to create a test finding
     fn create_finding(id: &str) -> Finding {
-        Finding { src: None,
+        Finding {
+            src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: id.to_string(),
@@ -444,7 +445,8 @@ mod tests {
         )];
         let mapper = create_test_mapper_with_rules(rules);
 
-        let original_finding = Finding { src: None,
+        let original_finding = Finding {
+            src: None,
             kind: FindingKind::Indicator,
             trait_refs: vec!["ref1".to_string(), "ref2".to_string()],
             id: "valuable".to_string(),

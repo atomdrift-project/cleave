@@ -150,8 +150,13 @@ pub(crate) fn init_logging(
                 EnvFilter::new(scoped_filter(file_log_level())),
             )
         } else {
+            // Global `warn` floor rather than a cleave-scoped one: a
+            // target-scoped `cleave=warn` directive was swallowing
+            // `cleave::context` errors (and any other crate's warnings) on
+            // stderr, so genuine problems went unseen at the default verbosity.
+            // The file layer stays scoped to keep the persistent log focused.
             (
-                EnvFilter::new(scoped_filter("warn")),
+                EnvFilter::new("warn"),
                 EnvFilter::new(scoped_filter(file_log_level())),
             )
         };
@@ -223,7 +228,9 @@ pub(crate) fn init_logging(
         } else if is_server {
             EnvFilter::new(scoped_filter("info"))
         } else {
-            EnvFilter::new(scoped_filter("warn"))
+            // Global `warn` floor — see the stderr-filter note above; surfaces
+            // warnings/errors from every crate when there's no log file.
+            EnvFilter::new("warn")
         };
         tracing_subscriber::fmt()
             .with_env_filter(env_filter)

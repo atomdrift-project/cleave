@@ -119,10 +119,31 @@ pub struct CompactTrait {
     #[serde(rename = "src")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub src: Option<u32>,
+    /// For a cross-file composite, the archive members it fired on — each a
+    /// member `files[]` id with the component's location where a context note
+    /// pins it. Lets a consumer tie the composite to the files (and offsets) it
+    /// was based on, since the linking component traits are filtered from output.
+    #[serde(rename = "srcs")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<CompactSource>,
     // Per-trait evidence (`ev`/`loc`) was removed in favour of the per-file
     // `ctx` block: the matched content is shown once, in context, and each
     // context note references the finding by `id`. Highlight a match via
     // `note.off - line_addr .. + note.len`.
+}
+
+/// One member a cross-file composite drew from, in compact form.
+#[derive(Debug, Serialize)]
+pub struct CompactSource {
+    /// Contributing member's `files[]` id.
+    #[serde(rename = "f")]
+    pub file: u32,
+    /// 1-based source line of the component match, when known.
+    #[serde(rename = "ln", skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// Byte offset of the component match, when known.
+    #[serde(rename = "o", skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
 }
 
 /// A string in compact tuple form
@@ -596,6 +617,19 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
             existing.src = existing.src.and(finding.src);
         } else {
             trait_order.push(&finding.id);
+            let sources = file
+                .composite_sources
+                .get(&finding.id)
+                .map(|srcs| {
+                    srcs.iter()
+                        .map(|s| CompactSource {
+                            file: s.file,
+                            line: s.line,
+                            offset: s.offset,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
             trait_map.insert(
                 &finding.id,
                 CompactTrait {
@@ -606,6 +640,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
                     mbc: finding.mbc.clone(),
                     attack: finding.attack.clone(),
                     src: finding.src,
+                    sources,
                 },
             );
         }
@@ -785,7 +820,8 @@ mod formula_tests {
     use serde_json::json;
 
     fn finding(id: &str, crit: Criticality, conf: f32) -> Finding {
-        Finding { src: None,
+        Finding {
+            src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: "test".to_string(),

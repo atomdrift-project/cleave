@@ -953,6 +953,98 @@ impl AnalysisReport {
         changed
     }
 
+    /// Resolve, for every cross-file composite finding, the archive members it
+    /// drew components from — recording each as a [`CompositeSource`] (member
+    /// file id plus the component's location when a context note pins it). The
+    /// composite's `trait_refs` name its component traits; a member contributed
+    /// if it carries a finding with one of those ids. Stored on the container
+    /// file's `composite_sources`, keyed by composite finding id.
+    ///
+    /// Runs during `finalize`, before component findings are filtered from the
+    /// output: the low-tier traits that link a composite to a member (e.g. an
+    /// install-hook presence trait on a package.json) are gone by render/compact
+    /// time, so this is the one point where the tie is recoverable.
+    fn attach_composite_sources(files: &mut [FileAnalysis]) {
+        use super::file_analysis::{ARCHIVE_DELIMITER, CompositeSource};
+        use rustc_hash::FxHashMap;
+        use std::collections::BTreeMap;
+
+        // A composite spanning more members than this is treated as a ubiquitous
+        // pattern, not targeted provenance — its sources are dropped (see below).
+        const MAX_COMPOSITE_SOURCES: usize = 8;
+
+        // Component finding id → file indices carrying it (skip synthetic
+        // embedded-binary extractions; their carrier member stands in for them).
+        let mut id_to_files: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+        for (i, f) in files.iter().enumerate() {
+            if f.path.contains("embedded:") {
+                continue;
+            }
+            for finding in &f.findings {
+                id_to_files.entry(finding.id.as_str()).or_default().push(i);
+            }
+        }
+
+        // Borrow `files` immutably to resolve, collect owned results, then write
+        // back — the resolution reads every file while we build per-container maps.
+        let mut resolved: Vec<(usize, BTreeMap<String, Vec<CompositeSource>>)> = Vec::new();
+        for (ci, container) in files.iter().enumerate() {
+            let prefix = format!("{}{}", container.path, ARCHIVE_DELIMITER);
+            let mut per_finding: BTreeMap<String, Vec<CompositeSource>> = BTreeMap::new();
+            for finding in &container.findings {
+                if finding.trait_refs.is_empty() {
+                    continue;
+                }
+                // member file id → source (dedup per member, first location wins).
+                let mut by_member: BTreeMap<u32, CompositeSource> = BTreeMap::new();
+                let mut ubiquitous = false;
+                'refs: for trait_ref in &finding.trait_refs {
+                    let Some(idxs) = id_to_files.get(trait_ref.as_str()) else {
+                        continue;
+                    };
+                    for &mi in idxs {
+                        let member = &files[mi];
+                        if mi == ci || !member.path.starts_with(&prefix) {
+                            continue; // not a member below this container
+                        }
+                        let entry = by_member
+                            .entry(member.id)
+                            .or_insert_with(|| CompositeSource {
+                                file: member.id,
+                                ..Default::default()
+                            });
+                        if entry.offset.is_none()
+                            && entry.line.is_none()
+                            && let Some((line, offset)) = note_location(member, trait_ref)
+                        {
+                            entry.line = line;
+                            entry.offset = offset;
+                        }
+                        // A composite that spans most of the archive isn't *based
+                        // on* particular files — it's a ubiquitous pattern (a
+                        // sourcemap reference, a language sigil). Recording every
+                        // member as a "source" is noise and bloats the output, so
+                        // drop the provenance once it stops being a targeted set.
+                        if by_member.len() > MAX_COMPOSITE_SOURCES {
+                            ubiquitous = true;
+                            break 'refs;
+                        }
+                    }
+                }
+                if !ubiquitous && !by_member.is_empty() {
+                    per_finding.insert(finding.id.clone(), by_member.into_values().collect());
+                }
+            }
+            if !per_finding.is_empty() {
+                resolved.push((ci, per_finding));
+            }
+        }
+
+        for (ci, map) in resolved {
+            files[ci].composite_sources = map;
+        }
+    }
+
     /// Shrink all Vec fields to fit their contents, freeing excess capacity.
     /// Call this after analysis is complete to reduce memory footprint.
     pub fn shrink_to_fit(&mut self) {
@@ -1069,6 +1161,13 @@ impl AnalysisReport {
                 }
             }
         }
+
+        // Tie each cross-file composite to the members it fired on, while the
+        // per-member component findings/notes are still present (the compact
+        // output and the terminal component-filter drop the low-tier ones that
+        // link a composite to a member, e.g. an install-hook trait on a
+        // package.json). Must run before those drops.
+        Self::attach_composite_sources(&mut self.files);
 
         for file in &mut self.files {
             file.strip_source_fields();
@@ -1321,6 +1420,22 @@ fn merge_finding(existing: &mut Finding, new: Finding) {
     }
 }
 
+/// Location of the first context note for finding `id` in `file`, as
+/// `(line, offset)`. `line` is the 1-based source line for text units (those
+/// carrying an `addr`); `offset` is the match's byte offset. Returns `None` when
+/// no note pins the finding — e.g. a metric or manifest-field-presence trait.
+fn note_location(file: &FileAnalysis, id: &str) -> Option<(Option<u64>, Option<u64>)> {
+    for line in &file.context {
+        for note in &line.notes {
+            if note.id == id {
+                let src_line = line.addr.map(|_| line.loc);
+                return Some((src_line, Some(note.off)));
+            }
+        }
+    }
+    None
+}
+
 /// The leaf member name of an archive-member file path: the segment after the
 /// last archive delimiter (`a.zip!!dir/b.so` → `dir/b.so`).
 fn leaf_member(path: &str) -> &str {
@@ -1482,7 +1597,8 @@ mod tests {
     }
 
     fn test_finding(id: &str, crit: Criticality) -> Finding {
-        Finding { src: None,
+        Finding {
+            src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: format!("Test finding {}", id),
@@ -1495,6 +1611,94 @@ mod tests {
             match_count: 0,
             source_file: None,
         }
+    }
+
+    #[test]
+    fn attach_composite_sources_ties_composite_to_members_with_locations() {
+        use super::super::file_analysis::ARCHIVE_DELIMITER;
+        use super::super::traits_findings::{ContextLine, Note};
+
+        // Container with a cross-file composite referencing two components.
+        let mut container =
+            FileAnalysis::new(0, "/x.tgz".into(), "tar.gz".into(), "s0".into(), 100);
+        let mut composite = test_finding(
+            "objectives/supply-chain/dropper::implant",
+            Criticality::Hostile,
+        );
+        composite.trait_refs = vec!["comp/manifest".into(), "comp/payload".into()];
+        container.findings = vec![composite];
+
+        // Member 1: a manifest carrying comp/manifest, anchored to a source line.
+        let mut m1 = FileAnalysis::new(
+            1,
+            format!("/x.tgz{ARCHIVE_DELIMITER}pkg/manifest.json"),
+            "json".into(),
+            "s1".into(),
+            10,
+        );
+        m1.depth = 1;
+        m1.findings = vec![test_finding("comp/manifest", Criticality::Component)];
+        m1.context = vec![ContextLine {
+            loc: 3,         // source line 3
+            addr: Some(40), // byte offset of the line → source unit
+            data: b"  \"preinstall\": \"node x\"".to_vec(),
+            hex: false,
+            notes: vec![Note {
+                crit: Criticality::Component,
+                id: "comp/manifest".into(),
+                desc: String::new(),
+                off: 40,
+                len: 5,
+                conf: 0.9,
+            }],
+        }];
+
+        // Member 2: a binary carrying comp/payload, anchored to a byte offset.
+        let mut m2 = FileAnalysis::new(
+            2,
+            format!("/x.tgz{ARCHIVE_DELIMITER}pkg/bin"),
+            "elf".into(),
+            "s2".into(),
+            20,
+        );
+        m2.depth = 1;
+        m2.findings = vec![test_finding("comp/payload", Criticality::Suspicious)];
+        m2.context = vec![ContextLine {
+            loc: 0x1234,
+            addr: None, // byte-addressed (binary) → no source line
+            data: vec![0u8; 4],
+            hex: true,
+            notes: vec![Note {
+                crit: Criticality::Suspicious,
+                id: "comp/payload".into(),
+                desc: String::new(),
+                off: 0x1234,
+                len: 4,
+                conf: 0.9,
+            }],
+        }];
+
+        let mut files = vec![container, m1, m2];
+        AnalysisReport::attach_composite_sources(&mut files);
+
+        let sources = files[0]
+            .composite_sources
+            .get("objectives/supply-chain/dropper::implant")
+            .expect("composite resolved to sources");
+        assert_eq!(sources.len(), 2, "both contributing members tracked");
+        let s1 = sources
+            .iter()
+            .find(|s| s.file == 1)
+            .expect("manifest member");
+        assert_eq!(s1.line, Some(3), "source component carries its line");
+        assert_eq!(s1.offset, Some(40));
+        let s2 = sources.iter().find(|s| s.file == 2).expect("binary member");
+        assert_eq!(s2.line, None, "binary component has no source line");
+        assert_eq!(
+            s2.offset,
+            Some(0x1234),
+            "binary component carries its offset"
+        );
     }
 
     // ==================== Criticality Tests ====================

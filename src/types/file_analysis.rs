@@ -19,6 +19,23 @@ pub(crate) const ARCHIVE_DELIMITER: &str = "!!";
 /// Path delimiter for decoded content (e.g., "file.py##base64+gzip@1234")
 pub(crate) const ENCODING_DELIMITER: &str = "##";
 
+/// One member that a cross-file composite drew a component from. Ties the
+/// composite to the file it was based on, with the component's location when a
+/// context note pins it (`line` for source files, `offset` for binaries). A
+/// component with no anchorable location — e.g. a metric or a manifest-field
+/// presence trait — contributes the file alone.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+pub struct CompositeSource {
+    /// `FileAnalysis::id` of the contributing archive member.
+    pub file: u32,
+    /// 1-based source line of the component match, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<u64>,
+    /// Byte offset of the component match, when known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<u64>,
+}
+
 /// Per-file analysis - the core unit in v2 schema
 ///
 /// Each file (root, archive member, or decoded payload) gets its own entry.
@@ -154,6 +171,16 @@ pub struct FileAnalysis {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
 
+    /// Provenance for this file's cross-file (container) composites: each
+    /// composite finding id → the archive members whose components it fired on,
+    /// with a location where one is known. Computed in `finalize` while the
+    /// per-member component findings/notes are still present (they're filtered
+    /// from the output later). Internal — surfaced into the compact output as the
+    /// composite's `srcs` and rendered as the `↳` member trail, so the web UI and
+    /// CLI tie a composite to the files (and offsets) it was based on.
+    #[serde(skip)]
+    pub composite_sources: std::collections::BTreeMap<String, Vec<CompositeSource>>,
+
     /// Flat structural-kv map. Path → leaf value, using the same
     /// `a.b[0].c` notation as `cleave value`. Auto-populated at
     /// `finalize()` time from the analyzer's `values_tree`. Type-default
@@ -211,6 +238,7 @@ impl FileAnalysis {
             env_vars: Vec::new(),
             extracted_path: None,
             formula: None,
+            composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
             values_tree: None,
         }

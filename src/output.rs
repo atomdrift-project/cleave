@@ -513,7 +513,10 @@ impl TinyOpts {
     #[must_use]
     pub fn terminal() -> Self {
         Self {
-            top_n: 50,
+            // Cap a file at 40 behaviors in the terminal view, but never at the
+            // cost of a hostile/suspicious finding: `always_crit` shows every one
+            // of those regardless, and `top_n` bounds only the notable remainder.
+            top_n: 40,
             always_crit: Some(Criticality::Suspicious),
             min_crit: Criticality::Notable,
             context_lines: Some(2),
@@ -589,6 +592,20 @@ pub fn format_context_badged(
     let colorize = opts.color && colored::control::SHOULD_COLORIZE.should_colorize();
     let term_width = terminal_width();
 
+    // Archive containers re-evaluate their members' content at container scope,
+    // so they accumulate copies of member findings alongside the genuine
+    // cross-file composites. To show only what's specific to a container, we
+    // need to know (a) which files are archive containers and (b) the deepest
+    // nesting level at which each finding id was located natively — a finding
+    // native deeper down belongs to that member, not the container above it.
+    let container_paths = archive_container_paths(&files);
+    let id_max_native_depth = native_finding_depths(&files);
+
+    // Cross-file composite provenance was resolved at finalize into each
+    // container's `composite_sources` (finding id → member files + locations).
+    // Map member file id → path so those sources render as readable members.
+    let id_to_path: HashMap<u32, &str> = files.iter().map(|f| (f.id, f.path.as_str())).collect();
+
     let mut out = String::with_capacity(4096);
     let mut emitted = false;
     // The machine/LLM view shows each distinct finding once across the whole
@@ -598,16 +615,103 @@ pub fn format_context_badged(
     // members then collapse. The terminal view keeps per-member detail.
     let dedup_across_files = matches!(opts.header, HeaderStyle::Minimal);
     let mut seen: HashSet<&str> = HashSet::new();
-    for file in files {
+    for &file in &files {
         let mut selected = select_ids(file, opts);
+
+        // For an archive container, drop findings that were located more
+        // specifically in a member below it (same id, native, deeper). What
+        // remains is container-specific: cross-file composites (never native to
+        // any single member) and any true atomic match on the container's own
+        // bytes. A no-op for ordinary files, which aren't in `container_paths`.
+        let is_container = container_paths.contains(file.path.as_str());
+        if is_container {
+            selected.retain(|id| {
+                id_max_native_depth
+                    .get(id)
+                    .is_none_or(|&deepest| deepest <= file.depth)
+            });
+        }
+
+        // Collapse findings already shown by an earlier file in the LLM view.
+        // Done after container filtering so the surviving, container-specific
+        // ids are what register as seen.
         if dedup_across_files {
             selected.retain(|&id| seen.insert(id));
         }
-        // Render a file that has either findings to show or an identity headline
-        // worth surfacing (a benign signed binary still answers "who is this?").
+
+        // Cheap pre-filter: nothing selected and no identity → nothing to show.
         if selected.is_empty() && file.identity.is_none() {
             continue;
         }
+
+        // A container has no meaningful byte view of its own — its bytes are
+        // packed/compressed member data — so its hex/source window is reserved
+        // for genuine atomic matches on the container's own bytes, never a
+        // cross-file composite that merely landed a stray offset. Composites
+        // still render as location-less notes. Ordinary files window everything.
+        let context_selected: Vec<&str> = if is_container {
+            selected
+                .iter()
+                .copied()
+                .filter(|id| {
+                    file.findings
+                        .iter()
+                        .any(|f| f.id == **id && f.src.is_none() && f.trait_refs.is_empty())
+                })
+                .collect()
+        } else {
+            selected.clone()
+        };
+
+        // The ids actually drawn as byte/source windows by `render_context`: a
+        // context note whose id the window view will render. This is the single
+        // source of truth for the windowed-vs-location-less split — a selected
+        // finding not in this set renders as a location-less note instead.
+        let context_sel: HashSet<&str> = context_selected.iter().copied().collect();
+        let windowed: HashSet<&str> = file
+            .context
+            .iter()
+            .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
+            .filter(|id| context_sel.contains(id))
+            .collect();
+
+        // Nested files (archive members, embedded payloads) indent under their
+        // container, so reserve those columns when sizing the body and rule.
+        let eff_width = term_width.saturating_sub(2 * file.depth as usize);
+
+        // Render the body first so a Rich header's rule can be sized to fit the
+        // widest line it actually produced. Location-less findings lead the
+        // context (a file-level note) rather than floating, orphaned, after it.
+        let mut body = String::new();
+        if let Some(identity) = &file.identity {
+            render_identity(&mut body, identity, colorize);
+        }
+        render_no_anchor(
+            &mut body,
+            file,
+            &selected,
+            &windowed,
+            &id_to_path,
+            opts,
+            colorize,
+        );
+        render_context(
+            &mut body,
+            file,
+            &context_selected,
+            opts,
+            eff_width,
+            colorize,
+        );
+
+        // Skip a file whose body came out empty: a lone header advertising
+        // counts with nothing beneath it is noise. A container is kept even when
+        // empty — its header anchors the members nested below it — as is a file
+        // with an identity headline worth showing.
+        if body.trim().is_empty() && file.identity.is_none() && !is_container {
+            continue;
+        }
+
         if emitted {
             out.push('\n'); // blank line between file entries
         }
@@ -619,20 +723,14 @@ pub fn format_context_badged(
             badge
         };
         emitted = true;
-        // Render the body first so a Rich header's rule can be sized to fit the
-        // widest line it actually produced. Location-less findings lead the
-        // context (a file-level note) rather than floating, orphaned, after it.
-        let mut body = String::new();
-        if let Some(identity) = &file.identity {
-            render_identity(&mut body, identity, colorize);
-        }
-        render_no_anchor(&mut body, file, &selected, opts, colorize);
-        render_context(&mut body, file, &selected, opts, term_width, colorize);
+
+        let mut block = String::new();
         match opts.header {
-            HeaderStyle::Rich => rich_header(&mut out, file, term_width, adorn, &body),
-            HeaderStyle::Minimal => minimal_header(&mut out, file, opts.basename_root),
+            HeaderStyle::Rich => rich_header(&mut block, file, eff_width, adorn, &body),
+            HeaderStyle::Minimal => minimal_header(&mut block, file, opts.basename_root),
         }
-        out.push_str(&body);
+        block.push_str(&body);
+        indent_block(&mut out, &block, file.depth);
     }
     // Trailing blank line so consecutive file entries are separated — both
     // archive members (looped above) and separate per-file outputs streamed by
@@ -647,6 +745,95 @@ pub fn format_context_badged(
 #[must_use]
 pub fn format_tiny(report: &AnalysisReport) -> String {
     format_context(report, &TinyOpts::tiny())
+}
+
+/// Paths of files that are archive containers — i.e. some other file is an
+/// archive member of theirs (`<container>!!<member>`). Synthetic embedded-binary
+/// extractions (`…!!embedded:…`) are sub-views of a member, not members, so they
+/// don't make their carrier a container.
+fn archive_container_paths<'a>(files: &[&'a FileAnalysis]) -> HashSet<&'a str> {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    let mut paths = HashSet::new();
+    for f in files {
+        if let Some(idx) = f.path.rfind(ARCHIVE_DELIMITER) {
+            let leaf = &f.path[idx + ARCHIVE_DELIMITER.len()..];
+            if leaf.starts_with("embedded:") {
+                continue;
+            }
+            paths.insert(&f.path[..idx]);
+        }
+    }
+    paths
+}
+
+/// The deepest nesting level at which each finding id appears as a *native*
+/// finding (one located in that file, `src` unset — not inherited from a child).
+/// A container drops any finding also native deeper down, since that member is
+/// where it was actually located.
+fn native_finding_depths<'a>(files: &[&'a FileAnalysis]) -> HashMap<&'a str, u32> {
+    let mut depths: HashMap<&str, u32> = HashMap::new();
+    for f in files {
+        for finding in f.findings.iter().filter(|fd| fd.src.is_none()) {
+            depths
+                .entry(finding.id.as_str())
+                .and_modify(|d| *d = (*d).max(f.depth))
+                .or_insert(f.depth);
+        }
+    }
+    depths
+}
+
+/// Render-ready member trail for a cross-file composite: the container-relative
+/// path of each member it drew from, suffixed with a location (`:line` for
+/// source, `@0x<off>` for binary) when one is known. Reads the provenance
+/// resolved at finalize (`file.composite_sources`), resolving member file ids to
+/// paths via `id_to_path`. Empty when the finding isn't a cross-file composite.
+fn composite_source_trail(
+    container: &FileAnalysis,
+    finding_id: &str,
+    id_to_path: &HashMap<u32, &str>,
+) -> Vec<String> {
+    use crate::types::file_analysis::ARCHIVE_DELIMITER;
+    let Some(sources) = container.composite_sources.get(finding_id) else {
+        return Vec::new();
+    };
+    let mut prefix = container.path.clone();
+    prefix.push_str(ARCHIVE_DELIMITER);
+    sources
+        .iter()
+        .map(|s| {
+            let path = id_to_path.get(&s.file).copied().unwrap_or("?");
+            let rel = path.strip_prefix(&prefix).unwrap_or(path);
+            let rel = rel.replace(ARCHIVE_DELIMITER, "/");
+            match (s.line, s.offset) {
+                (Some(line), _) => format!("{rel}:{line}"),
+                (None, Some(off)) => format!("{rel}@0x{off:x}"),
+                (None, None) => rel,
+            }
+        })
+        .collect()
+}
+
+/// Append `block` to `out`, indenting every non-empty line by `depth` levels
+/// (two spaces each) so archive members and other nested files nest visually
+/// under their container. Blank lines stay blank.
+fn indent_block(out: &mut String, block: &str, depth: u32) {
+    if depth == 0 {
+        out.push_str(block);
+        return;
+    }
+    let indent = "  ".repeat(depth as usize);
+    for seg in block.split_inclusive('\n') {
+        let (line, newline) = match seg.strip_suffix('\n') {
+            Some(line) => (line, "\n"),
+            None => (seg, ""),
+        };
+        if !line.is_empty() {
+            out.push_str(&indent);
+            out.push_str(line);
+        }
+        out.push_str(newline);
+    }
 }
 
 /// Whether a file contributes anything to the context view.
@@ -675,10 +862,8 @@ fn select_ids<'a>(file: &'a FileAnalysis, opts: &TinyOpts) -> Vec<&'a str> {
             })
             .or_insert((score, f.crit));
     }
-    let mut ranked: Vec<(&str, f32, Criticality)> = scored
-        .into_iter()
-        .map(|(id, (s, c))| (id, s, c))
-        .collect();
+    let mut ranked: Vec<(&str, f32, Criticality)> =
+        scored.into_iter().map(|(id, (s, c))| (id, s, c)).collect();
     ranked.sort_unstable_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(b.0)));
 
     // Findings at or above `always_crit` are shown regardless of `top_n`;
@@ -710,7 +895,11 @@ fn tiny_path(path: &str, basename_root: bool) -> String {
     }
     match path.split_once(ARCHIVE_DELIMITER) {
         Some((root, members)) => {
-            format!("{}/{}", basename(root), members.replace(ARCHIVE_DELIMITER, "/"))
+            format!(
+                "{}/{}",
+                basename(root),
+                members.replace(ARCHIVE_DELIMITER, "/")
+            )
         }
         None if basename_root => basename(path).to_string(),
         None => path.to_string(),
@@ -728,7 +917,11 @@ fn minimal_header(out: &mut String, file: &FileAnalysis, basename_root: bool) {
     out.push_str(&file.score.to_string());
     // The minimal header is tiny's only identity surface (no rich header),
     // so carry the same concise headline here for the LLM reader.
-    if let Some(headline) = file.identity.as_ref().and_then(|id| identity_headline(id, false)) {
+    if let Some(headline) = file
+        .identity
+        .as_ref()
+        .and_then(|id| identity_headline(id, false))
+    {
         out.push('\t');
         out.push_str(&headline);
     }
@@ -758,10 +951,18 @@ fn render_identity(out: &mut String, id: &filefacts::Identity, colorize: bool) {
     };
 
     if let Some(bp) = &id.build_path {
-        out.push_str(&format!("  {}  {}\n", label("build"), truncate_mid(&bp.value, 72)));
+        out.push_str(&format!(
+            "  {}  {}\n",
+            label("build"),
+            truncate_mid(&bp.value, 72)
+        ));
     }
     if !id.emails.is_empty() {
-        out.push_str(&format!("  {}  {}\n", label("contact"), id.emails.join(", ")));
+        out.push_str(&format!(
+            "  {}  {}\n",
+            label("contact"),
+            id.emails.join(", ")
+        ));
     }
     if !id.unique_ids.is_empty() {
         let ids: Vec<String> = id
@@ -1108,6 +1309,19 @@ fn render_source_context(
     // kept deliberately simple, no flowing a second trait onto adjacent lines.
     let mut prev: Option<u64> = None;
     for line in file.context.iter().filter(|l| in_window(l.loc)) {
+        // Leading-context lines (no match of their own) only earn a row when
+        // they carry real code — skip near-empty ones like a lone `}` or `)`
+        // that add height without context. A hit line always renders.
+        if !hits.contains(&line.loc)
+            && line
+                .data
+                .iter()
+                .filter(|b| !b.is_ascii_whitespace())
+                .count()
+                < 6
+        {
+            continue;
+        }
         // In the visual view the line-number jump already shows a skip, so no
         // separator line. The plain (LLM/tiny) view keeps a grep-style `--`.
         if !colorize && prev.is_some_and(|p| line.loc > p + 1) {
@@ -1433,6 +1647,14 @@ fn render_hex_unit(
         if !full_context && row_notes.is_empty() {
             continue;
         }
+        // A short trailing row (the leftover tail of the captured context) is a
+        // ragged stub. Drop it when it carries no match so every rendered row is
+        // full and the columns line up; a note-bearing tail is kept and padded to
+        // full width below (the wider trailing capture means notes rarely land
+        // here, but a match at end-of-file still can).
+        if row.len() < stride && row_notes.is_empty() {
+            continue;
+        }
         // The comment shows once, on the row where the match begins — not
         // repeated down every row its bytes span.
         let comment = row_notes
@@ -1450,7 +1672,7 @@ fn render_hex_unit(
             out.push(' ');
             out.push_str(&format!("{loc_str:>loc_width$}").bright_black().to_string());
             out.push_str("  ");
-            let (cells, width) = hex_cells(row, row_base, &spans, true);
+            let (cells, width) = hex_cells(row, row_base, &spans, stride, true);
             out.push_str(&cells);
             if let Some(n) = comment {
                 let pad = cells_w.saturating_sub(width) + 2;
@@ -1466,7 +1688,7 @@ fn render_hex_unit(
             out.push_str(&loc_str);
             out.push(if row_notes.is_empty() { '-' } else { ':' });
             out.push(' ');
-            let (cells, _) = hex_cells(row, row_base, &spans, false);
+            let (cells, _) = hex_cells(row, row_base, &spans, stride, false);
             out.push_str(&cells);
             if let Some(n) = comment {
                 out.push_str(&format!(
@@ -1488,6 +1710,7 @@ fn hex_cells(
     row: &[u8],
     row_base: u64,
     spans: &[(u64, u64, Criticality)],
+    stride: usize,
     colorize: bool,
 ) -> (String, usize) {
     let crit_at = |i: usize| {
@@ -1509,6 +1732,11 @@ fn hex_cells(
             (false, _) => s.push_str(&pair),
         }
     }
+    // Pad the hex column to the full stride so a short row's ascii and comment
+    // still align with full rows (each missing byte cell is `"XX "` = 3 cols).
+    for _ in row.len()..stride {
+        s.push_str("   ");
+    }
     s.push(' '); // separator between hex and ascii columns
     for (i, &b) in row.iter().enumerate() {
         let ch = if b.is_ascii_graphic() || b == b' ' {
@@ -1525,7 +1753,9 @@ fn hex_cells(
             (false, _) => s.push(ch),
         }
     }
-    (s, row.len() * 3 + 1 + row.len())
+    // Width reflects the full-stride hex column plus the row's own ascii chars;
+    // the caller pads the comment by the remaining ascii shortfall.
+    (s, stride * 3 + 1 + row.len())
 }
 
 /// The theme's truecolor for a criticality — the brand severity palette (coral /
@@ -1607,37 +1837,45 @@ fn paint_spans(text: &str, mut spans: Vec<(usize, usize, Criticality)>) -> Strin
     buf
 }
 
-/// Emit selected findings that have *no anchorable location at all* (metric /
-/// size / structural facts) as `.` lines. Findings that have an offset but lost
-/// the overlap dedup are not re-listed here — they're subsumed by their winner.
+/// Emit selected findings that have *no anchorable location* — a behavior
+/// composite or metric/structural fact with no byte to point at. The terminal
+/// (Rich) view renders each as a severity-tinted gutter glyph and description (no
+/// comment marker — there's no code to comment on), and a cross-file composite
+/// trails the members that contributed to it. The LLM (Minimal) view keeps its
+/// compact `. // SEV desc` comment form. A finding already drawn as a byte/source
+/// window (`windowed`) renders there, not again here.
 fn render_no_anchor(
     out: &mut String,
     file: &FileAnalysis,
     selected: &[&str],
+    windowed: &HashSet<&str>,
+    id_to_path: &HashMap<u32, &str>,
     opts: &TinyOpts,
     colorize: bool,
 ) {
-    let anchored: HashSet<&str> = file
-        .context
-        .iter()
-        .flat_map(|l| l.notes.iter().map(|n| n.id.as_str()))
-        .collect();
     let sel: HashSet<&str> = selected.iter().copied().collect();
 
+    let rich = matches!(opts.header, HeaderStyle::Rich);
+    // Once the terminal view has captured context, an intra-file composite that
+    // isn't windowed was deliberately omitted by the placement pass — every one
+    // of its legs was dominated by a stronger match. Don't resurrect it as a
+    // bare, location-less note. Cross-file composites (they carry a member trail)
+    // and atomic file-global facts still show, and the LLM view keeps everything.
+    let omit_dominated = rich && !file.context.is_empty();
+
     // Location-less notable traits are noise as bare comments; only surface
-    // suspicious+ structural facts (e.g. "embedded shellcode array").
+    // suspicious+ facts (e.g. "embedded shellcode array").
     let floor = opts.min_crit.max(Criticality::Suspicious);
     let mut rest: Vec<&Finding> = file
         .findings
         .iter()
         .filter(|f| {
-            f.crit >= floor
-                && sel.contains(f.id.as_str())
-                && !anchored.contains(f.id.as_str())
-                // Drop overlap-dedup losers: they *have* an offset but were
-                // collapsed into a higher trait's window. Only genuinely
-                // location-less findings remain.
-                && !f.evidence.iter().any(|e| e.byte_offset().is_some())
+            f.crit >= floor && sel.contains(f.id.as_str()) && !windowed.contains(f.id.as_str())
+        })
+        .filter(|f| {
+            !omit_dominated
+                || f.trait_refs.is_empty()
+                || file.composite_sources.contains_key(&f.id)
         })
         .collect();
     rest.sort_unstable_by(|a, b| b.crit.cmp(&a.crit).then_with(|| a.id.cmp(&b.id)));
@@ -1649,18 +1887,37 @@ fn render_no_anchor(
             continue;
         }
         let desc = terse_description(&f.desc);
-        if colorize {
-            // Single-char severity gutter, then a tinted comment marker and the
-            // description — a file-level note, with no location.
-            let (r, g, b) = crit_rgb(f.crit);
-            out.push_str(&format!(
-                "{} {} {}\n",
-                gutter_glyph(Some(f.crit), true),
-                marker.truecolor(r, g, b),
-                desc.bright_white()
-            ));
-        } else {
+        if !rich {
+            // LLM/tiny view: compact, machine-friendly comment form, unchanged.
             out.push_str(&format!(". {marker} {} {desc}\n", f.crit.letter()));
+            continue;
+        }
+        // Terminal view: severity gutter glyph + description, no comment marker.
+        let glyph = gutter_glyph(Some(f.crit), colorize);
+        if colorize {
+            out.push_str(&format!("{glyph} {}\n", desc.bright_white()));
+        } else {
+            out.push_str(&format!("{glyph} {desc}\n"));
+        }
+        // A cross-file composite names the members it drew from, aligned under
+        // the description on a dim trailing line.
+        let members = composite_source_trail(file, &f.id, id_to_path);
+        if !members.is_empty() {
+            const MAX_MEMBERS: usize = 5;
+            let trail = if members.len() > MAX_MEMBERS {
+                format!(
+                    "↳ {}, +{} more",
+                    members[..MAX_MEMBERS].join(", "),
+                    members.len() - MAX_MEMBERS
+                )
+            } else {
+                format!("↳ {}", members.join(", "))
+            };
+            if colorize {
+                out.push_str(&format!("  {}\n", trail.bright_black()));
+            } else {
+                out.push_str(&format!("  {trail}\n"));
+            }
         }
     }
 }
@@ -1755,7 +2012,9 @@ fn rich_header(
     };
     let type_display = if badged {
         // Litmus verdict view stays lean — type only, no identity/formula.
-        format!("\u{00b7} {file_type_display}").bright_black().to_string()
+        format!("\u{00b7} {file_type_display}")
+            .bright_black()
+            .to_string()
     } else if embedded.is_some() {
         // The kind already leads the embedded headline, so show only the formula.
         let formula = formula();
@@ -1770,11 +2029,19 @@ fn rich_header(
         // formula stay dim; the identity headline (what · who · trust) renders
         // brighter so "what is this / who signed it" pops at a glance.
         let mut s = file_type_display.bright_black().to_string();
-        if let Some(headline) = file.identity.as_ref().and_then(|id| identity_headline(id, true)) {
+        if let Some(headline) = file
+            .identity
+            .as_ref()
+            .and_then(|id| identity_headline(id, true))
+        {
             s.push_str(&format!(" {} {headline}", "·".bright_black()));
         }
         if !formula.is_empty() {
-            s.push_str(&format!(" {} {}", "•".bright_black(), formula.bright_black()));
+            s.push_str(&format!(
+                " {} {}",
+                "•".bright_black(),
+                formula.bright_black()
+            ));
         }
         s
     };
@@ -1797,24 +2064,28 @@ fn rich_header(
         trail,
     );
 
-    // Size the rule to the widest line it divides — the header, its subtitle, and
-    // the body beneath — so the divider is only as wide as the content needs.
-    let mut rule_w = visible_width(&header_line);
-    if let Some(sub) = badge.subtitle {
-        rule_w = rule_w.max(visible_width(sub));
-    }
-    for line in body.lines() {
-        rule_w = rule_w.max(visible_width(line));
-    }
-    let rule_w = rule_w.clamp(1, term_width);
-
     out.push_str(&header_line);
     out.push('\n');
     if let Some(sub) = badge.subtitle {
         out.push_str(sub);
         out.push('\n');
     }
-    out.push_str(&format!("{}\n", file_rule(rule_w)));
+    // Nested files (archive members, embedded payloads) skip the divider rule:
+    // the indentation already sets them apart, and a rule per member is just
+    // clutter. The top-level file keeps its rule as a clear section break.
+    if file.depth == 0 {
+        // Size the rule to the widest line it divides — the header, its subtitle,
+        // and the body beneath — so the divider is only as wide as it needs to be.
+        let mut rule_w = visible_width(&header_line);
+        if let Some(sub) = badge.subtitle {
+            rule_w = rule_w.max(visible_width(sub));
+        }
+        for line in body.lines() {
+            rule_w = rule_w.max(visible_width(line));
+        }
+        let rule_w = rule_w.clamp(1, term_width);
+        out.push_str(&format!("{}\n", file_rule(rule_w)));
+    }
 }
 
 /// A compact, colored severity tally for the header: `  3H 2S 4N`, counting each
@@ -2386,15 +2657,102 @@ mod tests {
     }
 
     fn file_with_findings(findings: Vec<Finding>) -> FileAnalysis {
-        let mut fa = FileAnalysis::new(
-            0,
-            "/t".to_string(),
-            "elf".to_string(),
-            "sha".to_string(),
-            1,
-        );
+        let mut fa =
+            FileAnalysis::new(0, "/t".to_string(), "elf".to_string(), "sha".to_string(), 1);
         fa.findings = findings;
         fa
+    }
+
+    #[test]
+    fn container_shows_cross_file_composites_not_member_duplicates() {
+        // An archive container re-evaluates member content at container scope, so
+        // it accumulates both genuine cross-file composites (native only here) and
+        // copies of member findings (also native on the member). The container
+        // must surface the former and drop the latter, which renders on the member.
+        let composite = Finding {
+            trait_refs: vec!["a".to_string(), "b".to_string()],
+            ..finding_with(
+                "objectives/supply-chain/install-hook::native-implant",
+                Criticality::Hostile,
+            )
+        };
+        // A member atomic that also got re-evaluated onto the container.
+        let dup_on_container = finding_with(
+            "metadata/package/fields/scripts::has-preinstall",
+            Criticality::Suspicious,
+        );
+        // The same finding, native to the member where it was actually located.
+        let dup_on_member = finding_with(
+            "metadata/package/fields/scripts::has-preinstall",
+            Criticality::Suspicious,
+        );
+
+        let mut container = FileAnalysis::new(
+            0,
+            "/x/pkg.tgz".to_string(),
+            "tar.gz".to_string(),
+            "sha".to_string(),
+            10,
+        );
+        container.depth = 0;
+        container.findings = vec![composite, dup_on_container];
+
+        let mut member = FileAnalysis::new(
+            1,
+            "/x/pkg.tgz!!package/package.json".to_string(),
+            "package.json".to_string(),
+            "sha2".to_string(),
+            5,
+        );
+        member.depth = 1;
+        member.findings = vec![dup_on_member];
+
+        let mut report = AnalysisReport::new(TargetInfo {
+            path: "/x/pkg.tgz".to_string(),
+            ..Default::default()
+        });
+        report.files = vec![container, member];
+
+        let out = strip_ansi(&format_terminal_ctx(&report));
+
+        // The cross-file composite is the container's verdict and must show.
+        assert!(
+            out.contains("native-implant") || out.contains("install-hook"),
+            "container must show the cross-file composite, got:\n{out}"
+        );
+        // The duplicated atomic renders on the member (indented), not the container.
+        let member_indented = out
+            .lines()
+            .any(|l| l.starts_with("  ") && l.contains("has-preinstall"));
+        assert!(
+            member_indented,
+            "member finding must render indented under the archive, got:\n{out}"
+        );
+        // It must NOT appear at the container's (unindented) level.
+        let on_container = out
+            .lines()
+            .any(|l| !l.starts_with(' ') && l.contains("has-preinstall"));
+        assert!(
+            !on_container,
+            "duplicated member atomic must not render on the container, got:\n{out}"
+        );
+    }
+
+    fn strip_ansi(s: &str) -> String {
+        let mut out = String::with_capacity(s.len());
+        let mut chars = s.chars();
+        while let Some(c) = chars.next() {
+            if c == '\u{1b}' {
+                for c2 in chars.by_ref() {
+                    if c2.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
     }
 
     #[test]
@@ -2406,13 +2764,17 @@ mod tests {
             .collect();
         let file = file_with_findings(findings);
         let selected = select_ids(&file, &TinyOpts::terminal());
-        assert_eq!(selected.len(), 60, "all 60 hostile must show despite cap 50");
+        assert_eq!(
+            selected.len(),
+            60,
+            "all 60 hostile must show despite cap 50"
+        );
     }
 
     #[test]
     fn select_ids_caps_lower_crit_remainder_but_keeps_high() {
-        // 60 notable + 8 suspicious/hostile, cap 50. All 8 high-crit show;
-        // the notable remainder fills to a total of 50 (42 notables).
+        // 60 notable + 8 suspicious/hostile, cap 40. All 8 high-crit show;
+        // the notable remainder fills to a total of 40 (32 notables).
         let mut findings: Vec<Finding> = (0..60)
             .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
             .collect();
@@ -2424,26 +2786,32 @@ mod tests {
         }
         let file = file_with_findings(findings);
         let selected = select_ids(&file, &TinyOpts::terminal());
-        assert_eq!(selected.len(), 50, "total capped at 50");
+        assert_eq!(selected.len(), 40, "total capped at 40");
         for i in 0..5 {
             assert!(selected.contains(&format!("sus-{i}").as_str()));
         }
         for i in 0..3 {
             assert!(selected.contains(&format!("hostile-{i}").as_str()));
         }
-        let notables = selected.iter().filter(|id| id.starts_with("notable-")).count();
-        assert_eq!(notables, 42, "lower-crit remainder fills the rest of the 50");
+        let notables = selected
+            .iter()
+            .filter(|id| id.starts_with("notable-"))
+            .count();
+        assert_eq!(
+            notables, 32,
+            "lower-crit remainder fills the rest of the 40"
+        );
     }
 
     #[test]
     fn tiny_view_widens_cap_to_512() {
-        // 300 notable findings: the terminal cap (50) would truncate, but the
+        // 300 notable findings: the terminal cap (40) would truncate, but the
         // tiny/LLM view widens the cap to 512 so all 300 show.
         let findings = (0..300)
             .map(|i| finding_with(&format!("notable-{i}"), Criticality::Notable))
             .collect();
         let file = file_with_findings(findings);
-        assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 50);
+        assert_eq!(select_ids(&file, &TinyOpts::terminal()).len(), 40);
         assert_eq!(select_ids(&file, &TinyOpts::tiny()).len(), 300);
     }
 
@@ -2503,7 +2871,8 @@ mod tests {
     #[test]
     fn test_aggregate_findings_different_directories() {
         let findings = vec![
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -2516,7 +2885,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "net/http::get-variant".to_string(),
@@ -2541,7 +2911,8 @@ mod tests {
     #[test]
     fn test_aggregate_findings_same_directory_keeps_highest_criticality() {
         let findings = vec![
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -2554,7 +2925,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::sh-variant".to_string(),
@@ -2579,7 +2951,8 @@ mod tests {
     #[test]
     fn test_aggregate_findings_same_directory_keeps_highest_confidence() {
         let findings = vec![
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::bash-variant".to_string(),
@@ -2592,7 +2965,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "execution/shell::sh-variant".to_string(),
@@ -2654,7 +3028,8 @@ mod tests {
 
     #[test]
     fn test_format_evidence_empty() {
-        let trait_item = Finding { src: None,
+        let trait_item = Finding {
+            src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "test".to_string(),
@@ -2672,7 +3047,8 @@ mod tests {
 
     #[test]
     fn test_format_evidence_with_values() {
-        let trait_item = Finding { src: None,
+        let trait_item = Finding {
+            src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "test".to_string(),
@@ -2714,7 +3090,8 @@ mod tests {
 
     #[test]
     fn test_format_terminal_with_capabilities() {
-        let capabilities = vec![Finding { src: None,
+        let capabilities = vec![Finding {
+            src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "micro-behaviors/execution/shell".to_string(),
@@ -2734,7 +3111,8 @@ mod tests {
 
     #[test]
     fn test_format_terminal_includes_third_party() {
-        let findings = vec![Finding { src: None,
+        let findings = vec![Finding {
+            src: None,
             kind: FindingKind::Indicator,
             trait_refs: vec![],
             id: "third_party/Sekoia/Backdoor/Lin/Bpfdoor".to_string(),
@@ -2764,7 +3142,8 @@ mod tests {
 
     #[test]
     fn test_format_tiny_includes_description_as_tsv_field() {
-        let findings = vec![Finding { src: None,
+        let findings = vec![Finding {
+            src: None,
             kind: FindingKind::Capability,
             trait_refs: vec![],
             id: "micro-behaviors/process/create/shell::bash".to_string(),
@@ -2829,7 +3208,8 @@ mod tests {
     #[test]
     fn test_format_tiny_includes_baseline_and_composite_findings() {
         let findings = vec![
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "micro-behaviors/fs/read::open".to_string(),
@@ -2842,7 +3222,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "micro-behaviors/fs/read::open".to_string(),
@@ -2861,7 +3242,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "objectives/execution/loader::fragment".to_string(),
@@ -2874,7 +3256,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "objectives/execution/loader::unused-fragment".to_string(),
@@ -2887,7 +3270,8 @@ mod tests {
                 match_count: 0,
                 source_file: None,
             },
-            Finding { src: None,
+            Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![
                     "micro-behaviors/fs/read::open".to_string(),
@@ -2924,7 +3308,8 @@ mod tests {
         // a context line between two hits.
         use crate::types::{ContextLine, Note};
         let report = create_test_report(
-            vec![Finding { src: None,
+            vec![Finding {
+                src: None,
                 kind: FindingKind::Capability,
                 trait_refs: vec![],
                 id: "net/socket".to_string(),

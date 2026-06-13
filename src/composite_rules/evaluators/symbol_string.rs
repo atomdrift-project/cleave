@@ -914,7 +914,7 @@ pub(crate) fn eval_call<'a>(
     };
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
-    let compiled_regex = regex.and_then(|r| regex::Regex::new(r).ok());
+    let compiled_regex = regex.and_then(|r| crate::composite_rules::condition::cached_regex(r));
 
     for sym in &view.symbols {
         let filefacts::Symbol::Call {
@@ -1002,7 +1002,7 @@ pub(crate) fn eval_symbol_fact<'a>(
     };
     let mut evidence = Vec::new();
     let mut match_count = 0usize;
-    let compiled_regex = regex.and_then(|r| regex::Regex::new(r).ok());
+    let compiled_regex = regex.and_then(|r| crate::composite_rules::condition::cached_regex(r));
 
     for sym in &view.symbols {
         // Project each fact to its matchable name + evidence location,
@@ -1128,7 +1128,8 @@ fn arg_matches(
                 return false;
             }
             if let Some(want_regex) = filter.regex.as_deref()
-                && !regex::Regex::new(want_regex).is_ok_and(|re| re.is_match(value))
+                && !crate::composite_rules::condition::cached_regex(want_regex)
+                    .is_some_and(|re| re.is_match(value))
             {
                 return false;
             }
@@ -1636,7 +1637,7 @@ pub(crate) fn eval_raw<'a>(
                     let finder = memchr::memmem::Finder::new(needle);
 
                     // Pre-lowercase entire search data ONCE (not per-iteration!)
-                    let search_lower = search_data.to_ascii_lowercase();
+                    let search_lower = &ctx.lower_binary()[search_start..search_end];
                     let mut pos = 0;
                     while let Some(offset) = finder.find(&search_lower[pos..]) {
                         let abs_pos = pos + offset;
@@ -1700,7 +1701,7 @@ pub(crate) fn eval_raw<'a>(
                 if case_insensitive {
                     let pattern_lower = substr_str.to_ascii_lowercase();
                     let needle = pattern_lower.as_bytes();
-                    let search_lower = search_data.to_ascii_lowercase();
+                    let search_lower = &ctx.lower_binary()[search_start..search_end];
                     let finder = memchr::memmem::Finder::new(needle);
                     let mut pos = 0;
                     while let Some(offset) = finder.find(&search_lower[pos..]) {
@@ -1756,8 +1757,8 @@ pub(crate) fn eval_raw<'a>(
                 if case_insensitive {
                     let pattern_lower = substr_str.to_ascii_lowercase();
                     let needle = pattern_lower.as_bytes();
-                    let search_lower = search_data.to_ascii_lowercase();
-                    let iter = memchr::memmem::find_iter(&search_lower, needle);
+                    let search_lower = &ctx.lower_binary()[search_start..search_end];
+                    let iter = memchr::memmem::find_iter(search_lower, needle);
                     first_offset = iter.clone().next().map(|o| (search_start + o) as u64);
                     match_count = iter.count();
                 } else {

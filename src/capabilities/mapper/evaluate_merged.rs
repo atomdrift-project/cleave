@@ -205,7 +205,9 @@ impl super::CapabilityMapper {
                 || !report.imports.is_empty()
                 || !report.exports.is_empty()
             {
-                let all_strings = super::build_all_strings(report);
+                let pseudo_strings = super::build_string_pseudo_entries(report);
+                let all_strings: Vec<&crate::types::StringInfo> =
+                    report.strings.iter().chain(pseudo_strings.iter()).collect();
 
                 // Run string matching ONCE
                 let (traits, evidence) = if self.string_match_index.has_patterns() {

@@ -772,7 +772,7 @@ pub fn analyze_embedded_string(
 
     if is_encoded {
         // Encoded code - create a separate layer
-        let mut file_entry = report.to_file_analysis(0);
+        let (mut file_entry, _, _) = report.into_file_analysis(0);
         file_entry.path = virtual_path.clone();
         file_entry.depth = (current_depth + 1) as u32;
         file_entry.encoding = Some(string_info.encoding_chain.clone());
@@ -1165,7 +1165,7 @@ fn detect_powershell_encoded_command(
         source_file: Some(parent_path.to_string()),
     });
 
-    let mut entry = report.to_file_analysis(0);
+    let (mut entry, _, _) = report.into_file_analysis(0);
     entry.path = virtual_path;
     entry.depth = (current_depth + 1) as u32;
     entry.encoding = Some(vec!["base64-utf16le".to_string()]);

@@ -510,11 +510,15 @@ impl MachOAnalyzer {
     /// Pull imports off filefacts's typed Imports view, run capability
     /// lookups against each, and merge into the report.
     fn analyze_imports_from_ctx(&self, ctx: &Ctx<'_>, report: &mut AnalysisReport) {
+        // Dedup capability findings via a set rather than rescanning every
+        // existing finding per import (import tables run to thousands).
+        let mut finding_ids: std::collections::HashSet<String> =
+            report.findings.iter().map(|f| f.id.clone()).collect();
         for imp in ctx.imports_from_filefacts() {
             if let Some(cap) = self
                 .capability_mapper
                 .lookup(&imp.symbol, imp.offset.as_deref())
-                && !report.findings.iter().any(|c| c.id == cap.id)
+                && finding_ids.insert(cap.id.clone())
             {
                 report.findings.push(cap);
             }
@@ -1259,6 +1263,8 @@ impl MachOAnalyzer {
             .collect();
         let mut seen_exports: HashSet<String> =
             report.exports.iter().map(|e| e.symbol.clone()).collect();
+        let mut seen_finding_ids: HashSet<String> =
+            report.findings.iter().map(|f| f.id.clone()).collect();
         let baseline_imports = report.imports.len();
         let baseline_exports = report.exports.len();
         let mut arches_parsed = 0;
@@ -1314,7 +1320,7 @@ impl MachOAnalyzer {
                 if let Some(cap) = self
                     .capability_mapper
                     .lookup(&symbol, import_offset.as_deref())
-                    && !report.findings.iter().any(|c| c.id == cap.id)
+                    && seen_finding_ids.insert(cap.id.clone())
                 {
                     report.findings.push(cap);
                 }

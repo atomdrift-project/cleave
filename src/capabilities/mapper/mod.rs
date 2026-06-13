@@ -76,12 +76,15 @@ pub(super) fn get_relative_source_file(path: &std::path::Path) -> Option<String>
 
 /// Build the combined string vector from report strings, imports, and exports.
 /// Used by both `evaluate_and_merge_findings` (cached path) and `evaluate_traits_filtered` (standalone).
-pub(super) fn build_all_strings(
+/// Build the synthetic `StringInfo` entries for the string-match haystack —
+/// import and export symbol names surfaced as strings so `type: text`/`string`
+/// traits can match them. The caller chains these (cheap, bounded by symbol
+/// count) after `report.strings`, which is borrowed by reference rather than
+/// deep-copied into the haystack.
+pub(super) fn build_string_pseudo_entries(
     report: &crate::types::AnalysisReport,
 ) -> Vec<crate::types::StringInfo> {
-    let total_capacity = report.strings.len() + report.imports.len() + report.exports.len();
-    let mut all_strings = Vec::with_capacity(total_capacity);
-    all_strings.extend_from_slice(&report.strings);
+    let mut all_strings = Vec::with_capacity(report.imports.len() + report.exports.len());
     for imp in &report.imports {
         let offset = imp.offset.as_ref().and_then(|s| {
             let s = s.trim().trim_start_matches("0x").trim_start_matches("0X");
@@ -125,17 +128,13 @@ pub(super) fn build_all_strings(
 /// `kind: member`/`bind`/`identifier` trait could never become a candidate
 /// (its literal would never appear in the haystack) and would be silently
 /// skipped — the prefilter must see the same facts the evaluators do.
-pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<String> {
+pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<&str> {
     let filefacts_len = report.filefacts.as_ref().map_or(0, |v| v.symbols.len());
     let mut all = Vec::with_capacity(report.imports.len() + report.exports.len() + filefacts_len);
-    all.extend(report.imports.iter().map(|i| i.symbol.clone()));
-    all.extend(report.exports.iter().map(|e| e.symbol.clone()));
+    all.extend(report.imports.iter().map(|i| i.symbol.as_str()));
+    all.extend(report.exports.iter().map(|e| e.symbol.as_str()));
     if let Some(view) = report.filefacts.as_ref() {
-        all.extend(
-            view.symbols
-                .iter()
-                .filter_map(|s| s.name().map(str::to_string)),
-        );
+        all.extend(view.symbols.iter().filter_map(|s| s.name()));
     }
     all
 }
@@ -147,16 +146,16 @@ pub(super) fn build_all_symbols(report: &crate::types::AnalysisReport) -> Vec<St
 /// export's is its `st_value`). Used by `fill_symbol_evidence_locations`.
 pub(super) fn build_symbol_offset_map(
     report: &crate::types::AnalysisReport,
-) -> rustc_hash::FxHashMap<String, String> {
-    let mut map: rustc_hash::FxHashMap<String, String> = rustc_hash::FxHashMap::default();
+) -> rustc_hash::FxHashMap<&str, String> {
+    let mut map: rustc_hash::FxHashMap<&str, String> = rustc_hash::FxHashMap::default();
     for i in &report.imports {
         if let Some(off) = i.offset.as_ref() {
-            map.entry(i.symbol.clone()).or_insert_with(|| off.clone());
+            map.entry(i.symbol.as_str()).or_insert_with(|| off.clone());
         }
     }
     for e in &report.exports {
         if let Some(off) = e.offset.as_ref() {
-            map.entry(e.symbol.clone()).or_insert_with(|| off.clone());
+            map.entry(e.symbol.as_str()).or_insert_with(|| off.clone());
         }
     }
     if let Some(view) = report.filefacts.as_ref() {
@@ -174,8 +173,7 @@ pub(super) fn build_symbol_offset_map(
                 filefacts::Symbol::Bind { offset, .. } => Some(*offset),
             };
             if let Some(offset) = offset {
-                map.entry(name.to_string())
-                    .or_insert_with(|| format!("{:#x}", offset));
+                map.entry(name).or_insert_with(|| format!("{:#x}", offset));
             }
         }
     }
@@ -190,11 +188,11 @@ pub(super) fn build_symbol_offset_map(
 /// symbol evidence never fabricates a file-start location.
 pub(super) fn fill_symbol_evidence_locations(
     evidence: &mut [crate::types::Evidence],
-    offsets: &rustc_hash::FxHashMap<String, String>,
+    offsets: &rustc_hash::FxHashMap<&str, String>,
 ) {
     for ev in evidence.iter_mut() {
         if ev.location.is_none() {
-            ev.location = offsets.get(&ev.value).cloned();
+            ev.location = offsets.get(ev.value.as_str()).cloned();
         }
     }
 }

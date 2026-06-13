@@ -595,7 +595,7 @@ fn compact_ast(
 // ========================================================================
 
 /// Convert a FileAnalysis into a CompactFile
-fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
+fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFile {
     // Dedup findings by ID within this file, merge evidence
     let mut trait_map: HashMap<&str, CompactTrait> = HashMap::new();
     let mut trait_order: Vec<&str> = Vec::new();
@@ -748,7 +748,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
     };
 
     CompactFile {
-        id: file.id,
+        id,
         path: file.path.clone(),
         file_type: file.file_type.clone(),
         sha: file.sha256.clone(),
@@ -769,7 +769,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis) -> CompactFile {
 /// for the binary crate's JSON output path.
 #[must_use]
 pub fn compact_from_files(files: &[super::file_analysis::FileAnalysis]) -> CompactReport {
-    let compact_files: Vec<CompactFile> = files.iter().map(convert_file).collect();
+    let compact_files: Vec<CompactFile> = files.iter().map(|f| convert_file(f, f.id)).collect();
     let traits_version =
         crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
     CompactReport {
@@ -787,21 +787,24 @@ impl AnalysisReport {
     /// For post-finalize reports, use `compact_from_files(&report.files)` instead.
     #[must_use]
     pub fn to_compact(&self) -> CompactReport {
-        // Build the root file entry from the report's top-level data
+        // Build the root file entry from the report's top-level data (its path is
+        // already `target.path`), then convert pre-populated members (archive
+        // members, decoded payloads) in place — `convert_file` takes the id
+        // explicitly, so members need no clone just to be renumbered.
         let root_file = self.to_file_analysis(0);
-        let mut all_files = vec![root_file];
-
-        // Add pre-populated files (archive members, decoded payloads)
-        if !self.files.is_empty() {
-            for (idx, file) in self.files.iter().enumerate() {
-                let mut f = file.clone();
-                f.id = (idx + 1) as u32;
-                all_files.push(f);
-            }
-            all_files[0].path = self.target.path.clone();
+        let mut files = Vec::with_capacity(1 + self.files.len());
+        files.push(convert_file(&root_file, 0));
+        for (idx, file) in self.files.iter().enumerate() {
+            files.push(convert_file(file, (idx + 1) as u32));
         }
 
-        compact_from_files(&all_files)
+        let traits_version =
+            crate::traits_repo::version().map(|v| if v.len() > 5 { v[..5].to_string() } else { v });
+        CompactReport {
+            version: "7",
+            traits_version,
+            files,
+        }
     }
 }
 

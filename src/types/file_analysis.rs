@@ -194,13 +194,6 @@ pub struct FileAnalysis {
         skip_serializing_if = "std::collections::BTreeMap::is_empty"
     )]
     pub kv: std::collections::BTreeMap<String, serde_json::Value>,
-
-    /// Pre-flattened source kv tree, retained for tools (e.g. `cleave
-    /// diff`) that need to walk the original structure with their own
-    /// flattening semantics. Skipped from output — `kv` is the
-    /// canonical surface for serialization.
-    #[serde(skip)]
-    pub values_tree: Option<Box<serde_json::Value>>,
 }
 
 impl FileAnalysis {
@@ -240,7 +233,6 @@ impl FileAnalysis {
             formula: None,
             composite_sources: std::collections::BTreeMap::new(),
             kv: std::collections::BTreeMap::new(),
-            values_tree: None,
         }
     }
 

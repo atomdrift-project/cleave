@@ -41,29 +41,25 @@ impl<'a> AnalysisBorrow<'a> {
     }
 }
 
-fn merge_filefacts_context(
+/// Merge a filefacts `AnalysisContext`'s structured values and metrics into the
+/// report (`values_tree` namespaces + `filefacts_metrics`). Shared by the
+/// per-file evaluation path and the archive-container path.
+pub(crate) fn merge_filefacts_context(
     report: &mut AnalysisReport,
     ctx: &crate::analysis_context::AnalysisContext<'_>,
 ) {
-    let values_tree = ctx.values_tree();
-    let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
-        .parsed
-        .metrics()
-        .iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
-
-    if let serde_json::Value::Object(map) = values_tree {
+    if let serde_json::Value::Object(map) = ctx.values_tree() {
         for (namespace, subtree) in map {
             report.merge_kv_subtree(&namespace, subtree);
         }
     }
-    if !filefacts_map.is_empty() {
+    let metrics = ctx.parsed.metrics();
+    if !metrics.is_empty() {
         let dest = report
             .filefacts_metrics
             .get_or_insert_with(Default::default);
-        for (k, v) in filefacts_map {
-            dest.insert(k, v);
+        for (k, v) in metrics.iter() {
+            dest.insert(k.to_string(), v);
         }
     }
 }

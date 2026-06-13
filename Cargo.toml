@@ -116,6 +116,10 @@ yara-x = { version = "1.17", features = ["rules-profiling"] }
 tree-sitter = "0.26"
 streaming-iterator = "0.1"
 
+# Zero-copy byte buffer — lets callers hand cleave a refcounted `Bytes`
+# (e.g. a worker's downloaded sample) without a Vec copy. See `analyze_bytes_shared`.
+bytes = "1"
+
 # Serialization
 plist = "1.9"
 serde = { version = "1.0", features = ["derive"] }

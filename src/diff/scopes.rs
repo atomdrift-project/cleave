@@ -347,6 +347,19 @@ pub(crate) fn flatten_kv_for_diff(value: &Value) -> Vec<(String, Value)> {
     flat
 }
 
+/// Diff-ready kv pairs drawn from an already-flattened `FileAnalysis.kv` map
+/// (archive members and other nested files). Applies the same redundant-path
+/// filter as [`flatten_kv_for_diff`] but skips re-flattening — `kv` is the
+/// single retained per-file representation (the nested values tree isn't kept).
+pub(crate) fn kv_flat_from_map(
+    kv: &std::collections::BTreeMap<String, Value>,
+) -> Vec<(String, Value)> {
+    kv.iter()
+        .filter(|(path, _)| !is_redundant_kv_path(path))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect()
+}
+
 /// `true` for value paths whose content is fully shown by another diff
 /// scope. Currently `source.imports[]` and `source.exports[]` (the
 /// `symbols` scope is the canonical view), plus `file.basename`/`file.stem`:

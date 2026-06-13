@@ -372,16 +372,11 @@ fn unit_from_member(fa: &FileAnalysis, root_rel: &str, delim: &str) -> DiffUnit 
         path,
         findings: fa.findings.clone(),
         filefacts_metrics: fa.filefacts_metrics.clone(),
-        // Archive members carry their own kv tree (preserved via
-        // `FileAnalysis.values_tree`) so a `.class` inside a `.jar` still
-        // contributes its `class.*` paths to the diff. Earlier
-        // versions hard-coded `None` here, silently dropping nested
-        // kv data.
-        kv_flat: fa
-            .values_tree
-            .as_deref()
-            .map(scopes::flatten_kv_for_diff)
-            .unwrap_or_default(),
+        // Members contribute their own kv paths (a `.class` inside a `.jar`
+        // still surfaces its `class.*` keys) from the already-flattened
+        // `FileAnalysis.kv` — the per-file nested values tree is no longer
+        // retained.
+        kv_flat: scopes::kv_flat_from_map(&fa.kv),
         imports: fa.imports.clone(),
         exports: fa.exports.clone(),
         strings: fa.strings.clone(),

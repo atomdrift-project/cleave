@@ -37,6 +37,7 @@ pub(crate) mod validation;
 pub(crate) use mapper::AnalysisBorrow;
 #[allow(unreachable_pub)]
 pub use mapper::CapabilityMapper;
+pub(crate) use mapper::evaluate_merged::merge_filefacts_context;
 
 // Test module needs access to internal types
 #[cfg(test)]

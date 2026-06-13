@@ -773,30 +773,10 @@ impl ArchiveAnalyzer {
         // both `report.values_tree` (host-level kv) and
         // `report.filefacts_metrics` (host-level metrics).
         if let Ok(ctx) = crate::analysis_context::AnalysisContext::open(archive_path, data) {
-            let values_tree = ctx.values_tree();
-            let filefacts_map: std::collections::BTreeMap<String, f64> = ctx
-                .parsed
-                .metrics()
-                .iter()
-                .map(|(k, v)| (k.to_string(), v))
-                .collect();
             report.filefacts = Some(crate::types::FilefactsView::from_ctx(&ctx));
             report.identity = ctx.identity();
             filefacts_archive_entries = ctx.archive_entries();
-            drop(ctx);
-            if let serde_json::Value::Object(map) = values_tree {
-                for (namespace, subtree) in map {
-                    report.merge_kv_subtree(&namespace, subtree);
-                }
-            }
-            if !filefacts_map.is_empty() {
-                let dest = report
-                    .filefacts_metrics
-                    .get_or_insert_with(Default::default);
-                for (k, v) in filefacts_map {
-                    dest.insert(k, v);
-                }
-            }
+            crate::capabilities::merge_filefacts_context(&mut report, &ctx);
         }
 
         if is_zip_container(file_type) {

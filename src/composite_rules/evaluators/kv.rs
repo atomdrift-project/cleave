@@ -1842,19 +1842,18 @@ fn resolve_first_value(qualified_path: &str, ctx: &EvaluationContext<'_>) -> Opt
             None
         }
         Some(name) => {
-            // Sibling archive entry: walk `report.files[]` for a
-            // matching basename. Case-insensitive match here mirrors
-            // the eq/ne default — `package.json::name` matches a file
-            // whose path tail is exactly `package.json` regardless of
-            // surrounding directory.
+            // Sibling archive entry: walk `report.files[]` for a matching
+            // basename. Case-insensitive match mirrors the eq/ne default —
+            // `package.json::name` matches a file whose path tail is exactly
+            // `package.json` regardless of surrounding directory. We read the
+            // already-flattened `file.kv` (the dotted key is the path) rather
+            // than a per-file values tree: `kv` is always present and, unlike
+            // the tree, isn't dropped when members fold into the container.
             for file in &ctx.report.files {
                 if sibling_path_matches(&file.path, name)
-                    && let Some(tree) = file.values_tree.as_deref()
+                    && let Some(v) = file.kv.get(path)
                 {
-                    let hits = navigate(tree, &segments);
-                    if let Some(first) = hits.first() {
-                        return Some((*first).clone());
-                    }
+                    return Some(v.clone());
                 }
             }
             None
@@ -4652,9 +4651,10 @@ Author-Email: test@example.com
             "".to_string(),
             0,
         );
-        sibling.values_tree = Some(Box::new(json!({
-            "markdown": {"first_heading": "@img/sharp-win32-x64"}
-        })));
+        crate::types::core::flatten_kv_for_output(
+            &json!({"markdown": {"first_heading": "@img/sharp-win32-x64"}}),
+            &mut sibling.kv,
+        );
         report.files.push(sibling);
 
         let report: &'static AnalysisReport = Box::leak(Box::new(report));
@@ -4702,7 +4702,7 @@ Author-Email: test@example.com
         report
     }
 
-    fn add_file_with_values(report: &mut AnalysisReport, path: &str, values: Value) {
+    fn add_file_with_values(report: &mut AnalysisReport, path: &str, values: &Value) {
         let mut file = FileAnalysis::new(
             report.files.len() as u32 + 1,
             path.to_string(),
@@ -4710,7 +4710,8 @@ Author-Email: test@example.com
             String::new(),
             0,
         );
-        file.values_tree = Some(Box::new(values));
+        // Mirror production: sibling values are read from the flattened `kv`.
+        crate::types::core::flatten_kv_for_output(values, &mut file.kv);
         report.files.push(file);
     }
 
@@ -4729,12 +4730,12 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "package/README.md",
-            json!({"markdown": {"first_heading": "@img/sharp-win32-x64"}}),
+            &json!({"markdown": {"first_heading": "@img/sharp-win32-x64"}}),
         );
         add_file_with_values(
             &mut report,
             "package/package.json",
-            json!({"name": "@devcarron/clob"}),
+            &json!({"name": "@devcarron/clob"}),
         );
         let ctx = ctx_from_report(report);
 
@@ -4748,12 +4749,12 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "package/README.md",
-            json!({"markdown": {"first_heading": "legit-pkg"}}),
+            &json!({"markdown": {"first_heading": "legit-pkg"}}),
         );
         add_file_with_values(
             &mut report,
             "package/package.json",
-            json!({"name": "legit-pkg"}),
+            &json!({"name": "legit-pkg"}),
         );
         let ctx = ctx_from_report(report);
 
@@ -4819,12 +4820,12 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "package/package.json",
-            json!({"name": "evil-replacement"}),
+            &json!({"name": "evil-replacement"}),
         );
         add_file_with_values(
             &mut report,
             "package/package-lock.json",
-            json!({"name": "original-victim"}),
+            &json!({"name": "original-victim"}),
         );
         let ctx = ctx_from_report(report);
 
@@ -4838,12 +4839,12 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "package/package.json",
-            json!({"name": "legit"}),
+            &json!({"name": "legit"}),
         );
         add_file_with_values(
             &mut report,
             "package/package-lock.json",
-            json!({"name": "legit"}),
+            &json!({"name": "legit"}),
         );
         let ctx = ctx_from_report(report);
 
@@ -4866,7 +4867,7 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "realpkg-1.0.0.dist-info/METADATA",
-            json!({"Name": "realpkg"}),
+            &json!({"Name": "realpkg"}),
         );
         let ctx = ctx_from_report(report);
 
@@ -4885,7 +4886,7 @@ Author-Email: test@example.com
         add_file_with_values(
             &mut report,
             "legit_pkg-1.0.0.dist-info/METADATA",
-            json!({"Name": "legit_pkg"}),
+            &json!({"Name": "legit_pkg"}),
         );
         let ctx = ctx_from_report(report);
 

@@ -21,7 +21,8 @@ impl super::CapabilityMapper {
             .trim_start_matches("__"); // Some have double underscore
 
         if let Some(info) = self.symbol_map.get(clean_symbol) {
-            return Some(Finding { src: None,
+            return Some(Finding {
+                src: None,
                 id: info.id.clone(),
                 kind: FindingKind::Capability,
                 desc: info.desc.clone(),

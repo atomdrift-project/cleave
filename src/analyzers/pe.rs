@@ -743,7 +743,8 @@ impl PEAnalyzer {
             } else {
                 "PE parsed with header-only fallback (downstream walker failed)"
             };
-            report.findings.push(Finding { src: None,
+            report.findings.push(Finding {
+                src: None,
                 id: "objectives/anti-analysis/pe-tampering/corrupted-header".to_string(),
                 kind: FindingKind::Structural,
                 desc: msg.to_string(),
@@ -813,7 +814,8 @@ impl PEAnalyzer {
             .truncated
             .load(std::sync::atomic::Ordering::SeqCst)
         {
-            report.findings.push(Finding { src: None,
+            report.findings.push(Finding {
+                src: None,
                 id: "metadata/strings-truncated".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
@@ -879,7 +881,8 @@ impl PEAnalyzer {
                     .replace(',', "")
                     .replace("(", "")
                     .replace(")", "");
-                report.findings.push(Finding { src: None,
+                report.findings.push(Finding {
+                    src: None,
                     id: format!("metadata/signed/unknown::{}", normalized),
                     kind: FindingKind::Capability,
                     desc: format!("Authenticode chain CN: {}", cn),
@@ -907,7 +910,8 @@ impl PEAnalyzer {
                         .replace(',', "")
                         .replace("(", "")
                         .replace(")", "");
-                    report.findings.push(Finding { src: None,
+                    report.findings.push(Finding {
+                        src: None,
                         id: format!("metadata/signed/leaf::{}", primary_norm),
                         kind: FindingKind::Capability,
                         desc: format!("Signed by {}", primary),
@@ -1262,7 +1266,8 @@ impl PEAnalyzer {
                 )
             };
 
-            findings.push(Finding { src: None,
+            findings.push(Finding {
+                src: None,
                 id: "objectives/anti-analysis/pe-tampering/junk-prefix".to_string(),
                 kind: FindingKind::Structural,
                 desc: format!(
@@ -1294,7 +1299,8 @@ impl PEAnalyzer {
 
         // No MZ found - check for BSJB (.NET) signature without valid PE
         if let Some(bsjb_offset) = self.find_signature(data, b"BSJB") {
-            findings.push(Finding { src: None,
+            findings.push(Finding {
+                src: None,
                 id: "objectives/anti-analysis/pe-tampering/dotnet-invalid-pe".to_string(),
                 kind: FindingKind::Structural,
                 desc: ".NET assembly (BSJB signature) with corrupted/missing PE header".to_string(),
@@ -1343,7 +1349,8 @@ impl PEAnalyzer {
         for (byte_val, &count) in byte_counts.iter().enumerate() {
             // Skip 0x00 (common in headers) and check if any byte is >40% of header
             if byte_val != 0 && count > header_len * 2 / 5 {
-                findings.push(Finding { src: None,
+                findings.push(Finding {
+                    src: None,
                     id: "objectives/anti-analysis/pe-tampering/byte-injection".to_string(),
                     kind: FindingKind::Structural,
                     desc: format!(

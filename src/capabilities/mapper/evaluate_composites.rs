@@ -480,7 +480,8 @@ impl super::CapabilityMapper {
                 };
 
                 if matched {
-                    findings.push(Finding { src: None,
+                    findings.push(Finding {
+                        src: None,
                         id: trait_def.id.clone(),
                         kind: FindingKind::Indicator,
                         desc: trait_def.desc.clone(),

@@ -92,6 +92,15 @@ pub(crate) fn analyze_embedded_as_child(
         }
     }
 
+    // Capture render context on the child's own bytes. The per-analyzer path
+    // doesn't run capture (the lib/archive orchestration normally does), so
+    // without this an embedded binary carries findings but no byte/line context —
+    // it would render as bare location-less notes with no hex view. The child's
+    // evidence offsets index these carved bytes. Rides up into `files[].context`
+    // via `into_file_analysis`, exactly as archive members do.
+    report.dedupe_findings();
+    crate::context::capture(&mut report, bytes, file_type);
+
     let temp_path = temp.path().display().to_string();
     let (mut fa, nested, _) = report.into_file_analysis(0);
     let metadata_name = metadata_name_from_bytes.or_else(|| {

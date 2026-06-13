@@ -510,7 +510,8 @@ where
             "suspicious" => types::Criticality::Suspicious,
             _ => types::Criticality::Baseline,
         };
-        report.findings.push(types::Finding { src: None,
+        report.findings.push(types::Finding {
+            src: None,
             kind: types::FindingKind::Capability,
             trait_refs: vec![],
             id: cap_id,
@@ -1411,7 +1412,8 @@ pub(crate) fn process_encoded_payloads(
             )
         };
 
-        report.findings.push(types::Finding { src: None,
+        report.findings.push(types::Finding {
+            src: None,
             id: format!(
                 "metadata/encoded-payload/{}",
                 payload.encoding_chain.join("-")
@@ -1453,7 +1455,8 @@ pub(crate) fn process_encoded_payloads(
                 path = %path.display(),
                 "Encoded payload analysis depth limit reached ({MAX_ANALYSIS_DEPTH}), skipping deeper analysis"
             );
-            report.findings.push(types::Finding { src: None,
+            report.findings.push(types::Finding {
+                src: None,
                 id: "objectives/anti-static/obfuscation/multi-layer/deep-nesting".to_string(),
                 kind: types::FindingKind::Indicator,
                 desc: format!(
@@ -1799,7 +1802,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 capability_mapper.precompute_raw_regex_matches(eval_data, &rule_file_type);
             let mut report = struct_result?;
             report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
-            report.identity = ctx.as_ref().and_then(crate::analysis_context::AnalysisContext::identity);
+            report.identity = ctx
+                .as_ref()
+                .and_then(crate::analysis_context::AnalysisContext::identity);
             analyzer.apply_fat_metadata(&mut report, file_data);
 
             // The preferred slice was parsed at base 0, so its structural
@@ -1893,7 +1898,9 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
                 capability_mapper.precompute_raw_regex_matches(file_data, &rule_file_type);
             let mut report = struct_result?;
             report.filefacts = ctx.as_ref().map(crate::types::FilefactsView::from_ctx);
-            report.identity = ctx.as_ref().and_then(crate::analysis_context::AnalysisContext::identity);
+            report.identity = ctx
+                .as_ref()
+                .and_then(crate::analysis_context::AnalysisContext::identity);
             let inline_yara =
                 process_yara_result(&mut report, prefetched_yara, engine.map(AsRef::as_ref));
             // Trait authors read ELF facts directly from
@@ -2121,9 +2128,20 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         });
     }
 
-    // Filter low-value composite "any" rules (needs=1) before caching.
-    // These provide no value over the underlying trait that matched.
-    let removed = report.filter_findings(|f| !capability_mapper.is_low_value_any_rule(&f.id));
+    // Filter low-value composite "any" rules (needs=1) before caching: they add
+    // nothing over the underlying trait that matched — UNLESS a composite depends
+    // on one. A trait referenced by a composite is, by definition, not low value:
+    // it's what ties that composite to the file (and offset) it fired on, so
+    // dropping it would erase the composite's cross-file provenance.
+    let composite_referenced: std::collections::HashSet<String> = report
+        .findings
+        .iter()
+        .chain(report.files.iter().flat_map(|f| f.findings.iter()))
+        .flat_map(|f| f.trait_refs.iter().cloned())
+        .collect();
+    let removed = report.filter_findings(|f| {
+        !capability_mapper.is_low_value_any_rule(&f.id) || composite_referenced.contains(&f.id)
+    });
     if removed > 0 {
         tracing::debug!("Filtered {} low-value composite 'any' rules", removed);
     }

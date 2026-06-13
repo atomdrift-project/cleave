@@ -259,6 +259,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: self.inline_yara_results,
             cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
             cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
+            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
@@ -610,6 +611,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
             cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
+            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
@@ -1086,6 +1088,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
             cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
+            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
@@ -1472,6 +1475,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
             cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
+            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
@@ -1600,6 +1604,7 @@ impl<'a> RuleDebugger<'a> {
             inline_yara_results: None,
             cached_kv_format: std::sync::Arc::new(std::sync::OnceLock::new()),
             cached_kv_parsed: std::sync::Arc::new(std::sync::OnceLock::new()),
+            cached_kv_offsets: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index: std::sync::Arc::new(std::sync::OnceLock::new()),
             string_exact_index_ci: std::sync::Arc::new(std::sync::OnceLock::new()),
             deadline: None,
@@ -2270,7 +2275,8 @@ composite_rules:
     }
 
     fn create_test_finding(id: &str) -> Finding {
-        Finding { src: None,
+        Finding {
+            src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: format!("Test finding: {}", id),

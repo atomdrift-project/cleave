@@ -31,6 +31,7 @@ use crate::composite_rules::condition::Condition;
 use crate::composite_rules::context::EvaluationContext;
 use crate::types::Evidence;
 use regex::Regex;
+use rustc_hash::FxHashMap;
 use serde_json::Value;
 use std::path::Path;
 
@@ -211,6 +212,114 @@ impl KvMatcher {
 
         false
     }
+}
+
+/// Frame on the object/array nesting stack while indexing JSON key offsets.
+struct JsonFrame {
+    is_object: bool,
+    /// Current member key whose value is being scanned (object frames only).
+    cur_key: Option<String>,
+}
+
+/// Find the closing quote of the JSON string starting at `start` (the opening
+/// `"`), honouring `\"`/`\\` escapes, and return the raw inner slice plus the
+/// index just past the closing quote. Escape sequences are left literal — manifest
+/// keys are plain identifiers, so the raw slice equals the parsed key.
+fn scan_json_string(text: &str, start: usize) -> (&str, usize) {
+    let bytes = text.as_bytes();
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 2, // skip the backslash and its (ASCII) escape char
+            b'"' => return (&text[start + 1..i], i + 1),
+            _ => i += 1,
+        }
+    }
+    (&text[start + 1..], bytes.len())
+}
+
+/// Index every object key in a JSON document to its byte offset, keyed by the
+/// dotted object-key path (array nesting is transparent, matching how trait
+/// paths address values). Built in one linear pass per file and cached, so
+/// value-match findings get a real location without re-scanning per match.
+/// Keeps the first occurrence of each path. Assumes serde already validated the
+/// document, so it tolerates structure rather than re-validating it.
+fn build_json_key_offsets(text: &str) -> FxHashMap<String, u64> {
+    let bytes = text.as_bytes();
+    let mut map: FxHashMap<String, u64> = FxHashMap::default();
+    let mut stack: Vec<JsonFrame> = Vec::new();
+    let mut expecting_key = false;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                stack.push(JsonFrame {
+                    is_object: true,
+                    cur_key: None,
+                });
+                expecting_key = true;
+                i += 1;
+            }
+            b'[' => {
+                stack.push(JsonFrame {
+                    is_object: false,
+                    cur_key: None,
+                });
+                expecting_key = false;
+                i += 1;
+            }
+            b'}' | b']' => {
+                stack.pop();
+                expecting_key = false;
+                i += 1;
+            }
+            b',' => {
+                if let Some(frame) = stack.last_mut() {
+                    frame.cur_key = None;
+                    expecting_key = frame.is_object;
+                }
+                i += 1;
+            }
+            b'"' => {
+                let start = i;
+                let (content, next) = scan_json_string(text, i);
+                i = next;
+                let top_is_object = stack.last().is_some_and(|f| f.is_object);
+                if top_is_object && expecting_key {
+                    let prefix = stack
+                        .iter()
+                        .filter_map(|f| f.cur_key.as_deref())
+                        .collect::<Vec<_>>()
+                        .join(".");
+                    let path = if prefix.is_empty() {
+                        content.to_string()
+                    } else {
+                        format!("{prefix}.{content}")
+                    };
+                    map.entry(path).or_insert(start as u64);
+                    if let Some(frame) = stack.last_mut() {
+                        frame.cur_key = Some(content.to_string());
+                    }
+                    expecting_key = false;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    map
+}
+
+/// Dotted object-key path of a parsed condition path, dropping array
+/// `Index`/`Wildcard` segments so it lines up with [`build_json_key_offsets`].
+fn segments_dotted(segments: &[PathSegment]) -> String {
+    segments
+        .iter()
+        .filter_map(|s| match s {
+            PathSegment::Key(k) => Some(k.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join(".")
 }
 
 /// Convert a JSON value to a string for matching.
@@ -1567,13 +1676,63 @@ pub(crate) fn evaluate_kv(condition: &Condition, ctx: &EvaluationContext<'_>) ->
                 method: "value".to_string(),
                 source: file_path.display().to_string(),
                 value: matched_value,
-                location: Some(format!("value:{}", path)),
+                location: Some(kv_location(path, &segments, format, content, ctx)),
                 ..Default::default()
             });
         }
     }
 
     None
+}
+
+/// Resolve the evidence location for a matched kv path so the finding anchors
+/// where the matched data sits. Two sources, in order:
+///
+/// 1. The per-file key-offset index for JSON content (built once, cached) — the
+///    matched key's byte position in package.json and friends.
+/// 2. A `<path>_offset` companion in the value tree — filefacts's existing idiom
+///    for structural facts it parsed from a binary (e.g. `macho.uuid` carries a
+///    sibling `macho.uuid_offset`). A `value` always comes from a real place in
+///    the file, unlike a `metric`, so this is where binary-fact matches anchor.
+///
+/// Falls back to the semantic `value:<path>` label only when neither resolves.
+fn kv_location(
+    path: &str,
+    segments: &[PathSegment],
+    format: StructuredFormat,
+    content: &[u8],
+    ctx: &EvaluationContext<'_>,
+) -> String {
+    let dotted = segments_dotted(segments);
+    let offsets = ctx.cached_kv_offsets.get_or_init(|| {
+        // Only JSON is indexed: package.json is the dominant supply-chain
+        // workload and the win is measured. Other structured formats fall back
+        // to the value-tree companion or the label — no hand-rolled re-scanner
+        // per format (see docs/BINARY_METADATA_ANCHORING.md).
+        if format == StructuredFormat::Json {
+            std::str::from_utf8(content)
+                .map(build_json_key_offsets)
+                .unwrap_or_default()
+        } else {
+            FxHashMap::default()
+        }
+    });
+    if let Some(off) = offsets.get(&dotted) {
+        return format!("offset:{off}");
+    }
+    if let Some(off) = value_tree_companion_offset(ctx, &dotted) {
+        return format!("offset:{off}");
+    }
+    format!("value:{path}")
+}
+
+/// Look up a `<path>_offset` sibling in the parsed value tree — filefacts records
+/// the source byte offset of a structural fact next to the fact itself. Returns
+/// `None` when there's no companion (the fact carries no single location).
+fn value_tree_companion_offset(ctx: &EvaluationContext<'_>, dotted_path: &str) -> Option<u64> {
+    let tree = ctx.report.values_tree.as_ref()?;
+    let segments = parse_path(&format!("{dotted_path}_offset")).ok()?;
+    navigate(tree.as_ref(), &segments).first()?.as_u64()
 }
 
 /// Format a value for evidence display with optional size information.
@@ -1743,6 +1902,36 @@ mod tests {
     use crate::composite_rules::types::FileType;
     use crate::types::{AnalysisReport, TargetInfo};
     use serde_json::json;
+
+    #[test]
+    fn json_key_offsets_indexes_nested_paths() {
+        let doc = r#"{"name":"x","scripts":{"preinstall":"curl"},"deps":{"a":"1"}}"#;
+        let m = build_json_key_offsets(doc);
+        let at = |needle: &str| doc.find(needle).map(|p| p as u64);
+        assert_eq!(m.get("name").copied(), at("\"name\""));
+        assert_eq!(m.get("scripts").copied(), at("\"scripts\""));
+        assert_eq!(m.get("scripts.preinstall").copied(), at("\"preinstall\""));
+        assert_eq!(m.get("deps.a").copied(), at("\"a\""));
+        // Nested keys are addressable only by their full dotted path.
+        assert_eq!(m.get("a"), None);
+        assert_eq!(m.get("preinstall"), None);
+    }
+
+    #[test]
+    fn json_key_offsets_arrays_are_transparent() {
+        let doc = r#"{"content_scripts":[{"matches":"<all_urls>"}]}"#;
+        let m = build_json_key_offsets(doc);
+        // Array nesting is skipped so the dotted path lines up with trait paths
+        // like `content_scripts[*].matches`.
+        assert_eq!(
+            m.get("content_scripts.matches").copied(),
+            doc.find("\"matches\"").map(|p| p as u64)
+        );
+        assert_eq!(
+            segments_dotted(&parse_path("content_scripts[*].matches").unwrap()),
+            "content_scripts.matches"
+        );
+    }
 
     /// Helper to create evaluation context for testing
     fn create_test_ctx<'a>(

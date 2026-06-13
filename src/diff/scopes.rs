@@ -739,7 +739,8 @@ mod tests {
     }
 
     fn finding(id: &str, crit: Criticality) -> Finding {
-        Finding { src: None,
+        Finding {
+            src: None,
             id: id.to_string(),
             kind: FindingKind::Capability,
             desc: format!("desc {id}"),

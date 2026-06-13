@@ -43,6 +43,11 @@ pub(crate) struct EvaluationContext<'a> {
     pub cached_kv_format: Arc<OnceLock<StructuredFormat>>,
     /// Cached parsed KV data (parse once per file, reuse for all KV conditions)
     pub cached_kv_parsed: Arc<OnceLock<Box<Value>>>,
+    /// Cached map of structured-key dotted path → byte offset in the raw file,
+    /// built once per file (lazily, only when a KV match needs to anchor) so
+    /// value-match findings carry a real location instead of re-scanning the
+    /// content per match. Empty for formats without an offset indexer.
+    pub cached_kv_offsets: Arc<OnceLock<FxHashMap<String, u64>>>,
     /// Cached AST nodes by kind (for batch evaluation)
     pub ast_kind_cache: Option<&'a FxHashMap<String, Vec<Evidence>>>,
     /// Index for O(1) exact string lookups. Values are indices into
@@ -127,6 +132,7 @@ impl<'a> EvaluationContext<'a> {
             inline_yara_results: None,
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
+            cached_kv_offsets: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),
@@ -329,6 +335,7 @@ impl<'a> EvaluationContext<'a> {
             inline_yara_results: None,
             cached_kv_format: Arc::new(OnceLock::new()),
             cached_kv_parsed: Arc::new(OnceLock::new()),
+            cached_kv_offsets: Arc::new(OnceLock::new()),
             ast_kind_cache: None,
             string_exact_index: Arc::new(OnceLock::new()),
             string_exact_index_ci: Arc::new(OnceLock::new()),

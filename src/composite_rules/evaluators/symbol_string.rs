@@ -1374,6 +1374,12 @@ pub(crate) fn eval_raw<'a>(
             // forcing every rayon worker to serialize through the cache's write lock
             // even on cache hit. That single bottleneck accounted for ~25 % of total
             // CPU as `parking_lot::lock_exclusive_slow` wait time on the slow dataset.
+            //
+            // On a miss we compile outside the lock and `put`. Two workers can race
+            // to compile the same pattern, but those compiles run in PARALLEL —
+            // measured wall-faster than serializing on a per-key `OnceLock`, which
+            // idles cores during the compile-heavy warmup (compile-once cut CPU but
+            // raised wall ~35 %). Wall is the priority, so the parallel race stays.
             let key = (pattern_str.to_string(), case_insensitive);
             let cache = super::bytes_regex_cache();
             // Clone the `Arc`, never the `Regex`: a `Regex` clone gets a cold

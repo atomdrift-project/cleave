@@ -593,6 +593,7 @@ impl FileTypeExt for FileType {
                 vec!["sh", "bash", "zsh", "application/x-sh", "application/x-zsh"]
             }
             FileType::Batch => vec!["bat", "cmd", "batch"],
+            FileType::Jcl => vec!["jcl"],
             FileType::Vbs => vec!["vbs", "vbe", "wsf", "wsc", "vba", "vbscript"],
             FileType::Python => vec!["py"],
             FileType::JavaScript => vec!["js", "mjs", "cjs", "jsx", "ts"],

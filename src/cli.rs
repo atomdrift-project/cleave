@@ -881,6 +881,8 @@ pub enum DetectFileType {
     Go,
     /// Shell script
     Shell,
+    /// IBM z/OS Job Control Language batch script
+    Jcl,
     /// Makefile / GNU Make build file
     Makefile,
     /// systemd service unit file

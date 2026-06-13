@@ -325,6 +325,8 @@ pub(crate) enum FileType {
     Shell,
     /// Windows batch script (.bat, .cmd)
     Batch,
+    /// IBM z/OS Job Control Language batch script (.jcl)
+    Jcl,
     /// Python source file
     Python,
     /// JavaScript source file

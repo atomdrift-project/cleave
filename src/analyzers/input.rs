@@ -55,6 +55,12 @@ pub struct AnalysisInput<'a> {
     /// Per-request cancellation flag. When set to true by the server on timeout, analyzers that
     /// check it should abort long-running loops and return a partial result.
     pub cancellation: Option<Arc<std::sync::atomic::AtomicBool>>,
+
+    /// Filefacts context opened once on `data` by the caller and threaded in
+    /// so the analyzer reuses it instead of re-parsing. When `None` the
+    /// analyzer opens its own. Owned (same `'a` as `data`) to avoid forcing a
+    /// second lifetime through the `Analyzer` trait.
+    pub parsed_ctx: Option<crate::analysis_context::AnalysisContext<'a>>,
 }
 
 #[allow(dead_code)] // Methods intentionally public for library consumers and future use

@@ -112,11 +112,12 @@ impl Analyzer for AppleScriptAnalyzer {
         // Extract symbols from compiled AppleScript
         self.extract_scpt_symbols(input.data, &mut report);
 
-        // Use pre-extracted strings if available, otherwise extract
+        // Use pre-extracted strings if available, otherwise source them from
+        // filefacts (the string-extraction authority).
         if !input.strings.is_empty() {
             report.strings = self.string_extractor.convert_stng_strings(input.strings);
         } else {
-            report.strings = self.string_extractor.extract_smart(input.data);
+            report.strings = crate::strings::strings_from_filefacts(input.path, input.data);
         }
 
         // Prefer the struct's cancellation flag; fall back to the input's flag.
@@ -188,8 +189,8 @@ impl Analyzer for AppleScriptAnalyzer {
         // Extract symbols from compiled AppleScript
         self.extract_scpt_symbols(&data, &mut report);
 
-        // Use intelligent string extraction
-        report.strings = self.string_extractor.extract_smart(&data);
+        // Strings come from filefacts (the string-extraction authority).
+        report.strings = crate::strings::strings_from_filefacts(file_path, &data);
 
         // Analyze embedded code in strings
         let (encoded_layers, plain_findings) =

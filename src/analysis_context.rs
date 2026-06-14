@@ -75,6 +75,14 @@ impl<'a> AnalysisContext<'a> {
         self.parsed.source_ast()
     }
 
+    /// Owned clone of filefacts' extracted-string rows (the `text()` view) —
+    /// the single string-extraction authority, in the form analyzers thread
+    /// through `AnalysisInput` and convert to `StringInfo`.
+    #[must_use]
+    pub fn text_rows(&self) -> Vec<stng::ExtractedString> {
+        self.parsed.text().iter().cloned().collect()
+    }
+
     /// Normalized identity claims filefacts derived, when the file
     /// asserts any identity or carries a signature. Returns `None` for
     /// the empty case so reports don't carry a bare `unsigned` record on

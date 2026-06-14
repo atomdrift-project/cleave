@@ -11,11 +11,59 @@ use crate::types::binary::StringInfo;
 use crate::types::file_analysis::{FileAnalysis, encode_decoded_path};
 use crate::types::{Criticality, Finding, FindingKind};
 use anyhow::{Context, Result};
+use regex::Regex;
 use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Matches an interpreter inline-code invocation, capturing the interpreter
+/// name and the opening quote: `python3 -c "..."`, `node -e '...'`,
+/// `ruby -e "..."`, `php -r '...'`. Returns `None` only if the compiled
+/// pattern ever fails — the same fallible-init pattern as the other regex
+/// statics in this crate, so library code never `expect()`s.
+fn inline_interp_re() -> Option<&'static Regex> {
+    static RE: std::sync::OnceLock<Option<Regex>> = std::sync::OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(r#"(?:^|[\s;&|(])(python3|python|nodejs|node|deno|bun|ruby|perl|php)\s+(?:-c|-e|-r|--eval)\s+("|')"#).ok()
+    })
+    .as_ref()
+}
+
+/// Extract the inner source of an interpreter inline-code invocation
+/// (`python3 -c "<code>"`, `node -e '<code>'`). Returns the language and the
+/// code body so the embedded-code detector can analyze it as a real source
+/// file — with a clean AST — instead of leaving it as an opaque shell-string
+/// argument that pollutes the parse with the `interp -c` prefix.
+fn extract_inline_interpreter_code(s: &str) -> Option<(FileType, &str)> {
+    let caps = inline_interp_re()?.captures(s)?;
+    let interp = caps.get(1)?.as_str();
+    let quote_m = caps.get(2)?;
+    let quote = quote_m.as_str().as_bytes()[0];
+    let open = quote_m.end();
+    // The code runs to the matching closing quote on the same line; for these
+    // one-liners that is the last occurrence of the same quote char before any
+    // newline (so a multi-line host script doesn't over-capture).
+    let line_end = s[open..].find('\n').map_or(s.len(), |i| open + i);
+    let close = s[open..line_end].rfind(quote as char).map(|i| open + i)?;
+    if close <= open {
+        return None;
+    }
+    let code = &s[open..close];
+    if code.len() < 8 {
+        return None;
+    }
+    let file_type = match interp {
+        "python" | "python3" => FileType::Python,
+        "node" | "nodejs" | "deno" | "bun" => FileType::JavaScript,
+        "ruby" => FileType::Ruby,
+        "perl" => FileType::Perl,
+        "php" => FileType::Php,
+        _ => return None,
+    };
+    Some((file_type, code))
+}
 
 /// Maximum nesting depth for decoded strings (prevent infinite recursion)
 const MAX_DECODE_DEPTH: usize = 3;
@@ -723,8 +771,23 @@ pub fn analyze_embedded_string(
     // Detect language (uses stng classification, no regex needed)
     let t_detect = std::time::Instant::now();
     let is_encoded = !string_info.encoding_chain.is_empty();
-    let file_type = detect_language_with_host(string_info, is_encoded, host_file_type)
-        .context("No language detected in string")?;
+    // Interpreter inline-code (`python3 -c "<code>"`, `node -e '<code>'`):
+    // unwrap to the inner source and analyze THAT as its real language so the
+    // AST/metric rules see clean code, not a shell-string argument. Only for
+    // plain (un-encoded) strings.
+    let inline_code = if is_encoded {
+        None
+    } else {
+        extract_inline_interpreter_code(&string_info.value)
+    };
+    let (file_type, source_to_analyze) = match inline_code {
+        Some((lang, code)) => (lang, code.to_string()),
+        None => {
+            let ft = detect_language_with_host(string_info, is_encoded, host_file_type)
+                .context("No language detected in string")?;
+            (ft, string_info.value.to_string())
+        }
+    };
     let detect_time = t_detect.elapsed();
 
     let offset = string_info.offset.unwrap_or(0);
@@ -757,7 +820,7 @@ pub fn analyze_embedded_string(
 
     // Analyze in-memory
     let t_analyze = std::time::Instant::now();
-    let report = analyzer.analyze_source(Path::new(&virtual_path), &string_info.value);
+    let report = analyzer.analyze_source(Path::new(&virtual_path), &source_to_analyze);
     let analyze_time = t_analyze.elapsed();
 
     if analyze_time.as_millis() > 100 {

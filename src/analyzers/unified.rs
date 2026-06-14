@@ -353,22 +353,11 @@ impl UnifiedSourceAnalyzer {
     }
 
     pub(crate) fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        // For backward compatibility, use UTF-8 bytes
-        self.analyze_source_with_original(file_path, content, content.as_bytes())
-    }
-
-    pub(crate) fn analyze_source_with_original(
-        &self,
-        file_path: &Path,
-        content: &str,
-        original_bytes: &[u8],
-    ) -> AnalysisReport {
         let ctx =
             crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
         self.analyze_source_impl(
             file_path,
             content,
-            original_bytes,
             &[],
             &[],
             None,
@@ -378,14 +367,13 @@ impl UnifiedSourceAnalyzer {
     }
 
     // Mirrors the fields of an `AnalysisInput` plus the decoded `content`; the
-    // legacy `analyze_source_with_original` path has no `AnalysisInput` to pass,
-    // so the pieces are threaded individually rather than bundled.
+    // path-based entry has no `AnalysisInput` to pass, so the pieces are
+    // threaded individually rather than bundled.
     #[allow(clippy::too_many_arguments)]
     fn analyze_source_impl(
         &self,
         file_path: &Path,
         content: &str,
-        original_bytes: &[u8],
         preextracted_stng: &[stng::ExtractedString],
         preextracted_payloads: &[crate::types::ExtractedPayload],
         precomputed_sha256: Option<String>,
@@ -429,11 +417,10 @@ impl UnifiedSourceAnalyzer {
         // recv() and can't process rayon work. stng on scripts is fast
         // (single-digit ms), so the parallelism gain was negligible.
         if !has_preextracted {
-            // This is the tree-sitter / script path — tell stng it's text so it
-            // can skip the XOR scan (XOR-obfuscated source code is vanishingly
-            // rare and the scanner is pure noise on minified JS / HTML / JSON).
-            let opts = super::attach_stng_cancellation(super::stng_text_opts(4), cancellation);
-            owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
+            // No caller-supplied strings: source them from the threaded
+            // filefacts context (the string-extraction authority). When the
+            // caller didn't open one, there are simply no pre-extracted strings.
+            owned_stng = source_ctx.map(|c| c.text_rows()).unwrap_or_default();
         }
 
         // `source_ctx` is resolved by the caller — the threaded context when it
@@ -1161,7 +1148,6 @@ impl Analyzer for UnifiedSourceAnalyzer {
             Some(ctx) if reuse => Ok(self.analyze_source_impl(
                 input.path,
                 &content,
-                input.data,
                 input.strings,
                 input.payloads,
                 input.sha256.clone(),
@@ -1175,7 +1161,6 @@ impl Analyzer for UnifiedSourceAnalyzer {
                 Ok(self.analyze_source_impl(
                     input.path,
                     &content,
-                    input.data,
                     input.strings,
                     input.payloads,
                     input.sha256.clone(),
@@ -1192,7 +1177,7 @@ impl Analyzer for UnifiedSourceAnalyzer {
         let bytes = data.as_slice();
 
         let content = String::from_utf8_lossy(bytes);
-        Ok(self.analyze_source_with_original(file_path, &content, bytes))
+        Ok(self.analyze_source(file_path, &content))
     }
 
     fn can_analyze(&self, _file_path: &Path) -> bool {

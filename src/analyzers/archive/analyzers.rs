@@ -781,10 +781,7 @@ impl ArchiveAnalyzer {
             // is a security hole. `skip_rizin_reason` still governs the rizin
             // (binary disassembly) skip below — that's correct for non-native
             // members — but it must NOT also gate string extraction.
-            let stng_opts = crate::analyzers::stng_analysis_opts(4);
-            crate::memory_tracker::set_current_phase(format!("stng on {relative_path}"));
-            let stng_opts =
-                crate::analyzers::attach_stng_cancellation(stng_opts, self.cancelled.as_ref());
+            crate::memory_tracker::set_current_phase(format!("strings on {relative_path}"));
             // Normalize UTF-16 (LE/BE BOM) member content to UTF-8 before string
             // extraction and trait matching, mirroring the standalone path in
             // `lib.rs`. Without this a UTF-16 script inside an archive is
@@ -794,19 +791,15 @@ impl ArchiveAnalyzer {
             let normalized_member = crate::file_io::normalize_text_encoding(data);
             let data: &[u8] = normalized_member.as_ref();
             let logical_path = Path::new(relative_path);
-            // Source members: filefacts is both the string authority and the
-            // parser, so open it once and thread it into the analyzer (below) —
-            // the member is parsed a single time. Other member types keep the
-            // standalone stng scan (their analyzers open their own context).
-            let member_ctx = if file_type.is_source_code() {
-                crate::analysis_context::AnalysisContext::open(logical_path, data).ok()
-            } else {
-                None
-            };
-            let stng_strings = match member_ctx.as_ref() {
-                Some(ctx) => ctx.parsed.text().iter().cloned().collect(),
-                None => stng::extract_strings_with_options(data, &stng_opts),
-            };
+            // filefacts is the string authority and the parser: open the
+            // member once and thread it into the analyzer (below) so it is
+            // parsed a single time, regardless of member type.
+            let member_ctx =
+                crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
+            let stng_strings: Vec<stng::ExtractedString> = member_ctx
+                .as_ref()
+                .map(|ctx| ctx.text_rows())
+                .unwrap_or_default();
             crate::memory_tracker::clear_current_phase();
             let payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)

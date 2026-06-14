@@ -437,8 +437,7 @@ impl ElfAnalyzer {
         // Strings come from filefacts's byte-scan `text()` — the single
         // string-extraction authority (cleave no longer scans). The raw stng
         // rows also feed embedded-child analysis below.
-        let raw_stng_strings: Vec<stng::ExtractedString> =
-            ctx.parsed.text().iter().cloned().collect();
+        let raw_stng_strings = ctx.text_rows();
         report.strings = self
             .string_extractor
             .convert_stng_strings(&raw_stng_strings);
@@ -1043,21 +1042,20 @@ impl Analyzer for ElfAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let opts = crate::analyzers::stng_analysis_opts(4);
-        let strings = stng::extract_strings_with_options(&data, &opts);
-        tracing::debug!(
-            path = %file_path.display(),
-            strings = strings.len(),
-            string_mode = "stng-local",
-            reason = "legacy analyze() path without pre-extracted AnalysisInput",
-            "ELF analyzer extracting strings locally before analyze_input"
-        );
-        let input = AnalysisInput::with_strings(
+        // filefacts is the string-extraction authority; open the context once
+        // and thread it into the input so analyze_input reuses this parse.
+        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let strings: Vec<stng::ExtractedString> =
+            ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+        let mut input = AnalysisInput::with_strings(
             file_path,
             &data,
             &strings,
             crate::analyzers::FileType::Elf,
         );
+        if let Some(ctx) = ctx {
+            input = input.with_parsed_ctx(ctx);
+        }
         self.analyze_input(&input)
     }
 

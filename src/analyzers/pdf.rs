@@ -153,18 +153,18 @@ impl PdfAnalyzer {
             let virtual_path_str = format!("{doc_name}!!pdf/{object_label}.js");
             let virtual_path = Path::new(&virtual_path_str);
 
-            // Text-shaped extractor — JS is ASCII-friendly source,
-            // so the XOR scan and binary heuristics aren't needed.
-            // 4-char minimum matches the VBA path.
-            let strings = stng::extract_strings_with_options(
-                js_bytes,
-                &crate::analyzers::attach_stng_cancellation(
-                    crate::analyzers::stng_text_opts(4),
-                    None,
-                ),
-            );
-            let input =
+            // filefacts is the string-extraction authority and the source
+            // parser: open the JS payload once and thread it into the sub-file
+            // analyzer so it is parsed a single time.
+            let js_ctx =
+                crate::analysis_context::AnalysisContext::open(virtual_path, js_bytes).ok();
+            let strings: Vec<stng::ExtractedString> =
+                js_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+            let mut input =
                 AnalysisInput::with_strings(virtual_path, js_bytes, &strings, FileType::JavaScript);
+            if let Some(ctx) = js_ctx {
+                input = input.with_parsed_ctx(ctx);
+            }
 
             match analyzer.analyze_input(&input) {
                 Ok(mut sub_report) => {

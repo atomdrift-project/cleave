@@ -82,20 +82,11 @@ impl PickleAnalyzer {
             }
         }
 
-        // Extract readable strings from pickle data. (This SHORT_BINUNICODE
-        // scan folds into the filefacts string-extraction track alongside the
-        // other analyzers.)
-        let strings = extract_pickle_strings(data);
-        for s in &strings {
-            report.strings.push(crate::types::StringInfo {
-                value: s.clone().into(),
-                string_type: None,
-                offset: None,
-                encoding: String::new(),
-                section: None,
-                encoding_chain: Vec::new(),
-                fragments: None,
-            });
+        // Strings come from filefacts' `text()` view — the single
+        // string-extraction authority — converted to cleave's StringInfo.
+        if let Some(ctx) = filefacts_ctx.as_ref() {
+            report.strings =
+                crate::strings::StringExtractor::new().convert_stng_strings(&ctx.text_rows());
         }
 
         // `pickle.*` kv comes from filefacts's dual emission in the
@@ -145,86 +136,9 @@ impl Analyzer for PickleAnalyzer {
     }
 }
 
-/// Extract readable ASCII strings from pickle SHORT_BINUNICODE fields.
-fn extract_pickle_strings(data: &[u8]) -> Vec<String> {
-    let mut strings = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    let mut i = 0;
-
-    while i < data.len() {
-        if data[i] == 0x8c {
-            if i + 1 >= data.len() {
-                break;
-            }
-            let length = data[i + 1] as usize;
-            if i + 2 + length > data.len() {
-                break;
-            }
-            if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length])
-                && s.is_ascii()
-                && s.len() > 2
-                && seen.insert(s.to_string())
-            {
-                strings.push(s.to_string());
-            }
-            i += 2 + length;
-        } else {
-            i += 1;
-        }
-    }
-
-    strings
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_pickle_strings() {
-        let data: Vec<u8> = vec![
-            0x8c, 0x05, b'h', b'e', b'l', b'l', b'o', // "hello"
-            0x8c, 0x05, b'w', b'o', b'r', b'l', b'd', // "world"
-        ];
-        let strings = extract_pickle_strings(&data);
-        assert_eq!(strings, vec!["hello", "world"]);
-    }
-
-    #[test]
-    fn test_extract_strings_deduplication() {
-        let data: Vec<u8> = vec![
-            0x8c, 0x05, b'h', b'e', b'l', b'l', b'o', // "hello"
-            0x8c, 0x05, b'h', b'e', b'l', b'l', b'o', // "hello" again
-        ];
-        let strings = extract_pickle_strings(&data);
-        assert_eq!(strings, vec!["hello"]);
-    }
-
-    #[test]
-    fn test_extract_strings_skips_short() {
-        // Strings <= 2 chars are filtered out
-        let data: Vec<u8> = vec![
-            0x8c, 0x02, b'o', b's', // "os" — too short (len 2)
-            0x8c, 0x01, b'x', // "x" — too short (len 1)
-            0x8c, 0x03, b'f', b'o', b'o', // "foo" — kept
-        ];
-        let strings = extract_pickle_strings(&data);
-        assert_eq!(strings, vec!["foo"]);
-    }
-
-    #[test]
-    fn test_extract_strings_empty_data() {
-        let strings = extract_pickle_strings(&[]);
-        assert!(strings.is_empty());
-    }
-
-    #[test]
-    fn test_extract_strings_truncated() {
-        // SHORT_BINUNICODE claiming more bytes than available
-        let data: Vec<u8> = vec![0x8c, 0x10, b'a', b'b'];
-        let strings = extract_pickle_strings(&data);
-        assert!(strings.is_empty());
-    }
 
     #[test]
     fn test_can_analyze_extensions() {

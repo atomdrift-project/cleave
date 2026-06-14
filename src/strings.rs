@@ -11,6 +11,21 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use stng::{ExtractedString, StringMethod};
 
+/// Strings for a file, sourced from filefacts' `text()` view — the single
+/// string-extraction authority — and classified via [`StringExtractor`].
+/// Returns empty when filefacts can't open the bytes. Use this at call
+/// sites that have a path + bytes but no pre-opened [`AnalysisContext`].
+///
+/// [`AnalysisContext`]: crate::analysis_context::AnalysisContext
+pub(crate) fn strings_from_filefacts(path: &std::path::Path, data: &[u8]) -> Vec<StringInfo> {
+    let Ok(ctx) = crate::analysis_context::AnalysisContext::open(path, data) else {
+        return Vec::new();
+    };
+    // Convert straight from the context's `text()` view — no intermediate Vec.
+    let text = ctx.parsed.text();
+    StringExtractor::new().convert_stng_iter(text.iter(), text.len())
+}
+
 /// Convert stng StringMethod to a string for encoding_chain tracking
 /// Only tracks actual string construction/encoding methods, not extraction sources
 fn stng_method_to_string(method: StringMethod) -> &'static str {
@@ -114,43 +129,10 @@ impl StringExtractor {
         }
     }
 
-    /// Extract strings using stng for comprehensive extraction.
-    ///
-    /// Rizin string extraction is owned by `filefacts` now — when stng
-    /// needs rizin-derived boundaries or function metadata they arrive
-    /// through `stng::ExtractOptions::with_rizin_*` populated by the
-    /// upstream `filefacts` parse, not via a cleave-side `with_r2_strings`
-    /// fold. Callers that previously plumbed `Option<Vec<R2String>>`
-    /// through this function just stop passing it.
-    pub(crate) fn extract_smart(&self, data: &[u8]) -> Vec<StringInfo> {
-        let raw = self.extract_raw_smart(data);
-        // We own `raw` and don't need it after conversion — move each element
-        // instead of cloning.
-        self.convert_stng_strings_owned(raw)
-    }
-
-    /// Extract raw stng strings from binary data.
-    pub(crate) fn extract_raw_smart(&self, data: &[u8]) -> Vec<ExtractedString> {
-        // Large pure-ASCII inputs (minified JS bundles, JSON dumps, logs that
-        // arrive through binary analyzers) get the text-mode opts to skip the
-        // XOR scan + UTF-16 decoders. Threshold matches the dataset sweet
-        // spot at which the scan is provably wasted.
-        const ASCII_FASTPATH_THRESHOLD: usize = 5 * 1024 * 1024;
-        let opts = if data.len() > ASCII_FASTPATH_THRESHOLD && data.is_ascii() {
-            crate::analyzers::stng_text_opts(self.min_length)
-        } else {
-            crate::analyzers::stng_analysis_opts(self.min_length)
-        };
-        stng::extract_strings_with_options(data, &opts)
-    }
-
-    /// Convert pre-extracted stng strings to StringInfo (public API for reuse).
-    ///
-    /// Takes a borrowed slice and clones each element because the caller
-    /// still needs the raw `ExtractedString` values afterward.  Prefer
-    /// [`StringExtractor::convert_stng_strings_owned`] when the caller owns
-    /// the `Vec` and does not need the raw form — it moves each element's
-    /// `String` fields and avoids N per-string clones.
+    /// Convert filefacts/stng `ExtractedString` rows into cleave's
+    /// `StringInfo`, applying symbol-map classification, the per-file
+    /// retention caps, and the base64 decoded-sidecar. This is the cleave-side
+    /// string layer; extraction itself is owned by filefacts.
     #[allow(dead_code)] // Used by binary target, not visible to library
     pub(crate) fn convert_stng_strings(&self, stng_strings: &[ExtractedString]) -> Vec<StringInfo> {
         self.convert_stng_iter(stng_strings.iter(), stng_strings.len())
@@ -185,59 +167,6 @@ impl StringExtractor {
             total_bytes += value_len;
             let decoded_sidecar = self.decoded_base64_sidecar(es);
             strings.push(self.convert_extracted_string(es.clone()));
-
-            if let Some(decoded) = decoded_sidecar {
-                let decoded_len = decoded.value.len();
-                if strings.len() >= MAX_STRINGS_PER_FILE {
-                    self.truncated
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    break;
-                }
-                if total_bytes + decoded_len > MAX_TOTAL_STRING_BYTES {
-                    self.truncated
-                        .store(true, std::sync::atomic::Ordering::SeqCst);
-                    break;
-                }
-                total_bytes += decoded_len;
-                strings.push(decoded);
-            }
-        }
-        strings
-    }
-
-    /// Consuming variant of [`StringExtractor::convert_stng_strings`].
-    ///
-    /// Moves each `ExtractedString` into `convert_extracted_string`, so
-    /// `String` fields (`value`, `section`, `raw`, …) transfer without being
-    /// cloned.  Use this when the caller owns the `Vec` and will not touch
-    /// the raw strings afterward.
-    pub(crate) fn convert_stng_strings_owned(
-        &self,
-        stng_strings: Vec<ExtractedString>,
-    ) -> Vec<StringInfo> {
-        let mut strings = Vec::with_capacity(stng_strings.len().min(MAX_STRINGS_PER_FILE));
-        let mut total_bytes = 0;
-        self.truncated
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        for es in stng_strings {
-            if strings.len() >= MAX_STRINGS_PER_FILE {
-                self.truncated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                break;
-            }
-
-            let value_len = es.value.len();
-            if total_bytes + value_len > MAX_TOTAL_STRING_BYTES {
-                self.truncated
-                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                break;
-            }
-
-            total_bytes += value_len;
-            let decoded_sidecar = self.decoded_base64_sidecar(&es);
-            let info = self.convert_extracted_string(es);
-            strings.push(info);
 
             if let Some(decoded) = decoded_sidecar {
                 let decoded_len = decoded.value.len();
@@ -379,103 +308,9 @@ mod tests {
     }
 
     #[test]
-    fn test_string_extraction() {
-        let data = b"Hello World http://example.com /usr/bin/ls";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        assert!(!strings.is_empty());
-    }
-
-    #[test]
-    fn test_email_detection() {
-        // Real binaries store string literals NUL-terminated, so an email
-        // address in rodata is its own extracted string — not embedded in a
-        // surrounding sentence. Mirror that layout here so the classifier
-        // sees the bare address and can label it as Email.
-        let data = b"\0admin@example.com\0other string\0";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        let email_string = strings
-            .iter()
-            .find(|s| s.string_type == Some(StringType::Email));
-        assert!(
-            email_string.is_some(),
-            "expected an Email-typed extraction; got: {:?}",
-            strings
-                .iter()
-                .map(|s| (&s.value, s.string_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_min_length_filter() {
-        let data = b"ab  Hello World";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        // "ab" should be filtered (< 4 chars), "Hello World" should be kept
-        assert!(!strings.iter().any(|s| s.value == "ab"));
-        assert!(strings.iter().any(|s| s.value.contains("Hello World")));
-    }
-
-    #[test]
-    fn test_control_characters_filtered() {
-        let data = b"Hello\x00\x01World";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        // Should extract "Hello" and "World" separately
-        assert!(strings.len() >= 2);
-    }
-
-    #[test]
-    fn test_offset_recorded() {
-        let data = b"start test string end";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        // Offset should be recorded for each string
-        assert!(strings.iter().all(|s| s.offset.is_some()));
-    }
-
-    #[test]
     fn test_default() {
         let extractor = StringExtractor::default();
         assert_eq!(extractor.min_length, 4);
-    }
-
-    #[test]
-    fn test_trimmed_strings() {
-        let data = b"  spaced  ";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        // Should trim whitespace
-        if let Some(s) = strings.first() {
-            assert_eq!(s.value.trim(), s.value.as_str());
-        }
-    }
-
-    #[test]
-    fn test_empty_data() {
-        let data = b"";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        assert!(strings.is_empty());
-    }
-
-    #[test]
-    fn test_binary_data_only() {
-        let data = vec![0x00, 0x01, 0x02, 0x03, 0xFF];
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(&data);
-
-        // No printable strings should be found
-        assert!(strings.is_empty());
     }
 
     #[test]
@@ -520,124 +355,6 @@ mod tests {
         let decoded_entries = strings.iter().filter(|s| s.value == decoded).count();
         assert_eq!(decoded_entries, 1);
         assert_eq!(strings[0].encoding_chain, vec!["base64"]);
-    }
-
-    #[test]
-    fn test_extract_smart_basic() {
-        // Basic test with null-terminated strings so stng can extract them individually
-        let data = b"Hello World\0http://example.com\0/usr/bin/ls\0";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        assert!(!strings.is_empty());
-
-        // Should find the URL - stng classifies URLs
-        let has_url = strings
-            .iter()
-            .any(|s| s.value.contains("example.com") && s.string_type == Some(StringType::Url));
-
-        // Should find the path
-        let has_path = strings
-            .iter()
-            .any(|s| s.value.contains("/usr/bin/ls") && s.string_type == Some(StringType::Path));
-
-        assert!(
-            has_url || has_path,
-            "Expected to find URL or Path, but got: {:?}",
-            strings
-                .iter()
-                .map(|s| (&s.value, &s.string_type))
-                .collect::<Vec<_>>()
-        );
-    }
-
-    #[test]
-    fn test_extract_smart_empty() {
-        let data = b"";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        assert!(strings.is_empty());
-    }
-
-    #[test]
-    fn test_extract_smart_deduplication() {
-        // Test that duplicate strings are removed
-        let data = b"test string\0test string\0test string";
-        let extractor = StringExtractor::new();
-        let strings = extractor.extract_smart(data);
-
-        // Should not have duplicate values
-        let values: Vec<&str> = strings.iter().map(|s| s.value.as_str()).collect();
-        let unique: HashSet<&str> = values.iter().cloned().collect();
-        assert_eq!(values.len(), unique.len());
-    }
-
-    #[test]
-    fn test_extract_smart_with_go_binary() {
-        // Test with actual Go binary if available
-        let path = "tests/fixtures/lang_strings/go_darwin_arm64";
-        if !std::path::Path::new(path).exists() {
-            return;
-        }
-        let data = std::fs::read(path).unwrap();
-        let extractor = StringExtractor::new();
-
-        let strings = extractor.extract_smart(&data);
-
-        // Should find strings from both lang_strings and basic extraction
-        assert!(!strings.is_empty());
-
-        // Go binaries should have DISSECT_CONST_MARKER from lang_strings
-        // (test fixture was compiled before rename)
-        assert!(
-            strings.iter().any(|s| s.value.contains("DISSECT")),
-            "Should find DISSECT markers in Go binary test fixture"
-        );
-    }
-
-    #[test]
-    fn test_extract_smart_with_rust_binary() {
-        // Test with actual Rust binary if available
-        let path = "tests/fixtures/lang_strings/rust_native";
-        if !std::path::Path::new(path).exists() {
-            return;
-        }
-        let data = std::fs::read(path).unwrap();
-        let extractor = StringExtractor::new();
-
-        let strings = extractor.extract_smart(&data);
-
-        // Should find strings
-        assert!(!strings.is_empty());
-
-        // Rust binaries should have stdlib paths
-        assert!(
-            strings.iter().any(|s| s.value.contains("library/std")),
-            "Should find stdlib paths in Rust binary"
-        );
-    }
-
-    #[test]
-    fn test_extract_smart_truncation_count() {
-        // Create data with many strings
-        let mut data = Vec::new();
-        for i in 0..110 {
-            data.extend_from_slice(format!("string_{:05}\0", i).as_bytes());
-        }
-
-        // Use a temporary extractor with a very low limit for testing
-        // Since the limits are constants, we'll just verify the flag is set
-        // if we were to exceed the REAL limits, but for a unit test,
-        // we can't easily change constants.
-
-        // Instead, let's just verify the structure and flag existence.
-        let extractor = StringExtractor::new();
-        assert!(
-            !extractor
-                .truncated
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
     }
 
     #[test]

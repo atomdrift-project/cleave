@@ -368,7 +368,6 @@ impl PEAnalyzer {
                 file_path,
                 file_path,
                 data,
-                None,
                 true,
                 precomputed_sha256,
                 ctx,
@@ -380,7 +379,6 @@ impl PEAnalyzer {
             file_path,
             file_path,
             data,
-            None,
             true,
             precomputed_sha256,
             ctx,
@@ -416,13 +414,11 @@ impl PEAnalyzer {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && fs::write(temp_file.path(), &unpacked_data).is_ok()
                 {
-                    let opts = crate::analyzers::stng_analysis_opts(4);
-                    let unpacked_strings =
-                        stng::extract_strings_with_options(&unpacked_data, &opts);
                     // UPX-unpacked bytes differ from the caller's
                     // bytes; open a fresh context on the
                     // decompressed payload so the downstream
-                    // helpers see a self-consistent view.
+                    // helpers see a self-consistent view — including
+                    // its filefacts-extracted strings.
                     let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
                         temp_file.path(),
                         &unpacked_data,
@@ -433,7 +429,6 @@ impl PEAnalyzer {
                         temp_file.path(),
                         temp_file.path(),
                         &unpacked_data,
-                        Some(&unpacked_strings),
                         true,
                         None, // Hash will change after decompression
                         &unpacked_ctx,
@@ -531,7 +526,6 @@ impl PEAnalyzer {
         logical_path: &Path,
         analysis_path: &Path,
         data: &'a [u8],
-        stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
@@ -553,7 +547,6 @@ impl PEAnalyzer {
             pe_data,
             tamper_findings,
             start,
-            stng_strings,
             allow_rizin,
             precomputed_sha256,
             ctx,
@@ -582,7 +575,6 @@ impl PEAnalyzer {
         pe_data: &'a [u8],
         mut tamper_findings: Vec<Finding>,
         start: std::time::Instant,
-        stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
@@ -794,22 +786,15 @@ impl PEAnalyzer {
 
         // --- Shared post-processing (strings, embedded code, metrics, overlay, SFX) ---
 
-        // String extraction (preference: stng_strings > preextracted > extract_smart)
-        let (report_strings, raw_stng_strings) = if let Some(strings) = stng_strings {
-            (
-                self.string_extractor.convert_stng_strings(strings),
-                Some(strings.to_vec()),
-            )
-        } else if let Some(ref strings) = self.preextracted_strings {
-            // If we have preextracted strings but they are already converted, we can't easily get back to raw.
-            // But usually preextracted_strings are from stng-local path or similar.
-            (strings.clone(), None)
-        } else {
-            let raw = self.string_extractor.extract_raw_smart(pe_data);
-            (self.string_extractor.convert_stng_strings(&raw), Some(raw))
+        // Strings come from filefacts's typed `text()` view — the single
+        // string-extraction authority (cleave no longer scans). The raw
+        // stng rows also feed embedded-child analysis below.
+        let raw_stng_strings: Vec<stng::ExtractedString> = {
+            let text = ctx.parsed.text();
+            text.ascii.iter().chain(text.utf16le.iter()).cloned().collect()
         };
         let _ = r2_strings;
-        report.strings = report_strings;
+        report.strings = self.string_extractor.convert_stng_strings(&raw_stng_strings);
 
         // Report string truncation if limits were hit
         if self
@@ -1181,7 +1166,7 @@ impl PEAnalyzer {
                     binary.offset,
                     self.capability_mapper.clone(),
                     self.yara_engine.clone(),
-                    raw_stng_strings.as_deref().unwrap_or(&[]),
+                    &raw_stng_strings,
                 ) {
                     if finding.crit == Criticality::Suspicious
                         && files
@@ -1447,23 +1432,15 @@ impl Default for PEAnalyzer {
 
 impl Analyzer for PEAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Use caller-provided strings when present; an empty slice means the
-        // caller only supplied bytes, so the structural analyzer should extract.
-        let strings = if input.strings.is_empty() {
-            None
-        } else {
-            Some(input.strings)
-        };
         // Open filefacts-side parse so structural helpers (sections,
-        // imports, exports, signature verification) source from
-        // filefacts's typed view.
+        // imports, exports, signature verification) and strings all
+        // source from filefacts's typed view.
         let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
             .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
         let mut report = self.analyze_structural_with_strings(
             input.path,
             input.backing_path(),
             input.data,
-            strings,
             !input.skip_rizin,
             input.sha256.as_deref(),
             &ctx,
@@ -1485,17 +1462,8 @@ impl Analyzer for PEAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let opts = crate::analyzers::stng_analysis_opts(4);
-        let strings = stng::extract_strings_with_options(&data, &opts);
-        tracing::debug!(
-            path = %file_path.display(),
-            strings = strings.len(),
-            string_mode = "stng-local",
-            reason = "legacy analyze() path without pre-extracted AnalysisInput",
-            "PE analyzer extracting strings locally before analyze_input"
-        );
-        let input =
-            AnalysisInput::with_strings(file_path, &data, &strings, crate::analyzers::FileType::Pe);
+        // Strings come from filefacts inside analyze_input — no local scan.
+        let input = AnalysisInput::new(file_path, &data, crate::analyzers::FileType::Pe);
         self.analyze_input(&input)
     }
 

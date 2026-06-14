@@ -11,8 +11,8 @@ use crate::capabilities::CapabilityMapper;
 use crate::entropy::EntropyLevel;
 use crate::strings::StringExtractor;
 use crate::types::{
-    AnalysisReport, Criticality, Evidence, Finding, FindingKind, Section, StringInfo,
-    StructuralFeature, TargetInfo,
+    AnalysisReport, Criticality, Evidence, Finding, FindingKind, Section, StructuralFeature,
+    TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -33,8 +33,6 @@ pub(crate) struct ElfAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     string_extractor: StringExtractor,
     yara_engine: Option<Arc<YaraEngine>>,
-    /// Pre-extracted strings from stng (avoids redundant extraction)
-    preextracted_strings: Option<Vec<StringInfo>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
     skip_embedded_scan: bool,
     /// Per-request cancellation flag.
@@ -105,7 +103,6 @@ impl ElfAnalyzer {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             string_extractor: StringExtractor::new(),
             yara_engine: None,
-            preextracted_strings: None,
             skip_embedded_scan: false,
             cancellation: None,
         }
@@ -161,18 +158,8 @@ impl ElfAnalyzer {
         self
     }
 
-    /// Set pre-extracted strings (avoids redundant stng/radare2 extraction)
-    #[must_use]
-    #[allow(dead_code)] // Used by binary target, not visible to library
-    pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
-        self.preextracted_strings = Some(strings);
-        self
-    }
-
-    /// Core ELF analysis logic.
-    ///
-    /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
-    /// Otherwise falls back to `self.preextracted_strings` or extracts with stng.
+    /// Core ELF analysis logic. Strings and structure both come from the
+    /// caller's `AnalysisContext` (filefacts) — the single extraction authority.
     #[allow(clippy::too_many_arguments)]
     fn analyze_elf_core<'a>(
         &self,
@@ -452,9 +439,15 @@ impl ElfAnalyzer {
         // rows also feed embedded-child analysis below.
         let raw_stng_strings: Vec<stng::ExtractedString> = {
             let text = ctx.parsed.text();
-            text.ascii.iter().chain(text.utf16le.iter()).cloned().collect()
+            text.ascii
+                .iter()
+                .chain(text.utf16le.iter())
+                .cloned()
+                .collect()
         };
-        report.strings = self.string_extractor.convert_stng_strings(&raw_stng_strings);
+        report.strings = self
+            .string_extractor
+            .convert_stng_strings(&raw_stng_strings);
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan && !is_core_dump {
@@ -874,14 +867,8 @@ impl ElfAnalyzer {
         }
 
         // UPX-packed: structural analysis of packed binary first
-        let mut report = self.analyze_elf_core(
-            file_path,
-            file_path,
-            data,
-            true,
-            precomputed_sha256,
-            ctx,
-        );
+        let mut report =
+            self.analyze_elf_core(file_path, file_path, data, true, precomputed_sha256, ctx);
 
         report.findings.push(
             Finding::structural(

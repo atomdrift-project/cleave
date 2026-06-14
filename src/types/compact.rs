@@ -69,6 +69,12 @@ pub struct CompactFile {
     #[serde(rename = "mol")]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula: Option<String>,
+    /// Normalized identity claims (filefacts `Identity`) for the file this
+    /// record was extracted from: name, version, signer, trust tier, and other
+    /// cross-format provenance. Omitted when the file asserts no identity.
+    #[serde(rename = "idn")]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity: Option<filefacts::Identity>,
     /// Traits (findings)
     #[serde(rename = "find")]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -756,6 +762,7 @@ fn convert_file(file: &super::file_analysis::FileAnalysis, id: u32) -> CompactFi
         risk: file.score,
         depth: file.depth,
         formula,
+        identity: file.identity.clone(),
         findings: traits,
         context: file.context.clone(),
         facts,

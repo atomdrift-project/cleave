@@ -793,14 +793,33 @@ impl ArchiveAnalyzer {
             // from the original bytes, so identity is unchanged.
             let normalized_member = crate::file_io::normalize_text_encoding(data);
             let data: &[u8] = normalized_member.as_ref();
-            let stng_strings = stng::extract_strings_with_options(data, &stng_opts);
+            let logical_path = Path::new(relative_path);
+            // Source members: filefacts is both the string authority and the
+            // parser, so open it once and thread it into the analyzer (below) —
+            // the member is parsed a single time. Other member types keep the
+            // standalone stng scan (their analyzers open their own context).
+            let member_ctx = if file_type.is_source_code() {
+                crate::analysis_context::AnalysisContext::open(logical_path, data).ok()
+            } else {
+                None
+            };
+            let stng_strings = match member_ctx.as_ref() {
+                Some(ctx) => {
+                    let text = ctx.parsed.text();
+                    text.ascii
+                        .iter()
+                        .chain(text.utf16le.iter())
+                        .cloned()
+                        .collect()
+                }
+                None => stng::extract_strings_with_options(data, &stng_opts),
+            };
             crate::memory_tracker::clear_current_phase();
             let payloads = if extract_payloads {
                 crate::extractors::encoded_payload::extract_encoded_payloads(&stng_strings)
             } else {
                 Vec::new()
             };
-            let logical_path = Path::new(relative_path);
             let mut input = AnalysisInput::with_payloads(
                 logical_path,
                 data,
@@ -812,6 +831,9 @@ impl ArchiveAnalyzer {
             .with_skip_rizin_if(skip_rizin_reason.is_some())
             .with_sha256(sha256.to_string())
             .at_depth((self.current_depth + 1) as u32);
+            if let Some(ctx) = member_ctx {
+                input = input.with_parsed_ctx(ctx);
+            }
             input.cancellation = self.cancelled.clone();
 
             tracing::debug!(

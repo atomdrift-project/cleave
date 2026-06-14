@@ -437,14 +437,8 @@ impl ElfAnalyzer {
         // Strings come from filefacts's byte-scan `text()` — the single
         // string-extraction authority (cleave no longer scans). The raw stng
         // rows also feed embedded-child analysis below.
-        let raw_stng_strings: Vec<stng::ExtractedString> = {
-            let text = ctx.parsed.text();
-            text.ascii
-                .iter()
-                .chain(text.utf16le.iter())
-                .cloned()
-                .collect()
-        };
+        let raw_stng_strings: Vec<stng::ExtractedString> =
+            ctx.parsed.text().iter().cloned().collect();
         report.strings = self
             .string_extractor
             .convert_stng_strings(&raw_stng_strings);

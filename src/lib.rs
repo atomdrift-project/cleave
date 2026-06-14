@@ -1737,34 +1737,21 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Open filefacts on the full file and harvest its `text()` rows — the same
     // string scan cleave used to run standalone, but now sourced from the one
     // authority. Returns the context too so the caller can thread it into the
-    // analyzer (avoiding a second parse).
+    // analyzer (avoiding a second parse). Mirrors `stng_scan`'s `(_, elapsed)`.
     let open_ctx_strings = || {
+        let t = std::time::Instant::now();
         let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
         let strings = ctx
             .as_ref()
-            .map(|c| {
-                let text = c.parsed.text();
-                text.ascii
-                    .iter()
-                    .chain(text.utf16le.iter())
-                    .cloned()
-                    .collect()
-            })
+            .map(|c| c.parsed.text().iter().cloned().collect())
             .unwrap_or_default();
-        (ctx, strings)
+        (ctx, strings, t.elapsed().as_millis() as u64)
     };
     let (mut file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
         (None, Vec::new(), 0u64, None)
     } else if let (true, Some(ftypes)) = (ctx_strings, binary_yara_ftypes) {
         // PE/ELF: overlap the ctx open+scan with the YARA prefetch.
-        let ((ctx, strings, ms), yara) = rayon::join(
-            || {
-                let t = std::time::Instant::now();
-                let (ctx, strings) = open_ctx_strings();
-                (ctx, strings, t.elapsed().as_millis() as u64)
-            },
-            || yara_prefetch(ftypes),
-        );
+        let ((ctx, strings, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
         (ctx, strings, ms, yara)
     } else if let Some(ftypes) = binary_yara_ftypes {
         // Mach-O: full-file stng scan (structural ctx is a per-arch slice).
@@ -1775,13 +1762,12 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // the AST parser). Open once and thread the context into the analyzer
         // (below) so the file is parsed a single time. Fall back to a bare scan
         // if filefacts refuses the bytes (the analyzer then opens its own).
-        let t = std::time::Instant::now();
-        let (ctx, strings) = open_ctx_strings();
-        if ctx.is_some() {
-            (ctx, strings, t.elapsed().as_millis() as u64, None)
-        } else {
-            let (s, ms) = stng_scan();
-            (None, s, ms, None)
+        match open_ctx_strings() {
+            (Some(ctx), strings, ms) => (Some(ctx), strings, ms, None),
+            (None, _, _) => {
+                let (s, ms) = stng_scan();
+                (None, s, ms, None)
+            }
         }
     } else {
         let (s, ms) = stng_scan();

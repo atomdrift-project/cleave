@@ -98,17 +98,9 @@ impl Default for PngAnalyzer {
 
 impl Analyzer for PngAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Reuse the threaded context, else open one on `input.data` so both
-        // branches yield a context over the same bytes (matching lifetimes).
-        let owned_ctx;
-        let source_ctx = match input.parsed_ctx.as_ref() {
-            Some(ctx) => Some(ctx),
-            None => {
-                owned_ctx =
-                    crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
-                owned_ctx.as_ref()
-            }
-        };
+        // Reuse the threaded context, else open one on the same `input.data`.
+        let fallback = input.open_ctx_fallback();
+        let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
         Ok(self.analyze_png(input.path, input.data, Some(input.strings), source_ctx))
     }
 

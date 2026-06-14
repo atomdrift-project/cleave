@@ -1,10 +1,51 @@
 //! Capability detection for Java bytecode.
 
-use super::parsing::ClassInfo;
+use crate::analysis_context::AnalysisContext;
 use crate::types::{AnalysisReport, Criticality, Evidence, Finding, FindingKind};
 
+/// Collect a filefacts values array (e.g. `class.class_refs`) into owned strings.
+fn ctx_values_array(ctx: Option<&AnalysisContext<'_>>, key: &str) -> Vec<String> {
+    let Some(ctx) = ctx else {
+        return Vec::new();
+    };
+    ctx.parsed
+        .values()
+        .get(key)
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| x.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 impl super::JavaClassAnalyzer {
-    pub(super) fn detect_capabilities(&self, class_info: &ClassInfo, report: &mut AnalysisReport) {
+    /// Read the constant-pool facts filefacts surfaces — the complete
+    /// `CONSTANT_Class` set and `CONSTANT_Utf8` string table — and run the
+    /// capability heuristics over them. cleave applies its own
+    /// interesting-string policy; the parsing itself lives in filefacts.
+    pub(super) fn detect_capabilities(
+        &self,
+        ctx: Option<&AnalysisContext<'_>>,
+        report: &mut AnalysisReport,
+    ) {
+        let class_refs = ctx_values_array(ctx, "class.class_refs");
+        let strings: Vec<String> = ctx_values_array(ctx, "class.strings")
+            .into_iter()
+            .filter(|s| self.is_interesting_string(s))
+            .collect();
+        self.detect_capabilities_from_facts(&class_refs, &strings, report);
+    }
+
+    /// Capability heuristics over already-resolved constant-pool facts.
+    /// `strings` are expected to have passed [`Self::is_interesting_string`].
+    pub(super) fn detect_capabilities_from_facts(
+        &self,
+        class_refs: &[String],
+        strings: &[String],
+        report: &mut AnalysisReport,
+    ) {
         let target_path = report.target.path.to_lowercase();
         let is_sig_stub = target_path.ends_with(".sig") || target_path.contains("ct.sym");
         let is_demo_artifact = target_path.contains("/demo/") || target_path.contains("j2ddemo");
@@ -72,7 +113,7 @@ impl super::JavaClassAnalyzer {
             ("sun/misc/Unsafe", "mem/unsafe", "Unsafe memory operations"),
         ];
 
-        for class_ref in &class_info.class_refs {
+        for class_ref in class_refs {
             for (pattern, cap_id, description) in &suspicious_classes {
                 if is_sig_stub {
                     continue;
@@ -114,65 +155,8 @@ impl super::JavaClassAnalyzer {
             }
         }
 
-        // Detect suspicious method names
-        for method in &class_info.methods {
-            let method_lower = method.name.to_lowercase();
-            if method_lower.contains("decrypt") || method_lower.contains("encrypt") {
-                self.add_capability(
-                    report,
-                    "crypto/operation",
-                    "Encryption/decryption operation",
-                    &method.name,
-                    Criticality::Notable,
-                );
-            }
-            if method_lower.contains("exec")
-                || method_lower.contains("command")
-                || method_lower.contains("shell")
-            {
-                self.add_capability(
-                    report,
-                    "execution/command",
-                    "Command execution method",
-                    &method.name,
-                    Criticality::Notable,
-                );
-            }
-            if method_lower.contains("download") || method_lower.contains("upload") {
-                self.add_capability(
-                    report,
-                    "net/transfer",
-                    "File transfer operation",
-                    &method.name,
-                    Criticality::Notable,
-                );
-            }
-            if method_lower.contains("inject") || method_lower.contains("hook") {
-                self.add_capability(
-                    report,
-                    "execution/inject",
-                    "Code injection method",
-                    &method.name,
-                    Criticality::Suspicious,
-                );
-            }
-            if method_lower.contains("keylog")
-                || method_lower.contains("key-log")
-                || method_lower.contains("keyboardcapture")
-                || method_lower.contains("capturekey")
-            {
-                self.add_capability(
-                    report,
-                    "credential/keylogger",
-                    "Potential keylogging",
-                    &method.name,
-                    Criticality::Suspicious,
-                );
-            }
-        }
-
         // Detect suspicious strings (RAT commands, malware indicators)
-        for s in &class_info.strings {
+        for s in strings {
             let s_lower = s.to_lowercase();
 
             // Shell/command execution - shell path references are common in legitimate

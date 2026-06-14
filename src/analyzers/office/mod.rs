@@ -146,11 +146,15 @@ impl OfficeAnalyzer {
             Vec::new()
         };
 
+        // VBA module source is decompressed by filefacts and read back
+        // from the shared parse opened above; the per-format parsers only
+        // flag macro presence (filefacts covers both OLE2 and OOXML).
+        let vba_modules = vba::modules_from_ctx(office_ctx.as_ref());
+
         // Route to appropriate parser
         let (
             type_str,
             findings,
-            vba_modules,
             embedded_execs,
             ole_metrics,
             ooxml_metrics,
@@ -159,17 +163,16 @@ impl OfficeAnalyzer {
             values_tree,
         ) = match file_type {
             FileType::OleDoc => {
-                let (t, f, v, e, om, cc, kv) = self.analyze_ole2(data);
-                (t, f, v, e, Some(om), None, None, cc, kv)
+                let (t, f, e, om, cc, kv) = self.analyze_ole2(data, &vba_modules);
+                (t, f, e, Some(om), None, None, cc, kv)
             }
             FileType::Ooxml => {
-                let (t, f, v, om, xm, cc, kv) =
-                    self.analyze_ooxml(data, file_path, &office_archive_entries);
-                (t, f, v, Vec::new(), None, om, xm, cc, kv)
+                let (t, f, om, xm, cc, kv) =
+                    self.analyze_ooxml(data, file_path, &office_archive_entries, &vba_modules);
+                (t, f, Vec::new(), None, om, xm, cc, kv)
             }
             _ => (
                 "unknown".to_string(),
-                Vec::new(),
                 Vec::new(),
                 Vec::new(),
                 None,
@@ -702,10 +705,10 @@ impl OfficeAnalyzer {
     fn analyze_ole2(
         &self,
         data: &[u8],
+        vba_modules: &[vba::VbaModule],
     ) -> (
         String,
         Vec<Finding>,
-        Vec<vba::VbaModule>,
         Vec<ole2::EmbeddedExecutable>,
         OleMetrics,
         OfficeCrossCounts,
@@ -723,7 +726,6 @@ impl OfficeAnalyzer {
                 "ole".to_string(),
                 findings,
                 Vec::new(),
-                Vec::new(),
                 OleMetrics::default(),
                 OfficeCrossCounts::default(),
                 serde_json::Value::Null,
@@ -738,7 +740,6 @@ impl OfficeAnalyzer {
                     "ole".to_string(),
                     findings,
                     Vec::new(),
-                    Vec::new(),
                     OleMetrics::default(),
                     OfficeCrossCounts::default(),
                     serde_json::Value::Null,
@@ -750,8 +751,8 @@ impl OfficeAnalyzer {
 
         // VBA presence — metadata finding
         if doc.has_vba {
-            let module_count = doc.vba_modules.len();
-            let module_names: Vec<&str> = doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
+            let module_count = vba_modules.len();
+            let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
                 src: None,
@@ -936,7 +937,6 @@ impl OfficeAnalyzer {
         (
             type_str,
             findings,
-            doc.vba_modules,
             doc.embedded_executables,
             ole_metrics,
             cross,
@@ -949,10 +949,10 @@ impl OfficeAnalyzer {
         data: &[u8],
         file_path: &Path,
         archive_entries: &[ArchiveEntry],
+        vba_modules: &[vba::VbaModule],
     ) -> (
         String,
         Vec<Finding>,
-        Vec<vba::VbaModule>,
         Option<OoxmlMetrics>,
         Option<XlmMetrics>,
         OfficeCrossCounts,
@@ -971,7 +971,6 @@ impl OfficeAnalyzer {
                 return (
                     ext.to_string(),
                     findings,
-                    Vec::new(),
                     None,
                     None,
                     OfficeCrossCounts::default(),
@@ -985,8 +984,8 @@ impl OfficeAnalyzer {
         // VBA presence — metadata finding
         let mut has_word_vba_doc = false;
         if doc.has_vba {
-            let module_count = doc.vba_modules.len();
-            let module_names: Vec<&str> = doc.vba_modules.iter().map(|m| m.name.as_str()).collect();
+            let module_count = vba_modules.len();
+            let module_names: Vec<&str> = vba_modules.iter().map(|m| m.name.as_str()).collect();
 
             findings.push(Finding {
                 src: None,
@@ -1029,10 +1028,10 @@ impl OfficeAnalyzer {
             }
         }
 
-        let vba_surface = if doc.vba_modules.is_empty() {
+        let vba_surface = if vba_modules.is_empty() {
             doc.vba_project_strings.join("\n")
         } else {
-            doc.vba_modules
+            vba_modules
                 .iter()
                 .map(|m| m.source_code.as_str())
                 .collect::<Vec<_>>()
@@ -1461,7 +1460,6 @@ impl OfficeAnalyzer {
         (
             type_str,
             findings,
-            doc.vba_modules,
             Some(ooxml_metrics),
             xlm_metrics,
             cross,
@@ -1613,12 +1611,10 @@ mod tests {
             vba::VbaModule {
                 name: "ThisDocument".into(),
                 source_code: "Sub Document_Open()\n  ' comment\n  x = 1\nEnd Sub\n".into(),
-                module_type: vba::VbaModuleType::Document,
             },
             vba::VbaModule {
                 name: "qWeRty12Ab".into(), // matches random-name heuristic
                 source_code: "Sub Helper()\n  y = 2\nEnd Sub\n".into(),
-                module_type: vba::VbaModuleType::Standard,
             },
         ];
 

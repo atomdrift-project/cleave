@@ -3,7 +3,6 @@
 //! Handles .doc, .xls, .ppt, .msg and other legacy Microsoft Office documents
 //! that use the Compound File Binary Format (CFBF/OLE2).
 
-use super::vba;
 use anyhow::Result;
 use std::io::{Cursor, Read};
 
@@ -41,8 +40,6 @@ pub(crate) struct Ole2Document {
     pub doc_subtype: Ole2Subtype,
     /// Whether VBA macros were found
     pub has_vba: bool,
-    /// Extracted VBA modules (if any)
-    pub vba_modules: Vec<vba::VbaModule>,
     /// Whether the document is encrypted
     pub has_encryption: bool,
     /// Stream names found in the document
@@ -192,18 +189,8 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
         .iter()
         .any(|s| s.to_lowercase().contains("/vba/") || s.to_lowercase().ends_with("/vba"));
 
-    // Extract VBA modules
-    let vba_modules = if has_vba {
-        match vba::extract_vba_modules(data) {
-            Ok(modules) => modules,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to extract VBA modules from OLE2");
-                Vec::new()
-            }
-        }
-    } else {
-        Vec::new()
-    };
+    // VBA module source is decompressed by filefacts and read back via
+    // `vba::modules_from_ctx`; the parser only records macro presence.
 
     // Check for encryption
     let has_encryption = stream_names
@@ -226,7 +213,6 @@ pub(crate) fn parse_ole2(data: &[u8]) -> Result<Ole2Document> {
     Ok(Ole2Document {
         doc_subtype,
         has_vba,
-        vba_modules,
         has_encryption,
         stream_names,
         embedded_executables,

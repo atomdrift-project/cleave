@@ -421,6 +421,14 @@ impl PEAnalyzer {
                         None, // Hash will change after decompression
                         &unpacked_ctx,
                     );
+                    // Merge filefacts facts (incl. `pe.go.*`) into the
+                    // unpacked report so `augment_report` can reshape the Go
+                    // build-info; idempotent with the merge during the
+                    // composite evaluation below.
+                    crate::capabilities::merge_filefacts_context(
+                        &mut unpacked_report,
+                        &unpacked_ctx,
+                    );
                     crate::analyzers::binary_extractors::augment_report(
                         &mut unpacked_report,
                         &unpacked_data,

@@ -153,12 +153,31 @@ impl StringExtractor {
     /// `String` fields and avoids N per-string clones.
     #[allow(dead_code)] // Used by binary target, not visible to library
     pub(crate) fn convert_stng_strings(&self, stng_strings: &[ExtractedString]) -> Vec<StringInfo> {
-        let mut strings = Vec::with_capacity(stng_strings.len().min(MAX_STRINGS_PER_FILE));
+        self.convert_stng_iter(stng_strings.iter(), stng_strings.len())
+    }
+
+    /// Convert filefacts' byte-scan `Text` (the single string-extraction
+    /// authority) into `StringInfo`. Chains the ascii + utf16le partitions into
+    /// one pass so the per-file retention caps apply across both.
+    #[allow(dead_code)] // Used by binary target, not visible to library
+    pub(crate) fn convert_filefacts_text(&self, text: &filefacts::Text) -> Vec<StringInfo> {
+        let hint = text.ascii.len() + text.utf16le.len();
+        self.convert_stng_iter(text.ascii.iter().chain(text.utf16le.iter()), hint)
+    }
+
+    /// Shared conversion core: apply the per-file string + byte retention caps
+    /// and the base64 sidecar over any `stng::ExtractedString` source.
+    fn convert_stng_iter<'a>(
+        &self,
+        source: impl Iterator<Item = &'a ExtractedString>,
+        len_hint: usize,
+    ) -> Vec<StringInfo> {
+        let mut strings = Vec::with_capacity(len_hint.min(MAX_STRINGS_PER_FILE));
         let mut total_bytes = 0;
         self.truncated
             .store(false, std::sync::atomic::Ordering::SeqCst);
 
-        for es in stng_strings {
+        for es in source {
             if strings.len() >= MAX_STRINGS_PER_FILE {
                 self.truncated
                     .store(true, std::sync::atomic::Ordering::SeqCst);

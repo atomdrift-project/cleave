@@ -342,3 +342,10 @@ opt-level = 3
 opt-level = 3
 
 
+
+# Local override to pick up the PKGBUILD basename → Shell recognition fix in
+# filefacts (src/fileid/ext.rs) before it is published upstream. Without it,
+# short Arch PKGBUILD recipes type as Unknown and the pacman supply-chain trait
+# family never runs on them. Remove once the filefacts change is released.
+#[patch."https://codeberg.org/atomdrift/filefacts.git"]
+#filefacts = { path = "../filefacts" }

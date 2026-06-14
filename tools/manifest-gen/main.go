@@ -294,11 +294,24 @@ func buildArtifacts(c *config, pointers map[string]map[string]string, latest str
 // --- git / commit helpers ---------------------------------------------------
 
 func releaseTags(repo string, n int) []string {
-	out := capture(repo, "git", "tag", "-l", "--sort=-version:refname")
+	// versionsort.suffix demotes prereleases so the final release outranks its
+	// own rc/beta tags; without it git sorts "v2.0.0-rc.5" ABOVE "v2.0.0" and
+	// the real release falls out of the top-n window. selectReleaseTags also
+	// skips prereleases outright — stable must never pin to an rc.
+	out := capture(repo, "git", "-c", "versionsort.suffix=-rc",
+		"tag", "-l", "--sort=-version:refname")
+	return selectReleaseTags(out, n)
+}
+
+// selectReleaseTags filters newest-first `git tag -l` output to the first n
+// stable release tags: those shaped like "v<digit>…" with no prerelease suffix
+// ("-rc", "-beta", …), returned without the leading "v".
+func selectReleaseTags(gitOutput string, n int) []string {
 	var tags []string
-	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+	for _, line := range strings.Split(strings.TrimSpace(gitOutput), "\n") {
 		t := strings.TrimSpace(line)
-		if len(t) >= 2 && t[0] == 'v' && t[1] >= '0' && t[1] <= '9' {
+		if len(t) >= 2 && t[0] == 'v' && t[1] >= '0' && t[1] <= '9' &&
+			!strings.Contains(t, "-") {
 			tags = append(tags, strings.TrimPrefix(t, "v"))
 			if len(tags) == n {
 				break

@@ -3,7 +3,6 @@
 //! Handles .docx, .xlsx, .pptx and macro-enabled variants (.docm, .xlsm, .pptm).
 //! These are ZIP archives containing XML files and optional VBA project binaries.
 
-use super::vba;
 use crate::analyzers::utils::parse_xml_safe;
 use crate::types::ArchiveEntry;
 use anyhow::Result;
@@ -19,8 +18,6 @@ pub(crate) struct OoxmlDocument {
     pub doc_subtype: OoxmlSubtype,
     /// Whether VBA macros were found (vbaProject.bin present)
     pub has_vba: bool,
-    /// Extracted VBA modules (if any)
-    pub vba_modules: Vec<vba::VbaModule>,
     /// External template references (template injection vector)
     pub external_refs: Vec<ExternalRef>,
     /// DDE field codes found
@@ -244,11 +241,9 @@ fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument
         .iter()
         .any(|n| n.to_lowercase().contains("vbaproject.bin"));
 
-    let vba_modules = if has_vba {
-        extract_vba_from_ooxml(reader, &entry_names)
-    } else {
-        Vec::new()
-    };
+    // VBA module source is decompressed by filefacts (from vbaProject.bin)
+    // and read back via `vba::modules_from_ctx`; the parser only records
+    // macro presence and the raw vbaProject string surface.
     let vba_project_strings = extract_vba_project_strings(reader, &entry_names);
     let external_refs = find_external_refs(reader, &entry_names);
     let dde_links = find_dde_links(reader, &entry_names);
@@ -292,7 +287,6 @@ fn parse_ooxml_from_reader<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlDocument
     OoxmlDocument {
         doc_subtype,
         has_vba,
-        vba_modules,
         external_refs,
         dde_links,
         embedded_executables,
@@ -325,40 +319,6 @@ fn detect_subtype<R: OoxmlEntryReader>(reader: &mut R) -> OoxmlSubtype {
         OoxmlSubtype::PowerPoint
     } else {
         OoxmlSubtype::Unknown
-    }
-}
-
-/// Extract VBA modules from vbaProject.bin within the OOXML archive.
-fn extract_vba_from_ooxml<R: OoxmlEntryReader>(
-    reader: &mut R,
-    entry_names: &[String],
-) -> Vec<vba::VbaModule> {
-    // Find the vbaProject.bin entry
-    let vba_entry = entry_names
-        .iter()
-        .find(|n| n.to_lowercase().ends_with("vbaproject.bin"))
-        .or_else(|| {
-            entry_names
-                .iter()
-                .find(|n| n.to_lowercase().contains("vbaproject.bin"))
-        });
-
-    let vba_path = match vba_entry {
-        Some(path) => path.clone(),
-        None => return Vec::new(),
-    };
-
-    let Some(vba_data) = read_zip_entry(reader, &vba_path) else {
-        return Vec::new();
-    };
-
-    // vbaProject.bin is itself an OLE2 compound file
-    match vba::extract_vba_modules(&vba_data) {
-        Ok(modules) => modules,
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to extract VBA from OOXML vbaProject.bin");
-            Vec::new()
-        }
     }
 }
 
@@ -641,6 +601,81 @@ mod tests {
         assert_eq!(
             doc.external_refs[0].target,
             "https://example.invalid/template.dotm"
+        );
+        Ok(())
+    }
+
+    /// Wrap raw bytes as a single uncompressed MS-OVBA chunk (≤ 4096).
+    fn ovba_store(raw: &[u8]) -> Vec<u8> {
+        let mut out = vec![0x01u8];
+        out.extend_from_slice(&0u16.to_le_bytes()); // header, high bit clear → uncompressed
+        out.extend_from_slice(raw);
+        out
+    }
+
+    /// A `tiny_docx` with an added `word/vbaProject.bin` macro container
+    /// holding a single module "Module1" whose source calls Shell.
+    fn tiny_docm() -> anyhow::Result<Vec<u8>> {
+        use std::io::{Cursor, Write};
+
+        // dir stream: one standard module "Module1" at stream offset 0.
+        let mut dir = Vec::new();
+        let push = |d: &mut Vec<u8>, id: u16, body: &[u8]| {
+            d.extend_from_slice(&id.to_le_bytes());
+            d.extend_from_slice(&(body.len() as u32).to_le_bytes());
+            d.extend_from_slice(body);
+        };
+        push(&mut dir, 0x0019, b"Module1"); // MODULENAME
+        push(&mut dir, 0x001A, b"Module1"); // MODULESTREAMNAME
+        push(&mut dir, 0x0031, &0u32.to_le_bytes()); // MODULEOFFSET
+        push(&mut dir, 0x0021, &[]); // procedural
+        push(&mut dir, 0x002B, &[]); // terminator
+        let source = b"Attribute VB_Name = \"Module1\"\r\nSub AutoOpen()\r\n  Shell \"calc.exe\"\r\nEnd Sub\r\n";
+
+        let mut buf = Cursor::new(Vec::<u8>::new());
+        {
+            let mut comp = cfb::CompoundFile::create(&mut buf)?;
+            comp.create_storage("/VBA")?;
+            comp.create_stream("/VBA/dir")?
+                .write_all(&ovba_store(&dir))?;
+            comp.create_stream("/VBA/Module1")?
+                .write_all(&ovba_store(source))?;
+        }
+        let vba_bin = buf.into_inner();
+
+        let mut out = Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut out);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            zip.start_file("[Content_Types].xml", options)?;
+            zip.write_all(br#"<Types><Override PartName="/word/document.xml" ContentType="application/vnd.ms-word.document.macroEnabled.main+xml"/><Override PartName="/word/vbaProject.bin" ContentType="application/vnd.ms-office.vbaProject"/></Types>"#)?;
+            zip.start_file("word/document.xml", options)?;
+            zip.write_all(br#"<w:document><w:body><w:p>Hello</w:p></w:body></w:document>"#)?;
+            zip.start_file("docProps/app.xml", options)?;
+            zip.write_all(br#"<Properties><Application>Word</Application></Properties>"#)?;
+            zip.start_file("word/vbaProject.bin", options)?;
+            zip.write_all(&vba_bin)?;
+            zip.finish()?;
+        }
+        Ok(out.into_inner())
+    }
+
+    /// End-to-end keystone: filefacts decompresses the OOXML
+    /// `vbaProject.bin` and cleave reads the module source back via
+    /// `vba::modules_from_ctx` — no cleave-side decompressor involved.
+    #[test]
+    fn vba_modules_decompressed_via_filefacts() -> anyhow::Result<()> {
+        let data = tiny_docm()?;
+        let path = std::path::Path::new("evil.docm");
+        let ctx = crate::analysis_context::AnalysisContext::open(path, &data)?;
+        let modules = crate::analyzers::office::vba::modules_from_ctx(Some(&ctx));
+        assert_eq!(modules.len(), 1, "one VBA module decompressed");
+        assert_eq!(modules[0].name, "Module1");
+        assert!(
+            modules[0].source_code.contains("AutoOpen") && modules[0].source_code.contains("Shell"),
+            "decompressed source: {}",
+            modules[0].source_code
         );
         Ok(())
     }

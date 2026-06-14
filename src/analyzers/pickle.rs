@@ -60,16 +60,31 @@ impl PickleAnalyzer {
             .tools_used
             .push("pickle-analyzer".to_string());
 
-        // Extract globals (module.attr references) as import symbols
-        let globals = extract_pickle_globals(data);
-        for global_ref in &globals {
-            report.imports.push(crate::types::Import::new(
-                global_ref.as_str(),
-                Some("pickle-global".to_string()),
-            ));
+        // Open the filefacts parse once: it resolves the `module.attr`
+        // callable references (`pickle.globals`) and the `pickle.*` opcode
+        // facts, and is reused for trait evaluation below.
+        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+
+        // Project filefacts' resolved `module.attr` globals (the RCE targets)
+        // as import symbols for trait matching.
+        if let Some(ctx) = filefacts_ctx.as_ref()
+            && let Some(globals) = ctx
+                .parsed
+                .values()
+                .get("pickle.globals")
+                .and_then(|v| v.as_array())
+        {
+            for global_ref in globals.iter().filter_map(|v| v.as_str()) {
+                report.imports.push(crate::types::Import::new(
+                    global_ref,
+                    Some("pickle-global".to_string()),
+                ));
+            }
         }
 
-        // Extract readable strings from pickle data
+        // Extract readable strings from pickle data. (This SHORT_BINUNICODE
+        // scan folds into the filefacts string-extraction track alongside the
+        // other analyzers.)
         let strings = extract_pickle_strings(data);
         for s in &strings {
             report.strings.push(crate::types::StringInfo {
@@ -87,7 +102,6 @@ impl PickleAnalyzer {
         // capability mapper — no synthesis needed here.
 
         // Evaluate trait rules
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
@@ -131,85 +145,6 @@ impl Analyzer for PickleAnalyzer {
     }
 }
 
-/// Extract all STACK_GLOBAL (0x93) and GLOBAL (opcode 'c') references from pickle data.
-/// Returns deduplicated "module.attr" strings.
-fn extract_pickle_globals(data: &[u8]) -> Vec<String> {
-    let mut globals = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-
-    // Track recent SHORT_BINUNICODE strings for STACK_GLOBAL pairing.
-    // Bounded to prevent memory exhaustion on crafted pickle streams.
-    let mut recent_strings: Vec<String> = Vec::new();
-    let mut i = 0;
-    const MAX_PICKLE_STRINGS: usize = 10_000;
-
-    while i < data.len() && recent_strings.len() < MAX_PICKLE_STRINGS {
-        match data[i] {
-            // SHORT_BINUNICODE (protocol 4+): 1-byte length
-            0x8c => {
-                if i + 1 >= data.len() {
-                    break;
-                }
-                let length = data[i + 1] as usize;
-                if i + 2 + length > data.len() {
-                    break;
-                }
-                if let Ok(s) = std::str::from_utf8(&data[i + 2..i + 2 + length])
-                    && s.is_ascii()
-                    && s.len() > 1
-                {
-                    recent_strings.push(s.to_string());
-                }
-                i += 2 + length;
-            }
-            // STACK_GLOBAL: pairs the top two stack items as module.attr
-            0x93 => {
-                if recent_strings.len() >= 2 {
-                    let attr = &recent_strings[recent_strings.len() - 1];
-                    let module = &recent_strings[recent_strings.len() - 2];
-                    // Only keep if both look like Python identifiers
-                    if is_python_identifier(module) && is_python_identifier(attr) {
-                        let global_ref = format!("{module}.{attr}");
-                        if seen.insert(global_ref.clone()) {
-                            globals.push(global_ref);
-                        }
-                    }
-                }
-                i += 1;
-            }
-            // GLOBAL (protocol 0-2): "module\nattr\n"
-            b'c' => {
-                if let Some(end) = data[i + 1..].iter().position(|&b| b == b'\n') {
-                    let module_end = i + 1 + end;
-                    if let Ok(module) = std::str::from_utf8(&data[i + 1..module_end])
-                        && let Some(end2) = data[module_end + 1..].iter().position(|&b| b == b'\n')
-                    {
-                        let attr_end = module_end + 1 + end2;
-                        if let Ok(attr) = std::str::from_utf8(&data[module_end + 1..attr_end])
-                            && is_python_identifier(module)
-                            && is_python_identifier(attr)
-                        {
-                            let global_ref = format!("{module}.{attr}");
-                            if seen.insert(global_ref.clone()) {
-                                globals.push(global_ref);
-                            }
-                        }
-                        i = attr_end + 1;
-                        continue;
-                    }
-                }
-                i += 1;
-            }
-            // MEMOIZE, REDUCE, etc. — skip
-            _ => {
-                i += 1;
-            }
-        }
-    }
-
-    globals
-}
-
 /// Extract readable ASCII strings from pickle SHORT_BINUNICODE fields.
 fn extract_pickle_strings(data: &[u8]) -> Vec<String> {
     let mut strings = Vec::new();
@@ -241,134 +176,9 @@ fn extract_pickle_strings(data: &[u8]) -> Vec<String> {
     strings
 }
 
-fn is_python_identifier(s: &str) -> bool {
-    !s.is_empty()
-        && s.is_ascii()
-        && s.chars()
-            .all(|c| c.is_alphanumeric() || c == '_' || c == '.')
-        && s.starts_with(|c: char| c.is_alphabetic() || c == '_')
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[allow(clippy::expect_used)]
-    fn test_is_python_identifier() {
-        assert!(is_python_identifier("os"));
-        assert!(is_python_identifier("os.system"));
-        assert!(is_python_identifier("builtins.exec"));
-        assert!(is_python_identifier("_io.BytesIO"));
-        assert!(!is_python_identifier(""));
-        assert!(!is_python_identifier("123"));
-        assert!(!is_python_identifier("hello world"));
-    }
-
-    #[test]
-    fn test_extract_stack_global() {
-        // Minimal pickle with STACK_GLOBAL: builtins.exec
-        let data: Vec<u8> = vec![
-            0x80, 0x04, // PROTO 4
-            0x8c, 0x08, b'b', b'u', b'i', b'l', b't', b'i', b'n',
-            b's', // SHORT_BINUNICODE "builtins"
-            0x94, // MEMOIZE
-            0x8c, 0x04, b'e', b'x', b'e', b'c', // SHORT_BINUNICODE "exec"
-            0x94, // MEMOIZE
-            0x93, // STACK_GLOBAL
-        ];
-        let globals = extract_pickle_globals(&data);
-        assert_eq!(globals, vec!["builtins.exec"]);
-    }
-
-    #[test]
-    fn test_extract_global_opcode_protocol0() {
-        // Protocol 0/1 GLOBAL opcode: c<module>\n<attr>\n
-        let data = b"cbuiltins\nexec\n";
-        let globals = extract_pickle_globals(data);
-        assert_eq!(globals, vec!["builtins.exec"]);
-    }
-
-    #[test]
-    fn test_extract_global_os_system() {
-        // Protocol 0 GLOBAL for os.system — classic pickle RCE
-        let data = b"cos\nsystem\n";
-        let globals = extract_pickle_globals(data);
-        assert_eq!(globals, vec!["os.system"]);
-    }
-
-    #[test]
-    fn test_extract_multiple_globals_protocol0() {
-        // Two GLOBAL references in sequence
-        let data = b"cos\nsystem\ncbuiltins\nexec\n";
-        let globals = extract_pickle_globals(data);
-        assert_eq!(globals, vec!["os.system", "builtins.exec"]);
-    }
-
-    #[test]
-    fn test_extract_multiple_stack_globals() {
-        // Two STACK_GLOBAL references
-        let mut data: Vec<u8> = vec![
-            0x80, 0x04, // PROTO 4
-            0x8c, 0x02, b'o', b's', // SHORT_BINUNICODE "os"
-            0x8c, 0x06, b's', b'y', b's', b't', b'e', b'm', // SHORT_BINUNICODE "system"
-            0x93, // STACK_GLOBAL
-            0x8c, 0x08, b'b', b'u', b'i', b'l', b't', b'i', b'n',
-            b's', // SHORT_BINUNICODE "builtins"
-            0x8c, 0x04, b'e', b'x', b'e', b'c', // SHORT_BINUNICODE "exec"
-            0x93, // STACK_GLOBAL
-        ];
-        // Add a STOP opcode for completeness
-        data.push(0x2e);
-        let globals = extract_pickle_globals(&data);
-        assert_eq!(globals, vec!["os.system", "builtins.exec"]);
-    }
-
-    #[test]
-    fn test_globals_deduplicated() {
-        // Same GLOBAL reference repeated should appear only once
-        let data = b"cos\nsystem\ncos\nsystem\n";
-        let globals = extract_pickle_globals(data);
-        assert_eq!(globals, vec!["os.system"]);
-    }
-
-    #[test]
-    fn test_extract_globals_empty_data() {
-        let globals = extract_pickle_globals(&[]);
-        assert!(globals.is_empty());
-    }
-
-    #[test]
-    fn test_extract_globals_no_opcodes() {
-        // Random bytes with no pickle opcodes
-        let data = &[0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE];
-        let globals = extract_pickle_globals(data);
-        assert!(globals.is_empty());
-    }
-
-    #[test]
-    fn test_extract_globals_truncated_short_binunicode() {
-        // SHORT_BINUNICODE with length extending past end of data
-        let data: Vec<u8> = vec![0x8c, 0x20, b'o', b's']; // claims 32 bytes, only 2 available
-        let globals = extract_pickle_globals(&data);
-        assert!(globals.is_empty());
-    }
-
-    #[test]
-    fn test_extract_globals_truncated_global_opcode() {
-        // GLOBAL opcode with no trailing newline
-        let data = b"cbuiltins";
-        let globals = extract_pickle_globals(data);
-        assert!(globals.is_empty());
-    }
-
-    #[test]
-    fn test_extract_globals_rejects_non_identifier() {
-        // GLOBAL with non-identifier module name
-        let data = b"c123\nsystem\n";
-        let globals = extract_pickle_globals(data);
-        assert!(globals.is_empty());
-    }
 
     #[test]
     fn test_extract_pickle_strings() {
@@ -480,7 +290,9 @@ mod tests {
 
     #[test]
     fn test_mixed_protocol0_and_stack_global() {
-        // GLOBAL opcode followed by STACK_GLOBAL in same stream
+        // GLOBAL opcode followed by STACK_GLOBAL in same stream — both
+        // module.attr callables surface as imports via filefacts pickle.globals.
+        let analyzer = PickleAnalyzer::new();
         let mut data: Vec<u8> = Vec::new();
         // Protocol 0 GLOBAL: posix.system
         data.extend_from_slice(b"cposix\nsystem\n");
@@ -489,18 +301,8 @@ mod tests {
             0x8c, 0x08, b'b', b'u', b'i', b'l', b't', b'i', b'n', b's', 0x8c, 0x04, b'e', b'x',
             b'e', b'c', 0x93,
         ]);
-        let globals = extract_pickle_globals(&data);
-        assert_eq!(globals, vec!["posix.system", "builtins.exec"]);
-    }
-
-    #[test]
-    fn test_stack_global_needs_two_strings() {
-        // STACK_GLOBAL with only one preceding string should not produce a global
-        let data: Vec<u8> = vec![
-            0x8c, 0x02, b'o', b's', // only one SHORT_BINUNICODE
-            0x93, // STACK_GLOBAL — needs two strings
-        ];
-        let globals = extract_pickle_globals(&data);
-        assert!(globals.is_empty());
+        let report = analyzer.analyze_pickle(Path::new("mixed.pkl"), &data);
+        assert!(report.imports.iter().any(|i| i.symbol == "posix.system"));
+        assert!(report.imports.iter().any(|i| i.symbol == "builtins.exec"));
     }
 }

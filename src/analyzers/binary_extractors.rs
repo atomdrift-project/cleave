@@ -22,13 +22,6 @@ use std::sync::OnceLock;
 // ELF `.comment` section
 // ---------------------------------------------------------------------------
 
-/// Public re-export of the internal ELF section reader so other
-/// modules (e.g. `go_buildinfo`) can fetch named sections without
-/// duplicating the parser.
-pub(crate) fn read_elf_section<'a>(data: &'a [u8], name: &[u8]) -> Option<&'a [u8]> {
-    read_section(data, name)
-}
-
 /// Locate a named ELF section and return its byte slice. Lenient
 /// parser — bails on malformed inputs rather than propagating
 /// errors. Caps memory; only reads section header table.
@@ -431,11 +424,12 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
         }
     }
 
-    // Go buildinfo — cross-format scan for the magic header.
+    // Go buildinfo — parsed by filefacts and surfaced under
+    // `<format>.go.*`; cleave reshapes it into the `go.*` subtree.
     // Trait authors looking for "where was this Go binary built"
     // compose `build.build_root` + `build.toolchain_family == "go"`
     // rather than a Go-specific duplicate field.
-    if let Some(go) = super::go_buildinfo::extract(raw_data) {
+    if let Some(go) = go_from_report(report) {
         let go_value = serialize_go_buildinfo(&go);
         if let Some(obj) = go_value.as_object()
             && !obj.is_empty()
@@ -478,6 +472,19 @@ pub(crate) fn augment_report(report: &mut AnalysisReport, raw_data: &[u8]) {
 /// reals, booleans, and dates (formatted as ISO-8601). Binary data
 /// blobs are dropped (kv tree isn't a useful surface for them).
 /// Returns `None` on parse failure or empty result.
+/// Read filefacts' `<format>.go` value (set by `go_buildinfo::detect`)
+/// from the report's values tree and reshape it into a [`GoBuildInfo`].
+/// Returns `None` for non-Go binaries.
+fn go_from_report(report: &AnalysisReport) -> Option<super::go_buildinfo::GoBuildInfo> {
+    let obj = report.values_tree.as_ref()?.as_object()?;
+    for fmt in ["elf", "macho", "pe"] {
+        if let Some(go) = obj.get(fmt).and_then(|f| f.get("go")) {
+            return Some(super::go_buildinfo::from_go_value(go));
+        }
+    }
+    None
+}
+
 /// Serialize a parsed Go buildinfo into the `go.*` kv-tree shape.
 /// Pike-pass restructure: the original
 /// runtime/buildinfo flat dict (with keys like `-buildmode`,

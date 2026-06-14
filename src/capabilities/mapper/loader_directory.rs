@@ -3803,6 +3803,13 @@ impl super::CapabilityMapper {
                 // `ast.identity_function_count`) and per-operator density
                 // (`ast.op.^`, `ast.op.%`, …). Open key set, like `binary.*`.
                 "ast.",
+                // Symbol-kind counts and derived call-target classification
+                // filefacts emits from the same walk: `calls.count`,
+                // `calls.obfuscated_target_count`, `calls.dynamic_target_count`,
+                // `binds.count`, `members.count`. Open key set.
+                "calls.",
+                "binds.",
+                "members.",
             ];
             let in_filefacts_namespace = |f: &str| EXPOSE_PREFIXES.iter().any(|p| f.starts_with(p));
 

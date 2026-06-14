@@ -48,8 +48,6 @@ pub(crate) mod go_buildinfo;
 pub(crate) mod builder_paths;
 // B2: PE-specific extractors (Rich header, imphash, VERSIONINFO).
 pub(crate) mod pe_extractors;
-// B4: Mach-O load command extractors (UUID, build_version, dylibs, rpath, source_version).
-pub(crate) mod macho_extractors;
 
 // Dedicated analyzers for binary/bytecode/manifest formats
 pub(crate) mod chrome_manifest;

@@ -914,6 +914,13 @@ impl ElfAnalyzer {
                         &unpacked_ctx,
                     );
                     let mut unpacked_report = unpacked_report;
+                    // Merge filefacts facts (incl. `elf.go.*`) so
+                    // `augment_report` can reshape the Go build-info;
+                    // idempotent with any later merge.
+                    crate::capabilities::merge_filefacts_context(
+                        &mut unpacked_report,
+                        &unpacked_ctx,
+                    );
                     crate::analyzers::binary_extractors::augment_report(
                         &mut unpacked_report,
                         &unpacked_data,

@@ -256,7 +256,6 @@ mod tests {
         Ole2Document {
             doc_subtype: Ole2Subtype::Word,
             has_vba: false,
-            vba_modules: Vec::new(),
             has_encryption: false,
             stream_names: Vec::new(),
             embedded_executables: Vec::new(),
@@ -271,7 +270,6 @@ mod tests {
         OoxmlDocument {
             doc_subtype: OoxmlSubtype::Word,
             has_vba: false,
-            vba_modules: Vec::new(),
             external_refs: Vec::new(),
             dde_links: Vec::new(),
             embedded_executables: Vec::new(),

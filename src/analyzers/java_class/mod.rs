@@ -1,15 +1,15 @@
 //! Java bytecode (.class) analyzer.
 
+use crate::analysis_context::AnalysisContext;
 use crate::analyzers::{AnalysisInput, Analyzer};
 use crate::capabilities::CapabilityMapper;
 use crate::types::{AnalysisReport, Evidence, StructuralFeature, TargetInfo};
-use anyhow::Result;
+use anyhow::{Result, bail};
 use std::path::Path;
 use std::sync::Arc;
 
 mod capabilities;
 mod helpers;
-mod parsing;
 mod tests;
 
 #[derive(Debug)]
@@ -42,15 +42,21 @@ impl JavaClassAnalyzer {
         self
     }
 
-    /// Analyze class file structure only, without trait evaluation.
-    /// Use this when you want to run YARA in parallel and evaluate traits after.
-    pub(crate) fn analyze_structural(
+    /// Analyze class file structure only, without trait evaluation, reusing a
+    /// caller-provided filefacts [`AnalysisContext`]. Constant-pool facts
+    /// (`class.class_refs` / `class.strings`) come from filefacts; cleave runs
+    /// its capability heuristics over them.
+    pub(crate) fn analyze_structural_with_ctx(
         &self,
         file_path: &Path,
         data: &[u8],
         precomputed_sha256: Option<String>,
+        ctx: Option<&AnalysisContext<'_>>,
     ) -> Result<AnalysisReport> {
-        let class_info = self.parse_class_file(data)?;
+        if data.len() < 4 || u32::from_be_bytes([data[0], data[1], data[2], data[3]]) != 0xCAFE_BABE
+        {
+            bail!("Invalid class file magic number");
+        }
 
         let target = TargetInfo {
             path: file_path.display().to_string(),
@@ -75,7 +81,7 @@ impl JavaClassAnalyzer {
             }],
         });
 
-        self.detect_capabilities(&class_info, &mut report);
+        self.detect_capabilities(ctx, &mut report);
 
         // `class.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis here.
@@ -87,11 +93,16 @@ impl JavaClassAnalyzer {
 impl Analyzer for JavaClassAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         let start = std::time::Instant::now();
-        let mut report = self.analyze_structural(input.path, input.data, input.sha256.clone())?;
+        // Open the filefacts parse once and thread it through structural
+        // analysis (constant-pool facts), import projection, and the mapper.
+        let filefacts_ctx = AnalysisContext::open(input.path, input.data).ok();
+        let mut report = self.analyze_structural_with_ctx(
+            input.path,
+            input.data,
+            input.sha256.clone(),
+            filefacts_ctx.as_ref(),
+        )?;
 
-        // Evaluate all rules (atomic + composite) and merge into report
-        let filefacts_ctx =
-            crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
         if let Some(ctx) = filefacts_ctx.as_ref() {
             report.imports.extend(ctx.imports_from_filefacts());
         }
@@ -115,10 +126,10 @@ impl Analyzer for JavaClassAnalyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         let start = std::time::Instant::now();
-        let mut report = self.analyze_structural(file_path, &data, None)?;
+        let filefacts_ctx = AnalysisContext::open(file_path, &data).ok();
+        let mut report =
+            self.analyze_structural_with_ctx(file_path, &data, None, filefacts_ctx.as_ref())?;
 
-        // Evaluate all rules (atomic + composite) and merge into report
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
         if let Some(ctx) = filefacts_ctx.as_ref() {
             report.imports.extend(ctx.imports_from_filefacts());
         }

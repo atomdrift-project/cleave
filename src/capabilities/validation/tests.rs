@@ -4408,7 +4408,10 @@ mod autoprefix_tests {
         let ids: Vec<&str> = refs.iter().map(|(id, _)| id.as_str()).collect();
         assert!(ids.contains(&"if-ref"), "if: ref must be collected");
         assert!(ids.contains(&"unless-ref"), "unless: ref must be collected");
-        assert!(ids.contains(&"dg-all-ref"), "downgrade: ref must be collected");
+        assert!(
+            ids.contains(&"dg-all-ref"),
+            "downgrade: ref must be collected"
+        );
         // Every collected ref is owned by the atomic trait.
         assert!(refs.iter().all(|(_, owner)| owner == "atomic-trait"));
     }

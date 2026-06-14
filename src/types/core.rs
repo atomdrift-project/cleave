@@ -783,42 +783,70 @@ impl AnalysisReport {
         removed
     }
 
-    /// Filter out component-criticality findings that aren't referenced by any composite.
-    /// Component traits are building blocks that should only appear in output when a
-    /// composite rule that uses them has fired.
-    /// Returns the number of findings removed.
-    pub fn filter_unmatched_components(&mut self) -> usize {
+    /// Strip Component- and Baseline-criticality findings that no fired composite
+    /// references, then recompute summaries. Component traits are composite
+    /// building blocks and baseline traits are universal noise; both are only
+    /// worth keeping in the output once a composite that uses them has fired (its
+    /// id appears in some finding's `trait_refs`). Dropping the rest is the bulk
+    /// of what shrinks large archive reports.
+    ///
+    /// MUST run only after every up-the-chain composite recomputation (archive and
+    /// encoding-layer inheritance, container re-evaluation): those parent
+    /// composites consume the component/baseline findings as inputs, so stripping
+    /// earlier would stop them firing. See [`Self::attach_composite_sources`],
+    /// which deliberately records each composite→member tie *before* this strip
+    /// removes the low-tier traits.
+    ///
+    /// Returns `(components_removed, baselines_removed)`.
+    pub fn strip_unmatched_traits(&mut self) -> (usize, usize) {
         use std::collections::HashSet;
 
-        // Collect all trait_refs from all findings (these are the traits referenced by composites)
-        let mut referenced_traits: HashSet<String> = HashSet::new();
-
-        // From top-level findings
+        // Ids referenced by a fired composite, unioned across every file: a trait
+        // is kept regardless of its own criticality if any composite uses it.
+        let mut referenced: HashSet<String> = HashSet::new();
         for finding in &self.findings {
-            for trait_ref in &finding.trait_refs {
-                referenced_traits.insert(trait_ref.clone());
-            }
+            referenced.extend(finding.trait_refs.iter().cloned());
         }
-
-        // From files array (v2 schema)
         for file in &self.files {
             for finding in &file.findings {
-                for trait_ref in &finding.trait_refs {
-                    referenced_traits.insert(trait_ref.clone());
-                }
+                referenced.extend(finding.trait_refs.iter().cloned());
             }
         }
 
-        // Filter out Component findings that aren't referenced
-        self.filter_findings(|f| {
-            if f.crit == Criticality::Component {
-                // Keep only if this finding's ID is in the referenced set
-                referenced_traits.contains(&f.id)
-            } else {
-                // Keep all non-Component findings
-                true
+        // Tally, per criticality, what the predicate below will drop.
+        let mut components = 0usize;
+        let mut baselines = 0usize;
+        {
+            let mut tally = |findings: &[Finding]| {
+                for f in findings {
+                    if !referenced.contains(&f.id) {
+                        match f.crit {
+                            Criticality::Component => components += 1,
+                            Criticality::Baseline => baselines += 1,
+                            _ => {}
+                        }
+                    }
+                }
+            };
+            tally(&self.findings);
+            for file in &self.files {
+                tally(&file.findings);
             }
-        })
+        }
+
+        if components + baselines > 0 {
+            self.filter_findings(|f| {
+                !matches!(f.crit, Criticality::Component | Criticality::Baseline)
+                    || referenced.contains(&f.id)
+            });
+            tracing::debug!(
+                components_removed = components,
+                baselines_removed = baselines,
+                "stripped unmatched component and baseline traits before render",
+            );
+        }
+
+        (components, baselines)
     }
 
     /// Merge encoding layers (files with `##` in their path) into their parent files.
@@ -1614,6 +1642,47 @@ mod tests {
             match_count: 0,
             source_file: None,
         }
+    }
+
+    #[test]
+    fn strip_unmatched_traits_drops_only_unreferenced_components_and_baselines() {
+        let mut report = AnalysisReport::new(test_target());
+        let mut file = FileAnalysis::new(0, "/sample.bin".into(), "elf".into(), "abc123".into(), 1024);
+
+        // A fired composite names one component and one baseline by id; those two
+        // are kept despite their low criticality, the unreferenced twins are not,
+        // and the notable is untouched regardless of references.
+        let mut composite = test_finding("objectives/x::y", Criticality::Hostile);
+        composite.trait_refs = vec!["comp/used".into(), "base/used".into()];
+        file.findings = vec![
+            composite,
+            test_finding("comp/used", Criticality::Component),
+            test_finding("comp/orphan", Criticality::Component),
+            test_finding("base/used", Criticality::Baseline),
+            test_finding("base/orphan", Criticality::Baseline),
+            test_finding("note/keep", Criticality::Notable),
+        ];
+        report.files = vec![file];
+
+        let (components, baselines) = report.strip_unmatched_traits();
+        assert_eq!(components, 1, "one unreferenced component dropped");
+        assert_eq!(baselines, 1, "one unreferenced baseline dropped");
+
+        let kept: Vec<&str> = report.files[0]
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        assert_eq!(kept.len(), 4);
+        for id in ["objectives/x::y", "comp/used", "base/used", "note/keep"] {
+            assert!(kept.contains(&id), "{id} should be kept");
+        }
+        for id in ["comp/orphan", "base/orphan"] {
+            assert!(!kept.contains(&id), "{id} should be stripped");
+        }
+
+        // Idempotent: a second pass removes nothing.
+        assert_eq!(report.strip_unmatched_traits(), (0, 0));
     }
 
     #[test]

@@ -525,8 +525,10 @@ impl OfficeAnalyzer {
             // open the VBA module once and thread it into the sub-file analyzer.
             let vba_ctx =
                 crate::analysis_context::AnalysisContext::open(virtual_path, vba_bytes).ok();
-            let strings: Vec<stng::ExtractedString> =
-                vba_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+            let strings: Vec<stng::ExtractedString> = vba_ctx
+                .as_ref()
+                .map(crate::analysis_context::AnalysisContext::text_rows)
+                .unwrap_or_default();
             let mut input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
             if let Some(ctx) = vba_ctx {
@@ -636,8 +638,10 @@ impl OfficeAnalyzer {
             // payload once and thread it into the sub-file analyzer.
             let exec_ctx =
                 crate::analysis_context::AnalysisContext::open(virtual_path, &exec.data).ok();
-            let strings: Vec<stng::ExtractedString> =
-                exec_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+            let strings: Vec<stng::ExtractedString> = exec_ctx
+                .as_ref()
+                .map(crate::analysis_context::AnalysisContext::text_rows)
+                .unwrap_or_default();
             let mut input =
                 AnalysisInput::with_strings(virtual_path, &exec.data, &strings, file_type);
             if let Some(ctx) = exec_ctx {

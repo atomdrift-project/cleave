@@ -1731,7 +1731,10 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let open_ctx_strings = || {
         let t = std::time::Instant::now();
         let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
-        let strings = ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+        let strings = ctx
+            .as_ref()
+            .map(crate::analysis_context::AnalysisContext::text_rows)
+            .unwrap_or_default();
         (ctx, strings, t.elapsed().as_millis() as u64)
     };
     let (mut file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {

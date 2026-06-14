@@ -358,8 +358,10 @@ pub trait Analyzer {
         // string-extraction authority. Thread the context into the input so
         // an analyzer that reads it reuses this parse.
         let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
-        let strings: Vec<stng::ExtractedString> =
-            ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+        let strings: Vec<stng::ExtractedString> = ctx
+            .as_ref()
+            .map(crate::analysis_context::AnalysisContext::text_rows)
+            .unwrap_or_default();
         let mut input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);
         if let Some(ctx) = ctx {
             input = input.with_parsed_ctx(ctx);

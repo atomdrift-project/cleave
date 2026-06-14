@@ -17,12 +17,17 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use std::collections::HashMap;
 /// Borrowed analysis products shared with the rule engine.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct AnalysisBorrow<'a> {
+// Two lifetimes: `'a` is how long we borrow the AST/context, `'b` is the file
+// bytes the context itself borrows. They are kept separate because
+// `AnalysisContext` is invariant over its byte lifetime, so a context opened
+// once and threaded in (long `'b`) can still be lent for a short `'a` — which a
+// single shared lifetime would forbid.
+pub(crate) struct AnalysisBorrow<'a, 'b> {
     pub(crate) cached_ast: Option<&'a tree_sitter::Tree>,
-    pub(crate) filefacts: Option<&'a crate::analysis_context::AnalysisContext<'a>>,
+    pub(crate) filefacts: Option<&'a crate::analysis_context::AnalysisContext<'b>>,
 }
 
-impl<'a> AnalysisBorrow<'a> {
+impl<'a, 'b> AnalysisBorrow<'a, 'b> {
     pub(crate) fn new(cached_ast: Option<&'a tree_sitter::Tree>) -> Self {
         Self {
             cached_ast,
@@ -32,7 +37,7 @@ impl<'a> AnalysisBorrow<'a> {
 
     pub(crate) fn with_filefacts(
         cached_ast: Option<&'a tree_sitter::Tree>,
-        filefacts: Option<&'a crate::analysis_context::AnalysisContext<'a>>,
+        filefacts: Option<&'a crate::analysis_context::AnalysisContext<'b>>,
     ) -> Self {
         Self {
             cached_ast,
@@ -137,7 +142,7 @@ impl super::CapabilityMapper {
         &self,
         report: &mut AnalysisReport,
         binary_data: &[u8],
-        analysis: AnalysisBorrow<'_>,
+        analysis: AnalysisBorrow<'_, '_>,
         inline_yara: Option<&HashMap<String, Vec<Evidence>>>,
         precomputed_raw_regex: Option<Option<FxHashSet<usize>>>,
         arch_ranges: Option<&[(Arch, std::ops::Range<usize>)]>,

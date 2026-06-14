@@ -79,6 +79,7 @@ impl<'a> AnalysisInput<'a> {
             sha256: None,
             depth: 0,
             cancellation: None,
+            parsed_ctx: None,
         }
     }
 
@@ -101,6 +102,7 @@ impl<'a> AnalysisInput<'a> {
             sha256: None,
             depth: 0,
             cancellation: None,
+            parsed_ctx: None,
         }
     }
 
@@ -124,6 +126,7 @@ impl<'a> AnalysisInput<'a> {
             sha256: None,
             depth: 0,
             cancellation: None,
+            parsed_ctx: None,
         }
     }
 
@@ -138,6 +141,17 @@ impl<'a> AnalysisInput<'a> {
     #[must_use]
     pub fn with_backing_path(mut self, backing_path: &'a Path) -> Self {
         self.backing_path = Some(backing_path);
+        self
+    }
+
+    /// Thread in a filefacts context the caller already opened on `data`, so
+    /// the analyzer reuses it instead of re-parsing the same bytes.
+    #[must_use]
+    pub fn with_parsed_ctx(
+        mut self,
+        ctx: crate::analysis_context::AnalysisContext<'a>,
+    ) -> Self {
+        self.parsed_ctx = Some(ctx);
         self
     }
 

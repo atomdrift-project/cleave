@@ -44,8 +44,15 @@ def main() -> None:
     if not latest:
         fail("no `latest` pointer in manifest")
 
+    stable = m.get("stable", {})
+    if not stable:
+        fail(
+            "[stable] has no pointers — no released engine produced a model "
+            "(per-release build or validation failed upstream); refusing to publish"
+        )
+
     artifacts = m.get("artifacts", {})
-    referenced = {latest} | set(m.get("stable", {}).values())
+    referenced = {latest} | set(stable.values())
 
     for key in sorted(referenced):
         if key not in artifacts:

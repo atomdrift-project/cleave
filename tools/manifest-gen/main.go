@@ -41,7 +41,8 @@ type config struct {
 	traits, repo, engineOverride, out string
 	headEngine                        string
 	artifactPrefix                    string
-	engineBin, traitsEnv              string
+	engineBins                        []string
+	traitsEnv                         string
 	validateArgs                      []string
 	nReleases, nCommits               int
 	soakDays, validDays               int
@@ -59,7 +60,8 @@ func main() {
 	flag.StringVar(&c.out, "out", "dist", "output directory")
 	flag.StringVar(&c.artifactPrefix, "artifact-prefix", "",
 		"path prepended to each artifact's `file` in the manifest, relative to the manifest (e.g. \"traits/\")")
-	flag.StringVar(&c.engineBin, "engine-bin", "cleave", "cargo bin name to build per tag (e.g. cleave, litmus)")
+	engineBin := flag.String("engine-bin", "cleave",
+		"comma-separated cargo bin name(s) to build per tag, tried in order; spans a rename across the tag range (e.g. \"litmus,ascan\")")
 	flag.StringVar(&c.traitsEnv, "traits-env", "CLEAVE_TRAITS_DIR",
 		"env var set to the extracted checkout when validating (cleave: CLEAVE_TRAITS_DIR; litmus: LITMUS_MODELS_DIR)")
 	validateArgs := flag.String("validate-args", "validate",
@@ -75,6 +77,14 @@ func main() {
 	flag.Parse()
 	c.channels = strings.Split(*chans, ",")
 	c.validateArgs = strings.Fields(*validateArgs)
+	for _, b := range strings.Split(*engineBin, ",") {
+		if b = strings.TrimSpace(b); b != "" {
+			c.engineBins = append(c.engineBins, b)
+		}
+	}
+	if len(c.engineBins) == 0 {
+		fatal("--engine-bin must name at least one cargo bin")
+	}
 
 	if c.sign && c.identity == "" {
 		fatal("--sign requires --identity")
@@ -144,6 +154,21 @@ func run(c *config) {
 			pointers[ch][rel] = sel[ch]
 		}
 	}
+	// Refuse to publish a manifest whose newest release has no pointer in a
+	// configured channel: the current engine either wouldn't build or rejected
+	// every candidate, and shipping it would strand clients on that release with
+	// no model. Older releases may legitimately stay empty (frozen at a prior
+	// floor or aged out), so this guards only the newest tag.
+	if len(tags) > 0 {
+		newest := tags[0]
+		for _, ch := range c.channels {
+			ch = strings.TrimSpace(ch)
+			if pointers[ch][newest] == "" {
+				fatal("channel %q has no pointer for newest release %s: engine unbuildable or no candidate passed validation — refusing to publish", ch, newest)
+			}
+		}
+	}
+
 	// `latest` = the newest commit the HEAD (current) engine actually validates.
 	// We never assume the newest commit works for HEAD — we walk it back too,
 	// bounded by the prior latest floor.
@@ -218,11 +243,14 @@ func ensureEngine(c *config, rel string) (string, bool) {
 		return c.engineOverride, true
 	}
 	tag := "v" + rel
-	cached := filepath.Join(c.out, "engines", tag, c.engineBin)
-	if _, err := os.Stat(cached); err == nil {
-		return cached, true
+	dir := filepath.Join(c.out, "engines", tag)
+	// A prior run may have cached the binary under any candidate bin name.
+	for _, bin := range c.engineBins {
+		cached := filepath.Join(dir, bin)
+		if _, err := os.Stat(cached); err == nil {
+			return cached, true
+		}
 	}
-	logf("building engine %s (cargo build --release) ...", tag)
 	src, err := os.MkdirTemp("", "engine-"+tag+"-")
 	if err != nil {
 		fatal("mktemp: %v", err)
@@ -249,23 +277,31 @@ func ensureEngine(c *config, rel string) (string, bool) {
 	if err != nil {
 		fatal("resolve target dir: %v", err)
 	}
-	build := exec.Command("cargo", "build", "--release", "--bin", c.engineBin)
-	build.Dir = src
-	build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+targetDir)
-	build.Stdout, build.Stderr = os.Stderr, os.Stderr
-	if err := build.Run(); err != nil {
-		logf("  build %s FAILED (old toolchain mismatch?) — skipping release", tag)
-		return "", false
+	// The engine bin was renamed across releases (litmus -> ascan), so any given
+	// tag builds under exactly one candidate name. Try each in order; the first
+	// that builds wins. Print a one-line reason per failed attempt so a genuine
+	// breakage is never silently mistaken for "wrong bin name for this tag".
+	for _, bin := range c.engineBins {
+		logf("building engine %s --bin %s (cargo build --release) ...", tag, bin)
+		build := exec.Command("cargo", "build", "--release", "--bin", bin)
+		build.Dir = src
+		build.Env = append(os.Environ(), "CARGO_TARGET_DIR="+targetDir)
+		if out, err := build.CombinedOutput(); err != nil {
+			logf("  build %s --bin %s failed: %s", tag, bin, briefErr(out))
+			continue
+		}
+		cached := filepath.Join(dir, bin)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			fatal("mkdir engine cache: %v", err)
+		}
+		if err := copyFile(filepath.Join(targetDir, "release", bin), cached); err != nil {
+			fatal("cache engine %s: %v", tag, err)
+		}
+		logf("  cached engine -> %s", cached)
+		return cached, true
 	}
-	binSrc := filepath.Join(targetDir, "release", c.engineBin)
-	if err := os.MkdirAll(filepath.Dir(cached), 0o755); err != nil {
-		fatal("mkdir engine cache: %v", err)
-	}
-	if err := copyFile(binSrc, cached); err != nil {
-		fatal("cache engine %s: %v", tag, err)
-	}
-	logf("  cached engine -> %s", cached)
-	return cached, true
+	logf("  build %s FAILED for all candidate bins %v — skipping release", tag, c.engineBins)
+	return "", false
 }
 
 // buildArtifacts produces a reproducible artifact for every distinct commit any
@@ -605,6 +641,24 @@ func orNone(s string) string {
 func isInteractive() bool {
 	fi, err := os.Stdin.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// briefErr reduces captured build output to a single line: the first cargo
+// "error…" line (e.g. `error: no bin target named litmus`), else the last
+// non-empty line.
+func briefErr(out []byte) string {
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	for _, l := range lines {
+		if s := strings.TrimSpace(l); strings.HasPrefix(s, "error") {
+			return s
+		}
+	}
+	for i := len(lines) - 1; i >= 0; i-- {
+		if s := strings.TrimSpace(lines[i]); s != "" {
+			return s
+		}
+	}
+	return "(no build output)"
 }
 
 func passWord(ok bool) string {

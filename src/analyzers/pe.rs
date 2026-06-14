@@ -785,8 +785,7 @@ impl PEAnalyzer {
         // Strings come from filefacts's typed `text()` view — the single
         // string-extraction authority (cleave no longer scans). The raw
         // stng rows also feed embedded-child analysis below.
-        let raw_stng_strings: Vec<stng::ExtractedString> =
-            ctx.parsed.text().iter().cloned().collect();
+        let raw_stng_strings = ctx.text_rows();
         let _ = r2_strings;
         report.strings = self
             .string_extractor

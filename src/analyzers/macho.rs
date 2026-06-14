@@ -310,9 +310,9 @@ impl MachOAnalyzer {
         } else if let Some(ref strings) = self.preextracted_strings {
             report.strings = strings.clone();
         } else {
-            // Extract strings using language-aware extraction (Go/Rust)
+            // No pre-extracted strings supplied: source them from filefacts.
             let _ = r2_strings;
-            report.strings = self.string_extractor.extract_smart(data);
+            report.strings = crate::strings::strings_from_filefacts(analysis_path, data);
         }
         let strings_ms = _t.elapsed().as_millis();
 
@@ -1570,15 +1570,13 @@ impl Analyzer for MachOAnalyzer {
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = fs::read(file_path).context("Failed to read file")?;
-        let opts = crate::analyzers::stng_analysis_opts(4);
-        let strings = stng::extract_strings_with_options(&data, &opts);
-        tracing::debug!(
-            path = %file_path.display(),
-            strings = strings.len(),
-            string_mode = "stng-local",
-            reason = "legacy analyze() path without pre-extracted AnalysisInput",
-            "Mach-O analyzer extracting strings locally before analyze_input"
-        );
+        // filefacts is the string-extraction authority. Harvest its full-file
+        // `text()` view; the structural pass opens its own per-arch slice.
+        let strings: Vec<stng::ExtractedString> =
+            crate::analysis_context::AnalysisContext::open(file_path, &data)
+                .ok()
+                .map(|c| c.text_rows())
+                .unwrap_or_default();
         let input = AnalysisInput::with_strings(
             file_path,
             &data,

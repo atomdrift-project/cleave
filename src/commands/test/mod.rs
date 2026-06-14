@@ -170,10 +170,14 @@ pub(crate) fn prepare_test_analysis(
         capability_mapper,
     )?;
 
-    // For FAT binaries, re-extract strings from the full file so offsets are file-relative.
+    // For FAT binaries, source full-file strings from filefacts (the
+    // string-extraction authority) so offsets are file-relative.
     if prepared_target.is_fat_macho {
-        let string_extractor = crate::strings::StringExtractor::default();
-        report.strings = string_extractor.extract_smart(&full_data);
+        let rows: Vec<stng::ExtractedString> = filefacts::open(&full_data)
+            .ok()
+            .map(|p| p.text().iter().cloned().collect())
+            .unwrap_or_default();
+        report.strings = crate::strings::StringExtractor::default().convert_stng_strings(&rows);
     }
 
     // Attach the binary values tree so value-sourced traits (`type: value,

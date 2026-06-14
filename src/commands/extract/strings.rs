@@ -146,7 +146,13 @@ fn run_direct(target: &str, min_length: usize, format: &cli::OutputFormat) -> Re
         .with_exports(&exports)
         .with_functions(&functions);
 
-    let strings = extractor.extract_smart(&data);
+    // Strings come from filefacts' `text()` view (the string-extraction
+    // authority); the configured extractor classifies them.
+    let rows: Vec<stng::ExtractedString> = filefacts::open(&data)
+        .ok()
+        .map(|p| p.text().iter().cloned().collect())
+        .unwrap_or_default();
+    let strings = extractor.convert_stng_strings(&rows);
     format_strings_output(&strings, format)
 }
 

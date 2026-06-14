@@ -16,7 +16,7 @@
 //!
 //! All analyzers receive an `AnalysisInput` containing pre-extracted data:
 //! - File bytes (read once at entry point)
-//! - Pre-extracted strings (stng called once)
+//! - Pre-extracted strings (filefacts `text()`, the single extraction authority)
 //! - File type (detected once)
 //!
 //! This eliminates redundant I/O and string extraction across the codebase.
@@ -88,73 +88,6 @@ use crate::types::AnalysisReport;
 use anyhow::Result;
 use std::path::Path;
 use std::sync::Arc;
-
-/// Standard stng extraction options for analysis.
-///
-/// All analysis code paths MUST use this to ensure consistent string
-/// extraction. XOR scanning is enabled so decoded strings are available for
-/// trait matching (string_value conditions); stng internally gates the scan
-/// on platform-signed/Go heuristics so unproductive scans are cheap.
-///
-/// Parallelism is left at stng's default (ambient rayon pool).  Rayon's
-/// work-stealing scheduler handles oversubscription correctly for `par_iter`;
-/// the only deadlock-prone primitive is `rayon::in_place_scope`, which stng
-/// does not use.  An earlier revision forced `with_parallelism(false)` when
-/// `rayon::current_thread_index().is_some()` — but `rayon::join(stng, yara)`
-/// at `lib.rs:1134` enrolls the calling thread into the pool, so the check
-/// returned `Some` even for single-file runs and regressed throughput by
-/// pinning stng to a 1-thread pool.
-#[must_use]
-pub fn stng_analysis_opts(min_length: usize) -> stng::ExtractOptions {
-    stng::ExtractOptions::new(min_length)
-        .with_garbage_filter(true)
-        .with_xor(None)
-}
-
-/// Variant of [`stng_analysis_opts`] for text / script inputs.
-///
-/// Setting `FormatHint::Text` skips stng's XOR scan — a pure waste on source
-/// code, minified JS, HTML, JSON, etc. where XOR obfuscation is vanishingly
-/// rare but the scanner would still walk the full file.
-#[must_use]
-pub fn stng_text_opts(min_length: usize) -> stng::ExtractOptions {
-    stng_analysis_opts(min_length).with_format_hint(stng::FormatHint::Text)
-}
-
-/// Attach a cancellation flag to an [`stng::ExtractOptions`] if one is available.
-///
-/// stng honours the flag at phase boundaries (before XOR, between decoder
-/// passes) so a user-interrupted scan can stop mid-file instead of finishing
-/// every decoder on a multi-megabyte binary.
-#[must_use]
-pub fn attach_stng_cancellation(
-    opts: stng::ExtractOptions,
-    cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
-) -> stng::ExtractOptions {
-    match cancel {
-        Some(c) => opts.with_cancellation(c.clone()),
-        None => opts,
-    }
-}
-
-/// Heuristic: does this byte slice look like a Go binary?
-///
-/// Go binaries (ELF, PE, Mach-O) embed a Go-buildinfo blob that starts with
-/// the 14-byte magic `\xffGo buildinf:`. It lives in a dedicated section
-/// (`.go.buildinfo` / `__go_buildinfo` / `_go_buildinfo`) and is present in
-/// every Go binary since Go 1.13 — it's the canonical runtime-agnostic marker.
-///
-/// Used by rizin routing: Go binaries get `aap` instead of `aa` to avoid
-/// the pathological per-symbol crawl over Go's large runtime symbol table.
-#[must_use]
-pub fn looks_like_go_binary(data: &[u8]) -> bool {
-    const GO_BUILDINFO_MAGIC: &[u8] = b"\xffGo buildinf:";
-    // Scan only the first ~16 MB — the buildinfo section is always near the
-    // start of the file in practice, and unbounded scans would defeat the
-    // purpose of this cheap check.
-    let horizon = data.len().min(16 * 1024 * 1024);
-    memchr::memmem::find(&data[..horizon], GO_BUILDINFO_MAGIC).is_some()
-}
 
 /// Create an analyzer for the given file type.
 ///
@@ -421,10 +354,16 @@ pub trait Analyzer {
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
         let file_type = detect_file_type(file_path)?;
-        let opts = stng_analysis_opts(4);
-        let strings = stng::extract_strings_with_options(&data, &opts);
-
-        let input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);
+        // Strings come from filefacts' `text()` view — the single
+        // string-extraction authority. Thread the context into the input so
+        // an analyzer that reads it reuses this parse.
+        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        let strings: Vec<stng::ExtractedString> =
+            ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+        let mut input = AnalysisInput::with_strings(file_path, &data, &strings, file_type);
+        if let Some(ctx) = ctx {
+            input = input.with_parsed_ctx(ctx);
+        }
         self.analyze_input(&input)
     }
 

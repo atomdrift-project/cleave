@@ -1701,14 +1701,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         "cleave:stng"
     });
     let cancel_for_yara = options.cancellation.clone();
-    let cancel_for_stng = options.cancellation.as_ref();
-    // PE/ELF source their strings from filefacts (the single extraction
-    // authority): lib.rs opens the full-file context ONCE here — overlapping
-    // the parse+scan with the YARA prefetch — and threads it into the arm,
-    // so the binary is parsed once instead of (cleave-scan + analyzer-open).
-    // Mach-O keeps its own stng scan: its structural context is opened on a
-    // per-arch slice in the arm, but strings need full-file offsets.
-    let ctx_strings = matches!(file_type, FileType::Pe | FileType::Elf);
+    // filefacts is the single string-extraction authority. lib.rs opens the
+    // full-file context ONCE here (overlapping parse+scan with the YARA
+    // prefetch for binaries) and harvests `text()`. PE/ELF additionally
+    // thread this context into their arm for structural facts; Mach-O opens a
+    // per-arch slice for structure but still sources its strings from here.
     // Types whose analyzer reads from a filefacts `AnalysisContext`: open it
     // once here and thread it through `AnalysisInput` so the file is parsed a
     // single time. Source code (unified/generic) plus the image analyzers
@@ -1727,13 +1724,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             .filter(|e| e.is_loaded())
             .map(|e| e.scan_bytes_with_inline(file_data, Some(ftypes)))
     };
-    let stng_scan = || {
-        let t = std::time::Instant::now();
-        let opts =
-            analyzers::attach_stng_cancellation(analyzers::stng_analysis_opts(4), cancel_for_stng);
-        let s = stng::extract_strings_with_options(file_data, &opts);
-        (s, t.elapsed().as_millis() as u64)
-    };
     // Open filefacts on the full file and harvest its `text()` rows — the same
     // string scan cleave used to run standalone, but now sourced from the one
     // authority. Returns the context too so the caller can thread it into the
@@ -1741,37 +1731,22 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     let open_ctx_strings = || {
         let t = std::time::Instant::now();
         let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
-        let strings = ctx
-            .as_ref()
-            .map(|c| c.parsed.text().iter().cloned().collect())
-            .unwrap_or_default();
+        let strings = ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
         (ctx, strings, t.elapsed().as_millis() as u64)
     };
     let (mut file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
         (None, Vec::new(), 0u64, None)
-    } else if let (true, Some(ftypes)) = (ctx_strings, binary_yara_ftypes) {
-        // PE/ELF: overlap the ctx open+scan with the YARA prefetch.
+    } else if let Some(ftypes) = binary_yara_ftypes {
+        // Binaries (PE/ELF/Mach-O): overlap the filefacts open + string
+        // harvest with the YARA prefetch (both need only the file bytes).
         let ((ctx, strings, ms), yara) = rayon::join(open_ctx_strings, || yara_prefetch(ftypes));
         (ctx, strings, ms, yara)
-    } else if let Some(ftypes) = binary_yara_ftypes {
-        // Mach-O: full-file stng scan (structural ctx is a per-arch slice).
-        let ((s, ms), yara) = rayon::join(stng_scan, || yara_prefetch(ftypes));
-        (None, s, ms, yara)
-    } else if threads_ctx {
-        // Source + images: filefacts is the string authority (and, for source,
-        // the AST parser). Open once and thread the context into the analyzer
-        // (below) so the file is parsed a single time. Fall back to a bare scan
-        // if filefacts refuses the bytes (the analyzer then opens its own).
-        match open_ctx_strings() {
-            (Some(ctx), strings, ms) => (Some(ctx), strings, ms, None),
-            (None, _, _) => {
-                let (s, ms) = stng_scan();
-                (None, s, ms, None)
-            }
-        }
     } else {
-        let (s, ms) = stng_scan();
-        (None, s, ms, None)
+        // Every other type sources strings from the same filefacts view.
+        // Source + image types additionally thread the context into their
+        // analyzer (below) so the file is parsed a single time.
+        let (ctx, strings, ms) = open_ctx_strings();
+        (ctx, strings, ms, None)
     };
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
@@ -1892,11 +1867,6 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             if is_fat {
                 let preferred_offset = range.start;
                 analyzer.union_supplementary_arches(&mut report, file_data, preferred_offset);
-            }
-
-            // For FAT binaries, re-extract strings from full file for correct offsets
-            if is_fat && preextracted_strings.is_empty() {
-                report.strings = string_extractor.extract_smart(file_data);
             }
 
             // Process YARA results and evaluate with inline evidence

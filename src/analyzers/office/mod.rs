@@ -521,16 +521,17 @@ impl OfficeAnalyzer {
             let virtual_path_str = format!("{doc_name}!!vba/{}.vbs", module.name);
             let virtual_path = Path::new(&virtual_path_str);
 
-            // VBA source — text hint so stng skips the XOR scan.
-            let strings = stng::extract_strings_with_options(
-                vba_bytes,
-                &crate::analyzers::attach_stng_cancellation(
-                    crate::analyzers::stng_text_opts(4),
-                    cancellation,
-                ),
-            );
+            // filefacts is the string-extraction authority and source parser:
+            // open the VBA module once and thread it into the sub-file analyzer.
+            let vba_ctx =
+                crate::analysis_context::AnalysisContext::open(virtual_path, vba_bytes).ok();
+            let strings: Vec<stng::ExtractedString> =
+                vba_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
             let mut input =
                 AnalysisInput::with_strings(virtual_path, vba_bytes, &strings, FileType::Vbs);
+            if let Some(ctx) = vba_ctx {
+                input = input.with_parsed_ctx(ctx);
+            }
             input.cancellation = cancellation.cloned();
 
             match analyzer.analyze_input(&input) {
@@ -631,15 +632,17 @@ impl OfficeAnalyzer {
             let virtual_path_str = format!("{doc_name}!!ole/{stream_label}");
             let virtual_path = Path::new(&virtual_path_str);
 
-            let strings = stng::extract_strings_with_options(
-                &exec.data,
-                &crate::analyzers::attach_stng_cancellation(
-                    crate::analyzers::stng_text_opts(4),
-                    cancellation,
-                ),
-            );
+            // filefacts is the string-extraction authority: open the embedded
+            // payload once and thread it into the sub-file analyzer.
+            let exec_ctx =
+                crate::analysis_context::AnalysisContext::open(virtual_path, &exec.data).ok();
+            let strings: Vec<stng::ExtractedString> =
+                exec_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
             let mut input =
                 AnalysisInput::with_strings(virtual_path, &exec.data, &strings, file_type);
+            if let Some(ctx) = exec_ctx {
+                input = input.with_parsed_ctx(ctx);
+            }
             input.cancellation = cancellation.cloned();
             input.depth = 1;
 

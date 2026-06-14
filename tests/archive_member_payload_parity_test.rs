@@ -10,8 +10,9 @@
 //! buried in an npm tarball / zip / jar lost its encoded-payload finding (and
 //! every trait derived from the decoded bytes) that the same file gets when
 //! scanned alone — silently weakening detection for exactly the place malware
-//! hides. A second, related downgrade had archive members use `stng_text_opts`
-//! (skips stng's XOR scan) instead of `stng_analysis_opts`.
+//! hides. A second, related downgrade had archive members skip the XOR scan
+//! that standalone files get — both now resolve through filefacts' single
+//! string-extraction path.
 //!
 //! These tests pin the invariant: detection must not depend on whether a file
 //! was scanned standalone or as an archive member. XOR and base64 detection are

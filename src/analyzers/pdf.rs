@@ -158,8 +158,10 @@ impl PdfAnalyzer {
             // analyzer so it is parsed a single time.
             let js_ctx =
                 crate::analysis_context::AnalysisContext::open(virtual_path, js_bytes).ok();
-            let strings: Vec<stng::ExtractedString> =
-                js_ctx.as_ref().map(|c| c.text_rows()).unwrap_or_default();
+            let strings: Vec<stng::ExtractedString> = js_ctx
+                .as_ref()
+                .map(crate::analysis_context::AnalysisContext::text_rows)
+                .unwrap_or_default();
             let mut input =
                 AnalysisInput::with_strings(virtual_path, js_bytes, &strings, FileType::JavaScript);
             if let Some(ctx) = js_ctx {

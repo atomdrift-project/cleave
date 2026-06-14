@@ -798,7 +798,7 @@ impl ArchiveAnalyzer {
                 crate::analysis_context::AnalysisContext::open(logical_path, data).ok();
             let stng_strings: Vec<stng::ExtractedString> = member_ctx
                 .as_ref()
-                .map(|ctx| ctx.text_rows())
+                .map(crate::analysis_context::AnalysisContext::text_rows)
                 .unwrap_or_default();
             crate::memory_tracker::clear_current_phase();
             let payloads = if extract_payloads {

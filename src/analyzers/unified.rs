@@ -420,7 +420,9 @@ impl UnifiedSourceAnalyzer {
             // No caller-supplied strings: source them from the threaded
             // filefacts context (the string-extraction authority). When the
             // caller didn't open one, there are simply no pre-extracted strings.
-            owned_stng = source_ctx.map(|c| c.text_rows()).unwrap_or_default();
+            owned_stng = source_ctx
+                .map(crate::analysis_context::AnalysisContext::text_rows)
+                .unwrap_or_default();
         }
 
         // `source_ctx` is resolved by the caller — the threaded context when it

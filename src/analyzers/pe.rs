@@ -10,7 +10,7 @@ use crate::capabilities::CapabilityMapper;
 use crate::strings::StringExtractor;
 use crate::types::{
     AnalysisReport, Criticality, Evidence, Export, Finding, FindingKind, Import, Section,
-    StringInfo, StructuralFeature, TargetInfo,
+    StructuralFeature, TargetInfo,
 };
 use crate::yara_engine::YaraEngine;
 use anyhow::{Context, Result};
@@ -32,8 +32,6 @@ pub struct PEAnalyzer {
     capability_mapper: Arc<CapabilityMapper>,
     string_extractor: StringExtractor,
     yara_engine: Option<Arc<YaraEngine>>,
-    /// Pre-extracted strings from stng (avoids redundant extraction)
-    preextracted_strings: Option<Vec<StringInfo>>,
     /// When true, skip scanning for embedded PE/ELF binaries (prevents recursion in sub-analysis).
     skip_embedded_scan: bool,
     /// Per-request cancellation flag.
@@ -235,7 +233,6 @@ impl PEAnalyzer {
             capability_mapper: Arc::new(CapabilityMapper::empty()),
             string_extractor: StringExtractor::new(),
             yara_engine: None,
-            preextracted_strings: None,
             skip_embedded_scan: false,
             cancellation: None,
         }
@@ -289,14 +286,6 @@ impl PEAnalyzer {
         self
     }
 
-    /// Set pre-extracted strings (avoids redundant stng/radare2 extraction)
-    #[must_use]
-    #[allow(dead_code)] // Used by binary target, not visible to library
-    pub(crate) fn with_preextracted_strings(mut self, strings: Vec<StringInfo>) -> Self {
-        self.preextracted_strings = Some(strings);
-        self
-    }
-
     /// Structural analysis of a PE binary (no main YARA scan, no trait evaluation).
     /// Overlay analysis (self-extracting archives) still runs and uses the YARA engine
     /// stored in this analyzer if set. Callers are responsible for running the main YARA
@@ -305,7 +294,6 @@ impl PEAnalyzer {
     /// Handles UPX decompression internally - unpacked content becomes a separate FileAnalysis
     /// entry in `report.files` with `encoding: ["upx"]`.
     ///
-    /// If `stng_strings` is provided, uses those directly (avoids redundant extraction).
     /// Convenience wrapper that opens an `AnalysisContext` against
     /// `data` and forwards to
     /// [`Self::analyze_structural_with_ctx`]. Production paths
@@ -791,10 +779,16 @@ impl PEAnalyzer {
         // stng rows also feed embedded-child analysis below.
         let raw_stng_strings: Vec<stng::ExtractedString> = {
             let text = ctx.parsed.text();
-            text.ascii.iter().chain(text.utf16le.iter()).cloned().collect()
+            text.ascii
+                .iter()
+                .chain(text.utf16le.iter())
+                .cloned()
+                .collect()
         };
         let _ = r2_strings;
-        report.strings = self.string_extractor.convert_stng_strings(&raw_stng_strings);
+        report.strings = self
+            .string_extractor
+            .convert_stng_strings(&raw_stng_strings);
 
         // Report string truncation if limits were hit
         if self

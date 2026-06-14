@@ -1702,37 +1702,60 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     });
     let cancel_for_yara = options.cancellation.clone();
     let cancel_for_stng = options.cancellation.as_ref();
-    let ((stng_strings, stage_stng_ms), prefetched_yara) = if file_type.is_archive() {
-        ((Vec::new(), 0u64), None)
-    } else if let Some(ftypes) = binary_yara_ftypes {
-        rayon::join(
-            || {
-                let t = std::time::Instant::now();
-                let opts = analyzers::attach_stng_cancellation(
-                    analyzers::stng_analysis_opts(4),
-                    cancel_for_stng,
-                );
-                let s = stng::extract_strings_with_options(file_data, &opts);
-                (s, t.elapsed().as_millis() as u64)
-            },
-            || {
-                if cancel_for_yara
-                    .as_ref()
-                    .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
-                {
-                    return None;
-                }
-                yara_engine
-                    .filter(|e| e.is_loaded())
-                    .map(|e| e.scan_bytes_with_inline(file_data, Some(ftypes)))
-            },
-        )
-    } else {
+    // PE/ELF source their strings from filefacts (the single extraction
+    // authority): lib.rs opens the full-file context ONCE here — overlapping
+    // the parse+scan with the YARA prefetch — and threads it into the arm,
+    // so the binary is parsed once instead of (cleave-scan + analyzer-open).
+    // Mach-O keeps its own stng scan: its structural context is opened on a
+    // per-arch slice in the arm, but strings need full-file offsets.
+    let ctx_strings = matches!(file_type, FileType::Pe | FileType::Elf);
+    let yara_prefetch = |ftypes: &[&str]| {
+        if cancel_for_yara
+            .as_ref()
+            .is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return None;
+        }
+        yara_engine
+            .filter(|e| e.is_loaded())
+            .map(|e| e.scan_bytes_with_inline(file_data, Some(ftypes)))
+    };
+    let stng_scan = || {
         let t = std::time::Instant::now();
         let opts =
             analyzers::attach_stng_cancellation(analyzers::stng_analysis_opts(4), cancel_for_stng);
         let s = stng::extract_strings_with_options(file_data, &opts);
-        ((s, t.elapsed().as_millis() as u64), None)
+        (s, t.elapsed().as_millis() as u64)
+    };
+    let (file_ctx, stng_strings, stage_stng_ms, prefetched_yara) = if file_type.is_archive() {
+        (None, Vec::new(), 0u64, None)
+    } else if let (true, Some(ftypes)) = (ctx_strings, binary_yara_ftypes) {
+        let ((ctx, strings, ms), yara) = rayon::join(
+            || {
+                let t = std::time::Instant::now();
+                let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+                let strings = ctx
+                    .as_ref()
+                    .map(|c| {
+                        let text = c.parsed.text();
+                        text.ascii
+                            .iter()
+                            .chain(text.utf16le.iter())
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                (ctx, strings, t.elapsed().as_millis() as u64)
+            },
+            || yara_prefetch(ftypes),
+        );
+        (ctx, strings, ms, yara)
+    } else if let Some(ftypes) = binary_yara_ftypes {
+        let ((s, ms), yara) = rayon::join(stng_scan, || yara_prefetch(ftypes));
+        (None, s, ms, yara)
+    } else {
+        let (s, ms) = stng_scan();
+        (None, s, ms, None)
     };
 
     // Check for encoded payloads (hex, base64, etc.) using stng results
@@ -1753,9 +1776,15 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     .with_sha256(sha256_hex.clone());
     input.cancellation = options.cancellation.clone();
 
-    // Convert stng strings to StringInfo for binary analyzers (avoids redundant extraction)
+    // Mach-O reads its strings from this pre-converted set (its structural
+    // context is a per-arch slice, so it can't self-source full-file strings
+    // the way PE/ELF do). Other types never read it — skip the conversion.
     let string_extractor = strings::StringExtractor::new();
-    let preextracted_strings = string_extractor.convert_stng_strings(&stng_strings);
+    let preextracted_strings = if matches!(file_type, FileType::MachO) {
+        string_extractor.convert_stng_strings(&stng_strings)
+    } else {
+        Vec::new()
+    };
 
     // Share mapper Arc — all analyzers share it via cheap ref-count bumps
     let mapper_arc = Arc::clone(capability_mapper);
@@ -1881,19 +1910,17 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             );
             let mut analyzer = analyzers::elf::ElfAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
-                .with_capability_mapper_arc(mapper_arc.clone())
-                .with_preextracted_strings(preextracted_strings.clone());
+                .with_capability_mapper_arc(mapper_arc.clone());
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine);
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("elf");
-            // Open filefacts once and lend it to the ELF analyzer so
-            // structural helpers read from the typed view directly.
-            // When filefacts can't open the bytes, fall back to the
-            // analyzer's own bytes-only entry point so the malformed
-            // signal is still surfaced.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data).ok();
+            // The full-file filefacts context was opened above (overlapping
+            // YARA) and supplies both structure and strings. When filefacts
+            // can't open the bytes, fall back to the analyzer's own
+            // bytes-only entry point so the malformed signal still surfaces.
+            let ctx = file_ctx;
             let struct_result: Result<AnalysisReport, anyhow::Error> =
                 if let Some(ctx) = ctx.as_ref() {
                     Ok(analyzer.analyze_structural_with_ctx(
@@ -1945,19 +1972,18 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
             );
             let mut analyzer = analyzers::pe::PEAnalyzer::new()
                 .with_cancellation(options.cancellation.clone())
-                .with_capability_mapper_arc(mapper_arc.clone())
-                .with_preextracted_strings(preextracted_strings.clone());
+                .with_capability_mapper_arc(mapper_arc.clone());
             // PE analyzer needs YARA engine for overlay/embedded payload analysis
             if let Some(engine) = yara_engine {
                 analyzer = analyzer.with_yara_arc(engine.clone());
             }
             let engine = yara_engine;
             let rule_file_type = capability_mapper.detect_file_type("pe");
-            // Open filefacts once here and lend the same typed view to the PE
-            // analyzer and trait mapper so sections, imports, exports, values,
-            // and metrics are projected without another PE parser pass.
-            let ctx = crate::analysis_context::AnalysisContext::open(path, file_data)
-                .map_err(|e| anyhow::anyhow!("filefacts open failed for PE: {e}"))?;
+            // The full-file filefacts context was opened above (overlapping
+            // YARA) and supplies sections, imports, exports, values, metrics,
+            // and strings — no second PE parser pass. A PE that filefacts
+            // can't open is unanalyzable, so surface the error.
+            let ctx = file_ctx.ok_or_else(|| anyhow::anyhow!("filefacts open failed for PE"))?;
             let struct_result = Ok::<_, anyhow::Error>(analyzer.analyze_structural_with_ctx(
                 path,
                 file_data,

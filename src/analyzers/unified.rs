@@ -363,6 +363,8 @@ impl UnifiedSourceAnalyzer {
         content: &str,
         original_bytes: &[u8],
     ) -> AnalysisReport {
+        let ctx =
+            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
         self.analyze_source_impl(
             file_path,
             content,
@@ -371,6 +373,7 @@ impl UnifiedSourceAnalyzer {
             &[],
             None,
             self.cancellation.as_ref(),
+            ctx.as_ref(),
         )
     }
 
@@ -383,6 +386,7 @@ impl UnifiedSourceAnalyzer {
         preextracted_payloads: &[crate::types::ExtractedPayload],
         precomputed_sha256: Option<String>,
         cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
 
@@ -428,11 +432,10 @@ impl UnifiedSourceAnalyzer {
             owned_stng = stng::extract_strings_with_options(original_bytes, &opts);
         }
 
-        let source_ctx =
-            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
-        let source_ast = source_ctx
-            .as_ref()
-            .and_then(crate::analysis_context::AnalysisContext::source_ast);
+        // `source_ctx` is resolved by the caller — the threaded context when it
+        // was opened on these exact bytes, else one opened on the normalized
+        // `content` (UTF-16/lossy inputs diverge from the original bytes).
+        let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
         let tree = source_ast.map(|ast| ast.tree);
 
         if let Some(tree) = tree {
@@ -715,7 +718,7 @@ impl UnifiedSourceAnalyzer {
 
             // Module imports come from filefacts's per-language queries; cleave
             // only adds Python `__import__` alias resolution on top.
-            if let Some(ctx) = source_ctx.as_ref() {
+            if let Some(ctx) = source_ctx {
                 symbol_extraction::ingest_filefacts_imports(
                     &ctx.parsed,
                     &self.file_type,
@@ -767,7 +770,7 @@ impl UnifiedSourceAnalyzer {
         // `type: value, path: source.imports, ...` traits can resolve.
         super::source_kv::attach_to_report(&mut report, Some(content.as_bytes()));
 
-        if let Some(ctx) = source_ctx.as_ref() {
+        if let Some(ctx) = source_ctx {
             let view = crate::types::FilefactsView::from_ctx(ctx);
             if !view.is_empty() {
                 report.filefacts = Some(view);
@@ -781,7 +784,7 @@ impl UnifiedSourceAnalyzer {
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 content.as_bytes(),
-                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
                 None,
                 None,
                 None,
@@ -1145,15 +1148,38 @@ impl Analyzer for UnifiedSourceAnalyzer {
         // Merge cancellation: prefer struct field (set via builder), fall back to input field
         // (set by the server when it doesn't go through analyzer_for_file_type_arc).
         let effective_cancellation = self.cancellation.as_ref().or(input.cancellation.as_ref());
-        Ok(self.analyze_source_impl(
-            input.path,
-            &content,
-            input.data,
-            input.strings,
-            input.payloads,
-            input.sha256.clone(),
-            effective_cancellation,
-        ))
+        // Reuse the threaded context only when it covers the exact bytes we
+        // analyze (no UTF-16/lossy normalization); otherwise open one on the
+        // normalized `content`. The two contexts have different byte lifetimes,
+        // so each branch makes its own call rather than merging into one option.
+        let reuse = content.as_bytes() == input.data;
+        match input.parsed_ctx.as_ref() {
+            Some(ctx) if reuse => Ok(self.analyze_source_impl(
+                input.path,
+                &content,
+                input.data,
+                input.strings,
+                input.payloads,
+                input.sha256.clone(),
+                effective_cancellation,
+                Some(ctx),
+            )),
+            _ => {
+                let owned_ctx =
+                    crate::analysis_context::AnalysisContext::open(input.path, content.as_bytes())
+                        .ok();
+                Ok(self.analyze_source_impl(
+                    input.path,
+                    &content,
+                    input.data,
+                    input.strings,
+                    input.payloads,
+                    input.sha256.clone(),
+                    effective_cancellation,
+                    owned_ctx.as_ref(),
+                ))
+            }
+        }
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {

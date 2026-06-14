@@ -71,7 +71,8 @@ impl GenericAnalyzer {
 
     #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        self.analyze_source_internal(file_path, content, None, None, None)
+        let ctx = crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref())
     }
 
     fn analyze_source_internal(
@@ -81,6 +82,7 @@ impl GenericAnalyzer {
         stng_strings: Option<&[stng::ExtractedString]>,
         original_bytes: Option<&[u8]>,
         precomputed_sha256: Option<String>,
+        source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) -> AnalysisReport {
         let start = std::time::Instant::now();
         tracing::debug!(
@@ -118,10 +120,9 @@ impl GenericAnalyzer {
 
         let mut report = AnalysisReport::new(target);
         let eval_bytes = original_bytes.unwrap_or(content.as_bytes());
-        let source_ctx = crate::analysis_context::AnalysisContext::open(file_path, eval_bytes).ok();
-        let source_ast = source_ctx
-            .as_ref()
-            .and_then(crate::analysis_context::AnalysisContext::source_ast);
+        // `source_ctx` is resolved by the caller — either the context lib.rs
+        // opened once and threaded in, or one the caller opened on `eval_bytes`.
+        let source_ast = source_ctx.and_then(crate::analysis_context::AnalysisContext::source_ast);
 
         // `pyc.*` kv comes from filefacts's dual emission in the
         // capability mapper — no synthesis needed here.
@@ -160,7 +161,7 @@ impl GenericAnalyzer {
                 &mut report,
             );
         }
-        if let Some(ctx) = source_ctx.as_ref() {
+        if let Some(ctx) = source_ctx {
             symbol_extraction::ingest_filefacts_imports(&ctx.parsed, &self.file_type, &mut report);
         }
         let tree = source_ast.map(|ast| ast.tree);
@@ -275,7 +276,7 @@ impl GenericAnalyzer {
 
         // Compute basic metrics
         let t_metrics = std::time::Instant::now();
-        self.compute_metrics(content, original_bytes, source_ctx.as_ref(), &mut report);
+        self.compute_metrics(content, original_bytes, source_ctx, &mut report);
         tracing::debug!(
             "GenericAnalyzer: Metrics computed in {:?}",
             t_metrics.elapsed()
@@ -294,7 +295,7 @@ impl GenericAnalyzer {
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 eval_bytes,
-                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(tree, source_ctx),
                 None,
                 None,
                 None,
@@ -461,14 +462,26 @@ impl GenericAnalyzer {
 
 impl Analyzer for GenericAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Use data and strings from input (no file read, no string extraction)
+        // Use data and strings from input (no file read, no string extraction).
+        // Reuse the threaded context when present; otherwise open one on the
+        // same bytes so both branches yield a context over `input.data`.
         let content = String::from_utf8_lossy(input.data);
+        let owned_ctx;
+        let source_ctx = match input.parsed_ctx.as_ref() {
+            Some(ctx) => Some(ctx),
+            None => {
+                owned_ctx =
+                    crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
+                owned_ctx.as_ref()
+            }
+        };
         Ok(self.analyze_source_internal(
             input.path,
             &content,
             Some(input.strings),
             Some(input.data),
             input.sha256.clone(),
+            source_ctx,
         ))
     }
 

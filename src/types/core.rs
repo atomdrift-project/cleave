@@ -14,6 +14,11 @@ use super::traits_findings::{ContextLine, Finding, StructuralFeature, Trait};
 use crate::analyzers::FileType;
 use crate::malecule_bridge;
 
+/// How many low-tier (component/baseline) traits to keep for a file that would
+/// otherwise be stripped down to no findings, so it still carries a minimal clue
+/// for downstream LLM consumers. See [`AnalysisReport::strip_unmatched_traits`].
+const RESCUE_LOW_TIER_KEEP: usize = 3;
+
 /// Represents an extracted payload (e.g., base64, hex, XOR)
 #[derive(Debug)]
 pub struct ExtractedPayload {
@@ -797,6 +802,11 @@ impl AnalysisReport {
     /// which deliberately records each composite→member tie *before* this strip
     /// removes the low-tier traits.
     ///
+    /// As an exception, a file that would otherwise be left with no
+    /// notable-or-higher finding keeps its [`RESCUE_LOW_TIER_KEEP`] best
+    /// low-tier traits. An empty findings list tells a downstream LLM consumer
+    /// nothing about the file; a few weak traits at least give it a clue.
+    ///
     /// Returns `(components_removed, baselines_removed)`.
     pub fn strip_unmatched_traits(&mut self) -> (usize, usize) {
         use std::collections::HashSet;
@@ -813,32 +823,49 @@ impl AnalysisReport {
             }
         }
 
-        // Tally, per criticality, what the predicate below will drop.
+        // A component/baseline finding is strippable unless a fired composite
+        // references it.
+        let strippable = |f: &Finding| {
+            matches!(f.crit, Criticality::Component | Criticality::Baseline)
+                && !referenced.contains(&f.id)
+        };
+
         let mut components = 0usize;
         let mut baselines = 0usize;
-        {
-            let mut tally = |findings: &[Finding]| {
-                for f in findings {
-                    if !referenced.contains(&f.id) {
-                        match f.crit {
-                            Criticality::Component => components += 1,
-                            Criticality::Baseline => baselines += 1,
-                            _ => {}
-                        }
-                    }
-                }
-            };
-            tally(&self.findings);
-            for file in &self.files {
-                tally(&file.findings);
+        let mut tally = |f: &Finding| match f.crit {
+            Criticality::Component => components += 1,
+            Criticality::Baseline => baselines += 1,
+            _ => {}
+        };
+
+        // Top-level findings are cleared at finalize and never serve as the
+        // per-file LLM clue, so they follow the base rule with no rescue.
+        self.findings.retain(|f| {
+            let keep = !strippable(f);
+            if !keep {
+                tally(f);
             }
+            keep
+        });
+
+        // Per file: rescue the best low-tier traits when nothing else survives.
+        for file in &mut self.files {
+            let rescued = Self::rescue_low_tier(&file.findings, &strippable);
+            file.findings.retain(|f| {
+                let keep = !strippable(f) || rescued.contains(&f.id);
+                if !keep {
+                    tally(f);
+                }
+                keep
+            });
         }
 
         if components + baselines > 0 {
-            self.filter_findings(|f| {
-                !matches!(f.crit, Criticality::Component | Criticality::Baseline)
-                    || referenced.contains(&f.id)
-            });
+            for file in &mut self.files {
+                Self::refresh_formula(file);
+                file.compute_summary();
+            }
+            self.summary = Some(ReportSummary::from_files(&self.files));
             tracing::debug!(
                 components_removed = components,
                 baselines_removed = baselines,
@@ -847,6 +874,31 @@ impl AnalysisReport {
         }
 
         (components, baselines)
+    }
+
+    /// Pick the ids of the low-tier traits to keep for a file that carries no
+    /// notable-or-higher signal, so its findings list is never empty. Returns an
+    /// empty set when the file already has real signal (no rescue needed) or has
+    /// no strippable traits to offer.
+    ///
+    /// Candidates rank best-first by score (criticality × confidence), with the
+    /// trait id as a deterministic final tiebreak.
+    fn rescue_low_tier<F>(findings: &[Finding], strippable: &F) -> std::collections::HashSet<String>
+    where
+        F: Fn(&Finding) -> bool,
+    {
+        if findings.iter().any(|f| f.crit >= Criticality::Notable) {
+            return std::collections::HashSet::new();
+        }
+
+        let score = |f: &Finding| f.crit as u8 as f32 * f.conf;
+        let mut candidates: Vec<&Finding> = findings.iter().filter(|f| strippable(f)).collect();
+        candidates.sort_by(|a, b| score(b).total_cmp(&score(a)).then(a.id.cmp(&b.id)));
+        candidates
+            .into_iter()
+            .take(RESCUE_LOW_TIER_KEEP)
+            .map(|f| f.id.clone())
+            .collect()
     }
 
     /// Merge encoding layers (files with `##` in their path) into their parent files.
@@ -1647,7 +1699,8 @@ mod tests {
     #[test]
     fn strip_unmatched_traits_drops_only_unreferenced_components_and_baselines() {
         let mut report = AnalysisReport::new(test_target());
-        let mut file = FileAnalysis::new(0, "/sample.bin".into(), "elf".into(), "abc123".into(), 1024);
+        let mut file =
+            FileAnalysis::new(0, "/sample.bin".into(), "elf".into(), "abc123".into(), 1024);
 
         // A fired composite names one component and one baseline by id; those two
         // are kept despite their low criticality, the unreferenced twins are not,
@@ -1683,6 +1736,66 @@ mod tests {
 
         // Idempotent: a second pass removes nothing.
         assert_eq!(report.strip_unmatched_traits(), (0, 0));
+    }
+
+    #[test]
+    fn strip_unmatched_traits_rescues_best_low_tier_when_no_signal() {
+        let mut report = AnalysisReport::new(test_target());
+        let mut file =
+            FileAnalysis::new(0, "/quiet.bin".into(), "elf".into(), "abc123".into(), 1024);
+
+        // No notable-or-higher finding: every trait would normally be stripped.
+        // Confidence orders the rescue, so the three highest-confidence survive.
+        let mut findings = Vec::new();
+        for (i, conf) in [0.1f32, 0.9, 0.5, 0.7, 0.3].iter().enumerate() {
+            let mut f = test_finding(&format!("base/t{i}"), Criticality::Baseline);
+            f.conf = *conf;
+            findings.push(f);
+        }
+        file.findings = findings;
+        report.files = vec![file];
+
+        let (components, baselines) = report.strip_unmatched_traits();
+        assert_eq!(components, 0);
+        assert_eq!(baselines, 2, "five low-tier traits, three rescued");
+
+        let kept: Vec<&str> = report.files[0]
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        assert_eq!(kept.len(), RESCUE_LOW_TIER_KEEP);
+        // t1 (0.9), t3 (0.7), t2 (0.5) win; t4 (0.3) and t0 (0.1) drop.
+        for id in ["base/t1", "base/t3", "base/t2"] {
+            assert!(kept.contains(&id), "{id} should be rescued");
+        }
+        for id in ["base/t0", "base/t4"] {
+            assert!(!kept.contains(&id), "{id} should be stripped");
+        }
+    }
+
+    #[test]
+    fn strip_unmatched_traits_no_rescue_when_signal_present() {
+        let mut report = AnalysisReport::new(test_target());
+        let mut file =
+            FileAnalysis::new(0, "/loud.bin".into(), "elf".into(), "abc123".into(), 1024);
+
+        // A lone notable counts as signal, so the low-tier traits strip in full.
+        file.findings = vec![
+            test_finding("note/keep", Criticality::Notable),
+            test_finding("base/a", Criticality::Baseline),
+            test_finding("comp/b", Criticality::Component),
+        ];
+        report.files = vec![file];
+
+        let (components, baselines) = report.strip_unmatched_traits();
+        assert_eq!((components, baselines), (1, 1));
+        let kept: Vec<&str> = report.files[0]
+            .findings
+            .iter()
+            .map(|f| f.id.as_str())
+            .collect();
+        assert_eq!(kept, vec!["note/keep"]);
     }
 
     #[test]

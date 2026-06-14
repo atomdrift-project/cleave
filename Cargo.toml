@@ -347,12 +347,12 @@ opt-level = 3
 # filefacts (src/fileid/ext.rs) before it is published upstream. Without it,
 # short Arch PKGBUILD recipes type as Unknown and the pacman supply-chain trait
 # family never runs on them. Remove once the filefacts change is released.
-[patch."https://codeberg.org/atomdrift/filefacts.git"]
-filefacts = { path = "../filefacts" }
+#[patch."https://codeberg.org/atomdrift/filefacts.git"]
+#filefacts = { path = "../filefacts" }
 
 # Local override to pick up the URL-decode FP fix in stng (src/decoders.rs):
 # a plain URL's percent-encoding is normal syntax, not an encoded payload, so it
 # no longer surfaces as `metadata/encoded-payload/url`. Remove once stng is
 # published upstream and this dependency's pinned revision is bumped.
-[patch."https://codeberg.org/atomdrift/stng.git"]
-stng = { path = "../stng" }
+#[patch."https://codeberg.org/atomdrift/stng.git"]
+#stng = { path = "../stng" }

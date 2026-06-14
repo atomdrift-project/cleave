@@ -719,6 +719,21 @@ fn lc_present(ctx: &Ctx<'_>, name: &str) -> bool {
 /// rebases them to full-file coordinates together.
 ///
 /// [`Identity`]: filefacts::Identity
+/// True when the leading magic marks a Mach-O *fat* (multi-architecture)
+/// wrapper. Thin Mach-O binaries (`FEEDFACE`/`FEEDFACF` and byte-swapped
+/// forms) return false, so callers can skip the slice-table parse for the
+/// common thin case. Callers already know the bytes are Mach-O, so the
+/// `0xCAFEBABE` overlap with Java `.class` magic is not ambiguous here.
+fn is_fat_macho(data: &[u8]) -> bool {
+    matches!(
+        data.get(0..4),
+        Some([0xCA, 0xFE, 0xBA, 0xBE]) // FAT_MAGIC
+            | Some([0xCA, 0xFE, 0xBA, 0xBF]) // FAT_MAGIC_64
+            | Some([0xBE, 0xBA, 0xFE, 0xCA]) // FAT_CIGAM
+            | Some([0xBF, 0xBA, 0xFE, 0xCA]) // FAT_CIGAM_64
+    )
+}
+
 fn emit_signature_findings(
     report: &mut AnalysisReport,
     sig_offset: u64,
@@ -1077,6 +1092,13 @@ impl MachOAnalyzer {
     /// re-parsing the fat wrapper through goblin. Prefers arm64; falls
     /// back to the first slice when arm64 isn't present.
     pub(crate) fn preferred_arch_range(&self, data: &[u8]) -> std::ops::Range<usize> {
+        // Thin (non-fat) binaries have no slice table, so the answer is the
+        // whole file. Detect that from the magic up front and skip the full
+        // filefacts parse this otherwise does just to discover there are no
+        // slices — the common case for Mach-O.
+        if !is_fat_macho(data) {
+            return 0..data.len();
+        }
         let Ok(parsed) = filefacts::open(data) else {
             return 0..data.len();
         };
@@ -1170,6 +1192,11 @@ impl MachOAnalyzer {
         data: &[u8],
     ) -> Vec<(crate::composite_rules::Arch, std::ops::Range<usize>)> {
         use crate::composite_rules::Arch;
+        // Thin binaries are a single full-file arch; skip the parse (see
+        // `preferred_arch_range`).
+        if !is_fat_macho(data) {
+            return vec![(Arch::All, 0..data.len())];
+        }
         let Ok(parsed) = filefacts::open(data) else {
             return vec![(Arch::All, 0..data.len())];
         };

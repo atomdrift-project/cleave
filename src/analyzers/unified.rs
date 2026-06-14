@@ -377,6 +377,7 @@ impl UnifiedSourceAnalyzer {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn analyze_source_impl(
         &self,
         file_path: &Path,

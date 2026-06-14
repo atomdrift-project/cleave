@@ -34,6 +34,11 @@ pub struct IterFilesConfig<'a> {
     pub targets: &'a [String],
     /// Maximum file size in bytes to consider; 0 means no limit.
     pub max_file_size: u64,
+    /// When set, only files modified at or after this Unix timestamp (seconds)
+    /// are emitted. `None` enumerates everything. The cutoff is checked from
+    /// the metadata cleave already reads, so unchanged files are skipped before
+    /// the magic-byte read.
+    pub newer_than: Option<i64>,
 }
 
 /// Run `cleave iter-files` against the configured targets.
@@ -81,6 +86,18 @@ fn walk_directory<W: Write>(root: &Path, config: &IterFilesConfig<'_>, out: &mut
 
 fn list_file<W: Write>(path: &Path, config: &IterFilesConfig<'_>, out: &mut W) -> Result<()> {
     let metadata = std::fs::metadata(path)?;
+
+    // Incremental enumeration: skip files older than the caller's cutoff before
+    // the magic-byte read below. Reuses the metadata already fetched. A file
+    // whose mtime is unreadable is kept, so a stat quirk never hides a sample.
+    if let Some(cutoff) = config.newer_than
+        && let Ok(modified) = metadata.modified()
+        && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+        && (since_epoch.as_secs() as i64) < cutoff
+    {
+        return Ok(());
+    }
+
     let size = metadata.len();
     if config.max_file_size > 0 && size > config.max_file_size {
         return Ok(());
@@ -127,6 +144,7 @@ mod tests {
             let config = IterFilesConfig {
                 targets: &targets,
                 max_file_size: 0,
+                newer_than: None,
             };
             // Run the inner walker directly so the test doesn't need stdout.
             walk_directory(dir.path(), &config, &mut buf);
@@ -164,12 +182,68 @@ mod tests {
         let config = IterFilesConfig {
             targets: &targets,
             max_file_size: 100, // smaller than the file
+            newer_than: None,
         };
         walk_directory(dir.path(), &config, &mut buf);
         assert!(
             buf.is_empty(),
             "expected no output, got: {:?}",
             String::from_utf8_lossy(&buf)
+        );
+    }
+
+    #[test]
+    fn newer_than_skips_older_files() {
+        use std::time::{Duration, SystemTime};
+
+        let dir = tempfile::tempdir().unwrap();
+        let sh_path = dir.path().join("hello.sh");
+        let mut f = std::fs::File::create(&sh_path).unwrap();
+        f.write_all(b"#!/bin/sh\necho hello\n").unwrap();
+
+        // Backdate the file's mtime well before the cutoff.
+        let old = SystemTime::now() - Duration::from_secs(3600);
+        f.set_modified(old).unwrap();
+        drop(f);
+
+        let cutoff = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - 60;
+        let targets = vec![dir.path().display().to_string()];
+
+        // With a cutoff after the file's mtime, it is skipped.
+        let mut buf: Vec<u8> = Vec::new();
+        walk_directory(
+            dir.path(),
+            &IterFilesConfig {
+                targets: &targets,
+                max_file_size: 0,
+                newer_than: Some(cutoff),
+            },
+            &mut buf,
+        );
+        assert!(
+            buf.is_empty(),
+            "older file should be skipped, got: {:?}",
+            String::from_utf8_lossy(&buf)
+        );
+
+        // Without a cutoff the same file is emitted.
+        let mut buf2: Vec<u8> = Vec::new();
+        walk_directory(
+            dir.path(),
+            &IterFilesConfig {
+                targets: &targets,
+                max_file_size: 0,
+                newer_than: None,
+            },
+            &mut buf2,
+        );
+        assert!(
+            String::from_utf8(buf2).unwrap().contains("hello.sh"),
+            "file should be emitted with no cutoff"
         );
     }
 }

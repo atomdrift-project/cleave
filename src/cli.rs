@@ -296,6 +296,13 @@ pub enum Command {
 
         #[arg(required = true)]
         targets: Vec<String>,
+
+        /// Only emit files modified at or after this Unix timestamp (seconds).
+        /// Omitted means a full enumeration. Lets an incremental caller (e.g.
+        /// hopper) skip unchanged files by their mtime before cleave reads
+        /// their magic bytes — the expensive step on a cold file cache.
+        #[arg(long, value_name = "UNIX_SECS")]
+        newer_than: Option<i64>,
     },
 
     /// Show version, traits revision, and loaded resource counts

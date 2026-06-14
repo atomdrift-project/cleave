@@ -71,10 +71,12 @@ impl GenericAnalyzer {
 
     #[allow(dead_code)] // Used by embedded_code_detector
     fn analyze_source(&self, file_path: &Path, content: &str) -> AnalysisReport {
-        let ctx = crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
+        let ctx =
+            crate::analysis_context::AnalysisContext::open(file_path, content.as_bytes()).ok();
         self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn analyze_source_internal(
         &self,
         file_path: &Path,

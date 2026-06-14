@@ -147,10 +147,7 @@ impl<'a> AnalysisInput<'a> {
     /// Thread in a filefacts context the caller already opened on `data`, so
     /// the analyzer reuses it instead of re-parsing the same bytes.
     #[must_use]
-    pub fn with_parsed_ctx(
-        mut self,
-        ctx: crate::analysis_context::AnalysisContext<'a>,
-    ) -> Self {
+    pub fn with_parsed_ctx(mut self, ctx: crate::analysis_context::AnalysisContext<'a>) -> Self {
         self.parsed_ctx = Some(ctx);
         self
     }

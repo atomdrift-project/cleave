@@ -1709,6 +1709,13 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     // Mach-O keeps its own stng scan: its structural context is opened on a
     // per-arch slice in the arm, but strings need full-file offsets.
     let ctx_strings = matches!(file_type, FileType::Pe | FileType::Elf);
+    // Types whose analyzer reads from a filefacts `AnalysisContext`: open it
+    // once here and thread it through `AnalysisInput` so the file is parsed a
+    // single time. Source code (unified/generic) plus the image analyzers
+    // (jpeg/png) qualify; binaries take the dedicated arms above, and types
+    // with their own parsers (office/java_class) are intentionally excluded.
+    let threads_ctx =
+        file_type.is_source_code() || matches!(file_type, FileType::Jpeg | FileType::Png);
     let yara_prefetch = |ftypes: &[&str]| {
         if cancel_for_yara
             .as_ref()
@@ -1763,11 +1770,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
         // Mach-O: full-file stng scan (structural ctx is a per-arch slice).
         let ((s, ms), yara) = rayon::join(stng_scan, || yara_prefetch(ftypes));
         (None, s, ms, yara)
-    } else if file_type.is_source_code() {
-        // Source: filefacts is both the string authority and the AST parser.
-        // Open once and thread the context into the analyzer (below) so the
-        // file is parsed a single time. Fall back to a bare scan if filefacts
-        // refuses the bytes (the analyzer then opens its own).
+    } else if threads_ctx {
+        // Source + images: filefacts is the string authority (and, for source,
+        // the AST parser). Open once and thread the context into the analyzer
+        // (below) so the file is parsed a single time. Fall back to a bare scan
+        // if filefacts refuses the bytes (the analyzer then opens its own).
         let t = std::time::Instant::now();
         let (ctx, strings) = open_ctx_strings();
         if ctx.is_some() {
@@ -1799,12 +1806,11 @@ fn analyze_file_with_resources_at_depth<P: AsRef<Path>>(
     .with_sha256(sha256_hex.clone());
     input.cancellation = options.cancellation.clone();
 
-    // Hand the source analyzer the context we already opened so it reuses the
-    // filefacts parse instead of opening its own. Binary arms use `file_ctx`
-    // directly (below), so only the source path moves it into the input.
-    if file_type.is_source_code()
-        && let Some(ctx) = file_ctx.take()
-    {
+    // Hand the source/image analyzer the context we already opened so it
+    // reuses the filefacts parse instead of opening its own. Binary arms use
+    // `file_ctx` directly (below), so only the threaded path moves it into the
+    // input.
+    if threads_ctx && let Some(ctx) = file_ctx.take() {
         input = input.with_parsed_ctx(ctx);
     }
 

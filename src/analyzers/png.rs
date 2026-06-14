@@ -50,6 +50,7 @@ impl PngAnalyzer {
         file_path: &Path,
         data: &[u8],
         stng_strings: Option<&[stng::ExtractedString]>,
+        source_ctx: Option<&crate::analysis_context::AnalysisContext<'_>>,
     ) -> AnalysisReport {
         let mut hasher = Sha256::new();
         hasher.update(data);
@@ -73,12 +74,12 @@ impl PngAnalyzer {
         // Filefacts's dual-emission inside `evaluate_and_merge_findings`
         // populates every `png.*` / `image.*` / `binary.overall_entropy`
         // metric onto `report.filefacts_metrics` for the trait engine.
-        let filefacts_ctx = crate::analysis_context::AnalysisContext::open(file_path, data).ok();
+        // `source_ctx` is resolved by the caller (threaded or freshly opened).
         self.capability_mapper
             .evaluate_and_merge_findings_with_precomputed(
                 &mut report,
                 data,
-                crate::capabilities::AnalysisBorrow::with_filefacts(None, filefacts_ctx.as_ref()),
+                crate::capabilities::AnalysisBorrow::with_filefacts(None, source_ctx),
                 None,
                 None,
                 None,
@@ -97,12 +98,24 @@ impl Default for PngAnalyzer {
 
 impl Analyzer for PngAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        Ok(self.analyze_png(input.path, input.data, Some(input.strings)))
+        // Reuse the threaded context, else open one on `input.data` so both
+        // branches yield a context over the same bytes (matching lifetimes).
+        let owned_ctx;
+        let source_ctx = match input.parsed_ctx.as_ref() {
+            Some(ctx) => Some(ctx),
+            None => {
+                owned_ctx =
+                    crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
+                owned_ctx.as_ref()
+            }
+        };
+        Ok(self.analyze_png(input.path, input.data, Some(input.strings), source_ctx))
     }
 
     fn analyze(&self, file_path: &Path) -> Result<AnalysisReport> {
         let data = std::fs::read(file_path)?;
-        Ok(self.analyze_png(file_path, &data, None))
+        let ctx = crate::analysis_context::AnalysisContext::open(file_path, &data).ok();
+        Ok(self.analyze_png(file_path, &data, None, ctx.as_ref()))
     }
 
     fn can_analyze(&self, file_path: &Path) -> bool {

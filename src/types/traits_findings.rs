@@ -515,6 +515,33 @@ impl Evidence {
             .or_else(|| self.parse_offset_from_location())
     }
 
+    /// Re-anchor this evidence's byte offset into `offsets` before its
+    /// `location` string is repurposed as a semantic label (e.g. `embedded@…`,
+    /// `decoded:…`, `extracted:…`).
+    ///
+    /// Content matchers (string/text/string_literal/symbol) record where they
+    /// matched in `location` as a parseable `0x…` string and leave `offsets`
+    /// empty. A later relabel overwrites that string, which would strand the
+    /// offset: [`byte_offset`](Self::byte_offset) then returns `None` and the
+    /// context-capture pass logs the match as anchor-less. Lifting the offset
+    /// into `offsets` first makes it survive the relabel.
+    ///
+    /// `shift` is added to each offset: pass `0` when the evidence stays local
+    /// to its own (sub-)buffer, or the parent byte offset when re-anchoring a
+    /// snippet's matches into the parent's byte space. Call this *before*
+    /// overwriting `location`.
+    pub(crate) fn reanchor_offset(&mut self, shift: u64) {
+        if self.offsets.is_empty() {
+            if let Some(local) = self.byte_offset() {
+                self.offsets.push(local.saturating_add(shift));
+            }
+        } else if shift != 0 {
+            for off in &mut self.offsets {
+                *off = off.saturating_add(shift);
+            }
+        }
+    }
+
     /// Try to parse a byte offset from the location string.
     /// Handles formats like "0x1234", "offset:0x1234", "offset:1234"
     fn parse_offset_from_location(&self) -> Option<u64> {
@@ -610,6 +637,67 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ==================== reanchor_offset Tests ====================
+
+    /// A content match that stored its offset only in `location` (the common
+    /// case for string/text/string_literal matchers) must keep that offset when
+    /// the location is later relabeled — otherwise `byte_offset` returns `None`
+    /// and the context pass reports it as anchor-less.
+    #[test]
+    fn reanchor_lifts_location_only_offset_into_offsets() {
+        let mut ev = Evidence {
+            method: "string_literal".to_string(),
+            location: Some("0x1a".to_string()),
+            ..Default::default()
+        };
+        ev.reanchor_offset(0x100);
+        assert_eq!(ev.offsets, vec![0x11a]);
+        // Relabeling the location no longer strands the offset.
+        ev.location = Some("embedded@0x100:0x1a".to_string());
+        assert_eq!(ev.byte_offset(), Some(0x11a));
+    }
+
+    /// With a zero shift (evidence rendered against its own sub-buffer) the
+    /// location offset is preserved verbatim.
+    #[test]
+    fn reanchor_zero_shift_preserves_local_offset() {
+        let mut ev = Evidence {
+            method: "text".to_string(),
+            location: Some("0x40".to_string()),
+            ..Default::default()
+        };
+        ev.reanchor_offset(0);
+        assert_eq!(ev.offsets, vec![0x40]);
+    }
+
+    /// Existing concrete offsets are shifted (not duplicated) into the parent's
+    /// byte space.
+    #[test]
+    fn reanchor_shifts_existing_offsets() {
+        let mut ev = Evidence {
+            method: "raw".to_string(),
+            offsets: vec![0x10, 0x20],
+            location: Some("0x10".to_string()),
+            ..Default::default()
+        };
+        ev.reanchor_offset(0x1000);
+        assert_eq!(ev.offsets, vec![0x1010, 0x1020]);
+    }
+
+    /// Evidence with neither offsets nor a parseable location gains nothing —
+    /// genuinely position-less facts stay position-less.
+    #[test]
+    fn reanchor_noop_without_any_offset() {
+        let mut ev = Evidence {
+            method: "string".to_string(),
+            location: Some("import".to_string()),
+            ..Default::default()
+        };
+        ev.reanchor_offset(0x100);
+        assert!(ev.offsets.is_empty());
+        assert_eq!(ev.byte_offset(), None);
     }
 
     // ==================== FindingKind Tests ====================

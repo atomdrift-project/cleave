@@ -310,17 +310,11 @@ fn analyze_and_format(
         );
     }
 
-    // Filter unmatched component traits for terminal output only —
-    // JSON retains them for ML features and debugging.
-    if *format == cli::OutputFormat::Terminal {
-        let removed = report.filter_unmatched_components();
-        if removed > 0 {
-            tracing::debug!(
-                "Filtered {} unmatched component traits from terminal output",
-                removed
-            );
-        }
-    }
+    // Strip unmatched component and baseline traits across every format. Runs
+    // here, after the encoding-layer merge re-evaluated container composites
+    // above, so a parent composite never loses the building-block traits it
+    // fired on. The method logs the per-criticality counts it removed.
+    report.strip_unmatched_traits();
 
     format_report_output(
         &mut report,

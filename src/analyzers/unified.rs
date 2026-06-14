@@ -570,9 +570,13 @@ impl UnifiedSourceAnalyzer {
                 file_entry.depth = 1; // Decoded content is one level deep
                 file_entry.encoding = Some(vec!["base64".to_string()]);
 
-                // Update evidence locations to indicate extracted payload
+                // Update evidence locations to indicate extracted payload. The
+                // payload renders against its own buffer (offsets stay local),
+                // so preserve any offset carried in `location` before the label
+                // overwrites it.
                 for finding in &mut file_entry.findings {
                     for evidence in &mut finding.evidence {
+                        evidence.reanchor_offset(0);
                         match &evidence.location {
                             None => {
                                 evidence.location = Some(format!("extracted:{}", virtual_path));
@@ -676,9 +680,13 @@ impl UnifiedSourceAnalyzer {
                     file_entry.depth = 1;
                     file_entry.encoding = Some(payload.encoding_chain.clone());
 
-                    // Update evidence locations
+                    // Update evidence locations. The decrypted payload renders
+                    // against its own buffer (offsets stay local), so preserve
+                    // any offset carried in `location` before the label
+                    // overwrites it.
                     for finding in &mut file_entry.findings {
                         for evidence in &mut finding.evidence {
+                            evidence.reanchor_offset(0);
                             match &evidence.location {
                                 None => {
                                     evidence.location = Some(format!("decrypted:{}", virtual_path));

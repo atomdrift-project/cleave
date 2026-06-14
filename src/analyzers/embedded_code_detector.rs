@@ -797,8 +797,12 @@ pub fn analyze_embedded_string(
     }
 
     // Avoid reporting the parent file itself as "embedded" code when the detector
-    // reclassifies the full source buffer starting at offset 0x0.
-    if is_top_level_self_detection(parent_path, is_encoded, offset, &file_type) {
+    // reclassifies the full source buffer starting at offset 0x0. An explicit
+    // `interp -c "<code>"` invocation is genuinely a different embedded language
+    // (and was size/self bypassed deliberately), so it is never self-detection.
+    if inline_code.is_none()
+        && is_top_level_self_detection(parent_path, is_encoded, offset, &file_type)
+    {
         anyhow::bail!("Top-level source self-detected as embedded code");
     }
 
@@ -840,9 +844,12 @@ pub fn analyze_embedded_string(
         file_entry.depth = (current_depth + 1) as u32;
         file_entry.encoding = Some(string_info.encoding_chain.clone());
 
-        // Prefix evidence locations
+        // Prefix evidence locations. The decoded layer renders against its own
+        // buffer, so offsets stay local (shift 0); preserve them out of
+        // `location` before that string is overwritten by the label.
         for finding in &mut file_entry.findings {
             for evidence in &mut finding.evidence {
+                evidence.reanchor_offset(0);
                 evidence.location = Some(format!(
                     "decoded:{}:{}",
                     virtual_path,
@@ -878,14 +885,16 @@ pub fn analyze_embedded_string(
         // and chmod in the next.
         for finding in &mut findings {
             for evidence in &mut finding.evidence {
+                // Lift the snippet-local offset into `offsets`, shifted into the
+                // parent's byte space, before the location is relabeled — a
+                // content match that recorded its offset only in `location`
+                // would otherwise be stranded once that string is overwritten.
+                evidence.reanchor_offset(offset);
                 evidence.location = Some(format!(
                     "embedded@{:#x}:{}",
                     offset,
                     evidence.location.as_deref().unwrap_or("unknown")
                 ));
-                for off in &mut evidence.offsets {
-                    *off = off.saturating_add(offset);
-                }
             }
         }
 

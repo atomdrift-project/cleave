@@ -1608,6 +1608,7 @@ dependencies = [
 [[package]]
 name = "filefacts"
 version = "1.0.0"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#17578e8f803ec214cfe91c164915a8a3f8a6860d"
 dependencies = [
  "aho-corasick",
  "bincode",
@@ -4389,8 +4390,8 @@ dependencies = [
 
 [[package]]
 name = "stng"
-version = "1.6.1"
-source = "git+https://codeberg.org/atomdrift/stng.git#882b16aeacf5c2cc3a0837ab3d85764248718b04"
+version = "1.6.2"
+source = "git+https://codeberg.org/atomdrift/stng.git#3b9adc200726da82bc45ea72539fc4e24893378b"
 dependencies = [
  "aho-corasick",
  "anyhow",
@@ -5044,6 +5045,7 @@ dependencies = [
 [[package]]
 name = "tree-sitter-clojure"
 version = "0.1.0"
+source = "git+https://codeberg.org/atomdrift/filefacts.git#17578e8f803ec214cfe91c164915a8a3f8a6860d"
 dependencies = [
  "cc",
  "tree-sitter",

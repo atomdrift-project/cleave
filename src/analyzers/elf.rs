@@ -179,7 +179,6 @@ impl ElfAnalyzer {
         logical_path: &Path,
         analysis_path: &Path,
         data: &'a [u8],
-        stng_strings: Option<&[stng::ExtractedString]>,
         allow_rizin: bool,
         precomputed_sha256: Option<&str>,
         ctx: &Ctx<'a>,
@@ -219,7 +218,7 @@ impl ElfAnalyzer {
                 .and_then(|v| v.as_str())
                 .is_some_and(|s| s == "core");
 
-        let (r2_strings, elf_content_end) = if filefacts_ok {
+        let (_r2_strings, elf_content_end) = if filefacts_ok {
             tools_used.push("filefacts".to_string());
             report.target.architectures = Some(vec![
                 parsed_values
@@ -448,20 +447,14 @@ impl ElfAnalyzer {
 
         // --- Shared post-processing (strings, embedded code, metrics, overlay) ---
 
-        // String extraction (preference: stng_strings > preextracted > extract_smart)
-        let (report_strings, raw_stng_strings) = if let Some(strings) = stng_strings {
-            (
-                self.string_extractor.convert_stng_strings(strings),
-                Some(strings.to_vec()),
-            )
-        } else if let Some(ref strings) = self.preextracted_strings {
-            (strings.clone(), None)
-        } else {
-            let _ = r2_strings;
-            let raw = self.string_extractor.extract_raw_smart(data);
-            (self.string_extractor.convert_stng_strings(&raw), Some(raw))
+        // Strings come from filefacts's byte-scan `text()` — the single
+        // string-extraction authority (cleave no longer scans). The raw stng
+        // rows also feed embedded-child analysis below.
+        let raw_stng_strings: Vec<stng::ExtractedString> = {
+            let text = ctx.parsed.text();
+            text.ascii.iter().chain(text.utf16le.iter()).cloned().collect()
         };
-        report.strings = report_strings;
+        report.strings = self.string_extractor.convert_stng_strings(&raw_stng_strings);
 
         // Embedded ELF / PE scanning (host-agnostic, scans raw bytes)
         if !self.skip_embedded_scan && !is_core_dump {
@@ -526,7 +519,7 @@ impl ElfAnalyzer {
                     binary.offset,
                     self.capability_mapper.clone(),
                     None, // YARA handled by child
-                    raw_stng_strings.as_deref().unwrap_or(&[]),
+                    &raw_stng_strings,
                 ) {
                     report.files.extend(files);
                 }
@@ -874,7 +867,6 @@ impl ElfAnalyzer {
                 file_path,
                 file_path,
                 data,
-                None,
                 true,
                 precomputed_sha256,
                 ctx,
@@ -886,7 +878,6 @@ impl ElfAnalyzer {
             file_path,
             file_path,
             data,
-            None,
             true,
             precomputed_sha256,
             ctx,
@@ -922,13 +913,11 @@ impl ElfAnalyzer {
                 if let Ok(temp_file) = tempfile::NamedTempFile::new()
                     && std::fs::write(temp_file.path(), &unpacked_data).is_ok()
                 {
-                    let opts = crate::analyzers::stng_analysis_opts(4);
-                    let unpacked_strings =
-                        stng::extract_strings_with_options(&unpacked_data, &opts);
                     // UPX-unpacked bytes differ from the caller's
                     // bytes; open a fresh context on the
                     // decompressed payload so the downstream
-                    // helpers see a self-consistent view.
+                    // helpers see a self-consistent view (and supply the
+                    // unpacked strings via its `text()`).
                     let Ok(unpacked_ctx) = crate::analysis_context::AnalysisContext::open(
                         temp_file.path(),
                         &unpacked_data,
@@ -939,7 +928,6 @@ impl ElfAnalyzer {
                         temp_file.path(),
                         temp_file.path(),
                         &unpacked_data,
-                        Some(&unpacked_strings),
                         true,
                         None,
                         &unpacked_ctx,
@@ -1033,24 +1021,17 @@ impl ElfAnalyzer {
 
 impl Analyzer for ElfAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
-        // Use caller-provided strings when present; an empty slice means the
-        // caller only supplied bytes, so the core analyzer should extract.
-        let strings = if input.strings.is_empty() {
-            None
-        } else {
-            Some(input.strings)
-        };
         // Open filefacts-side parse once so analyze_elf_core's helpers
-        // read structural data straight from filefacts. When filefacts can't
-        // open the bytes, we still produce a report so tamper findings
-        // and rizin disassembly surface for triage.
+        // read structural data straight from filefacts — including its
+        // byte-scan `text()`, the single string-extraction authority. When
+        // filefacts can't open the bytes, we still produce a report so tamper
+        // findings and rizin disassembly surface for triage.
         let ctx = crate::analysis_context::AnalysisContext::open(input.path, input.data)
             .map_err(|e| anyhow::anyhow!("filefacts open failed for ELF: {e}"))?;
         let mut report = self.analyze_elf_core(
             input.path,
             input.backing_path(),
             input.data,
-            strings,
             !input.skip_rizin,
             input.sha256.as_deref(),
             &ctx,

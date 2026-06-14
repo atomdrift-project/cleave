@@ -322,10 +322,14 @@ pub(crate) fn dispatch_command(
             &ctx.analyze,
             "No valid paths found (stdin was empty or contained only comments)",
         )?,
-        Some(cli::Command::IterFiles { targets }) => {
+        Some(cli::Command::IterFiles {
+            targets,
+            newer_than,
+        }) => {
             iter_files_command(&IterFilesConfig {
                 targets: &targets,
                 max_file_size: ctx.analyze.max_scan_file_size,
+                newer_than,
             })?;
             return Ok(None);
         }

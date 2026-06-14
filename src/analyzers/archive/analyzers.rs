@@ -804,14 +804,7 @@ impl ArchiveAnalyzer {
                 None
             };
             let stng_strings = match member_ctx.as_ref() {
-                Some(ctx) => {
-                    let text = ctx.parsed.text();
-                    text.ascii
-                        .iter()
-                        .chain(text.utf16le.iter())
-                        .cloned()
-                        .collect()
-                }
+                Some(ctx) => ctx.parsed.text().iter().cloned().collect(),
                 None => stng::extract_strings_with_options(data, &stng_opts),
             };
             crate::memory_tracker::clear_current_phase();

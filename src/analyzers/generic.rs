@@ -76,7 +76,6 @@ impl GenericAnalyzer {
         self.analyze_source_internal(file_path, content, None, None, None, ctx.as_ref())
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn analyze_source_internal(
         &self,
         file_path: &Path,
@@ -465,18 +464,10 @@ impl GenericAnalyzer {
 impl Analyzer for GenericAnalyzer {
     fn analyze_input(&self, input: &AnalysisInput<'_>) -> Result<AnalysisReport> {
         // Use data and strings from input (no file read, no string extraction).
-        // Reuse the threaded context when present; otherwise open one on the
-        // same bytes so both branches yield a context over `input.data`.
+        // Reuse the threaded context, else open one on the same `input.data`.
         let content = String::from_utf8_lossy(input.data);
-        let owned_ctx;
-        let source_ctx = match input.parsed_ctx.as_ref() {
-            Some(ctx) => Some(ctx),
-            None => {
-                owned_ctx =
-                    crate::analysis_context::AnalysisContext::open(input.path, input.data).ok();
-                owned_ctx.as_ref()
-            }
-        };
+        let fallback = input.open_ctx_fallback();
+        let source_ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
         Ok(self.analyze_source_internal(
             input.path,
             &content,

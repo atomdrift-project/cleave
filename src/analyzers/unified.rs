@@ -377,6 +377,9 @@ impl UnifiedSourceAnalyzer {
         )
     }
 
+    // Mirrors the fields of an `AnalysisInput` plus the decoded `content`; the
+    // legacy `analyze_source_with_original` path has no `AnalysisInput` to pass,
+    // so the pieces are threaded individually rather than bundled.
     #[allow(clippy::too_many_arguments)]
     fn analyze_source_impl(
         &self,

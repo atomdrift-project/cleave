@@ -152,6 +152,25 @@ impl<'a> AnalysisInput<'a> {
         self
     }
 
+    /// Opens a context on `data` only when one was not threaded in via
+    /// [`with_parsed_ctx`] (and `None` if filefacts rejects the bytes). Pair it
+    /// with [`parsed_ctx`](Self::parsed_ctx) to get the effective context:
+    ///
+    /// ```ignore
+    /// let fallback = input.open_ctx_fallback();
+    /// let ctx = input.parsed_ctx.as_ref().or(fallback.as_ref());
+    /// ```
+    ///
+    /// The owned fallback lives in the caller's scope so the borrow can point at
+    /// it — hence the two-step pairing rather than returning `Option<&_>`.
+    #[must_use]
+    pub fn open_ctx_fallback(&self) -> Option<crate::analysis_context::AnalysisContext<'a>> {
+        match self.parsed_ctx {
+            Some(_) => None,
+            None => crate::analysis_context::AnalysisContext::open(self.path, self.data).ok(),
+        }
+    }
+
     /// Disable deep radare2/rizin analysis for this input.
     #[must_use]
     pub fn with_skip_rizin(mut self) -> Self {

@@ -156,15 +156,6 @@ impl StringExtractor {
         self.convert_stng_iter(stng_strings.iter(), stng_strings.len())
     }
 
-    /// Convert filefacts' byte-scan `Text` (the single string-extraction
-    /// authority) into `StringInfo`. Chains the ascii + utf16le partitions into
-    /// one pass so the per-file retention caps apply across both.
-    #[allow(dead_code)] // Used by binary target, not visible to library
-    pub(crate) fn convert_filefacts_text(&self, text: &filefacts::Text) -> Vec<StringInfo> {
-        let hint = text.ascii.len() + text.utf16le.len();
-        self.convert_stng_iter(text.ascii.iter().chain(text.utf16le.iter()), hint)
-    }
-
     /// Shared conversion core: apply the per-file string + byte retention caps
     /// and the base64 sidecar over any `stng::ExtractedString` source.
     fn convert_stng_iter<'a>(
